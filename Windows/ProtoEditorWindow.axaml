@@ -1,0 +1,340 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:ce="using:CryBarEditor.Windows"
+        mc:Ignorable="d" d:DesignWidth="1280" d:DesignHeight="800"
+        x:Class="CryBarEditor.Windows.ProtoEditorWindow"
+        x:DataType="ce:ProtoEditorWindow"
+        Foreground="#d9d9d9"
+        Background="#141414"
+        Width="1280" Height="800"
+        MinWidth="960" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Title="AoM Proto XML Editor">
+
+    <Window.Resources>
+        <StreamGeometry x:Key="PageSearchCaseSensitiveIconPath">m186 768 140-380h30l143 380h-32l-40-113H257l-40 113h-31Zm80-139h151l-75-209h-1l-75 209Zm398 148q-40 0-62.5-21.5T579 697q0-41 27-65.5t74-24.5q18 0 39.5 5t32.5 11v-24q0-39-20-60t-56-21q-20 0-35.5 6T605 544l-17-19q20-16 42.5-23.5T677 494q50 0 75 27.5t25 81.5v164h-26v-39h-4q-17 27-36 38t-47 11Zm-2-26q40 0 64.5-29.5T751 646q-13-8-29.5-12.5T684 629q-35 0-56.5 18.5T606 696q0 26 15 40.5t41 14.5Z</StreamGeometry>
+        <StreamGeometry x:Key="PageSearchCompleteWordIconPath">M124 764V650h20v94h672v-94h20v114H124Zm266.903-93v-39H387q-17 27-36 38t-46.737 11q-38.789 0-62.026-21.695Q219 637.611 219 601q0-41 27-65.5t73-24.5q18 0 39.5 5t33.5 11v-24q0-39-19.5-60T318 422q-21 0-37 6t-36 20l-17-19q20-16 42.5-23.5t47.84-7.5q49.66 0 74.16 27.284 24.5 27.283 24.5 81.974V671h-26.097ZM324 533q-34 0-56 18.5T246 599q0 27 15.667 41.5Q277.333 655 303 655q40 0 64-29.706t24-75.576Q378 542 361.5 537.5T324 533Zm197 139V285h25v136.182L543 460h2q15-23 37.083-34t49.189-11Q679 415 707 450.5q28 35.5 28 98.5 0 61-28.073 96.5-28.072 35.5-76.53 35.5Q603 681 580 669t-35-33h-2v36h-22Zm108-229q-36 0-61 30.159t-25 76.523Q543 596 568 626.5t61 30.5q36 0 57.5-29t21.5-78q0-49-21.5-78T629 443Z</StreamGeometry>
+        <StreamGeometry x:Key="PageSearchRegularExpressionIconPath">M251 817q-49-48-76.5-109.5T147 577q0-69 27-131.5T251 335l16 14q-48 44-74 103t-26 124q0 64 26 122.5T266 803l-15 14Zm121-27q-14 0-24-10t-10-24q0-14 10-24t24-10q14 0 24 10t10 24q0 14-10 24t-24 10Zm158-192V496l-88 51-10-16 88-51-88-51 10-16 88 51V362h20v102l88-51 10 16-88 51 88 51-10 16-88-51v102h-20Zm178 219-15-14q47-44 73-103t26-124q0-65-25.5-123.5T693 349l15-14q49 49 76.5 111T812 577q0 69-27.5 131.5T708 817Z</StreamGeometry>
+        <StreamGeometry x:Key="PageSearchFindPreviousIconPath">M470 824V367L247 590l-15-14 248-248 248 248-15 14-223-223v457h-20Z</StreamGeometry>
+        <StreamGeometry x:Key="PageSearchFindNextIconPath">M480 824 232 576l15-14 223 223V328h20v457l223-223 15 14-248 248Z</StreamGeometry>
+        <StreamGeometry x:Key="PageSearchCloseIconPath">m291 780-15-15 189-189-189-189 15-15 189 189 189-189 15 15-189 189 189 189-15 15-189-189-189 189Z</StreamGeometry>
+    </Window.Resources>
+
+    <Window.Styles>
+        <Style Selector="TextBlock.SectionHeader">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#e3bd54" />
+            <Setter Property="Margin" Value="0,15,0,5" />
+        </Style>
+        <Style Selector="TextBlock.PageSearchQueryMatch">
+            <Setter Property="Background" Value="#2b3c57" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
+        <Style Selector="Button">
+            <Setter Property="Background" Value="#252526" />
+            <Setter Property="Foreground" Value="#d9d9d9" />
+            <Setter Property="Padding" Value="10,5" />
+        </Style>
+        <Style Selector="Button:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#313132" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="#1c1c1c" />
+            <Setter Property="Foreground" Value="#d9d9d9" />
+            <Setter Property="BorderBrush" Value="#3f3f46" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="AutoCompleteBox">
+            <Setter Property="Background" Value="#1c1c1c" />
+            <Setter Property="Foreground" Value="#d9d9d9" />
+            <Setter Property="BorderBrush" Value="#3f3f46" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="ListBox">
+            <Setter Property="Background" Value="#1c1c1c" />
+            <Setter Property="BorderBrush" Value="#2d2d30" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2b3c57" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#1a2436" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
+        <Style Selector="TabItem.editorTab">
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#a0a0a0" />
+            <Setter Property="Background" Value="#1c1c1c" />
+        </Style>
+        <Style Selector="TabItem.editorTab:selected">
+            <Setter Property="Foreground" Value="#d9d9d9" />
+            <Setter Property="Background" Value="#2b3c57" />
+        </Style>
+
+    </Window.Styles>
+
+    <Grid>
+    <DockPanel>
+        <!-- Menu bar / Top toolbar -->
+        <Border DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
+            <DockPanel Margin="10,0">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <Button Content="🔄 Switch Mod" Click="SwitchMod_Click" />
+                    <Button Content="+ Create Mod" Click="CreateMod_Click" Background="#2b7a0b" />
+                    <Button Content="💾 Save" Click="Save_Click" />
+                    <Button Content="💾 Save As" Click="SaveAs_Click" />
+                    <Button Content="⚙ Settings" Click="Settings_Click" />
+                </StackPanel>
+                <TextBlock x:Name="_fileLabel" Text="No file loaded" Foreground="Gray" VerticalAlignment="Center" HorizontalAlignment="Right" />
+            </DockPanel>
+        </Border>
+
+        <!-- Main content -->
+        <Grid ColumnDefinitions="260,5,*,5,360">
+            <!-- Left panel: unit list -->
+            <Border Grid.Column="0" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Units" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
+                    
+                    <TextBox DockPanel.Dock="Top" x:Name="_searchBox" PlaceholderText="Search..." Margin="0,0,0,6" TextChanged="SearchBox_TextChanged" />
+
+                    <Grid DockPanel.Dock="Top" x:Name="_categoryControls" IsVisible="False" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,6">
+                        <ComboBox x:Name="_categoryFilter" SelectionChanged="CategoryFilter_SelectionChanged" />
+                        <Button Grid.Column="1" Content="+" ToolTip.Tip="Create category" Padding="8,4" Click="CreateCategory_Click" />
+                        <Button Grid.Column="2" Content="Set" ToolTip.Tip="Assign selected unit to this category" Padding="8,4" Click="AssignCategory_Click" />
+                        <Button Grid.Column="3" Content="×" ToolTip.Tip="Delete selected category" Padding="8,4" Click="DeleteCategory_Click" />
+                    </Grid>
+                    
+                    <TabStrip DockPanel.Dock="Top" x:Name="_unitTabs" Margin="0,0,0,6" SelectionChanged="UnitTab_SelectionChanged">
+                        <TabStripItem x:Name="_originalTab">Original</TabStripItem>
+                        <TabStripItem x:Name="_modifiedTab">Modified</TabStripItem>
+                    </TabStrip>
+                    
+                    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
+                        <Button Grid.Column="0" Content="+ Add Unit" Click="AddUnit_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button Grid.Column="1" Content="🗑 Delete" Click="DeleteUnit_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    </Grid>
+                    
+                    <ListBox x:Name="_unitList" SelectionChanged="UnitList_SelectionChanged" />
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+
+            <!-- Right panel: fixed tools + scrollable editor -->
+            <Border Grid.Column="2" Padding="15">
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <Grid Grid.Row="0"
+                          ColumnDefinitions="Auto,*,Auto"
+                          Margin="0,0,0,10">
+                        <Button x:Name="_sectionsButton"
+                                Content="Sections"
+                                IsVisible="False"
+                                IsEnabled="False"
+                                Padding="12,5"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Top">
+                            <Button.Flyout>
+                                <Flyout Placement="BottomEdgeAlignedLeft">
+                                    <ScrollViewer MaxHeight="420"
+                                                  MinWidth="220"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <StackPanel x:Name="_sectionsFlyoutPanel"
+                                                    Spacing="4"
+                                                    Margin="4" />
+                                    </ScrollViewer>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Border Grid.Column="2"
+                                x:Name="_pageSearchPanel"
+                                IsVisible="False"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top"
+                                BorderThickness="1,0,1,1"
+                                CornerRadius="0,0,4,4"
+                                BorderBrush="#3f3f46"
+                                Background="#1c1c1c"
+                                Padding="8">
+                            <StackPanel Spacing="4">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBox x:Name="_pageSearchBox"
+                                             Width="265"
+                                             PlaceholderText="Find...">
+                                        <TextBox.InnerRightContent>
+                                            <StackPanel Orientation="Horizontal">
+                                                <ToggleButton x:Name="_pageSearchMatchCaseToggle"
+                                                              Background="Transparent"
+                                                              Foreground="#d9d9d9"
+                                                              BorderThickness="0"
+                                                              MinWidth="22"
+                                                              MinHeight="20"
+                                                              Padding="4"
+                                                              ToolTip.Tip="Match case">
+                                                    <Path Data="{StaticResource PageSearchCaseSensitiveIconPath}"
+                                                          Width="12"
+                                                          Height="12"
+                                                          Stretch="Uniform"
+                                                          Fill="{Binding $parent[ToggleButton].Foreground}"
+                                                          Stroke="{Binding $parent[ToggleButton].Foreground}"
+                                                          StrokeThickness="1" />
+                                                </ToggleButton>
+                                                <ToggleButton x:Name="_pageSearchWholeWordToggle"
+                                                              Background="Transparent"
+                                                              Foreground="#d9d9d9"
+                                                              BorderThickness="0"
+                                                              MinWidth="22"
+                                                              MinHeight="20"
+                                                              Padding="4"
+                                                              Margin="3,0,0,0"
+                                                              ToolTip.Tip="Match whole words">
+                                                    <Path Data="{StaticResource PageSearchCompleteWordIconPath}"
+                                                          Width="14"
+                                                          Height="12"
+                                                          Stretch="Uniform"
+                                                          Fill="{Binding $parent[ToggleButton].Foreground}"
+                                                          Stroke="{Binding $parent[ToggleButton].Foreground}"
+                                                          StrokeThickness="1" />
+                                                </ToggleButton>
+                                                <ToggleButton x:Name="_pageSearchRegexToggle"
+                                                              Background="Transparent"
+                                                              Foreground="#d9d9d9"
+                                                              BorderThickness="0"
+                                                              MinWidth="22"
+                                                              MinHeight="20"
+                                                              Padding="4"
+                                                              Margin="3,0,5,0"
+                                                              ToolTip.Tip="Use regex">
+                                                    <Path Data="{StaticResource PageSearchRegularExpressionIconPath}"
+                                                          Width="12"
+                                                          Height="12"
+                                                          Stretch="Uniform"
+                                                          Fill="{Binding $parent[ToggleButton].Foreground}"
+                                                          Stroke="{Binding $parent[ToggleButton].Foreground}"
+                                                          StrokeThickness="1" />
+                                                </ToggleButton>
+                                            </StackPanel>
+                                        </TextBox.InnerRightContent>
+                                    </TextBox>
+                                    <Button x:Name="_pageSearchPreviousButton"
+                                            Margin="5,0,0,0"
+                                            MinWidth="34"
+                                            BorderThickness="0"
+                                            Padding="4"
+                                            ToolTip.Tip="Find previous">
+                                        <Path Data="{StaticResource PageSearchFindPreviousIconPath}"
+                                              Width="16"
+                                              Height="16"
+                                              Stretch="Uniform"
+                                              Fill="{Binding $parent[Button].Foreground}"
+                                              Stroke="{Binding $parent[Button].Foreground}"
+                                              StrokeThickness="1" />
+                                    </Button>
+                                    <Button x:Name="_pageSearchNextButton"
+                                            Margin="3,0,0,0"
+                                            MinWidth="34"
+                                            BorderThickness="0"
+                                            Padding="4"
+                                            ToolTip.Tip="Find next">
+                                        <Path Data="{StaticResource PageSearchFindNextIconPath}"
+                                              Width="16"
+                                              Height="16"
+                                              Stretch="Uniform"
+                                              Fill="{Binding $parent[Button].Foreground}"
+                                              Stroke="{Binding $parent[Button].Foreground}"
+                                              StrokeThickness="1" />
+                                    </Button>
+                                    <Button x:Name="_pageSearchCloseButton"
+                                            Margin="3,0,0,0"
+                                            MinWidth="34"
+                                            BorderThickness="0"
+                                            Padding="4"
+                                            ToolTip.Tip="Close search">
+                                        <Path Data="{StaticResource PageSearchCloseIconPath}"
+                                              Width="12"
+                                              Height="12"
+                                              Stretch="Uniform"
+                                              Fill="{Binding $parent[Button].Foreground}"
+                                              Stroke="{Binding $parent[Button].Foreground}"
+                                              StrokeThickness="1" />
+                                    </Button>
+                                </StackPanel>
+                                <TextBlock x:Name="_pageSearchMatchCountText"
+                                           Text=""
+                                           FontSize="12"
+                                           Foreground="#d9d9d9"
+                                           Margin="2,0,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <Grid Grid.Row="1" RowDefinitions="Auto,*">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+                            <TextBlock Text="Unit :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" x:Name="_unitNameBox" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
+                        </Grid>
+                        <TabControl Grid.Row="1" x:Name="_editorTabs" SelectedIndex="0" SelectionChanged="EditorTab_SelectionChanged">
+                            <TabItem Classes="editorTab" Header="Stats">
+                                <ScrollViewer x:Name="_editorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="_statsEditorPanel" Spacing="10" />
+                                </ScrollViewer>
+                            </TabItem>
+                            <TabItem Classes="editorTab" Header="Actions">
+                                <ScrollViewer x:Name="_actionsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="_actionsEditorPanel" Spacing="10" />
+                                </ScrollViewer>
+                            </TabItem>
+                            <TabItem Classes="editorTab" Header="Commands">
+                                <ScrollViewer x:Name="_commandsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="_commandsEditorPanel" Spacing="10" />
+                                </ScrollViewer>
+                            </TabItem>
+                            <TabItem Classes="editorTab" Header="Train/Research">
+                                <ScrollViewer x:Name="_trainResearchEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="_trainResearchEditorPanel" Spacing="10" />
+                                </ScrollViewer>
+                            </TabItem>
+                        </TabControl>
+                    </Grid>
+                    <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="#e3bd54" FontWeight="Bold" Margin="0,5,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+            <GridSplitter Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <Border Grid.Column="4" Padding="12" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+                <Grid RowDefinitions="Auto,*">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                        <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
+                    </Grid>
+                    <TextBox Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="12" Background="#101010" Foreground="#d9d9d9" TextChanged="XmlPreviewText_TextChanged" />
+                </Grid>
+            </Border>
+        </Grid>
+    </DockPanel>
+        <Border x:Name="_startupLoadingOverlay"
+                IsVisible="False"
+                Background="#CC141414"
+                ZIndex="10">
+            <StackPanel Width="280"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12">
+                <ProgressBar IsIndeterminate="True"
+                             Height="8" />
+                <TextBlock x:Name="_startupLoadingText"
+                           Text="Loading Proto Editor..."
+                           HorizontalAlignment="Center"
+                           TextAlignment="Center"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           Foreground="#f0f0f0" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>
