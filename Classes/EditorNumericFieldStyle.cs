@@ -27,6 +27,25 @@ public static class EditorNumericFieldStyle
 
     public static string FormatDisplay(string? value) => FormatNumericDisplay(value);
 
+    public static string FormatDisplay(string? value, int minimumFractionDigits)
+    {
+        var text = FormatNumericDisplay(value);
+        if (minimumFractionDigits <= 0 || string.IsNullOrWhiteSpace(text))
+            return text;
+
+        if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
+            return text;
+
+        var dot = text.IndexOf('.');
+        if (dot < 0)
+            return text + "." + new string('0', minimumFractionDigits);
+
+        var fractionLength = text.Length - dot - 1;
+        return fractionLength >= minimumFractionDigits
+            ? text
+            : text + new string('0', minimumFractionDigits - fractionLength);
+    }
+
     public static string FormatNumericDisplay(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
