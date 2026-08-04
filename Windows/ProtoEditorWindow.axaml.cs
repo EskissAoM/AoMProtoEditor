@@ -249,6 +249,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public List<BonusRowState> BonusRows { get; } = [];
         public Dictionary<string, List<ProtoActionEmpowerTargetState>> EmpowerTargetStates { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<ProtoActionChargedRowState> ChargedRows { get; } = [];
+        public List<ProtoActionFullChargedState> FullChargedRows { get; } = [];
         public List<ProtoActionOnHitEffectRowState> OnHitEffectRows { get; } = [];
         public HashSet<string> ForcedVisibleFieldTags { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> SelectedFlagTags { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -332,6 +333,31 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required AutoCompleteBox ParamAcb { get; set; }
         public required TextBlock ParamLabel { get; set; }
         public required TextBox ModifyAmountCapTb { get; set; }
+    }
+
+    private sealed class ProtoActionFullChargedState
+    {
+        public required XElement OriginalElement { get; set; }
+        public required AutoCompleteBox ModifyTypeAcb { get; set; }
+        public required ComboBox ApplyTypeCb { get; set; }
+        public required AutoCompleteBox ParamAcb { get; set; }
+        public required TextBox ValueTb { get; set; }
+        public required ComboBox ActivationTypeCb { get; set; }
+        public required TextBox CooldownTb { get; set; }
+        public required TextBox DurationTb { get; set; }
+        public required Control ThresholdRow { get; set; }
+        public required TextBox ThresholdTb { get; set; }
+        public required Control TerrainRow { get; set; }
+        public required ComboBox TerrainTypeCb { get; set; }
+        public required CheckBox StealthCb { get; set; }
+        public required Grid VfxRow { get; set; }
+        public required AutoCompleteBox VfxAcb { get; set; }
+        public required TextBox VfxDurationTb { get; set; }
+        public required Grid SetTacticRow { get; set; }
+        public required TextBox SetTacticTb { get; set; }
+        public required Grid AttachmentRow { get; set; }
+        public required AssetPathEditor ChargedModelAttachmentEditor { get; set; }
+        public required AutoCompleteBox ChargedModelAttachmentBoneAcb { get; set; }
     }
 
     private sealed class ProtoActionOnHitEffectEntry
@@ -2813,6 +2839,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsRampageActionType(string actionType)
         => actionType.Equals("Rampage", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsChargedModifyActionType(string actionType)
+        => actionType.Equals("ChargedModify", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsSelfModifyActionType(string actionType)
         => actionType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase);
 
@@ -3009,9 +3038,32 @@ public partial class ProtoEditorWindow : SimpleWindow
         => IsStackControlActionType(actionType) &&
            ManagedStackControlChildTags.Contains(tag, StringComparer.OrdinalIgnoreCase);
 
+    private static readonly string[] FullChargedManagedFieldTags =
+    [
+        "charged",
+        "chargedmodify",
+        "chargedremove",
+        "chargedmodifyvfx",
+        "chargedmodifyvfxduration",
+        "hitpointsratiothreshold",
+        "stealth",
+        "activationtype",
+        "cooldown",
+        "duration",
+        "settactic",
+        "terraintype",
+        "chargedmodelattachment",
+        "chargedmodelattachmentbone",
+    ];
+
     private static bool IsManagedChargedFieldTag(string actionType, string tag)
-        => (IsBolsterActionType(actionType) || IsRampageActionType(actionType)) &&
-           tag.Equals("charged", StringComparison.OrdinalIgnoreCase);
+    {
+        if (IsChargedModifyActionType(actionType))
+            return FullChargedManagedFieldTags.Contains(tag, StringComparer.OrdinalIgnoreCase);
+
+        return (IsBolsterActionType(actionType) || IsRampageActionType(actionType)) &&
+               tag.Equals("charged", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsManagedBolsterStructuredFieldTag(string actionType, string tag)
         => IsBolsterActionType(actionType) &&
@@ -5227,12 +5279,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         var currentOnHitEffectEntries = state.OnHitEffectRows.Count > 0
             ? CollectProtoActionOnHitEffectEntries(state)
             : null;
+        var currentFullChargedElements = state.FullChargedRows.Count > 0
+            ? BuildFullChargedElements(state)
+            : null;
         RenderProtoActionVisibility(state);
         RenderProtoActionAdditionalFields(state, currentSimpleValues);
         RenderProtoActionDamageExtras(state, currentSimpleValues);
         RenderProtoActionStackControlFields(state, currentSimpleValues);
         RenderProtoActionEmpowerSections(state);
         RenderProtoActionChargedFields(state);
+        RenderProtoActionFullChargedFields(state, currentFullChargedElements);
         RenderProtoActionStructuredFields(state, currentStructuredValues);
         ArrangeRampageLayout(state, actionType);
         RenderTeleportAttackPostRateFields(state, currentSimpleValues, actionType);
@@ -5263,7 +5319,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsAreaMutateActionType(actionType) ||
             IsAutoRangedAttachActionType(actionType) ||
             IsAssistAttackActionType(actionType) ||
-            IsSpawnAssistActionType(actionType))
+            IsSpawnAssistActionType(actionType) ||
+            IsChargedModifyActionType(actionType))
         {
             state.OnHitEffectsContainer.Children.Clear();
             state.OnHitEffectRows.Clear();
@@ -16321,6 +16378,605 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private static readonly string[] ChargedModifyActivationTypes =
+    [
+        "Combat",
+        "BelowHitpointsThreshold",
+        "AfterAction",
+        "KillEnemy",
+        "UseByAbility",
+        "UseOnce",
+        "TerrainType",
+        "Always",
+        "ChargedActionActive",
+        "AuxChargedActionActive",
+    ];
+
+    private void RenderProtoActionFullChargedFields(
+        ProtoActionWidgetState state,
+        IReadOnlyList<XElement>? currentElements = null)
+    {
+        var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? "");
+        state.FullChargedRows.Clear();
+        if (!IsChargedModifyActionType(actionType))
+            return;
+
+        var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
+        var chargedElements = currentElements?.Select(x => new XElement(x)).ToList()
+            ?? effectiveAction.AdditionalElements
+                .Where(x => x.Name.LocalName.Equals("charged", StringComparison.OrdinalIgnoreCase))
+                .Select(x => new XElement(x))
+                .ToList();
+
+        if (chargedElements.Count == 0 && !_isReadOnly)
+            chargedElements.Add(new XElement("charged"));
+        if (chargedElements.Count == 0)
+            return;
+
+        state.AdditionalFieldsContainer.Children.Add(new TextBlock
+        {
+            Text = "Charged Modifier Configuration",
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(0, 6, 0, 2)
+        });
+
+        var cardsHost = new StackPanel { Spacing = 8 };
+        state.AdditionalFieldsContainer.Children.Add(cardsHost);
+
+        var modifyTypeSuggestions = ProtoConstants.KnownModifyTypes
+            .Select(ProtoConstants.GetModifyTypeDisplayName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var protoUnitSuggestions = GetAvailableTrainUnitNames();
+        var attachmentSuggestions = GetAvailableProtoActionAttachmentPaths();
+        var attachmentBoneSuggestions = GetAvailableProtoActionModelAttachmentBones();
+
+        async Task HandleChangedAsync()
+        {
+            if (_isPopulating)
+                return;
+            var proceed = await CheckStartLocalMod();
+            if (proceed)
+                MarkDirty();
+        }
+
+        static XElement? FindChild(XElement parent, string tag)
+            => parent.Elements().FirstOrDefault(x => x.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var sourceElement in chargedElements)
+        {
+            var originalElement = new XElement(sourceElement);
+            var chargedModify = FindChild(sourceElement, "chargedmodify");
+            var activationValue = FindChild(sourceElement, "activationtype")?.Value?.Trim() ?? "";
+            var terrainValue = FindChild(sourceElement, "terraintype")?.Value?.Trim() ?? "";
+            var stealthElement = FindChild(sourceElement, "stealth");
+
+            var card = new Border
+            {
+                Background = Brush.Parse("#181818"),
+                BorderBrush = Brush.Parse("#3f3f46"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8)
+            };
+            var cardStack = new StackPanel { Spacing = 5 };
+            card.Child = cardStack;
+
+            // Keep each label/editor pair together, but allow complete pairs to wrap
+            // when the editor pane becomes narrow.
+            var modifierRow = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var modifyTypeGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            modifyTypeGroup.Children.Add(new TextBlock
+            {
+                Text = "Modify Type:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var modifyTypeAcb = new AutoCompleteBox
+            {
+                Text = ProtoConstants.GetModifyTypeDisplayName(
+                    (string?)chargedModify?.Attribute("modifytype") ??
+                    (string?)chargedModify?.Attribute("modifyType") ?? ""),
+                FilterMode = AutoCompleteFilterMode.Contains,
+                ItemsSource = modifyTypeSuggestions,
+                IsEnabled = !_isReadOnly,
+                Width = 180
+            };
+            EnableDropdownAutoComplete(modifyTypeAcb);
+            modifyTypeGroup.Children.Add(modifyTypeAcb);
+            modifierRow.Children.Add(modifyTypeGroup);
+
+            var applyTypeGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            applyTypeGroup.Children.Add(new TextBlock
+            {
+                Text = "Apply Type:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var applyTypeValue = (string?)chargedModify?.Attribute("applytype") ??
+                                 (string?)chargedModify?.Attribute("applyType") ?? "Multiply";
+            var applyTypeCb = new ComboBox
+            {
+                ItemsSource = new[] { "Multiply", "Add", "Set" },
+                SelectedItem = new[] { "Multiply", "Add", "Set" }
+                    .FirstOrDefault(x => x.Equals(applyTypeValue, StringComparison.OrdinalIgnoreCase)) ?? "Multiply",
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            applyTypeGroup.Children.Add(applyTypeCb);
+            modifierRow.Children.Add(applyTypeGroup);
+
+            var paramGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var paramLabel = new TextBlock
+            {
+                Text = "Damage Type:",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            paramGroup.Children.Add(paramLabel);
+            var paramValue = (string?)chargedModify?.Attribute("param") ?? "";
+            var paramAcb = new AutoCompleteBox
+            {
+                Text = ProtoConstants.KnownDamageTypes.FirstOrDefault(x => x.Equals(paramValue, StringComparison.OrdinalIgnoreCase)) ?? paramValue,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                ItemsSource = ProtoConstants.KnownDamageTypes,
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            EnableDropdownAutoComplete(paramAcb);
+            paramGroup.Children.Add(paramAcb);
+            modifierRow.Children.Add(paramGroup);
+
+            var valueGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 0, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            valueGroup.Children.Add(new TextBlock
+            {
+                Text = "Value:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var valueTb = new TextBox
+            {
+                Text = chargedModify?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            AttachProtoActionDecimalBehavior(valueTb, () => true);
+            valueGroup.Children.Add(valueTb);
+            modifierRow.Children.Add(valueGroup);
+            cardStack.Children.Add(modifierRow);
+
+            // Activation-specific fields stay beside Activation Type.
+            var activationRow = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            activationRow.Children.Add(new TextBlock
+            {
+                Text = "Activation Type:",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 4, 6, 4)
+            });
+            var activationTypeCb = new ComboBox
+            {
+                ItemsSource = ChargedModifyActivationTypes,
+                SelectedItem = ChargedModifyActivationTypes.FirstOrDefault(x => x.Equals(activationValue, StringComparison.OrdinalIgnoreCase)),
+                IsEnabled = !_isReadOnly,
+                Width = 190
+            };
+            activationRow.Children.Add(activationTypeCb);
+
+            var thresholdRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(10, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            thresholdRow.Children.Add(new TextBlock
+            {
+                Text = "Hitpoints Ratio Threshold:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var thresholdTb = new TextBox
+            {
+                Text = FindChild(sourceElement, "hitpointsratiothreshold")?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            AttachProtoActionDecimalBehavior(thresholdTb);
+            thresholdRow.Children.Add(thresholdTb);
+            activationRow.Children.Add(thresholdRow);
+
+            var terrainRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(10, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            terrainRow.Children.Add(new TextBlock
+            {
+                Text = "Terrain Type:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var terrainTypeCb = new ComboBox
+            {
+                ItemsSource = new[] { "Water", "Land" },
+                SelectedItem = new[] { "Water", "Land" }.FirstOrDefault(x => x.Equals(terrainValue, StringComparison.OrdinalIgnoreCase)),
+                IsEnabled = !_isReadOnly,
+                Width = 120
+            };
+            terrainRow.Children.Add(terrainTypeCb);
+            activationRow.Children.Add(terrainRow);
+            cardStack.Children.Add(activationRow);
+
+            // Timing and stealth share their own row below activation.
+            var timingRow = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            timingRow.Children.Add(new TextBlock
+            {
+                Text = "Cooldown (s):",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 4, 6, 4)
+            });
+            var cooldownTb = new TextBox
+            {
+                Text = FindChild(sourceElement, "cooldown")?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            AttachProtoActionDecimalBehavior(cooldownTb);
+            timingRow.Children.Add(cooldownTb);
+            timingRow.Children.Add(new TextBlock
+            {
+                Text = "Duration (s):",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 4, 6, 4)
+            });
+            var durationTb = new TextBox
+            {
+                Text = FindChild(sourceElement, "duration")?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly,
+                Width = 100
+            };
+            AttachProtoActionDecimalBehavior(durationTb);
+            timingRow.Children.Add(durationTb);
+            var stealthCb = new CheckBox
+            {
+                Content = "Activate stealth",
+                IsChecked = stealthElement != null &&
+                            !stealthElement.Value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase),
+                IsEnabled = !_isReadOnly,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0)
+            };
+            timingRow.Children.Add(stealthCb);
+            cardStack.Children.Add(timingRow);
+
+            var optionalRowsHost = new StackPanel { Spacing = 4 };
+            cardStack.Children.Add(optionalRowsHost);
+
+            var vfxRow = new Grid
+            {
+                ColumnDefinitions = !_isReadOnly
+                    ? new ColumnDefinitions("190, 220, Auto, 100, 32")
+                    : new ColumnDefinitions("190, 220, Auto, 100"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                IsVisible = FindChild(sourceElement, "chargedmodifyvfx") != null ||
+                            FindChild(sourceElement, "chargedmodifyvfxduration") != null
+            };
+            vfxRow.Children.Add(new TextBlock
+            {
+                Text = "Activation VFX:",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 4, 6, 4)
+            });
+            var vfxAcb = new AutoCompleteBox
+            {
+                Text = FindChild(sourceElement, "chargedmodifyvfx")?.Value?.Trim() ?? "",
+                FilterMode = AutoCompleteFilterMode.Contains,
+                ItemsSource = protoUnitSuggestions,
+                IsEnabled = !_isReadOnly
+            };
+            EnableDropdownAutoComplete(vfxAcb);
+            Grid.SetColumn(vfxAcb, 1);
+            vfxRow.Children.Add(vfxAcb);
+            var vfxDurationLabel = new TextBlock
+            {
+                Text = "VFX Duration (s):",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 4, 6, 4)
+            };
+            Grid.SetColumn(vfxDurationLabel, 2);
+            vfxRow.Children.Add(vfxDurationLabel);
+            var vfxDurationTb = new TextBox
+            {
+                Text = FindChild(sourceElement, "chargedmodifyvfxduration")?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly
+            };
+            AttachProtoActionDecimalBehavior(vfxDurationTb);
+            Grid.SetColumn(vfxDurationTb, 3);
+            vfxRow.Children.Add(vfxDurationTb);
+            optionalRowsHost.Children.Add(vfxRow);
+
+            var setTacticRow = new Grid
+            {
+                ColumnDefinitions = !_isReadOnly ? new ColumnDefinitions("190, 260, 32") : new ColumnDefinitions("190, 260"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                IsVisible = FindChild(sourceElement, "settactic") != null
+            };
+            setTacticRow.Children.Add(new TextBlock
+            {
+                Text = "Set Tactic:",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 4, 6, 4)
+            });
+            var setTacticTb = new TextBox
+            {
+                Text = FindChild(sourceElement, "settactic")?.Value?.Trim() ?? "",
+                IsEnabled = !_isReadOnly,
+                Width = 260
+            };
+            Grid.SetColumn(setTacticTb, 1);
+            setTacticRow.Children.Add(setTacticTb);
+            optionalRowsHost.Children.Add(setTacticRow);
+
+            var attachmentRow = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                IsVisible = FindChild(sourceElement, "chargedmodelattachment") != null ||
+                            FindChild(sourceElement, "chargedmodelattachmentbone") != null
+            };
+            var attachmentWrap = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            attachmentRow.Children.Add(attachmentWrap);
+
+            var attachmentPathGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            attachmentPathGroup.Children.Add(new TextBlock
+            {
+                Text = "Charged Model Attachment:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var attachmentEditor = CreateAssetPathEditor(
+                "chargedmodelattachment",
+                FindChild(sourceElement, "chargedmodelattachment")?.Value?.Trim() ?? "",
+                attachmentSuggestions);
+            attachmentEditor.Width = 360;
+            attachmentPathGroup.Children.Add(attachmentEditor);
+            attachmentWrap.Children.Add(attachmentPathGroup);
+
+            var attachmentBoneGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 0, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            attachmentBoneGroup.Children.Add(new TextBlock
+            {
+                Text = "Attachment Bone:",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var attachmentBoneAcb = new AutoCompleteBox
+            {
+                Text = FindChild(sourceElement, "chargedmodelattachmentbone")?.Value?.Trim() ?? "",
+                FilterMode = AutoCompleteFilterMode.Contains,
+                ItemsSource = attachmentBoneSuggestions,
+                IsEnabled = !_isReadOnly,
+                Width = 140
+            };
+            EnableDropdownAutoComplete(attachmentBoneAcb);
+            attachmentBoneGroup.Children.Add(attachmentBoneAcb);
+            attachmentWrap.Children.Add(attachmentBoneGroup);
+            optionalRowsHost.Children.Add(attachmentRow);
+
+            Button? addVfxButton = null;
+            Button? addSetTacticButton = null;
+            Button? addAttachmentButton = null;
+
+            void RefreshOptionalButtons()
+            {
+                if (addVfxButton != null)
+                    addVfxButton.IsVisible = !vfxRow.IsVisible;
+                if (addSetTacticButton != null)
+                    addSetTacticButton.IsVisible = !setTacticRow.IsVisible;
+                if (addAttachmentButton != null)
+                    addAttachmentButton.IsVisible = !attachmentRow.IsVisible;
+            }
+
+            if (!_isReadOnly)
+            {
+                Button CreateRemoveButton(Action clearAndHide)
+                {
+                    var button = new Button
+                    {
+                        Content = "X",
+                        Background = Brush.Parse("#8b0000"),
+                        Width = 28,
+                        Height = 28,
+                        Padding = new Thickness(0),
+                        HorizontalContentAlignment = HorizontalAlignment.Center,
+                        VerticalContentAlignment = VerticalAlignment.Center
+                    };
+                    button.Click += async (_, _) =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed)
+                            return;
+                        clearAndHide();
+                        RefreshOptionalButtons();
+                        MarkDirty();
+                    };
+                    return button;
+                }
+
+                var removeVfxButton = CreateRemoveButton(() =>
+                {
+                    vfxAcb.Text = "";
+                    vfxDurationTb.Text = "";
+                    vfxRow.IsVisible = false;
+                });
+                Grid.SetColumn(removeVfxButton, 4);
+                vfxRow.Children.Add(removeVfxButton);
+
+                var removeSetTacticButton = CreateRemoveButton(() =>
+                {
+                    setTacticTb.Text = "";
+                    setTacticRow.IsVisible = false;
+                });
+                Grid.SetColumn(removeSetTacticButton, 2);
+                setTacticRow.Children.Add(removeSetTacticButton);
+
+                var removeAttachmentButton = CreateRemoveButton(() =>
+                {
+                    attachmentEditor.Configure("", attachmentSuggestions, HandleAssetPathChangedAsync);
+                    attachmentBoneAcb.Text = "";
+                    attachmentRow.IsVisible = false;
+                });
+                removeAttachmentButton.Margin = new Thickness(0, 0, 0, 4);
+                attachmentWrap.Children.Add(removeAttachmentButton);
+
+                var optionalButtons = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 3, 0, 0)
+                };
+                cardStack.Children.Add(optionalButtons);
+
+                Button CreateAddButton(string text, Action show)
+                {
+                    var button = new Button
+                    {
+                        Content = text,
+                        Background = Brush.Parse("#2b7a0b"),
+                        Margin = new Thickness(0, 0, 6, 4)
+                    };
+                    button.Click += async (_, _) =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed)
+                            return;
+                        show();
+                        RefreshOptionalButtons();
+                        MarkDirty();
+                    };
+                    optionalButtons.Children.Add(button);
+                    return button;
+                }
+
+                addVfxButton = CreateAddButton("+ VFX", () => vfxRow.IsVisible = true);
+                addSetTacticButton = CreateAddButton("+ Set Tactic", () => setTacticRow.IsVisible = true);
+                addAttachmentButton = CreateAddButton("+ Model Attachment", () => attachmentRow.IsVisible = true);
+                RefreshOptionalButtons();
+            }
+
+            void RefreshConditionalRows()
+            {
+                var selectedActivation = activationTypeCb.SelectedItem as string ?? "";
+                thresholdRow.IsVisible = selectedActivation.Equals("BelowHitpointsThreshold", StringComparison.OrdinalIgnoreCase);
+                terrainRow.IsVisible = selectedActivation.Equals("TerrainType", StringComparison.OrdinalIgnoreCase);
+            }
+
+            void RefreshParamVisibility()
+            {
+                var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
+                paramGroup.IsVisible = visible;
+            }
+
+            modifyTypeAcb.TextChanged += async (_, _) =>
+            {
+                RefreshParamVisibility();
+                await HandleChangedAsync();
+            };
+            applyTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+            paramAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            activationTypeCb.SelectionChanged += async (_, _) =>
+            {
+                RefreshConditionalRows();
+                await HandleChangedAsync();
+            };
+            cooldownTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            durationTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            thresholdTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            terrainTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+            stealthCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            vfxAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            vfxDurationTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            setTacticTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            attachmentBoneAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+
+            RefreshParamVisibility();
+            RefreshConditionalRows();
+
+            state.FullChargedRows.Add(new ProtoActionFullChargedState
+            {
+                OriginalElement = originalElement,
+                ModifyTypeAcb = modifyTypeAcb,
+                ApplyTypeCb = applyTypeCb,
+                ParamAcb = paramAcb,
+                ValueTb = valueTb,
+                ActivationTypeCb = activationTypeCb,
+                CooldownTb = cooldownTb,
+                DurationTb = durationTb,
+                ThresholdRow = thresholdRow,
+                ThresholdTb = thresholdTb,
+                TerrainRow = terrainRow,
+                TerrainTypeCb = terrainTypeCb,
+                StealthCb = stealthCb,
+                VfxRow = vfxRow,
+                VfxAcb = vfxAcb,
+                VfxDurationTb = vfxDurationTb,
+                SetTacticRow = setTacticRow,
+                SetTacticTb = setTacticTb,
+                AttachmentRow = attachmentRow,
+                ChargedModelAttachmentEditor = attachmentEditor,
+                ChargedModelAttachmentBoneAcb = attachmentBoneAcb
+            });
+
+            cardsHost.Children.Add(card);
+        }
+    }
+
     private List<ProtoActionOnHitEffectEntry> CollectProtoActionOnHitEffectEntries(ProtoActionWidgetState state)
     {
         var result = new List<ProtoActionOnHitEffectEntry>();
@@ -20500,6 +21156,144 @@ public partial class ProtoEditorWindow : SimpleWindow
                 chargedModify.SetAttributeValue("modifyamountcap", modifyAmountCap);
 
             elements.Add(new XElement("charged", chargedModify));
+        }
+
+        return elements;
+    }
+
+    private List<XElement> BuildFullChargedElements(ProtoActionWidgetState state)
+    {
+        var elements = new List<XElement>();
+
+        static XElement? FindChild(XElement parent, string tag)
+            => parent.Elements().FirstOrDefault(x => x.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+
+        static void SetChildValue(XElement parent, string tag, string value)
+        {
+            var matches = parent.Elements()
+                .Where(x => x.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                foreach (var match in matches)
+                    match.Remove();
+                return;
+            }
+
+            var child = matches.FirstOrDefault();
+            if (child == null)
+            {
+                parent.Add(new XElement(tag, value));
+                return;
+            }
+
+            child.Name = tag;
+            child.Value = value;
+            foreach (var duplicate in matches.Skip(1))
+                duplicate.Remove();
+        }
+
+        foreach (var row in state.FullChargedRows)
+        {
+            var modifyType = ProtoConstants.GetModifyTypeValue(row.ModifyTypeAcb.Text?.Trim() ?? "");
+            var applyType = row.ApplyTypeCb.SelectedItem as string ?? "Multiply";
+            var param = row.ParamAcb.Text?.Trim() ?? "";
+            var value = row.ValueTb.Text?.Trim() ?? "";
+            var activationType = row.ActivationTypeCb.SelectedItem as string ?? "";
+            var cooldown = row.CooldownTb.Text?.Trim() ?? "";
+            var duration = row.DurationTb.Text?.Trim() ?? "";
+            var threshold = row.ThresholdTb.Text?.Trim() ?? "";
+            var terrainType = row.TerrainTypeCb.SelectedItem as string ?? "";
+            var vfx = row.VfxRow.IsVisible ? row.VfxAcb.Text?.Trim() ?? "" : "";
+            var vfxDuration = row.VfxRow.IsVisible ? row.VfxDurationTb.Text?.Trim() ?? "" : "";
+            var setTactic = row.SetTacticRow.IsVisible ? row.SetTacticTb.Text?.Trim() ?? "" : "";
+            var attachment = row.AttachmentRow.IsVisible ? row.ChargedModelAttachmentEditor.FullValue : "";
+            var attachmentBone = row.AttachmentRow.IsVisible ? row.ChargedModelAttachmentBoneAcb.Text?.Trim() ?? "" : "";
+            var stealthEnabled = row.StealthCb.IsChecked == true;
+
+            var hasCurrentContent =
+                !string.IsNullOrWhiteSpace(modifyType) ||
+                !string.IsNullOrWhiteSpace(value) ||
+                !string.IsNullOrWhiteSpace(activationType) ||
+                !string.IsNullOrWhiteSpace(cooldown) ||
+                !string.IsNullOrWhiteSpace(duration) ||
+                !string.IsNullOrWhiteSpace(param) ||
+                !string.IsNullOrWhiteSpace(threshold) ||
+                !string.IsNullOrWhiteSpace(terrainType) ||
+                !string.IsNullOrWhiteSpace(vfx) ||
+                !string.IsNullOrWhiteSpace(vfxDuration) ||
+                !string.IsNullOrWhiteSpace(setTactic) ||
+                !string.IsNullOrWhiteSpace(attachment) ||
+                !string.IsNullOrWhiteSpace(attachmentBone) ||
+                stealthEnabled;
+
+            if (!row.OriginalElement.HasElements && !row.OriginalElement.HasAttributes && !hasCurrentContent)
+                continue;
+
+            var charged = new XElement(row.OriginalElement);
+            charged.Name = "charged";
+
+            var chargedModify = FindChild(charged, "chargedmodify");
+            var shouldHaveChargedModify = chargedModify != null || hasCurrentContent;
+            if (shouldHaveChargedModify)
+            {
+                if (chargedModify == null)
+                {
+                    chargedModify = new XElement("chargedmodify");
+                    charged.AddFirst(chargedModify);
+                }
+                else
+                {
+                    chargedModify.Name = "chargedmodify";
+                }
+
+                foreach (var attribute in chargedModify.Attributes()
+                    .Where(x => x.Name.LocalName.Equals("modifytype", StringComparison.OrdinalIgnoreCase) ||
+                                x.Name.LocalName.Equals("applytype", StringComparison.OrdinalIgnoreCase) ||
+                                x.Name.LocalName.Equals("param", StringComparison.OrdinalIgnoreCase))
+                    .ToList())
+                {
+                    attribute.Remove();
+                }
+
+                if (!string.IsNullOrWhiteSpace(modifyType))
+                    chargedModify.SetAttributeValue("modifytype", modifyType);
+                if (!string.IsNullOrWhiteSpace(applyType) &&
+                    !applyType.Equals("Multiply", StringComparison.OrdinalIgnoreCase))
+                {
+                    chargedModify.SetAttributeValue("applytype", applyType);
+                }
+
+                if (modifyType is "DamageSpecific" or "ArmorSpecific" && !string.IsNullOrWhiteSpace(param))
+                {
+                    var normalizedParam = ProtoConstants.KnownDamageTypes
+                        .FirstOrDefault(x => x.Equals(param, StringComparison.OrdinalIgnoreCase)) ?? param;
+                    chargedModify.SetAttributeValue("param", normalizedParam);
+                }
+
+                chargedModify.Value = value;
+            }
+
+            SetChildValue(charged, "activationtype", activationType);
+            SetChildValue(charged, "cooldown", cooldown);
+            SetChildValue(charged, "duration", duration);
+            SetChildValue(
+                charged,
+                "hitpointsratiothreshold",
+                activationType.Equals("BelowHitpointsThreshold", StringComparison.OrdinalIgnoreCase) ? threshold : "");
+            SetChildValue(
+                charged,
+                "terraintype",
+                activationType.Equals("TerrainType", StringComparison.OrdinalIgnoreCase) ? terrainType : "");
+            SetChildValue(charged, "chargedmodifyvfx", vfx);
+            SetChildValue(charged, "chargedmodifyvfxduration", vfxDuration);
+            SetChildValue(charged, "settactic", setTactic);
+            SetChildValue(charged, "chargedmodelattachment", attachment);
+            SetChildValue(charged, "chargedmodelattachmentbone", attachmentBone);
+            SetChildValue(charged, "stealth", stealthEnabled ? "1" : "");
+
+            elements.Add(charged);
         }
 
         return elements;
@@ -28394,20 +29188,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         };
 
-        typeAcb.SelectionChanged += async (s, e) =>
+        // SelectionChanged normally also raises TextChanged. Let TextChanged perform
+        // the metadata rebuild so selecting an action type cannot rebuild the editor twice
+        // during the same AutoCompleteBox interaction.
+        typeAcb.SelectionChanged += (_, _) =>
         {
-            if (!_isPopulating)
-            {
-                var proceed = await CheckStartLocalMod();
-                if (proceed)
-                {
-                    if (typeAcb.SelectedItem is string selectedType && !string.IsNullOrWhiteSpace(selectedType))
-                        typeAcb.Text = selectedType;
+            if (_isPopulating)
+                return;
 
-                    RefreshProtoActionMetadataPanels(state);
-                    onActionTypeChanged?.Invoke(state);
-                    MarkDirty();
-                }
+            if (typeAcb.SelectedItem is string selectedType &&
+                !string.IsNullOrWhiteSpace(selectedType) &&
+                !selectedType.Equals(typeAcb.Text?.Trim() ?? "", StringComparison.OrdinalIgnoreCase))
+            {
+                typeAcb.Text = selectedType;
             }
         };
 
@@ -30237,6 +31030,27 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (IsBolsterActionType(currentActionType) || IsRampageActionType(currentActionType))
             {
                 var currentCharged = BuildChargedElements(pw);
+                var tacticsCharged = tacticsAction?.AdditionalElements
+                    .Where(x => x.Name.LocalName.Equals("charged", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => new XElement(x))
+                    .ToList() ?? [];
+                var originalCharged = pw.Model.AdditionalElements
+                    .Where(x => x.Name.LocalName.Equals("charged", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => new XElement(x))
+                    .ToList();
+
+                pa.AdditionalElements.RemoveAll(x => x.Name.LocalName.Equals("charged", StringComparison.OrdinalIgnoreCase));
+                if (!ChargedElementsEqual(currentCharged, tacticsCharged) ||
+                    ChargedElementsEqual(originalCharged, currentCharged))
+                {
+                    foreach (var element in currentCharged)
+                        pa.AdditionalElements.Add(new XElement(element));
+                }
+            }
+
+            if (IsChargedModifyActionType(currentActionType))
+            {
+                var currentCharged = BuildFullChargedElements(pw);
                 var tacticsCharged = tacticsAction?.AdditionalElements
                     .Where(x => x.Name.LocalName.Equals("charged", StringComparison.OrdinalIgnoreCase))
                     .Select(x => new XElement(x))

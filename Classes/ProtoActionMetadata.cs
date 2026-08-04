@@ -605,6 +605,10 @@ public static class ProtoActionMetadataCatalog
         ["Empower"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["anim", "maxrange"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase)),
+        ["ChargedModify"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: [],
+            HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["persistent"]),
         ["Bolster"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["modifyamount", "anim", "maxrange", "rate", "projectile"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
