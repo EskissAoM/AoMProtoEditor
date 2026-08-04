@@ -388,7 +388,9 @@ public static class ProtoActionMetadataCatalog
         "transformskipplacementpush",
         "triggerafteridle",
         "volleymode",
+        "unintentionaldamagemultiplier",
         "workonabductedunits",
+        "workonchaosunits",
         "workonfrozenunits",
         "workonstonedamageunits",
         "workonstoneunits",
@@ -422,6 +424,10 @@ public static class ProtoActionMetadataCatalog
 
     private static readonly Dictionary<string, ProtoActionTypeEditorProfile> EditorProfiles = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["Attack"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["rof", "maxrange", "damage", "damagebonus", "rate"],
+            HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["attackaction"]),
         ["Drone"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["persistent"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
