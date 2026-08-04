@@ -3660,6 +3660,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         return editor;
     }
 
+    private IEnumerable<string> GetAssetPathSuggestions(string tag, IEnumerable<string>? additionalValues = null)
+    {
+        var staticValues = ProtoConstants.FieldSuggestions.TryGetValue(tag, out var suggestions)
+            ? suggestions
+            : [];
+        var barValues = _barXmlRoot?.Descendants(tag).Select(element => element.Value) ?? Enumerable.Empty<string>();
+        var modValues = _modXmlRoot?.Descendants(tag).Select(element => element.Value) ?? Enumerable.Empty<string>();
+        return staticValues.Concat(barValues).Concat(modValues).Concat(additionalValues ?? []);
+    }
+
     private static string ReadControlValue(Control control) => control switch
     {
         AssetPathEditor pathEditor => pathEditor.FullValue,
@@ -22081,7 +22091,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 AssetPathEditor CreateValueEditor(string value, Thickness margin)
                 {
-                    var editor = CreateAssetPathEditor(field.Tag, value, suggestionList);
+                    var allCulturePathValues = suggestionList
+                        .Concat(fieldEntries.Select(entry => entry.Value));
+                    var editor = CreateAssetPathEditor(field.Tag, value, GetAssetPathSuggestions(field.Tag, allCulturePathValues));
                     editor.IsEnabled = !_isReadOnly;
                     editor.Margin = margin;
                     return editor;
@@ -22383,10 +22395,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (AssetPathFieldTags.Contains(field.Tag))
             {
-                var sourceValues = ProtoConstants.FieldSuggestions.TryGetValue(field.Tag, out var assetSuggestions)
-                    ? assetSuggestions
-                    : [];
-                control = CreateAssetPathEditor(field.Tag, initialValue, sourceValues);
+                control = CreateAssetPathEditor(field.Tag, initialValue, GetAssetPathSuggestions(field.Tag));
             }
             else if (field.Mode == FieldInputMode.Number && control is TextBox numericTextBox)
                 EditorNumericFieldStyle.ConfigureNumericTextBox(numericTextBox);

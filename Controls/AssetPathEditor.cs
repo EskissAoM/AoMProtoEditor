@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using CryBarEditor.Classes;
@@ -13,12 +14,10 @@ public sealed class AssetPathEditor : Grid
     private bool _editing;
     private bool _suppress;
     private Func<string, Task>? _changed;
-    private readonly Border _compactBorder;
 
-    public TextBlock CompactPresenter { get; } = new()
+    public TextBox CompactPresenter { get; } = new()
     {
-        Background = Avalonia.Media.Brush.Parse("#1b1b1b"),
-        Padding = new Avalonia.Thickness(8, 6),
+        IsReadOnly = true,
         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch
     };
     public AutoCompleteBox Editor { get; } = new() { FilterMode = AutoCompleteFilterMode.Contains, IsVisible = false };
@@ -27,14 +26,7 @@ public sealed class AssetPathEditor : Grid
 
     public AssetPathEditor()
     {
-        _compactBorder = new Border
-        {
-            Background = CompactPresenter.Background,
-            CornerRadius = new Avalonia.CornerRadius(3),
-            MinHeight = 32,
-            Child = CompactPresenter
-        };
-        Children.Add(_compactBorder);
+        Children.Add(CompactPresenter);
         Children.Add(Editor);
         Editor.ItemTemplate = new FuncDataTemplate<PathSuggestion>((item, _) => new TextBlock { Text = item?.DisplayValue ?? "" });
         Editor.ItemFilter = (search, item) => item is PathSuggestion suggestion &&
@@ -43,7 +35,11 @@ public sealed class AssetPathEditor : Grid
         EditorTextFieldStyle.ConfigureSelector(Editor);
         Width = EditorTextFieldStyle.StandardWidth;
         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
-        _compactBorder.PointerPressed += (_, _) => { if (IsEnabled) BeginEdit(); };
+        CompactPresenter.AddHandler(InputElement.PointerPressedEvent, (_, _) =>
+        {
+            if (IsEnabled)
+                BeginEdit();
+        }, RoutingStrategies.Tunnel, handledEventsToo: true);
         Editor.SelectionChanged += async (_, _) =>
         {
             if (_suppress || Editor.SelectedItem is not PathSuggestion item) return;
@@ -73,7 +69,7 @@ public sealed class AssetPathEditor : Grid
         if (string.IsNullOrWhiteSpace(FullValue) && IsEnabled)
         {
             _editing = true;
-            _compactBorder.IsVisible = false;
+            CompactPresenter.IsVisible = false;
             Editor.IsVisible = true;
         }
     }
@@ -87,7 +83,7 @@ public sealed class AssetPathEditor : Grid
     }
     private void BeginEdit()
     {
-        _editing = true; _compactBorder.IsVisible = false; Editor.IsVisible = true;
+        _editing = true; CompactPresenter.IsVisible = false; Editor.IsVisible = true;
         _suppress = true; try { Editor.Text = FullValue; } finally { _suppress = false; }
         Editor.Focus();
         Editor.IsDropDownOpen = true;
@@ -101,11 +97,10 @@ public sealed class AssetPathEditor : Grid
             }
         }, DispatcherPriority.Input);
     }
-    private void EndEdit() { _editing = false; Editor.IsVisible = false; _compactBorder.IsVisible = true; Refresh(); }
+    private void EndEdit() { _editing = false; Editor.IsVisible = false; CompactPresenter.IsVisible = true; Refresh(); }
     private void Refresh()
     {
         CompactPresenter.Text = Suggestions.FirstOrDefault(x => x.FullValue.Equals(FullValue, StringComparison.OrdinalIgnoreCase))?.DisplayValue ?? FullValue;
-        _compactBorder.Background = CompactPresenter.Background;
         ToolTip.SetTip(this, FullValue);
     }
 }
