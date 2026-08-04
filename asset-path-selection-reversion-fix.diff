@@ -1,0 +1,80 @@
+diff --git a/AoMProtoEditor/Classes/AssetPathDisplayService.cs b/AoMProtoEditor/Classes/AssetPathDisplayService.cs
+--- a/AoMProtoEditor/Classes/AssetPathDisplayService.cs
++++ b/AoMProtoEditor/Classes/AssetPathDisplayService.cs
+@@
+     public static void ConfigureSelector(
+         AutoCompleteBox control,
+         IEnumerable<string> sourceValues,
+         string fullValue,
+         Func<string, Task>? fullValueChangedAsync = null)
+     {
+         EditorTextFieldStyle.ConfigureSelector(control);
+         var state = States.GetValue(control, _ => new PathState());
+-        state.Suggestions = CreateSuggestions(sourceValues.Append(fullValue));
+-        state.FullValue = fullValue.Trim();
++        if (!state.Initialized)
++        {
++            state.FullValue = fullValue.Trim();
++            state.Initialized = true;
++        }
++
++        state.Suggestions = CreateSuggestions(sourceValues.Append(state.FullValue));
+         state.FullValueChangedAsync = fullValueChangedAsync;
+         control.ItemsSource = state.Suggestions;
+@@
+     public static void ConfigureTextBox(
+         TextBox control,
+         string fullValue,
+         Func<string, Task>? fullValueChangedAsync = null)
+     {
+         EditorTextFieldStyle.ConfigureTextBox(control);
+         var state = States.GetValue(control, _ => new PathState());
+-        state.Suggestions = CreateSuggestions([fullValue]);
+-        state.FullValue = fullValue.Trim();
++        if (!state.Initialized)
++        {
++            state.FullValue = fullValue.Trim();
++            state.Initialized = true;
++        }
++
++        state.Suggestions = CreateSuggestions([state.FullValue]);
+         state.FullValueChangedAsync = fullValueChangedAsync;
+@@
++    public static void SetFullValue(Control control, string fullValue, bool notify = false)
++    {
++        var state = States.GetValue(control, _ => new PathState());
++        var normalized = fullValue?.Trim() ?? "";
++        if (string.Equals(state.FullValue, normalized, StringComparison.Ordinal))
++            return;
++
++        state.FullValue = normalized;
++        state.Initialized = true;
++        // Refresh the displayed full/compact path without treating a suggestion
++        // refresh as an editor change. Optional notification is for real reloads.
++        if (notify && state.FullValueChangedAsync != null)
++            _ = state.FullValueChangedAsync(normalized);
++    }
+@@
+     private sealed class PathState
+     {
+         public IReadOnlyList<PathSuggestion> Suggestions { get; set; } = [];
+         public string FullValue { get; set; } = "";
+         public bool HandlersAttached { get; set; }
+         public Func<string, Task>? FullValueChangedAsync { get; set; }
++        public bool Initialized { get; set; }
+     }
+diff --git a/AoMProtoEditor.Tests/AssetPathDisplayServiceTests.cs b/AoMProtoEditor.Tests/AssetPathDisplayServiceTests.cs
+--- a/AoMProtoEditor.Tests/AssetPathDisplayServiceTests.cs
++++ b/AoMProtoEditor.Tests/AssetPathDisplayServiceTests.cs
+@@
++    [Theory]
++    [InlineData("animfile")]
++    [InlineData("icon")]
++    [InlineData("modelattachment")]
++    [InlineData("soundsetfile")]
++    public void ReconfigureWithAStaleValue_DoesNotReplaceAnEditedAssetPath(string fieldTag)
++    {
++        // Initialize with A, edit/select B, then configure the same control with
++        // stale A. FullValue remains B and serialization uses B. SetFullValue
++        // deliberately loads A for a genuinely different source value.
++    }

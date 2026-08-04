@@ -1,8 +1,3 @@
-using System.Runtime.CompilerServices;
-using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Input;
-
 namespace CryBarEditor.Classes;
 
 public sealed record PathSuggestion(string FullValue, string DisplayValue)
@@ -13,207 +8,32 @@ public sealed record PathSuggestion(string FullValue, string DisplayValue)
 public static class AssetPathDisplayService
 {
     private static readonly string[] IgnoredDisplayPrefixes = ["resources"];
-    private static readonly ConditionalWeakTable<Control, PathState> States = new();
 
     public static IReadOnlyList<PathSuggestion> CreateSuggestions(IEnumerable<string> values)
     {
-        var fullPaths = values
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .GroupBy(NormalizeForComparison, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .ToList();
-
-        var normalized = fullPaths.ToDictionary(value => value, NormalizeForComparison, StringComparer.OrdinalIgnoreCase);
-        var displayByFullValue = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in fullPaths.GroupBy(value => FileName(normalized[value]), StringComparer.OrdinalIgnoreCase))
+        var paths = values.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim())
+            .GroupBy(Normalize, StringComparer.OrdinalIgnoreCase).Select(x => x.First()).ToList();
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in paths.GroupBy(x => Parts(x).LastOrDefault() ?? x, StringComparer.OrdinalIgnoreCase))
         {
-            var paths = group.ToList();
-            if (paths.Count == 1)
+            var groupPaths = group.ToList();
+            foreach (var path in groupPaths)
             {
-                displayByFullValue[paths[0]] = group.Key;
-                continue;
-            }
-
-            var segments = paths.ToDictionary(path => path, path => PrefixSegments(normalized[path]), StringComparer.OrdinalIgnoreCase);
-            foreach (var path in paths)
-            {
-                var prefix = segments[path];
-                var length = 1;
-                while (length < prefix.Length && paths.Any(other =>
-                    !other.Equals(path, StringComparison.OrdinalIgnoreCase) &&
-                    SameLeadingSegments(prefix, segments[other], length)))
-                {
-                    length++;
-                }
-
-                var labelPrefix = string.Join("\\", prefix.Take(length));
-                displayByFullValue[path] = string.IsNullOrEmpty(labelPrefix)
-                    ? group.Key
-                    : $"{labelPrefix}\\...\\{group.Key}";
+                if (groupPaths.Count == 1) { labels[path] = group.Key; continue; }
+                var parts = Parts(path).Take(Math.Max(0, Parts(path).Length - 1)).ToArray();
+                var count = 1;
+                while (count < parts.Length && groupPaths.Any(other => other != path && Parts(other).Take(count).SequenceEqual(parts.Take(count), StringComparer.OrdinalIgnoreCase))) count++;
+                labels[path] = string.Join("\\", parts.Take(count)) + "\\...\\" + group.Key;
             }
         }
-
-        return fullPaths
-            .Select(value => new PathSuggestion(value, displayByFullValue[value]))
-            .OrderBy(value => value.DisplayValue, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return paths.Select(x => new PathSuggestion(x, labels[x])).OrderBy(x => x.DisplayValue, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    public static void ConfigureSelector(AutoCompleteBox control, IEnumerable<string> sourceValues, string fullValue)
+    private static string Normalize(string value) => value.Replace('/', '\\').Trim();
+    private static string[] Parts(string value)
     {
-        EditorTextFieldStyle.ConfigureSelector(control);
-        var state = States.GetValue(control, _ => new PathState());
-        state.Suggestions = CreateSuggestions(sourceValues.Append(fullValue));
-        state.FullValue = fullValue.Trim();
-        control.ItemsSource = state.Suggestions;
-        if (!state.HandlersAttached)
-        {
-            AttachSelectorHandlers(control, state);
-            state.HandlersAttached = true;
-        }
-
-        if (control.IsFocused)
-            SetText(control, state, state.FullValue);
-        else
-            SetDisplayText(control, state, state.FullValue);
-        ToolTip.SetTip(control, state.FullValue);
-    }
-
-    private static void AttachSelectorHandlers(AutoCompleteBox control, PathState state)
-    {
-        control.SelectionChanged += (_, _) =>
-        {
-            if (state.IsUpdatingDisplay)
-                return;
-
-            if (control.SelectedItem is not PathSuggestion suggestion)
-                return;
-
-            state.FullValue = suggestion.FullValue;
-            ToolTip.SetTip(control, state.FullValue);
-            SetText(control, state, state.FullValue);
-        };
-        control.GotFocus += (_, _) => SetText(control, state, state.FullValue);
-        control.LostFocus += (_, _) =>
-        {
-            if (!state.IsUpdatingDisplay)
-                state.FullValue = control.Text?.Trim() ?? string.Empty;
-            SetDisplayText(control, state, state.FullValue);
-            ToolTip.SetTip(control, state.FullValue);
-        };
-        control.TextChanged += (_, _) =>
-        {
-            if (!state.IsUpdatingDisplay && control.IsFocused)
-                state.FullValue = control.Text?.Trim() ?? string.Empty;
-        };
-    }
-
-    public static void ConfigureTextBox(TextBox control, string fullValue)
-    {
-        EditorTextFieldStyle.ConfigureTextBox(control);
-        var state = States.GetValue(control, _ => new PathState());
-        state.Suggestions = CreateSuggestions([fullValue]);
-        state.FullValue = fullValue.Trim();
-        if (!state.HandlersAttached)
-        {
-            AttachTextBoxHandlers(control, state);
-            state.HandlersAttached = true;
-        }
-
-        if (control.IsFocused)
-            SetText(control, state, state.FullValue);
-        else
-            SetDisplayText(control, state, state.FullValue);
-        ToolTip.SetTip(control, state.FullValue);
-    }
-
-    private static void AttachTextBoxHandlers(TextBox control, PathState state)
-    {
-        control.GotFocus += (_, _) => SetText(control, state, state.FullValue);
-        control.LostFocus += (_, _) =>
-        {
-            if (!state.IsUpdatingDisplay)
-                state.FullValue = control.Text?.Trim() ?? string.Empty;
-            SetDisplayText(control, state, state.FullValue);
-            ToolTip.SetTip(control, state.FullValue);
-        };
-        control.TextChanged += (_, _) =>
-        {
-            if (!state.IsUpdatingDisplay && control.IsFocused)
-                state.FullValue = control.Text?.Trim() ?? string.Empty;
-        };
-    }
-
-    public static string GetFullValue(Control control) => States.TryGetValue(control, out var state)
-        ? state.FullValue
-        : control switch
-        {
-            TextBox textBox => textBox.Text?.Trim() ?? string.Empty,
-            AutoCompleteBox selector => selector.Text?.Trim() ?? string.Empty,
-            _ => string.Empty,
-        };
-
-    private static void SetDisplayText(AutoCompleteBox control, PathState state, string fullValue)
-        => SetText(control, state, state.Suggestions.FirstOrDefault(item => item.FullValue.Equals(fullValue, StringComparison.OrdinalIgnoreCase))?.DisplayValue ?? fullValue);
-
-    private static void SetDisplayText(TextBox control, PathState state, string fullValue)
-        => SetText(control, state, state.Suggestions.FirstOrDefault(item => item.FullValue.Equals(fullValue, StringComparison.OrdinalIgnoreCase))?.DisplayValue ?? fullValue);
-
-    private static void SetText(AutoCompleteBox control, PathState state, string value)
-    {
-        if (string.Equals(control.Text, value, StringComparison.Ordinal))
-            return;
-
-        state.IsUpdatingDisplay = true;
-        try
-        {
-            control.Text = value;
-        }
-        finally
-        {
-            state.IsUpdatingDisplay = false;
-        }
-    }
-
-    private static void SetText(TextBox control, PathState state, string value)
-    {
-        if (string.Equals(control.Text, value, StringComparison.Ordinal))
-            return;
-
-        state.IsUpdatingDisplay = true;
-        try
-        {
-            control.Text = value;
-        }
-        finally
-        {
-            state.IsUpdatingDisplay = false;
-        }
-    }
-
-    private static string NormalizeForComparison(string value) => value.Replace('/', '\\').Trim();
-
-    private static string FileName(string normalizedPath)
-        => normalizedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? normalizedPath;
-
-    private static string[] PrefixSegments(string normalizedPath)
-    {
-        var segments = normalizedPath.Split('\\', StringSplitOptions.RemoveEmptyEntries).ToList();
-        if (segments.Count > 0 && IgnoredDisplayPrefixes.Contains(segments[0], StringComparer.OrdinalIgnoreCase))
-            segments.RemoveAt(0);
-        return segments.Take(Math.Max(0, segments.Count - 1)).ToArray();
-    }
-
-    private static bool SameLeadingSegments(string[] left, string[] right, int length)
-        => left.Length >= length && right.Length >= length &&
-           left.Take(length).SequenceEqual(right.Take(length), StringComparer.OrdinalIgnoreCase);
-
-    private sealed class PathState
-    {
-        public IReadOnlyList<PathSuggestion> Suggestions { get; set; } = [];
-        public string FullValue { get; set; } = "";
-        public bool IsUpdatingDisplay { get; set; }
-        public bool HandlersAttached { get; set; }
+        var parts = Normalize(value).Split('\\', StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (parts.Count > 0 && IgnoredDisplayPrefixes.Contains(parts[0], StringComparer.OrdinalIgnoreCase)) parts.RemoveAt(0);
+        return parts.ToArray();
     }
 }

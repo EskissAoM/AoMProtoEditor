@@ -18,6 +18,7 @@ using Avalonia.Threading;
 using CryBar;
 using CryBar.Bar;
 using CryBarEditor.Classes;
+using CryBarEditor.Controls;
 
 namespace CryBarEditor.Windows;
 
@@ -307,7 +308,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required CheckBox ActiveCb { get; set; }
         public required AutoCompleteBox AnimAcb { get; set; }
         public required TextBox EmpowerAreaTb { get; set; }
-        public required TextBox ModelAttachmentTb { get; set; }
+        public required AssetPathEditor ModelAttachmentEditor { get; set; }
         public required AutoCompleteBox ModelAttachmentBoneAcb { get; set; }
         public bool IsAnimVisible { get; set; }
         public bool IsEmpowerAreaVisible { get; set; }
@@ -427,7 +428,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         public required Panel RowPanel { get; set; }
         public required ComboBox CultureCb { get; set; }
-        public required AutoCompleteBox ValueAcb { get; set; }
+        public required AssetPathEditor ValueEditor { get; set; }
     }
 
     private class ResourceConversionRowState
@@ -3624,8 +3625,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             ProtoActionFieldEditorKind.Toggle when control is CheckBox checkBox => checkBox.IsChecked == true ? "1" : "",
             _ when control is ComboBox comboBox => comboBox.SelectedItem as string ?? "",
-            _ when control is AutoCompleteBox autoCompleteBox => AssetPathDisplayService.GetFullValue(autoCompleteBox),
-            _ when control is TextBox textBox => AssetPathDisplayService.GetFullValue(textBox),
+            _ when control is AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
+            _ when control is TextBox textBox => textBox.Text?.Trim() ?? "",
             _ => "",
         };
     }
@@ -3634,10 +3635,39 @@ public partial class ProtoEditorWindow : SimpleWindow
         => control switch
         {
             ComboBox comboBox => comboBox.SelectedItem as string ?? "",
-            AutoCompleteBox autoCompleteBox => AssetPathDisplayService.GetFullValue(autoCompleteBox),
-            TextBox textBox => AssetPathDisplayService.GetFullValue(textBox),
+            AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
+            TextBox textBox => textBox.Text?.Trim() ?? "",
             _ => "",
         };
+
+    private async Task HandleAssetPathChangedAsync(string _)
+    {
+        if (_isPopulating)
+            return;
+
+        var proceed = await CheckStartLocalMod();
+        if (proceed)
+            MarkDirty();
+    }
+
+    private AssetPathEditor CreateAssetPathEditor(string tag, string initialValue, IEnumerable<string> suggestions)
+    {
+        var editor = new AssetPathEditor();
+        editor.IsEnabled = !_isReadOnly;
+        editor.Opacity = _isReadOnly ? 0.55 : 1.0;
+        editor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#4a4a4a" : "#1b1b1b");
+        editor.Configure(initialValue, suggestions, HandleAssetPathChangedAsync);
+        return editor;
+    }
+
+    private static string ReadControlValue(Control control) => control switch
+    {
+        AssetPathEditor pathEditor => pathEditor.FullValue,
+        AutoCompleteBox acb => acb.Text?.Trim() ?? "",
+        TextBox tb => tb.Text?.Trim() ?? "",
+        ComboBox cb => cb.SelectedItem?.ToString()?.Trim() ?? "",
+        _ => ""
+    };
 
     private static void AttachProtoActionDecimalBehavior(TextBox textBox, Func<bool>? allowNegative = null)
     {
@@ -3683,8 +3713,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         return control switch
         {
             ComboBox comboBox => comboBox.SelectedItem as string ?? "",
-            AutoCompleteBox autoCompleteBox => AssetPathDisplayService.GetFullValue(autoCompleteBox),
-            TextBox textBox => AssetPathDisplayService.GetFullValue(textBox),
+            AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
+            TextBox textBox => textBox.Text?.Trim() ?? "",
             _ => "",
         };
     }
@@ -5558,20 +5588,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             else if (AssetPathFieldTags.Contains(tag) && editor is TextBox assetTextBox)
             {
                 EditorTextFieldStyle.ConfigureTextBox(assetTextBox);
-                AssetPathDisplayService.ConfigureTextBox(assetTextBox, value);
             }
             else if (editor is TextBox textBox)
                 EditorTextFieldStyle.ConfigureTextBox(textBox);
             if (editor is AutoCompleteBox editorAcb)
             {
                 if (AssetPathFieldTags.Contains(tag))
-                    AssetPathDisplayService.ConfigureSelector(editorAcb, GetProtoActionValueSuggestions(tag) ?? [], value);
+                    EditorTextFieldStyle.ConfigureSelector(editorAcb);
                 else
                     EditorTextFieldStyle.ConfigureSelector(editorAcb);
                 EnableDropdownAutoComplete(editorAcb);
             }
 
-            if (editor is TextBox additionalTb)
+            if (AssetPathFieldTags.Contains(tag))
+                editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
+
+            if (!AssetPathFieldTags.Contains(tag) && editor is TextBox additionalTb)
             {
                 additionalTb.TextChanged += async (s, e) =>
                 {
@@ -5585,7 +5617,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 };
             }
-            else if (editor is AutoCompleteBox additionalAcb)
+            else if (!AssetPathFieldTags.Contains(tag) && editor is AutoCompleteBox additionalAcb)
             {
                 additionalAcb.TextChanged += async (s, e) =>
                 {
@@ -5978,18 +6010,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 else if (AssetPathFieldTags.Contains(tag) && editor is TextBox assetTextBox)
                 {
                     EditorTextFieldStyle.ConfigureTextBox(assetTextBox);
-                    AssetPathDisplayService.ConfigureTextBox(assetTextBox, value);
                 }
                 else if (editor is TextBox textBox)
                     EditorTextFieldStyle.ConfigureTextBox(textBox);
                 if (editor is AutoCompleteBox editorAcb)
                 {
                     if (AssetPathFieldTags.Contains(tag))
-                        AssetPathDisplayService.ConfigureSelector(editorAcb, GetProtoActionValueSuggestions(tag) ?? [], value);
+                        EditorTextFieldStyle.ConfigureSelector(editorAcb);
                     else
                         EditorTextFieldStyle.ConfigureSelector(editorAcb);
                     EnableDropdownAutoComplete(editorAcb);
                 }
+
+                if (AssetPathFieldTags.Contains(tag))
+                    editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
 
                 if (_isReadOnly && IsDevoteMinorActionType(actionType))
                 {
@@ -6007,7 +6041,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 }
 
-                if (editor is TextBox tb)
+                if (!AssetPathFieldTags.Contains(tag) && editor is TextBox tb)
                 {
                     tb.TextChanged += async (_, _) =>
                     {
@@ -6019,7 +6053,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                     };
                 }
-                else if (editor is AutoCompleteBox acb)
+                else if (!AssetPathFieldTags.Contains(tag) && editor is AutoCompleteBox acb)
                 {
                     acb.TextChanged += async (_, _) =>
                     {
@@ -14504,20 +14538,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 else if (AssetPathFieldTags.Contains(tag) && editor is TextBox assetTextBox)
                 {
                     EditorTextFieldStyle.ConfigureTextBox(assetTextBox);
-                    AssetPathDisplayService.ConfigureTextBox(assetTextBox, valueOverride);
                 }
                 else if (editor is TextBox normalTextBox)
                     EditorTextFieldStyle.ConfigureTextBox(normalTextBox);
                 if (editor is AutoCompleteBox autoCompleteBox)
                 {
                     if (AssetPathFieldTags.Contains(tag))
-                        AssetPathDisplayService.ConfigureSelector(autoCompleteBox, GetProtoActionValueSuggestions(tag) ?? [], valueOverride);
+                        EditorTextFieldStyle.ConfigureSelector(autoCompleteBox);
                     else
                         EditorTextFieldStyle.ConfigureSelector(autoCompleteBox);
                     EnableDropdownAutoComplete(autoCompleteBox);
                 }
 
-                if (editor is TextBox textEditor)
+                if (AssetPathFieldTags.Contains(tag))
+                    editor = CreateAssetPathEditor(tag, valueOverride, GetProtoActionValueSuggestions(tag) ?? []);
+
+                if (!AssetPathFieldTags.Contains(tag) && editor is TextBox textEditor)
                 {
                     textEditor.TextChanged += async (_, _) =>
                     {
@@ -14529,7 +14565,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                     };
                 }
-                else if (editor is AutoCompleteBox autoEditor)
+                else if (!AssetPathFieldTags.Contains(tag) && editor is AutoCompleteBox autoEditor)
                 {
                     autoEditor.TextChanged += async (_, _) =>
                     {
@@ -15359,14 +15395,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 WireTextBox(empowerAreaTb, numeric: true);
 
-                var modelAttachmentTb = new TextBox
-                {
-                    Text = initialTarget?.Element("modelattachment")?.Value?.Trim() ?? "",
-                    IsEnabled = !_isReadOnly
-                };
-                EditorTextFieldStyle.ConfigureTextBox(modelAttachmentTb);
-                AssetPathDisplayService.ConfigureTextBox(modelAttachmentTb, modelAttachmentTb.Text ?? "");
-                WireTextBox(modelAttachmentTb);
+                var modelAttachmentTb = CreateAssetPathEditor(
+                    "modelattachment",
+                    initialTarget?.Element("modelattachment")?.Value?.Trim() ?? "",
+                    []);
+                modelAttachmentTb.IsEnabled = !_isReadOnly;
 
                 var modelAttachmentBoneAcb = new AutoCompleteBox
                 {
@@ -15388,7 +15421,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ActiveCb = activeCb,
                     AnimAcb = animAcb,
                     EmpowerAreaTb = empowerAreaTb,
-                    ModelAttachmentTb = modelAttachmentTb,
+                    ModelAttachmentEditor = modelAttachmentTb,
                     ModelAttachmentBoneAcb = modelAttachmentBoneAcb,
                     IsAnimVisible = !string.IsNullOrWhiteSpace(animAcb.Text) || state.ForcedVisibleFieldTags.Contains(animationVisibilityKey),
                     IsEmpowerAreaVisible = !string.IsNullOrWhiteSpace(empowerAreaTb.Text) || state.ForcedVisibleFieldTags.Contains(empowerAuraVisibilityKey),
@@ -19768,20 +19801,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             else if (AssetPathFieldTags.Contains(tag) && editor is TextBox assetTextBox)
             {
                 EditorTextFieldStyle.ConfigureTextBox(assetTextBox);
-                AssetPathDisplayService.ConfigureTextBox(assetTextBox, value);
             }
             else if (editor is TextBox textBox)
                 EditorTextFieldStyle.ConfigureTextBox(textBox);
             if (editor is AutoCompleteBox editorAcb)
             {
                 if (AssetPathFieldTags.Contains(tag))
-                    AssetPathDisplayService.ConfigureSelector(editorAcb, GetProtoActionValueSuggestions(tag) ?? [], value);
+                    EditorTextFieldStyle.ConfigureSelector(editorAcb);
                 else
                     EditorTextFieldStyle.ConfigureSelector(editorAcb);
                 EnableDropdownAutoComplete(editorAcb);
             }
 
-            if (editor is TextBox editorTb)
+            if (AssetPathFieldTags.Contains(tag))
+                editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
+
+            if (!AssetPathFieldTags.Contains(tag) && editor is TextBox editorTb)
             {
                 editorTb.TextChanged += async (s, e) =>
                 {
@@ -19792,7 +19827,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 };
             }
-            else if (editor is AutoCompleteBox editorAutoComplete)
+            else if (!AssetPathFieldTags.Contains(tag) && editor is AutoCompleteBox editorAutoComplete)
             {
                 editorAutoComplete.TextChanged += async (s, e) =>
                 {
@@ -20124,7 +20159,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(empowerAreaValue))
                 targetElement.Add(new XElement("empowerarea", empowerAreaValue));
 
-            var modelAttachmentValue = AssetPathDisplayService.GetFullValue(targetState.ModelAttachmentTb);
+            var modelAttachmentValue = targetState.ModelAttachmentEditor.FullValue;
             if (!string.IsNullOrWhiteSpace(modelAttachmentValue))
                 targetElement.Add(new XElement("modelattachment", modelAttachmentValue));
 
@@ -22041,30 +22076,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var fieldStack = new StackPanel { Spacing = 4 };
                 var rowStates = new List<CultureFieldRowState>();
                 _cultureFieldRows[field.Tag] = rowStates;
-                AutoCompleteBox? defaultAcb = null;
+                AssetPathEditor? defaultAcb = null;
                 Control? defaultControl = null;
 
-                AutoCompleteBox CreateValueEditor(string value, Thickness margin)
+                AssetPathEditor CreateValueEditor(string value, Thickness margin)
                 {
-                    var acb = new AutoCompleteBox
-                    {
-                        Text = value,
-                        FilterMode = AutoCompleteFilterMode.Contains,
-                        ItemsSource = suggestionList,
-                        IsEnabled = !_isReadOnly,
-                        Margin = margin
-                    };
-                    AssetPathDisplayService.ConfigureSelector(acb, suggestionList, value);
-                    EnableDropdownAutoComplete(acb);
-                    acb.TextChanged += async (s, e) =>
-                    {
-                        if (!_isPopulating)
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed) MarkDirty();
-                        }
-                    };
-                    return acb;
+                    var editor = CreateAssetPathEditor(field.Tag, value, suggestionList);
+                    editor.IsEnabled = !_isReadOnly;
+                    editor.Margin = margin;
+                    return editor;
                 }
 
                 void ShowDefaultRowLabelIfNeeded()
@@ -22166,7 +22186,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         RowPanel = rowGrid,
                         CultureCb = cultureCb,
-                        ValueAcb = valueAcb
+                        ValueEditor = valueAcb
                     };
                     rowStates.Add(rowState);
 
@@ -22293,19 +22313,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                             ItemsSource = list
                         };
                         if (AssetPathFieldTags.Contains(field.Tag))
-                            AssetPathDisplayService.ConfigureSelector(acb, list, initialValue);
+                            EditorTextFieldStyle.ConfigureSelector(acb);
                         else
                             EditorTextFieldStyle.ConfigureSelector(acb);
                         EnableDropdownAutoComplete(acb);
 
-                        acb.TextChanged += async (s, e) =>
+                        if (!AssetPathFieldTags.Contains(field.Tag))
                         {
-                            if (!_isPopulating)
+                            acb.TextChanged += async (s, e) =>
                             {
-                                var proceed = await CheckStartLocalMod();
-                                if (proceed) MarkDirty();
-                            }
-                        };
+                                if (!_isPopulating)
+                                {
+                                    var proceed = await CheckStartLocalMod();
+                                    if (proceed) MarkDirty();
+                                }
+                            };
+                        }
 
                         control = acb;
                     }
@@ -22358,7 +22381,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 control = tb;
             }
 
-            if (field.Mode == FieldInputMode.Number && control is TextBox numericTextBox)
+            if (AssetPathFieldTags.Contains(field.Tag))
+            {
+                var sourceValues = ProtoConstants.FieldSuggestions.TryGetValue(field.Tag, out var assetSuggestions)
+                    ? assetSuggestions
+                    : [];
+                control = CreateAssetPathEditor(field.Tag, initialValue, sourceValues);
+            }
+            else if (field.Mode == FieldInputMode.Number && control is TextBox numericTextBox)
                 EditorNumericFieldStyle.ConfigureNumericTextBox(numericTextBox);
 
             Grid.SetColumn(control, 1);
@@ -28536,7 +28566,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (_fieldControls.TryGetValue(field.Tag, out var ctrl))
             {
                 string val = "";
-                if (AssetPathFieldTags.Contains(field.Tag)) val = AssetPathDisplayService.GetFullValue(ctrl);
+                if (AssetPathFieldTags.Contains(field.Tag)) val = ReadControlValue(ctrl);
                 else if (ctrl is AutoCompleteBox acb) val = acb.Text?.Trim() ?? "";
                 else if (ctrl is ComboBox cb) val = cb.SelectedItem as string ?? cb.SelectedValue as string ?? "";
                 else if (ctrl is TextBox tb) val = tb.Text?.Trim() ?? "";
@@ -29601,9 +29631,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var entries = new List<ProtoCultureFieldEntry>();
 
-            if (_fieldControls.TryGetValue(tag, out var ctrl) && ctrl is AutoCompleteBox defaultAcb)
+            if (_fieldControls.TryGetValue(tag, out var ctrl) && ctrl is AssetPathEditor defaultAcb)
             {
-                var defaultValue = AssetPathDisplayService.GetFullValue(defaultAcb);
+                var defaultValue = defaultAcb.FullValue;
                 if (!string.IsNullOrWhiteSpace(defaultValue))
                     entries.Add(new ProtoCultureFieldEntry { Value = defaultValue });
             }
@@ -29614,7 +29644,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var cultureLabel = row.CultureCb.SelectedItem as string ?? row.CultureCb.SelectedValue as string ?? "";
                     var cultureValue = GetCultureValue(cultureLabel);
-                    var value = AssetPathDisplayService.GetFullValue(row.ValueAcb);
+                    var value = row.ValueEditor.FullValue;
                     if (!string.IsNullOrWhiteSpace(cultureValue) && !string.IsNullOrWhiteSpace(value))
                     {
                         entries.Add(new ProtoCultureFieldEntry
