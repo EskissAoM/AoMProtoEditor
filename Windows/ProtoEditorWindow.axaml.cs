@@ -3637,6 +3637,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static void AttachProtoActionDecimalBehavior(TextBox textBox, Func<bool>? allowNegative = null)
     {
+        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
         textBox.TextChanged += (s, e) =>
         {
             var text = textBox.Text ?? "";
@@ -21222,6 +21223,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 16, 4)
                 };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(obstructionXTb);
                 obstructionXTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -21248,6 +21250,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 0, 4)
                 };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(obstructionZTb);
                 obstructionZTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -21274,6 +21277,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 0, 4)
                 };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(turnRateTb);
                 turnRateTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -21893,6 +21897,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 16, 4)
                 };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(maxVelocityTb);
                 maxVelocityTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -21924,6 +21929,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 0, 4)
                 };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(maxRunVelocityTb);
                 maxRunVelocityTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -22285,6 +22291,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 control = tb;
             }
 
+            if (field.Mode == FieldInputMode.Number && control is TextBox numericTextBox)
+                EditorNumericFieldStyle.ConfigureNumericTextBox(numericTextBox);
+
             Grid.SetColumn(control, 1);
             Grid.SetRow(control, gridRow);
             propertiesGrid.Children.Add(control);
@@ -22346,6 +22355,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             grid.Children.Add(lbl);
 
             var tb = new TextBox { Text = initialLimit, IsEnabled = !_isReadOnly, Margin = new Thickness(0, 0, 10, 0) };
+            EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
             tb.TextChanged += async (s, e) =>
             {
                 if (!_isPopulating)
@@ -22470,6 +22480,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IsEnabled = !_isReadOnly,
                         Margin = new Thickness(0, 0, 8, 0)
                     };
+                    EditorNumericFieldStyle.ConfigureNumericTextBox(weightTb);
                     weightTb.AddHandler(InputElement.TextInputEvent, (sender, args) =>
                     {
                         var currentText = weightTb.Text ?? "";
@@ -22719,6 +22730,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void AttachIntegerOnlyBehavior(TextBox textBox, string defaultValue)
             {
+                EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
                 textBox.AddHandler(InputElement.TextInputEvent, (sender, args) =>
                 {
                     if (string.IsNullOrWhiteSpace(args.Text) || !args.Text.All(char.IsDigit))
@@ -22734,6 +22746,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void AttachNumberOnlyBehavior(TextBox textBox, string defaultValue)
             {
+                EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
                 textBox.AddHandler(InputElement.TextInputEvent, (sender, args) =>
                 {
                     var proposed = (textBox.Text ?? "") + args.Text;
@@ -23081,6 +23094,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void AttachDecimalBehavior(TextBox textBox)
         {
+            EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
             textBox.AddHandler(InputElement.TextInputEvent, (sender, args) =>
             {
                 var proposed = (textBox.Text ?? "") + args.Text;
@@ -23091,6 +23105,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void AttachSignedDecimalBehavior(TextBox textBox)
         {
+            EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
             textBox.AddHandler(InputElement.TextInputEvent, (sender, args) =>
             {
                 var proposed = (textBox.Text ?? "") + args.Text;
@@ -28083,6 +28098,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         fieldsGrid.Children.Add(rofLabel);
 
         var rofTb = new TextBox { Text = GetProtoActionDefaultSimpleValue("rof", effectiveAction.Rof), IsEnabled = !_isReadOnly, Margin = new Thickness(0, 0, 10, 0) };
+        AttachProtoActionDecimalBehavior(rofTb);
         rofTb.TextChanged += async (s, e) =>
         {
             if (!_isPopulating)
@@ -28134,6 +28150,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         fieldsGrid.Children.Add(mrLabel);
 
         var mrTb = new TextBox { Text = GetProtoActionDefaultSimpleValue("maxrange", effectiveAction.MaxRange), IsEnabled = !_isReadOnly };
+        AttachProtoActionDecimalBehavior(mrTb);
         mrTb.TextChanged += async (s, e) =>
         {
             if (!_isPopulating)
@@ -28245,6 +28262,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             rowPanel.Children.Add(typeCb);
 
             var valTb = new TextBox { Text = dval, IsEnabled = !_isReadOnly, Width = 70 };
+            AttachProtoActionDecimalBehavior(valTb);
             valTb.TextChanged += async (s, e) =>
             {
                 if (!_isPopulating)
@@ -28327,6 +28345,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             rowPanel.Children.Add(typeAcb);
 
             var valTb = new TextBox { Text = bval, IsEnabled = !_isReadOnly, Width = 80 };
+            AttachProtoActionDecimalBehavior(valTb);
             valTb.TextChanged += async (s, e) =>
             {
                 if (!_isPopulating)
