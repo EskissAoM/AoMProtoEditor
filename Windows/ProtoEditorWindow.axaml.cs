@@ -46,9 +46,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         "shortrollovertextid",
     ];
     private static readonly string[] CultureAwareSimpleFieldTags = ["icon", "animfile"];
+    private static readonly string[] AttachmentPathTags =
+    [
+        "modelattachment", "chargedmodelattachment", "targetattachment", "infectionattachment"
+    ];
     private static readonly HashSet<string> AssetPathFieldTags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "animfile", "icon", "modelattachment", "soundsetfile"
+        "animfile", "icon", "modelattachment", "soundsetfile",
+        "chargedmodelattachment", "targetattachment", "infectionattachment"
     };
     private static readonly (string Value, string Label)[] SupportedCultures =
     [
@@ -134,8 +139,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedBloodGroupNames;
     private List<string>? _cachedMinimapIcons;
     private List<string>? _cachedProtoActionAnimationSuggestions;
+    private List<string>? _cachedProtoActionAttachmentPathSuggestions;
     private List<string>? _cachedProtoActionModelAttachmentBoneSuggestions;
     private List<string> _barProtoActionAnimationNames = [];
+    private List<string> _barProtoActionAttachmentPaths = [];
     private List<string> _barProtoActionModelAttachmentBones = [];
     private bool _barProtoActionSuggestionDataLoaded;
     private string? _cachedModStringEntriesPath;
@@ -814,12 +821,14 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void InvalidateProtoActionValueSuggestionCaches()
     {
         _cachedProtoActionAnimationSuggestions = null;
+        _cachedProtoActionAttachmentPathSuggestions = null;
         _cachedProtoActionModelAttachmentBoneSuggestions = null;
     }
 
     private void ResetBarProtoActionSuggestionData()
     {
         _barProtoActionAnimationNames = [];
+        _barProtoActionAttachmentPaths = [];
         _barProtoActionModelAttachmentBones = [];
         _barProtoActionSuggestionDataLoaded = false;
         InvalidateProtoActionValueSuggestionCaches();
@@ -2781,6 +2790,17 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsAutoRangedAttachActionType(string actionType)
         => actionType.Equals("AutoRangedAttach", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsAssistAttackActionType(string actionType)
+        => actionType.Equals("AssistAttack", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSpawnAssistActionType(string actionType)
+        => actionType.Equals("SpawnAssistUnit", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsManagedAssistAttackFieldTag(string actionType, string tag)
+        => IsAssistAttackActionType(actionType) &&
+           (tag.Equals("modifymultiplier", StringComparison.OrdinalIgnoreCase) ||
+            tag.Equals("modifytargetlimit", StringComparison.OrdinalIgnoreCase));
+
     private static bool IsReflectAttackActionType(string actionType)
         => actionType.Equals("ReflectAttack", StringComparison.OrdinalIgnoreCase);
 
@@ -3232,6 +3252,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                  return;
              if (IsManagedAutoRangedModifyFieldTag(actionType, normalized))
                  return;
+             if (IsManagedAssistAttackFieldTag(actionType, normalized))
+                 return;
              if (IsManagedJumpAttackFieldTag(actionType, normalized))
                  return;
              if (IsManagedMaulFieldTag(actionType, normalized))
@@ -3319,6 +3341,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                  IsManagedAbductDamageAreaFieldTag(actionType, normalized) ||
                  IsManagedAutoBoostFieldTag(actionType, normalized) ||
                  IsManagedAutoRangedModifyFieldTag(actionType, normalized) ||
+                 IsManagedAssistAttackFieldTag(actionType, normalized) ||
                  IsManagedJumpAttackFieldTag(actionType, normalized) ||
                  IsManagedMaulFieldTag(actionType, normalized) ||
                  IsManagedTeleportAttackFieldTag(actionType, normalized) ||
@@ -3374,6 +3397,8 @@ public partial class ProtoEditorWindow : SimpleWindow
              if (IsManagedAutoBoostFieldTag(actionType, normalized))
                  continue;
              if (IsManagedAutoRangedModifyFieldTag(actionType, normalized))
+                 continue;
+             if (IsManagedAssistAttackFieldTag(actionType, normalized))
                  continue;
              if (IsManagedJumpAttackFieldTag(actionType, normalized))
                  continue;
@@ -3624,6 +3649,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         return definition.EditorKind switch
         {
             ProtoActionFieldEditorKind.Toggle when control is CheckBox checkBox => checkBox.IsChecked == true ? "1" : "",
+            _ when control is AssetPathEditor pathEditor => pathEditor.FullValue,
             _ when control is ComboBox comboBox => comboBox.SelectedItem as string ?? "",
             _ when control is AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
             _ when control is TextBox textBox => textBox.Text?.Trim() ?? "",
@@ -3634,6 +3660,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static string ReadTextLikeControlValue(Control control)
         => control switch
         {
+            AssetPathEditor pathEditor => pathEditor.FullValue,
             ComboBox comboBox => comboBox.SelectedItem as string ?? "",
             AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
             TextBox textBox => textBox.Text?.Trim() ?? "",
@@ -3657,6 +3684,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         editor.Opacity = _isReadOnly ? 0.55 : 1.0;
         editor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#4a4a4a" : "#1b1b1b");
         editor.Configure(initialValue, suggestions, HandleAssetPathChangedAsync);
+        editor.Margin = new Thickness(0, 4, 0, 4);
         return editor;
     }
 
@@ -3722,6 +3750,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         return control switch
         {
+            AssetPathEditor pathEditor => pathEditor.FullValue,
             ComboBox comboBox => comboBox.SelectedItem as string ?? "",
             AutoCompleteBox autoCompleteBox => autoCompleteBox.Text?.Trim() ?? "",
             TextBox textBox => textBox.Text?.Trim() ?? "",
@@ -4245,6 +4274,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string>? GetProtoActionValueSuggestions(string tag)
     {
+        if (AttachmentPathTags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+            return GetAvailableProtoActionAttachmentPaths();
+
         if (tag.Equals("anim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("reloadanim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("typedanim", StringComparison.OrdinalIgnoreCase))
@@ -4337,6 +4369,60 @@ public partial class ProtoEditorWindow : SimpleWindow
             .ToList();
 
         return _cachedProtoActionAnimationSuggestions;
+    }
+
+    private List<string> GetAvailableProtoActionAttachmentPaths()
+    {
+        if (_cachedProtoActionAttachmentPathSuggestions != null)
+            return _cachedProtoActionAttachmentPathSuggestions;
+
+        EnsureBarProtoActionSuggestionDataLoaded();
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddIfPresent(string? value)
+        {
+            var normalized = value?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(normalized))
+                values.Add(normalized);
+        }
+
+        void AddFromRoot(XElement? root)
+        {
+            if (root == null)
+                return;
+
+            foreach (var value in root.Descendants()
+                .Where(x => AttachmentPathTags.Contains(x.Name.LocalName, StringComparer.OrdinalIgnoreCase))
+                .Select(x => x.Value))
+            {
+                AddIfPresent(value);
+            }
+        }
+
+        void AddFromAction(ProtoAction action)
+        {
+            foreach (var tag in AttachmentPathTags)
+                AddIfPresent(ProtoXmlHandler.GetProtoActionSimpleFieldValue(action, tag));
+        }
+
+        values.UnionWith(_barProtoActionAttachmentPaths);
+        AddFromRoot(_barXmlRoot);
+        AddFromRoot(_modXmlRoot);
+
+        foreach (var action in _currentUnitTacticsActions.Values)
+            AddFromAction(action);
+
+        foreach (var tacticsActions in _tacticsActionCache.Values)
+        {
+            foreach (var action in tacticsActions.Values)
+                AddFromAction(action);
+        }
+
+        _cachedProtoActionAttachmentPathSuggestions = values
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return _cachedProtoActionAttachmentPathSuggestions;
     }
 
     private List<string> GetAvailableProtoActionModelAttachmentBones()
@@ -4681,6 +4767,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static string GetProtoActionFieldLabel(string actionType, string tag, string defaultLabel)
         => IsBolsterActionType(actionType) && tag.Equals("modifyamount", StringComparison.OrdinalIgnoreCase)
             ? "Max Number Targets"
+            : IsAssistAttackActionType(actionType) && tag.Equals("modifymultiplier", StringComparison.OrdinalIgnoreCase)
+                ? "Lifesteal"
+                : IsAssistAttackActionType(actionType) && tag.Equals("modifytargetlimit", StringComparison.OrdinalIgnoreCase)
+                    ? "Max Targets"
+                    : IsSpawnAssistActionType(actionType) && tag.Equals("projectile", StringComparison.OrdinalIgnoreCase)
+                        ? "Spawned Assist Unit"
             : IsRampageActionType(actionType) && tag.Equals("modifyduration", StringComparison.OrdinalIgnoreCase)
                 ? "Duration (ms)"
             : IsReleaseSkyLanternActionType(actionType) && tag.Equals("timer", StringComparison.OrdinalIgnoreCase)
@@ -5169,7 +5261,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsConditionalShieldActionType(actionType) ||
             IsAutoRangedModifyActionType(actionType) ||
             IsAreaMutateActionType(actionType) ||
-            IsAutoRangedAttachActionType(actionType))
+            IsAutoRangedAttachActionType(actionType) ||
+            IsAssistAttackActionType(actionType) ||
+            IsSpawnAssistActionType(actionType))
         {
             state.OnHitEffectsContainer.Children.Clear();
             state.OnHitEffectRows.Clear();
@@ -5499,7 +5593,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsDrainResurrectionActionType(actionType) ||
             IsDistanceModifyActionType(actionType);
 
-        if (primaryFieldTags.Count == 0 && _isReadOnly && !hasManagedCustomLayout)
+        if (primaryFieldTags.Count == 0 && _isReadOnly && !hasManagedCustomLayout && !IsAssistAttackActionType(actionType))
             return;
 
         void RenderFieldRow(string tag)
@@ -5912,6 +6006,134 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (isRampage)
             RenderRampageTimingRow();
+
+        var coreParent = state.CoreFieldsGrid.Parent as Panel;
+        foreach (var existingAssistNote in (coreParent ?? state.Container).Children
+                     .OfType<Control>()
+                     .Where(control => string.Equals(control.Tag as string, "assistattack.note", StringComparison.Ordinal))
+                     .ToList())
+        {
+            (coreParent ?? state.Container).Children.Remove(existingAssistNote);
+        }
+        if (IsAssistAttackActionType(actionType))
+        {
+            var note = new TextBlock
+            {
+                Tag = "assistattack.note",
+                Text = "Work only when defined as spawned assist unit of a SpawnAssistUnit action",
+                FontStyle = FontStyle.Italic,
+                Opacity = 0.78,
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            var noteParent = coreParent ?? state.Container;
+            var coreIndex = noteParent.Children.IndexOf(state.CoreFieldsGrid);
+            noteParent.Children.Insert(Math.Max(0, coreIndex), note);
+
+            foreach (var existingOption in state.CoreFieldsGrid.Children
+                         .OfType<Control>()
+                         .Where(control => (control.Tag as string)?.StartsWith("assistattack.option.", StringComparison.Ordinal) == true)
+                         .ToList())
+            {
+                state.CoreFieldsGrid.Children.Remove(existingOption);
+            }
+            state.CoreFieldsGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 80, Auto, 80");
+            Grid.SetColumn(state.MaxRangeLabel, 2);
+            Grid.SetColumn(state.MaxRangeTb, 3);
+            var nextColumn = 4;
+            void AddAssistOption(string tag, string label)
+            {
+                var rawValue = currentValues.TryGetValue(tag, out var editedValue)
+                    ? editedValue
+                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag);
+                var visible = state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(rawValue);
+                state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+                if (!visible)
+                {
+                    var addButton = new Button
+                    {
+                        Tag = "assistattack.option." + tag,
+                        Content = label,
+                        Background = Brush.Parse("#2b7a0b"),
+                        Margin = new Thickness(14, 0, 0, 0)
+                    };
+                    addButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        state.ForcedVisibleFieldTags.Add(tag);
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    Grid.SetColumn(addButton, nextColumn++);
+                    state.CoreFieldsGrid.Children.Add(addButton);
+                    return;
+                }
+
+                var labelControl = new TextBlock
+                {
+                    Tag = "assistattack.option." + tag,
+                    Text = label + ":",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(14, 0, 8, 0)
+                };
+                Grid.SetColumn(labelControl, nextColumn++);
+                state.CoreFieldsGrid.Children.Add(labelControl);
+                state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(90)));
+                var editor = new TextBox { Tag = "assistattack.option." + tag, Text = rawValue, IsEnabled = !_isReadOnly, Width = 90 };
+                AttachProtoActionDecimalBehavior(editor);
+                editor.TextChanged += async (_, _) => { if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
+                state.AdditionalFieldControls[tag] = editor;
+                Grid.SetColumn(editor, nextColumn++);
+                state.CoreFieldsGrid.Children.Add(editor);
+                if (!_isReadOnly)
+                {
+                    state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+                    var removeButton = new Button { Tag = "assistattack.option." + tag, Content = "X", Background = Brush.Parse("#8b0000"), Width = 28, Margin = new Thickness(5, 0, 0, 0) };
+                    removeButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        state.ForcedVisibleFieldTags.Remove(tag);
+                        editor.Text = "";
+                        state.AdditionalFieldControls.Remove(tag);
+                        ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    Grid.SetColumn(removeButton, nextColumn++);
+                    state.CoreFieldsGrid.Children.Add(removeButton);
+                }
+            }
+            AddAssistOption("modifytargetlimit", "Max Targets");
+            AddAssistOption("modifymultiplier", "Lifesteal");
+        }
+        else if (IsSpawnAssistActionType(actionType))
+        {
+            primaryFieldTags.RemoveAll(tag => tag.Equals("projectile", StringComparison.OrdinalIgnoreCase));
+            var projectileRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+            projectileRow.Children.Add(new TextBlock { Text = "Spawned Assist Unit:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
+            var projectileValue = currentValues.TryGetValue("projectile", out var editedProjectile)
+                ? editedProjectile
+                : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "projectile");
+            var projectileEditor = new AutoCompleteBox
+            {
+                Text = projectileValue,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                IsEnabled = !_isReadOnly,
+                Width = 220
+            };
+            ConfigureStrictSuggestionAutoComplete(projectileEditor, GetAvailableTrainUnitNames(), projectileValue);
+            projectileEditor.TextChanged += async (_, _) => { if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
+            state.AdditionalFieldControls["projectile"] = projectileEditor;
+            projectileRow.Children.Add(projectileEditor);
+            projectileRow.Children.Add(new TextBlock
+            {
+                Text = "Requires the spawned assist unit to have an AssistAttack",
+                FontStyle = FontStyle.Italic,
+                Opacity = 0.78,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(14, 4, 0, 4)
+            });
+            state.AdditionalFieldsContainer.Children.Add(projectileRow);
+        }
 
         if (!IsAutoRangedModifyActionType(actionType) && !IsAreaMutateActionType(actionType) && !IsAutoRangedAttachActionType(actionType))
         {
@@ -7946,6 +8168,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var editor = CreateSimpleEditor(tag);
                     if (editor is TextBox textBox) textBox.Width = width;
                     if (editor is AutoCompleteBox autoCompleteBox) autoCompleteBox.Width = width;
+                    if (editor is AssetPathEditor pathEditor)
+                    {
+                        pathEditor.Width = width;
+                        pathEditor.Editor.Width = width;
+                        pathEditor.Editor.MaxWidth = width;
+                    }
                     panel.Children.Add(editor);
                 }
 
@@ -14773,6 +15001,24 @@ public partial class ProtoEditorWindow : SimpleWindow
         var isGore = IsGoreActionType(actionType);
         var isThrow = IsThrowActionType(actionType);
         var isConditionalShield = IsConditionalShieldActionType(actionType);
+        foreach (var existingSpawnAssistNote in state.DamageSectionContainer.Children
+                     .OfType<Control>()
+                     .Where(control => string.Equals(control.Tag as string, "spawnassist.damage.note", StringComparison.Ordinal))
+                     .ToList())
+        {
+            state.DamageSectionContainer.Children.Remove(existingSpawnAssistNote);
+        }
+        if (IsSpawnAssistActionType(actionType))
+        {
+            state.DamageSectionContainer.Children.Insert(0, new TextBlock
+            {
+                Tag = "spawnassist.damage.note",
+                Text = "Only for display in the UI, actual damages are defined in the spawned assist unit AssistAttack",
+                FontStyle = FontStyle.Italic,
+                Opacity = 0.78,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+        }
         var showOptionalDamageAreaFields = ShouldShowOptionalAbductDamageAreaFields(state, actionType, effectiveAction, currentValues);
         var hasDamageAreaData = OptionalAbductDamageAreaTags.Any(tag =>
             state.ForcedVisibleFieldTags.Contains(tag) ||
@@ -21045,7 +21291,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (_protoDataBarFile != null && !string.IsNullOrWhiteSpace(_protoDataBarPath))
             {
-                (_barProtoActionAnimationNames, _barProtoActionModelAttachmentBones) =
+                (_barProtoActionAnimationNames, _barProtoActionAttachmentPaths, _barProtoActionModelAttachmentBones) =
                     ExtractProtoActionSuggestionDataFromBar(_protoDataBarFile, _protoDataBarPath);
             }
         }
@@ -21057,13 +21303,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         _barProtoActionSuggestionDataLoaded = true;
     }
 
-    private static (List<string> AnimationNames, List<string> ModelAttachmentBones) ExtractProtoActionSuggestionDataFromBar(BarFile barFile, string barPath)
+    private static (List<string> AnimationNames, List<string> AttachmentPaths, List<string> ModelAttachmentBones) ExtractProtoActionSuggestionDataFromBar(BarFile barFile, string barPath)
     {
         var animationNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var attachmentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var modelAttachmentBones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
         if (entries == null)
-            return ([], []);
+            return ([], [], []);
 
         var candidateEntries = entries
             .Where(e =>
@@ -21106,6 +21353,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                         continue;
                     }
 
+                    if (AttachmentPathTags.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        attachmentPaths.Add(value);
+                        continue;
+                    }
+
                     if (element.Name.LocalName.Equals("modelattachmentbone", StringComparison.OrdinalIgnoreCase))
                         modelAttachmentBones.Add(value);
                 }
@@ -21128,6 +21381,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         return (
             animationNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            attachmentPaths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
             modelAttachmentBones.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
     }
 

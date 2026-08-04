@@ -120,6 +120,7 @@ public static class ProtoActionMetadataCatalog
         ["projectile"] = new("projectile", "Projectile", ProtoActionFieldEditorKind.Text),
         ["splashvfxproto"] = new("splashvfxproto", "Splash VFX Proto", ProtoActionFieldEditorKind.Text),
         ["modelattachment"] = new("modelattachment", "Model Attachment", ProtoActionFieldEditorKind.Text),
+        ["chargedmodelattachment"] = new("chargedmodelattachment", "Charged Model Attachment", ProtoActionFieldEditorKind.Text),
         ["modelattachmentbone"] = new("modelattachmentbone", "Model Attachment Bone", ProtoActionFieldEditorKind.Text),
         ["modelattachmenttimer"] = new("modelattachmenttimer", "Model Attachment Timer (ms)", ProtoActionFieldEditorKind.Number),
         ["targetattachment"] = new("targetattachment", "Target Attachment", ProtoActionFieldEditorKind.Text),
@@ -503,6 +504,13 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["maxrange", "attachprotounit", "modifyabstracttype", "forbidabstracttype", "modifyprotoid", "forbidunittype"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent", "forceupdatemode"]),
+        ["AssistAttack"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["maxrange", "damage", "damagebonus", "rate"],
+            HiddenByDefaultTags: new HashSet<string>(["rof"], StringComparer.OrdinalIgnoreCase)),
+        ["SpawnAssistUnit"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["maxrange", "projectile", "damage", "damagebonus", "rate", "anim"],
+            HiddenByDefaultTags: new HashSet<string>(["rof"], StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["attackaction"]),
         ["Inline"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: [],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
