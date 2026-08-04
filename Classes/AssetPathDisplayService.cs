@@ -63,26 +63,36 @@ public static class AssetPathDisplayService
     public static void ConfigureSelector(AutoCompleteBox control, IEnumerable<string> sourceValues, string fullValue)
     {
         EditorTextFieldStyle.ConfigureSelector(control);
-        var allValues = sourceValues.Append(fullValue);
-        var suggestions = CreateSuggestions(allValues);
-        var state = new PathState(suggestions, fullValue.Trim());
-        States.Remove(control);
-        States.Add(control, state);
-        control.ItemsSource = suggestions;
-        SetDisplayText(control, state, state.FullValue);
-        ToolTip.SetTip(control, state.FullValue);
+        var state = States.GetValue(control, _ => new PathState());
+        state.Suggestions = CreateSuggestions(sourceValues.Append(fullValue));
+        state.FullValue = fullValue.Trim();
+        control.ItemsSource = state.Suggestions;
+        if (!state.HandlersAttached)
+        {
+            AttachSelectorHandlers(control, state);
+            state.HandlersAttached = true;
+        }
 
+        if (control.IsFocused)
+            SetText(control, state, state.FullValue);
+        else
+            SetDisplayText(control, state, state.FullValue);
+        ToolTip.SetTip(control, state.FullValue);
+    }
+
+    private static void AttachSelectorHandlers(AutoCompleteBox control, PathState state)
+    {
         control.SelectionChanged += (_, _) =>
         {
             if (state.IsUpdatingDisplay)
                 return;
 
-            if (control.SelectedItem is PathSuggestion suggestion)
-            {
-                state.FullValue = suggestion.FullValue;
-                SetDisplayText(control, state, state.FullValue);
-                ToolTip.SetTip(control, state.FullValue);
-            }
+            if (control.SelectedItem is not PathSuggestion suggestion)
+                return;
+
+            state.FullValue = suggestion.FullValue;
+            ToolTip.SetTip(control, state.FullValue);
+            SetText(control, state, state.FullValue);
         };
         control.GotFocus += (_, _) => SetText(control, state, state.FullValue);
         control.LostFocus += (_, _) =>
@@ -102,11 +112,24 @@ public static class AssetPathDisplayService
     public static void ConfigureTextBox(TextBox control, string fullValue)
     {
         EditorTextFieldStyle.ConfigureTextBox(control);
-        var state = new PathState(CreateSuggestions([fullValue]), fullValue.Trim());
-        States.Remove(control);
-        States.Add(control, state);
-        SetDisplayText(control, state, state.FullValue);
+        var state = States.GetValue(control, _ => new PathState());
+        state.Suggestions = CreateSuggestions([fullValue]);
+        state.FullValue = fullValue.Trim();
+        if (!state.HandlersAttached)
+        {
+            AttachTextBoxHandlers(control, state);
+            state.HandlersAttached = true;
+        }
+
+        if (control.IsFocused)
+            SetText(control, state, state.FullValue);
+        else
+            SetDisplayText(control, state, state.FullValue);
         ToolTip.SetTip(control, state.FullValue);
+    }
+
+    private static void AttachTextBoxHandlers(TextBox control, PathState state)
+    {
         control.GotFocus += (_, _) => SetText(control, state, state.FullValue);
         control.LostFocus += (_, _) =>
         {
@@ -139,16 +162,34 @@ public static class AssetPathDisplayService
 
     private static void SetText(AutoCompleteBox control, PathState state, string value)
     {
+        if (string.Equals(control.Text, value, StringComparison.Ordinal))
+            return;
+
         state.IsUpdatingDisplay = true;
-        control.Text = value;
-        state.IsUpdatingDisplay = false;
+        try
+        {
+            control.Text = value;
+        }
+        finally
+        {
+            state.IsUpdatingDisplay = false;
+        }
     }
 
     private static void SetText(TextBox control, PathState state, string value)
     {
+        if (string.Equals(control.Text, value, StringComparison.Ordinal))
+            return;
+
         state.IsUpdatingDisplay = true;
-        control.Text = value;
-        state.IsUpdatingDisplay = false;
+        try
+        {
+            control.Text = value;
+        }
+        finally
+        {
+            state.IsUpdatingDisplay = false;
+        }
     }
 
     private static string NormalizeForComparison(string value) => value.Replace('/', '\\').Trim();
@@ -168,10 +209,11 @@ public static class AssetPathDisplayService
         => left.Length >= length && right.Length >= length &&
            left.Take(length).SequenceEqual(right.Take(length), StringComparer.OrdinalIgnoreCase);
 
-    private sealed class PathState(IReadOnlyList<PathSuggestion> suggestions, string fullValue)
+    private sealed class PathState
     {
-        public IReadOnlyList<PathSuggestion> Suggestions { get; } = suggestions;
-        public string FullValue { get; set; } = fullValue;
+        public IReadOnlyList<PathSuggestion> Suggestions { get; set; } = [];
+        public string FullValue { get; set; } = "";
         public bool IsUpdatingDisplay { get; set; }
+        public bool HandlersAttached { get; set; }
     }
 }
