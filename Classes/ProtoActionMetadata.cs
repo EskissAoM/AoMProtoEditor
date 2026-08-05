@@ -115,6 +115,7 @@ public static class ProtoActionMetadataCatalog
         ["accuracy"] = new("accuracy", "Accuracy", ProtoActionFieldEditorKind.Number),
         ["maxspread"] = new("maxspread", "Max Spread", ProtoActionFieldEditorKind.Number),
         ["trackrating"] = new("trackrating", "Track Rating", ProtoActionFieldEditorKind.Number),
+        ["rollingdamagefactor"] = new("rollingdamagefactor", "Rolling Damage Factor", ProtoActionFieldEditorKind.Number),
         ["impacteffect"] = new("impacteffect", "Impact Effect", ProtoActionFieldEditorKind.Text),
         ["onhiteffect"] = new("onhiteffect", "On Hit Effect", ProtoActionFieldEditorKind.Text),
         ["projectile"] = new("projectile", "Projectile", ProtoActionFieldEditorKind.Text),
@@ -429,7 +430,7 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction"]),
         ["Drone"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent"],
+            DefaultVisibleTags: [],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["Build"] = new ProtoActionTypeEditorProfile(
@@ -442,7 +443,7 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["anim", "maxrange", "rof", "rate", "modelattachment", "modelattachmentbone", "modelattachmenttimer"],
             HiddenByDefaultTags: new HashSet<string>(["damage", "damagebonus"], StringComparer.OrdinalIgnoreCase)),
         ["ConditionalTransform"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "conditionaltransformrule", "modifyprotoid"],
+            DefaultVisibleTags: ["conditionaltransformrule", "modifyprotoid"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["DelayedTransform"] = new ProtoActionTypeEditorProfile(
@@ -491,7 +492,7 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["damage", "maxrange", "rate", "rof", "singleuse"],
             HiddenByDefaultTags: new HashSet<string>(["damagebonus"], StringComparer.OrdinalIgnoreCase)),
         ["AutoConvert"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["maxrange", "persistent", "modifyabstracttype"],
+            DefaultVisibleTags: ["maxrange", "modifyabstracttype"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["AutoBoost"] = new ProtoActionTypeEditorProfile(
@@ -506,6 +507,10 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["rof", "maxrange", "damage", "damagebonus", "rate", "anim", "impacteffect"],
             HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction", "handlogic"]),
+        ["LinearAreaAttack"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["rof", "maxrange", "modifyamount", "damage", "damagebonus", "rate", "anim", "walkanim", "impacteffect"],
+            HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["attackaction"]),
         ["AutoRangedModify"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["maxrange", "modifytype", "modifyamount", "modifymultiplier", "modifydamagetype", "modifydamagetargettype", "modifystacklimit", "modifytargetlimit", "modifyabstracttype", "forbidabstracttype", "modifyprotoid", "forbidunittype"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
@@ -530,15 +535,15 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["isabductdrop"]),
         ["Move"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent"],
+            DefaultVisibleTags: [],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["Maintain"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "maintaintrainpoints", "rate", "modifybase", "modifytargetlimit"],
+            DefaultVisibleTags: ["maintaintrainpoints", "rate", "modifybase", "modifytargetlimit"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent", "showqueuewhilewaiting"]),
         ["AutoGather"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "rate", "donotautogatherunlessgatheringtypes", "modifybase", "modifymultiplier", "modifyratecap"],
+            DefaultVisibleTags: ["rate", "donotautogatherunlessgatheringtypes", "modifybase", "modifymultiplier", "modifyratecap"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["Convert"] = new ProtoActionTypeEditorProfile(
@@ -597,15 +602,15 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent", "targetenemy"]),
         ["Trail"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "trailprotounit"],
+            DefaultVisibleTags: ["trailprotounit"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["StackControl"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent"],
+            DefaultVisibleTags: [],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["ModifyGather"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["rate", "modifyresourcesubtype", "persistent"],
+            DefaultVisibleTags: ["rate", "modifyresourcesubtype"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["ReflectAttack"] = new ProtoActionTypeEditorProfile(
@@ -613,7 +618,7 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction"]),
         ["WaterTornado"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["maxrange", "minrange", "maxspread", "spreadfactor", "persistent"],
+            DefaultVisibleTags: ["maxrange", "minrange", "maxspread", "spreadfactor"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["Empower"] = new ProtoActionTypeEditorProfile(
@@ -635,11 +640,11 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["decayrate", "minresource", "minscale", "reductionend", "reductionstart", "scaleincrement"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase)),
         ["SelfModify"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["modifytype", "modifyamount", "persistent"],
+            DefaultVisibleTags: ["modifytype", "modifyamount"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["LikeBonus"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["maxrange", "modifytype", "modifyamount", "persistent"],
+            DefaultVisibleTags: ["maxrange", "modifytype", "modifyamount"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["ReleaseSkyLantern"] = new ProtoActionTypeEditorProfile(
@@ -647,7 +652,7 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["autocastbyself"]),
         ["IdleStatBonus"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "modifytype", "modifyamount", "modifyratecap", "modifybase", "modifydecay"],
+            DefaultVisibleTags: ["modifytype", "modifyamount", "modifyratecap", "modifybase", "modifydecay"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["DrainResurrection"] = new ProtoActionTypeEditorProfile(
@@ -655,7 +660,7 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["mustfinishanimation", "attackaction"]),
         ["DistanceModify"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["persistent", "maxrange", "minrange", "minrate", "modifytype", "modifyamount", "modifybase"],
+            DefaultVisibleTags: ["maxrange", "minrange", "minrate", "modifytype", "modifyamount", "modifybase"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus", "rate"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["persistent"]),
         ["NoWork"] = new ProtoActionTypeEditorProfile(

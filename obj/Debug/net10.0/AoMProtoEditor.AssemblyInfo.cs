@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AoMProtoEditor")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ecd5b7f1e817bb0cda754301660826f640005a87")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a18f25a383d5d82e254c9dfaaf8387ba9e80edee")]
 [assembly: System.Reflection.AssemblyProductAttribute("AoMProtoEditor")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AoMProtoEditor")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
