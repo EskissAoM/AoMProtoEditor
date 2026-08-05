@@ -498,6 +498,14 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["anim", "maxrange", "rof", "rate", "damage", "damagearea", "damageflags", "modelattachment", "modelattachmentbone"],
             HiddenByDefaultTags: new HashSet<string>(["damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction", "handlogic"]),
+        ["ChainAttack"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["rof", "maxrange", "damage", "damagebonus", "rate", "projectile", "anim", "impacteffect"],
+            HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["attackaction", "rangedlogic"]),
+        ["AoEAttack"] = new ProtoActionTypeEditorProfile(
+            DefaultVisibleTags: ["rof", "maxrange", "damage", "damagebonus", "rate", "anim", "impacteffect"],
+            HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            DefaultFlagTags: ["attackaction", "handlogic"]),
         ["AutoRangedModify"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["maxrange", "modifytype", "modifyamount", "modifymultiplier", "modifydamagetype", "modifydamagetargettype", "modifystacklimit", "modifytargetlimit", "modifyabstracttype", "forbidabstracttype", "modifyprotoid", "forbidunittype"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),

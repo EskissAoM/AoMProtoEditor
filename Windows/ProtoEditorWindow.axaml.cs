@@ -291,6 +291,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private const string AutoBoostSelfEnabledStateKey = "autoboost.self.enabled";
     private const string AutoBoostAreaEnabledStateKey = "autoboost.area.enabled";
     private const string OptionalModelAttachmentHiddenStateKey = "modelattachment.hidden";
+    private const string DamageAreaTargetsInitializedStateKey = "damagearea.targets.initialized";
+    private const string DamageHeaderTag = "protoaction.damage.header";
+    private const string DamageAreaRowTag = "protoaction.damage.area.row";
     private const string BuckAttackWorkOnFrozenUnitsStateKey = "buckattack.workonfrozenunits.value";
     private const string BuckAttackWorkOnFrozenUnitsExplicitStateKey = "buckattack.workonfrozenunits.explicit";
 
@@ -368,10 +371,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required Control TerrainRow { get; set; }
         public required ComboBox TerrainTypeCb { get; set; }
         public required CheckBox StealthCb { get; set; }
-        public required Grid VfxRow { get; set; }
+        public required Control VfxRow { get; set; }
         public required AutoCompleteBox VfxAcb { get; set; }
         public required TextBox VfxDurationTb { get; set; }
-        public required Grid SetTacticRow { get; set; }
+        public required Control SetTacticRow { get; set; }
         public required TextBox SetTacticTb { get; set; }
         public required Grid AttachmentRow { get; set; }
         public required AssetPathEditor ChargedModelAttachmentEditor { get; set; }
@@ -2412,8 +2415,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var headerGrid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("70, 70, *, Auto"),
-            Margin = new Thickness(0, 0, 0, 2)
+            ColumnDefinitions = new ColumnDefinitions("70, 70, Auto, Auto"),
+            Margin = new Thickness(0, 0, 0, 2),
+            HorizontalAlignment = HorizontalAlignment.Left
         };
 
         var rowHeader = new TextBlock
@@ -2458,8 +2462,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var rowPanel = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions("70, 70, *, Auto"),
-                Margin = new Thickness(0, 2, 0, 2)
+                ColumnDefinitions = new ColumnDefinitions("70, 70, Auto, Auto"),
+                Margin = new Thickness(0, 2, 0, 2),
+                HorizontalAlignment = HorizontalAlignment.Left
             };
 
             var rowCb = new ComboBox
@@ -2507,6 +2512,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Margin = new Thickness(0, 0, 8, 0)
             };
+            EditorTextFieldStyle.ConfigureSelector(valueAcb);
             EnableDropdownAutoComplete(valueAcb);
             valueAcb.TextChanged += async (s, e) =>
             {
@@ -2532,7 +2538,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -2881,6 +2887,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsAttackActionType(string actionType)
         => actionType.Equals("Attack", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsChainAttackActionType(string actionType)
+        => actionType.Equals("ChainAttack", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAoeAttackActionType(string actionType)
+        => actionType.Equals("AoEAttack", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsManagedAssistAttackFieldTag(string actionType, string tag)
         => IsAssistAttackActionType(actionType) &&
            (tag.Equals("modifymultiplier", StringComparison.OrdinalIgnoreCase) ||
@@ -2980,14 +2992,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         => actionType.Equals("Throw", StringComparison.OrdinalIgnoreCase);
 
     private static bool UsesCoreMinRange(string actionType)
-        => IsJumpAttackActionType(actionType) || IsMaulActionType(actionType) || IsTeleportAttackActionType(actionType) || IsAttackActionType(actionType);
+        => IsJumpAttackActionType(actionType) || IsMaulActionType(actionType) || IsTeleportAttackActionType(actionType) || IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType);
 
     private static bool ShouldShowCoreMinRange(ProtoActionWidgetState state, ProtoAction action, string actionType)
     {
         if (!UsesCoreMinRange(actionType) || state.IsLinkedMaulAreaAction)
             return false;
 
-        if (IsAttackActionType(actionType))
+        if (IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType))
             return state.ForcedVisibleFieldTags.Contains("minrange") ||
                    !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(action, "minrange"));
 
@@ -3057,6 +3069,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             (tag.Equals("damagearea", StringComparison.OrdinalIgnoreCase) ||
              tag.Equals("damageflags", StringComparison.OrdinalIgnoreCase) ||
              tag.Equals("maxsizeclass", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool IsManagedChainAttackFieldTag(string actionType, string tag)
+        => IsChainAttackActionType(actionType) &&
+           new[] { "minrange", "projectile", "displayednumberprojectiles", "numberbounces", "accuracy", "trackrating", "anim", "impacteffect" }
+               .Contains(tag, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsManagedAoeAttackFieldTag(string actionType, string tag)
+        => IsAoeAttackActionType(actionType) &&
+           new[] { "minrange", "anim", "impacteffect" }
+               .Contains(tag, StringComparer.OrdinalIgnoreCase);
 
     private static bool IsManagedMaulFieldTag(string actionType, string tag)
         => IsMaulActionType(actionType) &&
@@ -3378,6 +3400,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                  return;
              if (IsManagedJumpAttackFieldTag(actionType, normalized))
                  return;
+             if (IsManagedChainAttackFieldTag(actionType, normalized))
+                 return;
+             if (IsManagedAoeAttackFieldTag(actionType, normalized))
+                 return;
              if (IsManagedMaulFieldTag(actionType, normalized))
                  return;
              if (IsManagedTeleportAttackFieldTag(actionType, normalized))
@@ -3465,6 +3491,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                  IsManagedAutoRangedModifyFieldTag(actionType, normalized) ||
                  IsManagedAssistAttackFieldTag(actionType, normalized) ||
                  IsManagedJumpAttackFieldTag(actionType, normalized) ||
+                 IsManagedChainAttackFieldTag(actionType, normalized) ||
+                 IsManagedAoeAttackFieldTag(actionType, normalized) ||
                  IsManagedMaulFieldTag(actionType, normalized) ||
                  IsManagedTeleportAttackFieldTag(actionType, normalized) ||
                  IsManagedThrowFieldTag(actionType, normalized) ||
@@ -3808,6 +3836,29 @@ public partial class ProtoEditorWindow : SimpleWindow
         editor.Configure(initialValue, suggestions, HandleAssetPathChangedAsync);
         editor.Margin = new Thickness(0, 4, 0, 4);
         return editor;
+    }
+
+    private static StackPanel CreateLabeledFieldGroup(
+        string label,
+        Control editor,
+        Thickness? margin = null)
+    {
+        editor.VerticalAlignment = VerticalAlignment.Center;
+
+        var group = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Margin = margin ?? new Thickness(0, 0, 12, 6),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        group.Children.Add(new TextBlock
+        {
+            Text = label,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        group.Children.Add(editor);
+        return group;
     }
 
     private IEnumerable<string> GetAssetPathSuggestions(string tag, IEnumerable<string>? additionalValues = null)
@@ -4740,6 +4791,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool SupportsOptionalAbductDamageAreaActionType(string actionType)
         => actionType.Equals("Abduct", StringComparison.OrdinalIgnoreCase) ||
            IsAttackActionType(actionType) ||
+           IsChainAttackActionType(actionType) ||
+           IsAoeAttackActionType(actionType) ||
            IsRampageActionType(actionType);
 
     private static bool ShouldShowOptionalModelAttachmentFields(
@@ -4995,7 +5048,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             // Damage flags are required for both shield modes, but damage entries only apply in Damage mode.
             if (state.DamageSectionContainer.Children.Count > 0)
-                state.DamageSectionContainer.Children[0].IsVisible = conditionalShieldDamageEnabled;
+                state.DamageSectionContainer.Children[0].IsVisible =
+                    conditionalShieldDamageEnabled && state.DamageRows.Count > 0;
             if (state.DamageSectionContainer.Children.Count > 1)
                 state.DamageSectionContainer.Children[1].IsVisible = conditionalShieldDamageEnabled;
         }
@@ -5138,6 +5192,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void EnsureJumpAttackCoreLayout(ProtoActionWidgetState state, ProtoAction effectiveAction, string actionType)
     {
+        var usesAttackLikeRangeLayout = IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType);
         foreach (var existingAttackMinRangeButton in state.CoreFieldsGrid.Children
                      .OfType<Control>()
                      .Where(control => string.Equals(control.Tag as string, "attack.minrange.button", StringComparison.Ordinal) ||
@@ -5148,21 +5203,21 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (!ShouldShowCoreMinRange(state, effectiveAction, actionType))
         {
-            if (state.JumpAttackMinRangeTb != null || IsAttackActionType(actionType))
+            if (state.JumpAttackMinRangeTb != null || usesAttackLikeRangeLayout)
             {
                 if (state.JumpAttackMinRangeTb != null)
                     state.JumpAttackMinRangeTb.IsVisible = false;
                 if (state.JumpAttackMinRangeLabel != null)
                     state.JumpAttackMinRangeLabel.IsVisible = false;
-                state.CoreFieldsGrid.ColumnDefinitions = IsAttackActionType(actionType)
+                state.CoreFieldsGrid.ColumnDefinitions = usesAttackLikeRangeLayout
                     ? new ColumnDefinitions("Auto, 80, Auto, Auto, 80")
                     : new ColumnDefinitions("Auto, 80, Auto, 80");
-                Grid.SetColumn(state.MaxRangeLabel, IsAttackActionType(actionType) ? 3 : 2);
-                Grid.SetColumn(state.MaxRangeTb, IsAttackActionType(actionType) ? 4 : 3);
+                Grid.SetColumn(state.MaxRangeLabel, usesAttackLikeRangeLayout ? 3 : 2);
+                Grid.SetColumn(state.MaxRangeTb, usesAttackLikeRangeLayout ? 4 : 3);
                 var supportsAttackCombatRanges = !IsAttackActionType(actionType) ||
                                                  state.SelectedFlagTags.Contains("handlogic") ||
                                                  state.SelectedFlagTags.Contains("rangedlogic");
-                if (IsAttackActionType(actionType) && supportsAttackCombatRanges && !_isReadOnly)
+                if (usesAttackLikeRangeLayout && supportsAttackCombatRanges && !_isReadOnly)
                 {
                     var addMinRangeButton = new Button
                     {
@@ -5185,29 +5240,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
-        state.CoreFieldsGrid.ColumnDefinitions = IsAttackActionType(actionType)
+        state.CoreFieldsGrid.ColumnDefinitions = usesAttackLikeRangeLayout
             ? new ColumnDefinitions("Auto, 80, Auto, 90, 42, Auto, 80")
             : new ColumnDefinitions("Auto, 80, Auto, 80, Auto, 80");
-        Grid.SetColumn(state.MaxRangeLabel, IsAttackActionType(actionType) ? 5 : 4);
-        Grid.SetColumn(state.MaxRangeTb, IsAttackActionType(actionType) ? 6 : 5);
+        Grid.SetColumn(state.MaxRangeLabel, usesAttackLikeRangeLayout ? 5 : 4);
+        Grid.SetColumn(state.MaxRangeTb, usesAttackLikeRangeLayout ? 6 : 5);
 
         void AddAttackMinRangeRemoveButton()
         {
-            if (!IsAttackActionType(actionType) || _isReadOnly)
+            if (!usesAttackLikeRangeLayout || _isReadOnly)
                 return;
 
             var removeButton = new Button
             {
                 Tag = "attack.minrange.remove",
-                Content = "X",
-                Background = Brush.Parse("#8b0000"),
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(5, 0, 0, 0),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
+                Classes = { "remove-button" },
+                Margin = new Thickness(5, 0, 0, 0) };
             removeButton.Click += async (_, _) =>
             {
                 if (!await CheckStartLocalMod())
@@ -5223,9 +5271,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (state.JumpAttackMinRangeTb != null)
         {
-            state.JumpAttackMinRangeTb.IsVisible = true;
-            state.JumpAttackMinRangeTb.Width = 90;
-            state.JumpAttackMinRangeTb.Margin = new Thickness(0, 0, 8, 0);
+                state.JumpAttackMinRangeTb.IsVisible = true;
+                state.JumpAttackMinRangeTb.Width = 90;
+                state.JumpAttackMinRangeTb.Margin = new Thickness(0, 0, 8, 0);
             if (state.JumpAttackMinRangeLabel != null)
                 state.JumpAttackMinRangeLabel.IsVisible = true;
             AddAttackMinRangeRemoveButton();
@@ -5628,7 +5676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.FlagsContainer,
                 state.OptionalFieldsContainer
             }
-            : IsAttackActionType(actionType)
+            : IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType)
             ? new Control[]
             {
                 state.DamageSectionContainer,
@@ -5741,6 +5789,64 @@ public partial class ProtoEditorWindow : SimpleWindow
         state.DefaultFlagsInitializedForType = actionType;
     }
 
+    private WrapPanel CreateCombatVisualFieldsRow(
+        ProtoActionWidgetState state,
+        string animationValue,
+        string impactEffectValue,
+        bool showAnimation,
+        bool showImpact)
+    {
+        var row = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+
+        if (showAnimation)
+        {
+            var animationEditor = new AutoCompleteBox
+            {
+                Text = animationValue,
+                ItemsSource = GetAvailableProtoActionAnimationNames(),
+                FilterMode = AutoCompleteFilterMode.Contains,
+                IsEnabled = !_isReadOnly
+            };
+            EditorTextFieldStyle.ConfigureSelector(animationEditor);
+            EnableDropdownAutoComplete(animationEditor);
+            animationEditor.TextChanged += async (_, _) =>
+            {
+                if (!_isPopulating && await CheckStartLocalMod())
+                    MarkDirty();
+            };
+            state.AdditionalFieldControls["anim"] = animationEditor;
+            row.Children.Add(CreateLabeledFieldGroup("Animation:", animationEditor));
+        }
+
+        if (showImpact)
+        {
+            var impactEditor = new AutoCompleteBox
+            {
+                Text = impactEffectValue,
+                ItemsSource = KnownImpactEffects,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                IsEnabled = !_isReadOnly
+            };
+            EditorTextFieldStyle.ConfigureSelector(impactEditor);
+            EnableDropdownAutoComplete(impactEditor);
+            impactEditor.TextChanged += async (_, _) =>
+            {
+                if (!_isPopulating && await CheckStartLocalMod())
+                    MarkDirty();
+            };
+            state.AdditionalFieldControls["impacteffect"] = impactEditor;
+            var impactGroup = CreateLabeledFieldGroup("Impact Effect:", impactEditor);
+            impactGroup.Margin = new Thickness(showAnimation ? 14 : 0, 0, 0, 0);
+            row.Children.Add(impactGroup);
+        }
+
+        return row;
+    }
+
     private void RenderProtoActionAdditionalFields(ProtoActionWidgetState state, Dictionary<string, string> currentValues)
     {
         var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
@@ -5824,7 +5930,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsGatherActionType(actionType) ||
             IsIdleStatBonusActionType(actionType) ||
             IsDrainResurrectionActionType(actionType) ||
-            IsDistanceModifyActionType(actionType);
+            IsDistanceModifyActionType(actionType) ||
+            IsChainAttackActionType(actionType) ||
+            IsAoeAttackActionType(actionType);
 
         if (primaryFieldTags.Count == 0 && _isReadOnly && !hasManagedCustomLayout && !IsAssistAttackActionType(actionType) && !IsAttackActionType(actionType))
             return;
@@ -5999,14 +6107,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
+                    Classes = { "remove-button" },
                     Margin = new Thickness(8, 0, 0, 0),
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -6101,6 +6203,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 0, editorColumn == 1 ? 12 : 0, 0)
                 };
+                EditorTextFieldStyle.ConfigureSelector(editor);
                 EnableDropdownAutoComplete(editor);
                 editor.TextChanged += async (_, _) =>
                 {
@@ -6213,7 +6316,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             if (!_isReadOnly)
             {
-                var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Width = 28 };
+                var removeButton = new Button { Classes = { "remove-button" } };
                 removeButton.Click += async (_, _) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -6320,7 +6423,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (!_isReadOnly)
                 {
                     state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-                    var removeButton = new Button { Tag = "assistattack.option." + tag, Content = "X", Background = Brush.Parse("#8b0000"), Width = 28, Margin = new Thickness(5, 0, 0, 0) };
+                    var removeButton = new Button { Tag = "assistattack.option." + tag, Classes = { "remove-button" }, Margin = new Thickness(5, 0, 0, 0) };
                     removeButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -6462,6 +6565,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.ForcedVisibleFieldTags.Add("damagearea");
                     state.ForcedVisibleFieldTags.Add("damageflags");
                     state.ForcedVisibleFieldTags.Add("areasortmode");
+                    InitializeDamageAreaDefaults(state, requireAreaSortMode: true);
                 }
                 if (!usesDefaultDamageArea && previouslyUsedDefaultDamageArea)
                 {
@@ -6635,15 +6739,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(5, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(5, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveAttackRangedFieldAsync(tag);
                         row.Children.Add(removeButton);
                     }
@@ -6783,11 +6880,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeBounceButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0)
                         };
                         removeBounceButton.Click += async (_, _) =>
@@ -6877,113 +6970,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.AdditionalFieldsContainer.Children.Add(ballisticFlagsRow);
             }
 
-            if (usesCombatMode)
+            var attackAnimationValue = currentValues.TryGetValue("anim", out var editedAnimation)
+                ? editedAnimation
+                : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "anim");
+            var attackImpactValue = currentValues.TryGetValue("impacteffect", out var editedImpact) &&
+                                    !string.IsNullOrWhiteSpace(editedImpact)
+                ? editedImpact
+                : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "impacteffect");
+            if (usesCombatMode || !_isReadOnly || !string.IsNullOrWhiteSpace(attackImpactValue))
             {
-                var animationValue = currentValues.TryGetValue("anim", out var editedAnimation)
-                    ? editedAnimation
-                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "anim");
-                var animationRow = new WrapPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Margin = new Thickness(0, 2, 0, 2)
-                };
-                animationRow.Children.Add(new TextBlock
-                {
-                    Text = "Animation:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                var animationEditor = new AutoCompleteBox
-                {
-                    Text = animationValue,
-                    ItemsSource = GetAvailableProtoActionAnimationNames(),
-                    FilterMode = AutoCompleteFilterMode.Contains,
-                    IsEnabled = !_isReadOnly,
-                    Width = 380
-                };
-                EnableDropdownAutoComplete(animationEditor);
-                animationEditor.TextChanged += async (_, _) =>
-                {
-                    if (!_isPopulating && await CheckStartLocalMod())
-                        MarkDirty();
-                };
-                state.AdditionalFieldControls["anim"] = animationEditor;
-                animationRow.Children.Add(animationEditor);
-
-                var impactValue = currentValues.TryGetValue("impacteffect", out var editedImpact) &&
-                                  !string.IsNullOrWhiteSpace(editedImpact)
-                    ? editedImpact
-                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "impacteffect");
-                // Editable Attack actions keep the impact-effect slot available even when
-                // the custom action has already been saved once.
-                if (!_isReadOnly || !string.IsNullOrWhiteSpace(impactValue))
-                {
-                    animationRow.Children.Add(new TextBlock
-                    {
-                        Text = "Impact Effect:",
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(14, 4, 8, 4)
-                    });
-                    var impactEditor = new AutoCompleteBox
-                    {
-                        Text = impactValue,
-                        ItemsSource = KnownImpactEffects,
-                        FilterMode = AutoCompleteFilterMode.Contains,
-                        IsEnabled = !_isReadOnly,
-                        Width = 300,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    EditorTextFieldStyle.ConfigureSelector(impactEditor);
-                    EnableDropdownAutoComplete(impactEditor);
-                    impactEditor.TextChanged += async (_, _) =>
-                    {
-                        if (!_isPopulating && await CheckStartLocalMod())
-                            MarkDirty();
-                    };
-                    state.AdditionalFieldControls["impacteffect"] = impactEditor;
-                    animationRow.Children.Add(impactEditor);
-                }
-                state.AdditionalFieldsContainer.Children.Add(animationRow);
-            }
-            else
-            {
-                var impactValue = currentValues.TryGetValue("impacteffect", out var editedImpact) &&
-                                  !string.IsNullOrWhiteSpace(editedImpact)
-                    ? editedImpact
-                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "impacteffect");
-                if (!_isReadOnly || !string.IsNullOrWhiteSpace(impactValue))
-                {
-                    var impactRow = new WrapPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Margin = new Thickness(0, 2, 0, 2)
-                    };
-                    impactRow.Children.Add(new TextBlock
-                    {
-                        Text = "Impact Effect:",
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 4, 10, 4)
-                    });
-                    var impactEditor = new AutoCompleteBox
-                    {
-                        Text = impactValue,
-                        ItemsSource = KnownImpactEffects,
-                        FilterMode = AutoCompleteFilterMode.Contains,
-                        IsEnabled = !_isReadOnly,
-                        Width = 420,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    EditorTextFieldStyle.ConfigureSelector(impactEditor);
-                    EnableDropdownAutoComplete(impactEditor);
-                    impactEditor.TextChanged += async (_, _) =>
-                    {
-                        if (!_isPopulating && await CheckStartLocalMod())
-                            MarkDirty();
-                    };
-                    state.AdditionalFieldControls["impacteffect"] = impactEditor;
-                    impactRow.Children.Add(impactEditor);
-                    state.AdditionalFieldsContainer.Children.Add(impactRow);
-                }
+                state.AdditionalFieldsContainer.Children.Add(CreateCombatVisualFieldsRow(
+                    state,
+                    attackAnimationValue,
+                    attackImpactValue,
+                    showAnimation: usesCombatMode,
+                    showImpact: !_isReadOnly || !string.IsNullOrWhiteSpace(attackImpactValue)));
             }
 
             var hasThrowOnHitEffect = state.OnHitEffectRows.Count > 0
@@ -7073,11 +7074,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeThrowButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0)
                         };
                         removeThrowButton.Click += async (_, _) =>
@@ -7204,11 +7201,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeCastPowerButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0)
                         };
                         removeCastPowerButton.Click += async (_, _) =>
@@ -7421,34 +7414,195 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return editor;
             }
 
-            Grid CreateCompactRow(params (string Tag, string Label)[] fields)
+            WrapPanel CreateCompactRow(params (string Tag, string Label)[] fields)
             {
-                var columns = string.Join(", ", Enumerable.Repeat("Auto, *", fields.Length));
-                var row = new Grid
+                var row = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions(columns),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Stretch
                 };
-                for (var i = 0; i < fields.Length; i++)
+                foreach (var field in fields)
                 {
-                    var label = new TextBlock
-                    {
-                        Text = fields[i].Label + ":",
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(i == 0 ? 0 : 12, 4, 10, 4)
-                    };
-                    Grid.SetColumn(label, i * 2);
-                    row.Children.Add(label);
-
-                    var editor = CreateSimpleEditor(fields[i].Tag);
-                    Grid.SetColumn(editor, i * 2 + 1);
-                    row.Children.Add(editor);
+                    var editor = CreateSimpleEditor(field.Tag);
+                    row.Children.Add(CreateLabeledFieldGroup(field.Label + ":", editor));
                 }
                 return row;
             }
 
-            if (IsDevoteMinorActionType(actionType))
+            if (IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType))
+            {
+                string GetChainAttackValue(string tag)
+                    => currentValues.TryGetValue(tag, out var editedValue)
+                        ? editedValue
+                        : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag);
+
+                Control CreateChainAttackEditor(string tag, string value, double width = 100)
+                {
+                    Control editor;
+                    if (tag.Equals("projectile", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var projectileEditor = new AutoCompleteBox
+                        {
+                            Text = value,
+                            FilterMode = AutoCompleteFilterMode.Contains,
+                            IsEnabled = !_isReadOnly,
+                            Width = 220
+                        };
+                        ConfigureStrictSuggestionAutoComplete(projectileEditor, GetAvailableTrainUnitNames(), value);
+                        editor = projectileEditor;
+                    }
+                    else if (tag.Equals("anim", StringComparison.OrdinalIgnoreCase) ||
+                             tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase))
+                    {
+                        IEnumerable<string> suggestions = tag.Equals("anim", StringComparison.OrdinalIgnoreCase)
+                            ? GetAvailableProtoActionAnimationNames()
+                            : KnownImpactEffects;
+                        var selector = new AutoCompleteBox
+                        {
+                            Text = value,
+                            ItemsSource = suggestions,
+                            FilterMode = AutoCompleteFilterMode.Contains,
+                            IsEnabled = !_isReadOnly,
+                            Width = tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase) ? 300 : 260
+                        };
+                        EditorTextFieldStyle.ConfigureSelector(selector);
+                        EnableDropdownAutoComplete(selector);
+                        editor = selector;
+                    }
+                    else
+                    {
+                        var textBox = new TextBox
+                        {
+                            Text = value,
+                            IsEnabled = !_isReadOnly,
+                            Width = width
+                        };
+                        AttachProtoActionDecimalBehavior(textBox);
+                        editor = textBox;
+                    }
+
+                    if (editor is TextBox textBoxEditor)
+                    {
+                        textBoxEditor.TextChanged += async (_, _) =>
+                        {
+                            if (!_isPopulating && await CheckStartLocalMod())
+                                MarkDirty();
+                        };
+                    }
+                    else if (editor is AutoCompleteBox autoCompleteEditor)
+                    {
+                        autoCompleteEditor.TextChanged += async (_, _) =>
+                        {
+                            if (!_isPopulating && await CheckStartLocalMod())
+                                MarkDirty();
+                        };
+                    }
+
+                    state.AdditionalFieldControls[tag] = editor;
+                    return editor;
+                }
+
+                bool IsChainAttackOptionalVisible(string tag)
+                    => state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(GetChainAttackValue(tag));
+
+                void AddChainAttackOptional(Panel row, string tag, string label, bool renderButtons, double width = 100)
+                {
+                    var value = GetChainAttackValue(tag);
+                    var visible = IsChainAttackOptionalVisible(tag);
+                    if (visible && renderButtons)
+                        return;
+                    if (!visible)
+                    {
+                        if (renderButtons && !_isReadOnly)
+                        {
+                            var addButton = new Button
+                            {
+                                Content = label,
+                                Background = Brush.Parse("#2b7a0b"),
+                                Margin = new Thickness(10, 0, 0, 0)
+                            };
+                            addButton.Click += async (_, _) =>
+                            {
+                                if (!await CheckStartLocalMod())
+                                    return;
+                                state.ForcedVisibleFieldTags.Add(tag);
+                                RefreshProtoActionMetadataPanels(state);
+                                MarkDirty();
+                            };
+                            row.Children.Add(addButton);
+                        }
+                        return;
+                    }
+
+                    row.Children.Add(new TextBlock
+                    {
+                        Text = label + ":",
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(12, 4, 8, 4)
+                    });
+                    row.Children.Add(CreateChainAttackEditor(tag, value, width));
+                    if (!_isReadOnly)
+                    {
+                        var removeButton = new Button
+                        {
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(6, 0, 0, 0)
+                        };
+                        removeButton.Click += async (_, _) =>
+                        {
+                            if (!await CheckStartLocalMod())
+                                return;
+                            state.ForcedVisibleFieldTags.Remove(tag);
+                            state.AdditionalFieldControls.Remove(tag);
+                            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
+                            RefreshProtoActionMetadataPanels(state);
+                            MarkDirty();
+                        };
+                        row.Children.Add(removeButton);
+                    }
+                }
+
+                if (IsChainAttackActionType(actionType))
+                {
+                    var projectileRow = new WrapPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Margin = new Thickness(0, 2, 0, 2)
+                    };
+                    projectileRow.Children.Add(CreateLabeledFieldGroup("Projectile:", CreateChainAttackEditor("projectile", GetChainAttackValue("projectile"))));
+                    foreach (var (tag, label) in new[] { ("displayednumberprojectiles", "Displayed Number"), ("numberbounces", "Number Bounces") })
+                        AddChainAttackOptional(projectileRow, tag, label, renderButtons: false);
+                    foreach (var (tag, label) in new[] { ("displayednumberprojectiles", "Displayed Number"), ("numberbounces", "Number Bounces") })
+                        AddChainAttackOptional(projectileRow, tag, label, renderButtons: true);
+                    state.AdditionalFieldsContainer.Children.Add(projectileRow);
+
+                    var targetingRow = new WrapPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Margin = new Thickness(0, 2, 0, 2)
+                    };
+                    foreach (var (tag, label) in new[] { ("accuracy", "Accuracy"), ("trackrating", "Track Rating") })
+                        AddChainAttackOptional(targetingRow, tag, label, renderButtons: false);
+                    foreach (var (tag, label) in new[] { ("accuracy", "Accuracy"), ("trackrating", "Track Rating") })
+                        AddChainAttackOptional(targetingRow, tag, label, renderButtons: true);
+                    if (targetingRow.Children.Count > 0)
+                        state.AdditionalFieldsContainer.Children.Add(targetingRow);
+                }
+
+                var animationValue = GetChainAttackValue("anim");
+                var impactValue = GetChainAttackValue("impacteffect");
+                if (!_isReadOnly || !string.IsNullOrWhiteSpace(animationValue) || !string.IsNullOrWhiteSpace(impactValue))
+                {
+                    state.AdditionalFieldsContainer.Children.Add(CreateCombatVisualFieldsRow(
+                        state,
+                        animationValue,
+                        impactValue,
+                        showAnimation: !_isReadOnly || !string.IsNullOrWhiteSpace(animationValue),
+                        showImpact: !_isReadOnly || !string.IsNullOrWhiteSpace(impactValue)));
+                }
+            }
+            else if (IsDevoteMinorActionType(actionType))
             {
                 state.CoreFieldsGrid.IsVisible = false;
                 state.MaxRangeLabel.IsVisible = false;
@@ -7473,37 +7627,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (visibleFields.Length == 0)
                         return;
 
-                    if (!isOriginalReadOnlyAction)
-                    {
-                        state.AdditionalFieldsContainer.Children.Add(CreateCompactRow(visibleFields));
-                        return;
-                    }
-
-                    var columns = string.Join(", ", Enumerable.Repeat("Auto, Auto", visibleFields.Length));
-                    var row = new Grid
-                    {
-                        ColumnDefinitions = new ColumnDefinitions(columns),
-                        Margin = new Thickness(0, 2, 0, 2),
-                        HorizontalAlignment = HorizontalAlignment.Left
-                    };
-
-                    for (var i = 0; i < visibleFields.Length; i++)
-                    {
-                        var label = new TextBlock
-                        {
-                            Text = visibleFields[i].Label + ":",
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(i == 0 ? 0 : 12, 4, 10, 4)
-                        };
-                        Grid.SetColumn(label, i * 2);
-                        row.Children.Add(label);
-
-                        var editor = CreateSimpleEditor(visibleFields[i].Tag);
-                        Grid.SetColumn(editor, i * 2 + 1);
-                        row.Children.Add(editor);
-                    }
-
-                    state.AdditionalFieldsContainer.Children.Add(row);
+                    state.AdditionalFieldsContainer.Children.Add(CreateCompactRow(visibleFields));
                 }
 
                 string InferDevoteMinorSubtype()
@@ -7770,50 +7894,32 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                     if (showAttachmentRow)
                     {
-                        var attachmentRow = new Grid
+                        var attachmentRow = new WrapPanel
                         {
-                            ColumnDefinitions = !_isReadOnly
-                                ? new ColumnDefinitions("180, *, 180, 140, 32")
-                                : new ColumnDefinitions("Auto, Auto, Auto, Auto"),
+                            Orientation = Orientation.Horizontal,
                             Margin = new Thickness(0, 2, 0, 2),
-                            HorizontalAlignment = _isReadOnly ? HorizontalAlignment.Left : HorizontalAlignment.Stretch
+                            HorizontalAlignment = HorizontalAlignment.Left
                         };
-                        attachmentRow.Children.Add(new TextBlock
-                        {
-                            Text = "Model Attachment:",
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(0, 4, 10, 4)
-                        });
                         var modelAttachmentEditor = CreateSimpleEditor("modelattachment");
-                        Grid.SetColumn(modelAttachmentEditor, 1);
-                        attachmentRow.Children.Add(modelAttachmentEditor);
-                        var modelAttachmentBoneLabel = new TextBlock
-                        {
-                            Text = "Model Attachment Bone:",
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(12, 4, 10, 4)
-                        };
-                        Grid.SetColumn(modelAttachmentBoneLabel, 2);
-                        attachmentRow.Children.Add(modelAttachmentBoneLabel);
+                        attachmentRow.Children.Add(CreateLabeledFieldGroup(
+                            "Model Attachment:",
+                            modelAttachmentEditor));
+
                         var modelAttachmentBoneEditor = CreateSimpleEditor("modelattachmentbone");
                         if (modelAttachmentBoneEditor is AutoCompleteBox modelAttachmentBoneAcb)
                             modelAttachmentBoneAcb.Width = 140;
-                        Grid.SetColumn(modelAttachmentBoneEditor, 3);
-                        attachmentRow.Children.Add(modelAttachmentBoneEditor);
+                        attachmentRow.Children.Add(CreateLabeledFieldGroup(
+                            "Model Attachment Bone:",
+                            modelAttachmentBoneEditor));
+
                         if (!_isReadOnly)
                         {
                             var removeAttachmentButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
+                                Classes = { "remove-button" },
+                                Margin = new Thickness(0, 0, 0, 6)
                             };
                             removeAttachmentButton.Click += async (_, _) => await RemoveDevoteMinorAttachmentAsync();
-                            Grid.SetColumn(removeAttachmentButton, 4);
                             attachmentRow.Children.Add(removeAttachmentButton);
                         }
                         state.AdditionalFieldsContainer.Children.Add(attachmentRow);
@@ -7930,14 +8036,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeSoundsetEnterButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeSoundsetEnterButton.Click += async (_, _) => await RemoveDevoteMinorOptionalFieldAsync("soundsetenter");
                             Grid.SetColumn(removeSoundsetEnterButton, 2);
                             soundsetEnterRow.Children.Add(removeSoundsetEnterButton);
@@ -7968,14 +8067,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeDevotionPowerButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeDevotionPowerButton.Click += async (_, _) => await RemoveDevoteMinorOptionalFieldAsync("devotionpower");
                             Grid.SetColumn(removeDevotionPowerButton, 2);
                             devotionPowerRow.Children.Add(removeDevotionPowerButton);
@@ -8123,20 +8215,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 string GetValue(string tag) => currentValues.TryGetValue(tag, out var value) ? value : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag);
-                var modifyRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 2) };
-                modifyRow.Children.Add(new TextBlock { Text = "Modify Type:", VerticalAlignment = VerticalAlignment.Center });
+                var modifyRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
                 var modifyTypeAcb = new AutoCompleteBox { Text = ProtoConstants.GetModifyTypeDisplayName(ProtoConstants.GetModifyTypeValue(GetValue("modifytype"))), Width = 210, FilterMode = AutoCompleteFilterMode.Contains, IsEnabled = !_isReadOnly };
                 ConfigureStrictSuggestionAutoComplete(modifyTypeAcb, modifyTypeSuggestions, modifyTypeAcb.Text ?? "");
-                modifyRow.Children.Add(modifyTypeAcb);
-                modifyRow.Children.Add(new TextBlock { Text = "Damage Type:", VerticalAlignment = VerticalAlignment.Center });
+                modifyRow.Children.Add(CreateLabeledFieldGroup("Modify Type:", modifyTypeAcb));
                 var damageTypeAcb = new AutoCompleteBox { Text = GetValue("modifydamagetype"), Width = 100, FilterMode = AutoCompleteFilterMode.Contains, ItemsSource = ProtoConstants.KnownDamageTypes, IsEnabled = !_isReadOnly };
                 EnableDropdownAutoComplete(damageTypeAcb);
-                modifyRow.Children.Add(damageTypeAcb);
+                var damageTypeGroup = CreateLabeledFieldGroup("Damage Type:", damageTypeAcb);
+                modifyRow.Children.Add(damageTypeGroup);
                 void RefreshDamageTypeVisibility()
                 {
                     var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "ArmorSpecific" or "DamageSpecific";
-                    modifyRow.Children[2].IsVisible = visible;
-                    damageTypeAcb.IsVisible = visible;
+                    damageTypeGroup.IsVisible = visible;
                     if (!visible) damageTypeAcb.Text = "";
                 }
                 modifyTypeAcb.TextChanged += async (_, _) => { RefreshDamageTypeVisibility(); if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
@@ -8146,13 +8236,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.AdditionalFieldControls["modifydamagetype"] = damageTypeAcb;
                 state.AdditionalFieldsContainer.Children.Add(modifyRow);
 
-                var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 2) };
-                modeRow.Children.Add(new TextBlock { Text = "Modify:", VerticalAlignment = VerticalAlignment.Center });
+                var modeRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
                 var modeOptions = inverseAura
                     ? new[] { "Rate By Type" }
                     : new[] { "Multiplier", "Amount" };
                 var modeCombo = new ComboBox { ItemsSource = modeOptions, SelectedItem = mode.Replace("Modify ", ""), Width = 140, IsEnabled = !_isReadOnly && !inverseAura };
-                modeRow.Children.Add(modeCombo);
+                modeRow.Children.Add(CreateLabeledFieldGroup("Modify:", modeCombo));
                 modifyTypeAcb.SelectionChanged += (_, _) =>
                 {
                     if (_isPopulating)
@@ -8178,10 +8267,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.CustomValues["likebonus.mode"] = defaultMode;
                     modeCombo.SelectedItem = defaultMode;
                 };
-                modeRow.Children.Add(new TextBlock { Text = "Value:", VerticalAlignment = VerticalAlignment.Center });
                 var modifierValueTb = new TextBox { Text = mode.Contains("Multiplier", StringComparison.OrdinalIgnoreCase) ? GetValue("modifymultiplier") : GetValue("modifyamount"), Width = 120, IsEnabled = !_isReadOnly };
                 AttachProtoActionDecimalBehavior(modifierValueTb);
-                modeRow.Children.Add(modifierValueTb);
+                var modifierValueGroup = CreateLabeledFieldGroup("Value:", modifierValueTb);
+                modeRow.Children.Add(modifierValueGroup);
                 state.AdditionalFieldControls["modifyamount"] = modifierValueTb;
                 state.AdditionalFieldControls["modifymultiplier"] = modifierValueTb;
                 state.AdditionalFieldsContainer.Children.Add(modeRow);
@@ -8192,8 +8281,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var rateByType = selectedMode == "Rate By Type";
                     state.AdditionalFieldControls.Remove("modifyamount");
                     state.AdditionalFieldControls.Remove("modifymultiplier");
-                    modifierValueTb.IsVisible = !rateByType;
-                    modeRow.Children[2].IsVisible = !rateByType;
+                    modifierValueGroup.IsVisible = !rateByType;
                     if (rateByType)
                     {
                         state.SelectedFlagTags.Add("modifyratebytype");
@@ -8248,19 +8336,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var showTargetLimit = !string.IsNullOrWhiteSpace(GetValue("modifytargetlimit")) || state.ForcedVisibleFieldTags.Contains("modifytargetlimit");
                 if (mode == "Rate By Type" && showRateCap)
                 {
-                    modeRow.Children.Add(new TextBlock { Text = "Modify Rate Cap:", VerticalAlignment = VerticalAlignment.Center });
-                    modeRow.Children.Add(CreateSimpleEditor("modifyratecap"));
+                    modeRow.Children.Add(CreateLabeledFieldGroup("Modify Rate Cap:", CreateSimpleEditor("modifyratecap")));
                     if (!_isReadOnly)
                     {
-                        var remove = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var remove = new Button { Classes = { "remove-button" } };
                         remove.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Remove("modifyratecap"); state.AdditionalFieldControls.Remove("modifyratecap"); ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "modifyratecap", ""); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                         modeRow.Children.Add(remove);
                     }
                 }
                 if (mode != "Rate By Type" && showTargetLimit)
                 {
-                    modeRow.Children.Add(new TextBlock { Text = "Max Targets:", VerticalAlignment = VerticalAlignment.Center });
-                    modeRow.Children.Add(CreateSimpleEditor("modifytargetlimit"));
+                    modeRow.Children.Add(CreateLabeledFieldGroup("Max Targets:", CreateSimpleEditor("modifytargetlimit")));
                 }
                 if (!_isReadOnly && mode == "Rate By Type" && !showRateCap)
                 {
@@ -8281,10 +8367,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var targetAttachmentRow = CreateCompactRow(("targetattachment", "Target Attachment"), ("targetattachmentbone", "Target Attachment Bone"));
                     if (!_isReadOnly)
                     {
-                        var remove = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var remove = new Button { Classes = { "remove-button" } };
                         remove.Click += async (_, _) => { if (await CheckStartLocalMod()) { foreach (var tag in new[] { "targetattachment", "targetattachmentbone" }) { state.ForcedVisibleFieldTags.Remove(tag); state.AdditionalFieldControls.Remove(tag); ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, ""); } RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
-                        targetAttachmentRow.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(32)));
-                        Grid.SetColumn(remove, targetAttachmentRow.ColumnDefinitions.Count - 1);
                         targetAttachmentRow.Children.Add(remove);
                     }
                     state.AdditionalFieldsContainer.Children.Add(targetAttachmentRow);
@@ -8519,36 +8603,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 animRow.Children.Add(animEditor);
                 state.AdditionalFieldsContainer.Children.Add(animRow);
 
-                var timingRow = new Grid
+                var timingRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("180, 140, 120, 140"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                timingRow.Children.Add(new TextBlock
-                {
-                    Text = "Modify Duration (ms):",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
                 var modifyDurationEditor = CreateSimpleEditor("modifyduration");
-                Grid.SetColumn(modifyDurationEditor, 1);
-                timingRow.Children.Add(modifyDurationEditor);
-                var timerLabel = new TextBlock
-                {
-                    Text = "Timer (s):",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(timerLabel, 2);
-                timingRow.Children.Add(timerLabel);
+                timingRow.Children.Add(CreateLabeledFieldGroup(
+                    "Modify Duration (ms):",
+                    modifyDurationEditor));
                 var timerEditor = CreateSimpleEditor("timer");
                 if (timerEditor is TextBox timerTb)
                     timerTb.Width = 140;
                 else if (timerEditor is AutoCompleteBox timerAcb)
                     timerAcb.Width = 140;
-                Grid.SetColumn(timerEditor, 3);
-                timingRow.Children.Add(timerEditor);
+                timingRow.Children.Add(CreateLabeledFieldGroup("Timer (s):", timerEditor));
                 state.AdditionalFieldsContainer.Children.Add(timingRow);
             }
             else if (IsAutoRangedModifyActionType(actionType) || IsAreaMutateActionType(actionType) || IsAutoRangedAttachActionType(actionType))
@@ -8675,7 +8745,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         slowHealPanel.Children.Add(slowHealEditor);
                         if (!_isReadOnly)
                         {
-                            var removeSlowHealButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Margin = new Thickness(6, 0, 0, 0) };
+                            var removeSlowHealButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(6, 0, 0, 0) };
                             removeSlowHealButton.Click += async (_, _) =>
                             {
                                 if (!await CheckStartLocalMod()) return;
@@ -8817,7 +8887,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     stackRow.Children.Add(editor);
                     if (!_isReadOnly)
                     {
-                        var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var removeButton = new Button { Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
@@ -8898,7 +8968,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         state.BonusRows.Add(rowState);
                         if (!_isReadOnly)
                         {
-                            var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                            var removeButton = new Button { Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 if (!await CheckStartLocalMod()) return;
@@ -8966,7 +9036,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         state.StructuredFieldRows["rate"].Add(rowState);
                         if (!_isReadOnly)
                         {
-                            var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Margin = new Thickness(6, 0, 0, 0) };
+                            var removeButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(6, 0, 0, 0) };
                             removeButton.Click += async (_, _) =>
                             {
                                 if (!await CheckStartLocalMod()) return;
@@ -9261,7 +9331,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 void AddAutoRangedLabeledField(Panel panel, string tag, string label, double width = 100)
                 {
-                    panel.Children.Add(new TextBlock { Text = label + ":", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 6, 4) });
                     var editor = CreateSimpleEditor(tag);
                     if (editor is TextBox textBox) textBox.Width = width;
                     if (editor is AutoCompleteBox autoCompleteBox) autoCompleteBox.Width = width;
@@ -9271,7 +9340,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                         pathEditor.Editor.Width = width;
                         pathEditor.Editor.MaxWidth = width;
                     }
-                    panel.Children.Add(editor);
+                    panel.Children.Add(CreateLabeledFieldGroup(
+                        label + ":",
+                        editor,
+                        new Thickness(12, 0, 0, 4)));
                 }
 
                 var showAdditionalProperties = state.CustomValues.GetValueOrDefault("autorangedmodify.additionalproperties", "0") == "1" ||
@@ -9287,7 +9359,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddAutoRangedFlagCheckBox(propertiesRow, "modifyupdateintervalrandomness", "Random");
                     if (!_isReadOnly)
                     {
-                        var removePropertiesButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Margin = new Thickness(8, 0, 0, 0) };
+                        var removePropertiesButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(8, 0, 0, 0) };
                         removePropertiesButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -9330,7 +9402,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     infectionHeader.Children.Add(new TextBlock { Text = "Infection", FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center });
                     if (!_isReadOnly)
                     {
-                        var removeInfectionButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Margin = new Thickness(8, 0, 0, 0) };
+                        var removeInfectionButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(8, 0, 0, 0) };
                         removeInfectionButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -9462,7 +9534,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddShieldField("modifytargetlimit", "Target Limit");
                     if (!_isReadOnly)
                     {
-                        var removeTargetLimit = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var removeTargetLimit = new Button { Classes = { "remove-button" } };
                         removeTargetLimit.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Remove("modifytargetlimit"); ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "modifytargetlimit", ""); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                         shieldRow.Children.Add(removeTargetLimit);
                     }
@@ -9485,7 +9557,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddShieldField("slowhealmultiplier", "Slow Heal Multiplier");
                     if (!_isReadOnly)
                     {
-                        var removeSlowHealMultiplier = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var removeSlowHealMultiplier = new Button { Classes = { "remove-button" } };
                         removeSlowHealMultiplier.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
@@ -9577,7 +9649,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     row.Children.Add(boneEditor);
                     if (!_isReadOnly)
                     {
-                        var remove = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var remove = new Button { Classes = { "remove-button" } };
                         remove.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
@@ -9808,7 +9880,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowState.AttributeEditors["type"] = typeAcb;
                     if (!_isReadOnly)
                     {
-                        var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var removeButton = new Button { Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             if (await CheckStartLocalMod())
@@ -9858,7 +9930,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     slowHealRow.Children.Add(slowHealEditor);
                     if (!_isReadOnly)
                     {
-                        var removeButton = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                        var removeButton = new Button { Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             if (await CheckStartLocalMod())
@@ -10060,13 +10132,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 EnableDropdownAutoComplete(ruleActionTypeAcb);
-                var ruleActionTypeLabel = new TextBlock
-                {
-                    Text = "Action Type:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4),
-                    IsVisible = string.Equals(ruleTypeCb.SelectedItem as string, "OnAction", StringComparison.OrdinalIgnoreCase)
-                };
+                var ruleActionTypeGroup = CreateLabeledFieldGroup("Action Type:", ruleActionTypeAcb);
+                ruleActionTypeGroup.IsVisible =
+                    string.Equals(ruleTypeCb.SelectedItem as string, "OnAction", StringComparison.OrdinalIgnoreCase);
                 var ruleRowState = new ProtoActionStructuredFieldRowState
                 {
                     Tag = "conditionaltransformrule",
@@ -10089,42 +10157,26 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 ruleTypeCb.SelectionChanged += async (_, _) =>
                 {
-                    ruleActionTypeLabel.IsVisible = ruleActionTypeAcb.IsVisible =
+                    ruleActionTypeGroup.IsVisible =
                         string.Equals(ruleTypeCb.SelectedItem as string, "OnAction", StringComparison.OrdinalIgnoreCase);
                     await HandleConditionalTransformRuleChangedAsync();
                 };
                 ruleValueTb.TextChanged += async (_, _) => await HandleConditionalTransformRuleChangedAsync();
                 ruleActionTypeAcb.TextChanged += async (_, _) => await HandleConditionalTransformRuleChangedAsync();
 
-                var conditionalTransformRuleRow = new Grid
+                var conditionalTransformRuleRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("220, 220, 80, 100, 100, 180"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                conditionalTransformRuleRow.Children.Add(new TextBlock
-                {
-                    Text = "Conditional Transform Rule:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                Grid.SetColumn(ruleTypeCb, 1);
-                conditionalTransformRuleRow.Children.Add(ruleTypeCb);
-                var ruleValueLabel = new TextBlock
-                {
-                    Text = "Value:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(ruleValueLabel, 2);
-                conditionalTransformRuleRow.Children.Add(ruleValueLabel);
-                Grid.SetColumn(ruleValueTb, 3);
-                conditionalTransformRuleRow.Children.Add(ruleValueTb);
-                Grid.SetColumn(ruleActionTypeLabel, 4);
-                conditionalTransformRuleRow.Children.Add(ruleActionTypeLabel);
-                ruleActionTypeAcb.IsVisible = ruleActionTypeLabel.IsVisible;
-                Grid.SetColumn(ruleActionTypeAcb, 5);
-                conditionalTransformRuleRow.Children.Add(ruleActionTypeAcb);
+                conditionalTransformRuleRow.Children.Add(CreateLabeledFieldGroup(
+                    "Conditional Transform Rule:",
+                    ruleTypeCb));
+                conditionalTransformRuleRow.Children.Add(CreateLabeledFieldGroup(
+                    "Value:",
+                    ruleValueTb));
+                conditionalTransformRuleRow.Children.Add(ruleActionTypeGroup);
                 state.AdditionalFieldsContainer.Children.Add(conditionalTransformRuleRow);
 
                 var modifyProtoEntries = GetProtoActionStructuredFieldEntriesForEditor(effectiveAction, actionType, "modifyprotoid");
@@ -10237,14 +10289,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -10409,13 +10454,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeTransformDurationButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center,
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0)
                         };
                         removeTransformDurationButton.Click += async (_, _) =>
@@ -10600,14 +10639,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -10761,13 +10793,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center,
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0)
                         };
                         removeButton.Click += async (_, _) =>
@@ -10846,13 +10872,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center,
+                                Classes = { "remove-button" },
                                 Margin = new Thickness(2, 0, 0, 0)
                             };
                             removeButton.Click += async (_, _) =>
@@ -11036,14 +11056,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -11268,14 +11281,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -11423,14 +11429,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -11508,14 +11507,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -11902,16 +11894,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                         removeConversionButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
+                            Classes = { "remove-button" },
                             Margin = new Thickness(8, 0, 0, 0),
-                            IsVisible = conversionProtoLabel.IsVisible,
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            IsVisible = conversionProtoLabel.IsVisible };
                         removeConversionButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -11935,14 +11920,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -12030,13 +12008,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center,
+                                Classes = { "remove-button" },
                                 Margin = new Thickness(8, 0, 0, 0)
                             };
                             removeButton.Click += async (_, _) =>
@@ -12114,13 +12086,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center,
+                                Classes = { "remove-button" },
                                 Margin = new Thickness(8, 0, 0, 0)
                             };
                             removeButton.Click += async (_, _) =>
@@ -12348,15 +12314,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             removeTypedStunButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                Margin = new Thickness(8, 0, 0, 0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" },
+                                Margin = new Thickness(8, 0, 0, 0) };
                             removeTypedStunButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -12380,15 +12339,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                Margin = new Thickness(12, 0, 0, 0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" },
+                                Margin = new Thickness(12, 0, 0, 0) };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -12480,13 +12432,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center,
+                                Classes = { "remove-button" },
                                 Margin = new Thickness(8, 0, 0, 0)
                             };
                             removeButton.Click += async (_, _) =>
@@ -12665,15 +12611,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -12768,13 +12707,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center,
+                                Classes = { "remove-button" },
                                 Margin = new Thickness(8, 0, 0, 0)
                             };
                             removeButton.Click += async (_, _) =>
@@ -12926,15 +12859,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -13083,15 +13009,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveGrantOtherResourcesAsync();
                         Grid.SetColumn(removeButton, 4);
                         rowGrid.Children.Add(removeButton);
@@ -13191,15 +13110,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveGrantResourcesToAllyAsync();
                         Grid.SetColumn(removeButton, showGrantOtherResources ? 4 : 2);
                         rowGrid.Children.Add(removeButton);
@@ -13408,15 +13320,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveStealthVfxAsync();
                         Grid.SetColumn(removeButton, 2);
                         vfxRow.Children.Add(removeButton);
@@ -13527,15 +13432,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveStealthSoundsAsync();
                         Grid.SetColumn(removeButton, 6);
                         soundsRow.Children.Add(removeButton);
@@ -13697,15 +13595,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeMinRangeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeMinRangeButton.Click += async (_, _) => await RemoveLureMinRangeAsync();
                         Grid.SetColumn(removeMinRangeButton, 2);
                         rangeRofRow.Children.Add(removeMinRangeButton);
@@ -13814,15 +13705,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -13952,15 +13836,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) => await RemoveTargetedSpeedMultiplierAsync();
                         Grid.SetColumn(removeButton, 2);
                         row.Children.Add(removeButton);
@@ -14115,15 +13992,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            Margin = new Thickness(8, 0, 0, 0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0) };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -14215,6 +14085,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ItemsSource = GetAvailableTrainUnitNames(),
                     IsEnabled = !_isReadOnly
                 };
+                EditorTextFieldStyle.ConfigureSelector(chargedEditor);
                 EnableDropdownAutoComplete(chargedEditor);
                 chargedEditor.TextChanged += async (_, _) =>
                 {
@@ -14283,30 +14154,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 };
 
-                var animMaxRangeRow = new Grid
+                var animMaxRangeRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("180, *, 180, 140"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                animMaxRangeRow.Children.Add(new TextBlock
-                {
-                    Text = "Animation:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                Grid.SetColumn(animEditor, 1);
-                animMaxRangeRow.Children.Add(animEditor);
-                var maxRangeLabel = new TextBlock
-                {
-                    Text = "Max Range:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(maxRangeLabel, 2);
-                animMaxRangeRow.Children.Add(maxRangeLabel);
-                Grid.SetColumn(maxRangeMirror, 3);
-                animMaxRangeRow.Children.Add(maxRangeMirror);
+                animMaxRangeRow.Children.Add(CreateLabeledFieldGroup("Animation:", animEditor));
+                animMaxRangeRow.Children.Add(CreateLabeledFieldGroup("Max Range:", maxRangeMirror));
                 state.AdditionalFieldsContainer.Children.Add(animMaxRangeRow);
             }
             else if (IsIdleStatBonusActionType(actionType))
@@ -14664,14 +14519,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeModifyBaseButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeModifyBaseButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -14717,32 +14565,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.MaxRangeLabel.IsVisible = false;
                 state.MaxRangeTb.IsVisible = false;
 
-                var animProjectileRow = new Grid
+                var animProjectileRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("180, *, 120, *"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                animProjectileRow.Children.Add(new TextBlock
-                {
-                    Text = "Animation:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
                 var animEditor = CreateSimpleEditor("anim");
-                Grid.SetColumn(animEditor, 1);
-                animProjectileRow.Children.Add(animEditor);
-                var projectileLabel = new TextBlock
-                {
-                    Text = "Projectile:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(projectileLabel, 2);
-                animProjectileRow.Children.Add(projectileLabel);
+                animProjectileRow.Children.Add(CreateLabeledFieldGroup("Animation:", animEditor));
                 var projectileEditor = CreateSimpleEditor("projectile");
-                Grid.SetColumn(projectileEditor, 3);
-                animProjectileRow.Children.Add(projectileEditor);
+                animProjectileRow.Children.Add(CreateLabeledFieldGroup("Projectile:", projectileEditor));
                 state.AdditionalFieldsContainer.Children.Add(animProjectileRow);
 
                 var maxRangeMirror = new TextBox
@@ -14809,18 +14641,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rateRowState.AttributeEditors["type"] = rateTypeAcb;
                 state.StructuredFieldRows["rate"].Add(rateRowState);
 
-                var rateMaxRangeRow = new Grid
+                var rateMaxRangeRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("60, 420, 120, 140"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                rateMaxRangeRow.Children.Add(new TextBlock
-                {
-                    Text = "Rate:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
                 var ratePanel = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -14830,18 +14656,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ratePanel.Children.Add(rateTypeAcb);
                 ratePanel.Children.Add(new TextBlock { Text = "Value:", VerticalAlignment = VerticalAlignment.Center });
                 ratePanel.Children.Add(rateValueTb);
-                Grid.SetColumn(ratePanel, 1);
-                rateMaxRangeRow.Children.Add(ratePanel);
-                var maxRangeLabel = new TextBlock
-                {
-                    Text = "Max Range:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(maxRangeLabel, 2);
-                rateMaxRangeRow.Children.Add(maxRangeLabel);
-                Grid.SetColumn(maxRangeMirror, 3);
-                rateMaxRangeRow.Children.Add(maxRangeMirror);
+                rateMaxRangeRow.Children.Add(CreateLabeledFieldGroup("Rate:", ratePanel));
+                rateMaxRangeRow.Children.Add(CreateLabeledFieldGroup("Max Range:", maxRangeMirror));
                 state.AdditionalFieldsContainer.Children.Add(rateMaxRangeRow);
 
                 var rawDamageFlagsValue = currentValues.TryGetValue("damageflags", out var currentDamageFlags)
@@ -14873,7 +14689,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 damageFlagsRow.Children.Add(new TextBlock
                 {
-                    Text = "Damage Flags:",
+                    Text = "Targets:",
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 4, 10, 4)
                 });
@@ -15073,40 +14889,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 minRateRowState.AttributeEditors["type"] = minRateTypeAcb;
                 state.StructuredFieldRows["minrate"].Add(minRateRowState);
 
-                var distanceRow = new Grid
+                var distanceRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("Auto, 110, Auto, 110, Auto, 280"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                var minRangeLabel = new TextBlock
-                {
-                    Text = "Min Range:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                };
-                Grid.SetColumn(minRangeLabel, 0);
-                distanceRow.Children.Add(minRangeLabel);
-                Grid.SetColumn(minRangeEditor, 1);
-                distanceRow.Children.Add(minRangeEditor);
-                var maxRangeLabel = new TextBlock
-                {
-                    Text = "Max Range:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(maxRangeLabel, 2);
-                distanceRow.Children.Add(maxRangeLabel);
-                Grid.SetColumn(maxRangeMirror, 3);
-                distanceRow.Children.Add(maxRangeMirror);
-                var minRateLabel = new TextBlock
-                {
-                    Text = "Min Rate:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(minRateLabel, 4);
-                distanceRow.Children.Add(minRateLabel);
+                distanceRow.Children.Add(CreateLabeledFieldGroup("Min Range:", minRangeEditor));
+                distanceRow.Children.Add(CreateLabeledFieldGroup("Max Range:", maxRangeMirror));
                 var minRatePanel = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -15116,8 +14906,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 minRatePanel.Children.Add(minRateTypeAcb);
                 minRatePanel.Children.Add(new TextBlock { Text = "Value:", VerticalAlignment = VerticalAlignment.Center });
                 minRatePanel.Children.Add(minRateValueTb);
-                Grid.SetColumn(minRatePanel, 5);
-                distanceRow.Children.Add(minRatePanel);
+                distanceRow.Children.Add(CreateLabeledFieldGroup("Min Rate:", minRatePanel));
                 state.AdditionalFieldsContainer.Children.Add(distanceRow);
 
                 var modifyTypeSuggestions = ProtoConstants.KnownModifyTypes
@@ -15143,18 +14932,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var showModifyBase = !string.IsNullOrWhiteSpace(currentModifyBaseValue) ||
                                      state.ForcedVisibleFieldTags.Contains("modifybase");
 
-                var modifyGrid = new Grid
+                var modifyGrid = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("Auto, 220, Auto, 140, Auto, 160, Auto, 140"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                modifyGrid.Children.Add(new TextBlock
-                {
-                    Text = "Modify Type:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
                 var modifyTypeDisplayValue = ProtoConstants.GetModifyTypeDisplayName(ProtoConstants.GetModifyTypeValue(currentModifyTypeValue ?? ""));
                 var modifyTypeAcb = new AutoCompleteBox
                 {
@@ -15173,18 +14956,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed)
                         MarkDirty();
                 };
-                Grid.SetColumn(modifyTypeAcb, 1);
-                modifyGrid.Children.Add(modifyTypeAcb);
+                modifyGrid.Children.Add(CreateLabeledFieldGroup("Modify Type:", modifyTypeAcb));
                 state.AdditionalFieldControls["modifytype"] = modifyTypeAcb;
-
-                var modifyDamageTypeLabel = new TextBlock
-                {
-                    Text = "Modify Damage Type:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(modifyDamageTypeLabel, 2);
-                modifyGrid.Children.Add(modifyDamageTypeLabel);
 
                 var modifyDamageTypeAcb = new AutoCompleteBox
                 {
@@ -15204,15 +14977,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed)
                         MarkDirty();
                 };
-                Grid.SetColumn(modifyDamageTypeAcb, 3);
-                modifyGrid.Children.Add(modifyDamageTypeAcb);
+                var modifyDamageTypeGroup = CreateLabeledFieldGroup(
+                    "Modify Damage Type:",
+                    modifyDamageTypeAcb);
+                modifyGrid.Children.Add(modifyDamageTypeGroup);
                 state.AdditionalFieldControls["modifydamagetype"] = modifyDamageTypeAcb;
 
                 void RefreshDistanceModifyDamageTypeVisibility()
                 {
                     var show = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
-                    modifyDamageTypeLabel.IsVisible = show;
-                    modifyDamageTypeAcb.IsVisible = show;
+                    modifyDamageTypeGroup.IsVisible = show;
                     if (!show)
                         modifyDamageTypeAcb.Text = "";
                 }
@@ -15222,15 +14996,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var useModifyMultiplier = !string.IsNullOrWhiteSpace(currentModifyMultiplierValue) &&
                                           string.IsNullOrWhiteSpace(currentModifyAmountValue);
-                var modeLabel = new TextBlock
-                {
-                    Text = "Modify:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(modeLabel, 4);
-                modifyGrid.Children.Add(modeLabel);
-
                 var modeCombo = new ComboBox
                 {
                     ItemsSource = new[] { "Modify Amount", "Modify Multiplier" },
@@ -15238,21 +15003,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Width = 160
                 };
-                Grid.SetColumn(modeCombo, 5);
-                modifyGrid.Children.Add(modeCombo);
-
-                var valueLabel = new TextBlock
-                {
-                    Text = "Value:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(valueLabel, 6);
-                modifyGrid.Children.Add(valueLabel);
+                modifyGrid.Children.Add(CreateLabeledFieldGroup("Modify:", modeCombo));
 
                 var valueHost = new Grid();
-                Grid.SetColumn(valueHost, 7);
-                modifyGrid.Children.Add(valueHost);
+                modifyGrid.Children.Add(CreateLabeledFieldGroup("Value:", valueHost));
 
                 var modifyAmountTb = new TextBox
                 {
@@ -15368,14 +15122,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeModifyBaseButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeModifyBaseButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -15538,14 +15285,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -15655,15 +15395,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var removeButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
-                        Width = 28,
-                        Height = 28,
-                        Padding = new Thickness(0),
-                        Margin = new Thickness(8, 0, 0, 0),
-                        HorizontalContentAlignment = HorizontalAlignment.Center,
-                        VerticalContentAlignment = VerticalAlignment.Center
-                    };
+                        Classes = { "remove-button" },
+                        Margin = new Thickness(8, 0, 0, 0) };
                     removeButton.Click += async (_, _) => await RemoveAutoBoostModifyProtoIdAsync();
                     Grid.SetColumn(removeButton, 2);
                     modifyProtoRow.Children.Add(removeButton);
@@ -15922,39 +15655,26 @@ public partial class ProtoEditorWindow : SimpleWindow
                 currentValues.TryGetValue("modelattachment", out var currentModelAttachment)
                     ? currentModelAttachment
                     : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modelattachment"));
-            var modelAttachmentRow = new Grid
+            var modelAttachmentRow = new WrapPanel
             {
-                ColumnDefinitions = !_isReadOnly
-                    ? new ColumnDefinitions(IsAutoRangedModifyActionType(actionType) ? "180, *, 180, 140, 92, 32" : "180, *, 180, 140, 32")
-                    : new ColumnDefinitions("180, *, 180, 140"),
+                Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 2, 0, 2),
-                HorizontalAlignment = HorizontalAlignment.Stretch
+                HorizontalAlignment = HorizontalAlignment.Left
             };
-            modelAttachmentRow.Children.Add(new TextBlock
-            {
-                Text = "Model Attachment:",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 10, 4)
-            });
             var modelAttachmentEditor = CreateAttachmentEditor("modelattachment", modelAttachmentValue);
-            Grid.SetColumn(modelAttachmentEditor, 1);
-            modelAttachmentRow.Children.Add(modelAttachmentEditor);
+            modelAttachmentRow.Children.Add(CreateLabeledFieldGroup(
+                "Model Attachment:",
+                modelAttachmentEditor));
+
             var modelAttachmentBoneValue = GetProtoActionDefaultSimpleValue(
                 "modelattachmentbone",
                 currentValues.TryGetValue("modelattachmentbone", out var currentBone)
                     ? currentBone
                     : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modelattachmentbone"));
-            var modelAttachmentBoneLabel = new TextBlock
-            {
-                Text = "Model Attachment Bone:",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(12, 4, 10, 4)
-            };
-            Grid.SetColumn(modelAttachmentBoneLabel, 2);
-            modelAttachmentRow.Children.Add(modelAttachmentBoneLabel);
             var modelAttachmentBoneEditor = CreateAttachmentEditor("modelattachmentbone", modelAttachmentBoneValue, 140);
-            Grid.SetColumn(modelAttachmentBoneEditor, 3);
-            modelAttachmentRow.Children.Add(modelAttachmentBoneEditor);
+            modelAttachmentRow.Children.Add(CreateLabeledFieldGroup(
+                "Model Attachment Bone:",
+                modelAttachmentBoneEditor));
 
             if (!_isReadOnly)
             {
@@ -15965,7 +15685,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Content = "On self",
                         IsChecked = state.SelectedFlagTags.Contains("modelattachmentonself"),
                         VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(10, 0, 0, 0)
+                        Margin = new Thickness(0, 0, 12, 6)
                     };
                     onSelfCheckBox.IsCheckedChanged += async (_, _) =>
                     {
@@ -15977,24 +15697,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderProtoActionFlags(state);
                         MarkDirty();
                     };
-                    Grid.SetColumn(onSelfCheckBox, 4);
                     modelAttachmentRow.Children.Add(onSelfCheckBox);
                 }
+
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(8, 0, 0, 0),
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center,
-                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Classes = { "remove-button" },
+                    Margin = new Thickness(0, 0, 0, 6),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 removeButton.Click += async (_, _) => await RemoveOptionalModelAttachmentAsync();
-                Grid.SetColumn(removeButton, IsAutoRangedModifyActionType(actionType) ? 5 : 4);
                 modelAttachmentRow.Children.Add(removeButton);
             }
 
@@ -16085,9 +15797,41 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private static void RefreshProtoActionDamageHeader(ProtoActionWidgetState state)
+    {
+        var header = state.DamageSectionContainer.Children
+            .OfType<TextBlock>()
+            .FirstOrDefault(control => string.Equals(control.Tag as string, DamageHeaderTag, StringComparison.Ordinal));
+        if (header == null)
+            return;
+
+        var hasDamageArea = state.DamageExtrasContainer.Children
+            .OfType<Control>()
+            .Any(control => string.Equals(control.Tag as string, DamageAreaRowTag, StringComparison.Ordinal));
+        header.IsVisible = state.DamageRows.Count > 0 || state.BonusRows.Count > 0 || hasDamageArea;
+    }
+
+    private static void InitializeDamageAreaDefaults(ProtoActionWidgetState state, bool requireAreaSortMode)
+    {
+        if (!state.CustomValues.ContainsKey(DamageAreaTargetsInitializedStateKey))
+        {
+            var currentTargets = ProtoXmlHandler.GetProtoActionSimpleFieldValue(state.Model, "damageflags");
+            if (string.IsNullOrWhiteSpace(currentTargets))
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "damageflags", "Enemy");
+            state.CustomValues[DamageAreaTargetsInitializedStateKey] = "1";
+        }
+
+        if (requireAreaSortMode &&
+            string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(state.Model, "areasortmode")))
+        {
+            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "areasortmode", "Radial");
+        }
+    }
+
     private void RenderProtoActionDamageExtras(ProtoActionWidgetState state, Dictionary<string, string> currentValues)
     {
         state.DamageExtrasContainer.Children.Clear();
+        RefreshProtoActionDamageHeader(state);
 
         var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
         var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? "");
@@ -16184,12 +15928,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.AdditionalFieldControls.Remove(tag);
                     ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
                 }
+                state.CustomValues.Remove(DamageAreaTargetsInitializedStateKey);
                 MarkDirty();
                 RefreshProtoActionMetadataPanels(state);
             }
 
             var damageAreaRow = new WrapPanel
             {
+                Tag = DamageAreaRowTag,
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 2, 0, 2)
             };
@@ -16207,18 +15953,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var damageAreaEditor = CreateDamageAreaEditor("damagearea", damageAreaValue);
                 damageAreaRow.Children.Add(damageAreaEditor);
 
-                if (!_isReadOnly && !isAutoBoost)
+                if (!_isReadOnly && !isAutoBoost && !isSpecialAttackAreaMode)
                 {
                     var removeButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
-                        Width = 28,
-                        Height = 28,
-                        Padding = new Thickness(0),
+                        Classes = { "remove-button" },
                         Margin = new Thickness(8, 0, 0, 0),
-                        HorizontalContentAlignment = HorizontalAlignment.Center,
-                        VerticalContentAlignment = VerticalAlignment.Center,
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center
                     };
@@ -16226,42 +15966,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     damageAreaRow.Children.Add(removeButton);
                 }
 
-                var hasAreaSortMode = currentValues.TryGetValue("areasortmode", out var currentAreaSortMode)
-                    ? !string.IsNullOrWhiteSpace(currentAreaSortMode)
-                    : !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "areasortmode"));
-                if (showsDefaultAttackDamageArea || hasAreaSortMode)
-                {
-                    var areaSortMode = currentValues.TryGetValue("areasortmode", out currentAreaSortMode)
-                        ? currentAreaSortMode
-                        : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "areasortmode");
-                    if (string.IsNullOrWhiteSpace(areaSortMode) &&
-                        (state.IsNewCustomAction || state.ForcedVisibleFieldTags.Contains("areasortmode")))
-                        areaSortMode = "Radial";
-
-                    damageAreaRow.Children.Add(new TextBlock
-                    {
-                        Text = "Area Sort Mode:",
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(14, 4, 8, 4)
-                    });
-                    var areaSortModeCombo = new ComboBox
-                    {
-                        ItemsSource = new[] { "Directional", "Radial" },
-                        SelectedItem = new[] { "Directional", "Radial" }.Contains(areaSortMode, StringComparer.OrdinalIgnoreCase)
-                            ? new[] { "Directional", "Radial" }.First(value => value.Equals(areaSortMode, StringComparison.OrdinalIgnoreCase))
-                            : null,
-                        IsEnabled = !_isReadOnly,
-                        Width = 110
-                    };
-                    areaSortModeCombo.SelectionChanged += async (_, _) =>
-                    {
-                        if (_isPopulating || !await CheckStartLocalMod())
-                            return;
-                        MarkDirty();
-                    };
-                    state.AdditionalFieldControls["areasortmode"] = areaSortModeCombo;
-                    damageAreaRow.Children.Add(areaSortModeCombo);
-                }
             }
 
             var rawDamageFlagsValue = currentValues.TryGetValue("damageflags", out var currentDamageFlags)
@@ -16280,12 +15984,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 foreach (var value in rawDamageFlagsValue.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     selectedDamageFlags.Add(value);
             }
-            else if (state.IsNewCustomAction)
-            {
-                selectedDamageFlags.Add("Enemy");
-                damageFlagsStorage.Text = "Enemy";
-            }
-
             var conditionalShieldHealEnabled = false;
             if (isConditionalShield)
             {
@@ -16311,7 +16009,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             damageAreaRow.Children.Add(new TextBlock
             {
-                Text = "Damage Flags:",
+                Text = "Targets:",
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(14, 4, 8, 4)
             });
@@ -16354,6 +16052,96 @@ public partial class ProtoEditorWindow : SimpleWindow
                 damageAreaRow.Children.Add(damageFlagCheckBox);
             }
 
+            if (!isConditionalShield)
+            {
+                var currentAreaSortMode = currentValues.TryGetValue("areasortmode", out var editedAreaSortMode)
+                    ? editedAreaSortMode
+                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "areasortmode");
+                var showAreaSortMode = isSpecialAttackAreaMode ||
+                                       state.ForcedVisibleFieldTags.Contains("areasortmode") ||
+                                       !string.IsNullOrWhiteSpace(currentAreaSortMode);
+
+                if (showAreaSortMode)
+                {
+                    if (isSpecialAttackAreaMode && string.IsNullOrWhiteSpace(currentAreaSortMode))
+                        currentAreaSortMode = "Radial";
+
+                    damageAreaRow.Children.Add(new TextBlock
+                    {
+                        Text = "Area Sort:",
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(14, 4, 8, 4)
+                    });
+
+                    var areaSortOptions = new[] { "Directional", "Radial" };
+                    var areaSortModeCombo = new ComboBox
+                    {
+                        ItemsSource = areaSortOptions,
+                        SelectedItem = areaSortOptions.FirstOrDefault(value =>
+                            value.Equals(currentAreaSortMode, StringComparison.OrdinalIgnoreCase)),
+                        IsEnabled = !_isReadOnly,
+                        Width = 110
+                    };
+                    areaSortModeCombo.SelectionChanged += async (_, _) =>
+                    {
+                        if (_isPopulating || !await CheckStartLocalMod())
+                            return;
+
+                        var selectedAreaSortMode = areaSortModeCombo.SelectedItem as string ?? "";
+                        ProtoXmlHandler.SetProtoActionSimpleFieldValue(
+                            state.Model,
+                            "areasortmode",
+                            selectedAreaSortMode);
+                        state.ForcedVisibleFieldTags.Add("areasortmode");
+                        MarkDirty();
+                    };
+                    state.AdditionalFieldControls["areasortmode"] = areaSortModeCombo;
+                    damageAreaRow.Children.Add(areaSortModeCombo);
+
+                    if (!_isReadOnly && !isSpecialAttackAreaMode)
+                    {
+                        var removeAreaSortButton = new Button
+                        {
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(8, 0, 0, 0),
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                        removeAreaSortButton.Click += async (_, _) =>
+                        {
+                            if (!await CheckStartLocalMod())
+                                return;
+
+                            state.ForcedVisibleFieldTags.Remove("areasortmode");
+                            state.AdditionalFieldControls.Remove("areasortmode");
+                            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "areasortmode", "");
+                            RefreshProtoActionMetadataPanels(state);
+                            MarkDirty();
+                        };
+                        damageAreaRow.Children.Add(removeAreaSortButton);
+                    }
+                }
+                else if (!_isReadOnly)
+                {
+                    var addAreaSortButton = new Button
+                    {
+                        Content = "+ Area Sort",
+                        Background = Brush.Parse("#2b7a0b"),
+                        Margin = new Thickness(14, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    addAreaSortButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod())
+                            return;
+
+                        state.ForcedVisibleFieldTags.Add("areasortmode");
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    damageAreaRow.Children.Add(addAreaSortButton);
+                }
+            }
+
             state.DamageExtrasContainer.Children.Add(damageAreaRow);
         }
 
@@ -16374,14 +16162,15 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 foreach (var tag in OptionalAbductDamageAreaTags)
                     state.ForcedVisibleFieldTags.Add(tag);
-                if (state.IsNewCustomAction)
-                    ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "damageflags", "Enemy");
+                InitializeDamageAreaDefaults(state, requireAreaSortMode: false);
 
                 RefreshProtoActionMetadataPanels(state);
                 MarkDirty();
             };
             state.DamageExtrasContainer.Children.Add(addDamageAreaButton);
         }
+
+        RefreshProtoActionDamageHeader(state);
     }
 
     private static XElement? GetProtoActionAdditionalElement(ProtoAction action, string tag)
@@ -16764,6 +16553,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     FilterMode = AutoCompleteFilterMode.Contains,
                     IsEnabled = !_isReadOnly
                 };
+                EditorTextFieldStyle.ConfigureSelector(targetAcb);
                 WireAutoCompleteBox(targetAcb, targetSuggestions);
                 Grid.SetColumn(targetAcb, 1);
                 headerGrid.Children.Add(targetAcb);
@@ -16803,33 +16593,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(activeCb, 2);
                 headerGrid.Children.Add(activeCb);
 
-                Grid CreateTwoColumnRow(string leftLabel, Control leftEditor, string rightLabel, Control rightEditor)
+                WrapPanel CreateTwoColumnRow(string leftLabel, Control leftEditor, string rightLabel, Control rightEditor)
                 {
-                    var grid = new Grid
+                    var row = new WrapPanel
                     {
-                        ColumnDefinitions = new ColumnDefinitions("180, *, 180, *"),
+                        Orientation = Orientation.Horizontal,
                         Margin = new Thickness(0, 2, 0, 2),
                         HorizontalAlignment = HorizontalAlignment.Stretch
                     };
-                    grid.Children.Add(new TextBlock
-                    {
-                        Text = leftLabel,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 4, 10, 4)
-                    });
-                    Grid.SetColumn(leftEditor, 1);
-                    grid.Children.Add(leftEditor);
-                    var rightLabelBlock = new TextBlock
-                    {
-                        Text = rightLabel,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(12, 4, 10, 4)
-                    };
-                    Grid.SetColumn(rightLabelBlock, 2);
-                    grid.Children.Add(rightLabelBlock);
-                    Grid.SetColumn(rightEditor, 3);
-                    grid.Children.Add(rightEditor);
-                    return grid;
+                    row.Children.Add(CreateLabeledFieldGroup(leftLabel, leftEditor));
+                    row.Children.Add(CreateLabeledFieldGroup(rightLabel, rightEditor));
+                    return row;
                 }
 
                 var animAcb = new AutoCompleteBox
@@ -16838,6 +16612,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     FilterMode = AutoCompleteFilterMode.Contains,
                     IsEnabled = !_isReadOnly
                 };
+                EditorTextFieldStyle.ConfigureSelector(animAcb);
                 WireAutoCompleteBox(animAcb, animationSuggestions);
 
                 var empowerAreaTb = new TextBox
@@ -16859,6 +16634,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     FilterMode = AutoCompleteFilterMode.Contains,
                     IsEnabled = !_isReadOnly
                 };
+                EditorTextFieldStyle.ConfigureSelector(modelAttachmentBoneAcb);
                 WireAutoCompleteBox(modelAttachmentBoneAcb, modelAttachmentBoneSuggestions);
 
                 var targetIndex = sectionStateList.Count;
@@ -16906,6 +16682,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FilterMode = AutoCompleteFilterMode.Contains,
                         IsEnabled = !_isReadOnly
                     };
+                    EditorTextFieldStyle.ConfigureSelector(acb);
                     WireAutoCompleteBox(acb, targetSuggestions);
                     row.Children.Add(acb);
                     targetState.ForbidTypeAcbs.Add(acb);
@@ -16914,14 +16691,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -17006,14 +16776,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) => await onRemove();
                             Grid.SetColumn(removeButton, 2);
                             cell.Children.Add(removeButton);
@@ -17146,6 +16909,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FilterMode = AutoCompleteFilterMode.Contains,
                         IsEnabled = !_isReadOnly
                     };
+                    EditorTextFieldStyle.ConfigureSelector(modifyTypeAcb);
                     WireAutoCompleteBox(modifyTypeAcb, modifyTypeSuggestions);
                     Grid.SetColumn(modifyTypeAcb, 1);
                     row.Children.Add(modifyTypeAcb);
@@ -17183,6 +16947,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FilterMode = AutoCompleteFilterMode.Contains,
                         IsEnabled = !_isReadOnly
                     };
+                    EditorTextFieldStyle.ConfigureSelector(damageTypeAcb);
                     WireAutoCompleteBox(damageTypeAcb, ProtoConstants.KnownDamageTypes);
                     Grid.SetColumn(damageTypeAcb, 5);
                     row.Children.Add(damageTypeAcb);
@@ -17213,14 +16978,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
-                            Width = 28,
-                            Height = 28,
-                            Padding = new Thickness(0),
-                            HorizontalContentAlignment = HorizontalAlignment.Center,
-                            VerticalContentAlignment = VerticalAlignment.Center
-                        };
+                            Classes = { "remove-button" } };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
@@ -17457,14 +17215,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center
-                };
+                    Classes = { "remove-button" } };
                 removeButton.Click += async (_, _) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -17710,18 +17461,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             modifierRow.Children.Add(valueGroup);
             cardStack.Children.Add(modifierRow);
 
-            // Activation-specific fields stay beside Activation Type.
+            // Activation-specific fields stay beside Activation Type and wrap as complete label/editor groups.
             var activationRow = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            activationRow.Children.Add(new TextBlock
-            {
-                Text = "Activation Type:",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 6, 4)
-            });
             var activationTypeCb = new ComboBox
             {
                 ItemsSource = ChargedModifyActivationTypes,
@@ -17729,20 +17474,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Width = 190
             };
-            activationRow.Children.Add(activationTypeCb);
+            activationRow.Children.Add(CreateLabeledFieldGroup("Activation Type:", activationTypeCb));
 
-            var thresholdRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 6,
-                Margin = new Thickness(10, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            thresholdRow.Children.Add(new TextBlock
-            {
-                Text = "Hitpoints Ratio Threshold:",
-                VerticalAlignment = VerticalAlignment.Center
-            });
             var thresholdTb = new TextBox
             {
                 Text = FindChild(sourceElement, "hitpointsratiothreshold")?.Value?.Trim() ?? "",
@@ -17750,21 +17483,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Width = 100
             };
             AttachProtoActionDecimalBehavior(thresholdTb);
-            thresholdRow.Children.Add(thresholdTb);
+            var thresholdRow = CreateLabeledFieldGroup(
+                "Hitpoints Ratio Threshold:",
+                thresholdTb);
             activationRow.Children.Add(thresholdRow);
 
-            var terrainRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 6,
-                Margin = new Thickness(10, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            terrainRow.Children.Add(new TextBlock
-            {
-                Text = "Terrain Type:",
-                VerticalAlignment = VerticalAlignment.Center
-            });
             var terrainTypeCb = new ComboBox
             {
                 ItemsSource = new[] { "Water", "Land" },
@@ -17772,7 +17495,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Width = 120
             };
-            terrainRow.Children.Add(terrainTypeCb);
+            var terrainRow = CreateLabeledFieldGroup("Terrain Type:", terrainTypeCb);
             activationRow.Children.Add(terrainRow);
             cardStack.Children.Add(activationRow);
 
@@ -17782,12 +17505,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Orientation = Orientation.Horizontal,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            timingRow.Children.Add(new TextBlock
-            {
-                Text = "Cooldown (s):",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 6, 4)
-            });
             var cooldownTb = new TextBox
             {
                 Text = FindChild(sourceElement, "cooldown")?.Value?.Trim() ?? "",
@@ -17795,13 +17512,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Width = 100
             };
             AttachProtoActionDecimalBehavior(cooldownTb);
-            timingRow.Children.Add(cooldownTb);
-            timingRow.Children.Add(new TextBlock
-            {
-                Text = "Duration (s):",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(10, 4, 6, 4)
-            });
+            timingRow.Children.Add(CreateLabeledFieldGroup("Cooldown (s):", cooldownTb));
+
             var durationTb = new TextBox
             {
                 Text = FindChild(sourceElement, "duration")?.Value?.Trim() ?? "",
@@ -17809,7 +17521,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Width = 100
             };
             AttachProtoActionDecimalBehavior(durationTb);
-            timingRow.Children.Add(durationTb);
+            timingRow.Children.Add(CreateLabeledFieldGroup("Duration (s):", durationTb));
+
             var stealthCb = new CheckBox
             {
                 Content = "Activate stealth",
@@ -17817,7 +17530,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             !stealthElement.Value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase),
                 IsEnabled = !_isReadOnly,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(12, 0, 0, 0)
+                Margin = new Thickness(0, 0, 12, 6)
             };
             timingRow.Children.Add(stealthCb);
             cardStack.Children.Add(timingRow);
@@ -17825,69 +17538,47 @@ public partial class ProtoEditorWindow : SimpleWindow
             var optionalRowsHost = new StackPanel { Spacing = 4 };
             cardStack.Children.Add(optionalRowsHost);
 
-            var vfxRow = new Grid
+            var vfxRow = new WrapPanel
             {
-                ColumnDefinitions = !_isReadOnly
-                    ? new ColumnDefinitions("190, 220, Auto, 100, 32")
-                    : new ColumnDefinitions("190, 220, Auto, 100"),
+                Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 IsVisible = FindChild(sourceElement, "chargedmodifyvfx") != null ||
                             FindChild(sourceElement, "chargedmodifyvfxduration") != null
             };
-            vfxRow.Children.Add(new TextBlock
-            {
-                Text = "Activation VFX:",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 6, 4)
-            });
             var vfxAcb = new AutoCompleteBox
             {
                 Text = FindChild(sourceElement, "chargedmodifyvfx")?.Value?.Trim() ?? "",
                 FilterMode = AutoCompleteFilterMode.Contains,
                 ItemsSource = protoUnitSuggestions,
-                IsEnabled = !_isReadOnly
+                IsEnabled = !_isReadOnly,
+                Width = 220
             };
             EnableDropdownAutoComplete(vfxAcb);
-            Grid.SetColumn(vfxAcb, 1);
-            vfxRow.Children.Add(vfxAcb);
-            var vfxDurationLabel = new TextBlock
-            {
-                Text = "VFX Duration (s):",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(10, 4, 6, 4)
-            };
-            Grid.SetColumn(vfxDurationLabel, 2);
-            vfxRow.Children.Add(vfxDurationLabel);
+            vfxRow.Children.Add(CreateLabeledFieldGroup("Activation VFX:", vfxAcb));
+
             var vfxDurationTb = new TextBox
             {
                 Text = FindChild(sourceElement, "chargedmodifyvfxduration")?.Value?.Trim() ?? "",
-                IsEnabled = !_isReadOnly
+                IsEnabled = !_isReadOnly,
+                Width = 100
             };
             AttachProtoActionDecimalBehavior(vfxDurationTb);
-            Grid.SetColumn(vfxDurationTb, 3);
-            vfxRow.Children.Add(vfxDurationTb);
+            vfxRow.Children.Add(CreateLabeledFieldGroup("VFX Duration (s):", vfxDurationTb));
             optionalRowsHost.Children.Add(vfxRow);
 
-            var setTacticRow = new Grid
+            var setTacticRow = new WrapPanel
             {
-                ColumnDefinitions = !_isReadOnly ? new ColumnDefinitions("190, 260, 32") : new ColumnDefinitions("190, 260"),
+                Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 IsVisible = FindChild(sourceElement, "settactic") != null
             };
-            setTacticRow.Children.Add(new TextBlock
-            {
-                Text = "Set Tactic:",
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 6, 4)
-            });
             var setTacticTb = new TextBox
             {
                 Text = FindChild(sourceElement, "settactic")?.Value?.Trim() ?? "",
                 IsEnabled = !_isReadOnly,
                 Width = 260
             };
-            Grid.SetColumn(setTacticTb, 1);
-            setTacticRow.Children.Add(setTacticTb);
+            setTacticRow.Children.Add(CreateLabeledFieldGroup("Set Tactic:", setTacticTb));
             optionalRowsHost.Children.Add(setTacticRow);
 
             var attachmentRow = new Grid
@@ -17968,14 +17659,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var button = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
-                        Width = 28,
-                        Height = 28,
-                        Padding = new Thickness(0),
-                        HorizontalContentAlignment = HorizontalAlignment.Center,
-                        VerticalContentAlignment = VerticalAlignment.Center
-                    };
+                        Classes = { "remove-button" } };
                     button.Click += async (_, _) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -17994,7 +17678,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     vfxDurationTb.Text = "";
                     vfxRow.IsVisible = false;
                 });
-                Grid.SetColumn(removeVfxButton, 4);
                 vfxRow.Children.Add(removeVfxButton);
 
                 var removeSetTacticButton = CreateRemoveButton(() =>
@@ -18002,7 +17685,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     setTacticTb.Text = "";
                     setTacticRow.IsVisible = false;
                 });
-                Grid.SetColumn(removeSetTacticButton, 2);
                 setTacticRow.Children.Add(removeSetTacticButton);
 
                 var removeAttachmentButton = CreateRemoveButton(() =>
@@ -18523,14 +18205,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center
-                };
+                    Classes = { "remove-button" } };
                 removeButton.Click += async (_, _) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -19015,15 +18690,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 void AddLabeledControl(string label, Control control)
                 {
-                    sharedRow.Children.Add(new TextBlock
-                    {
-                        Text = label,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 4, 8, 4)
-                    });
                     if (control.Margin == default)
-                        control.Margin = new Thickness(0, 0, 14, 0);
-                    sharedRow.Children.Add(control);
+                        control.Margin = new Thickness(0);
+                    sharedRow.Children.Add(CreateLabeledFieldGroup(label, control));
                 }
 
                 if (currentSupportedType.Equals("Stun", StringComparison.OrdinalIgnoreCase) ||
@@ -19742,14 +19411,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeTargetButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeTargetButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -19902,14 +19564,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeDamageButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeDamageButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -20126,14 +19781,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeModifyButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeModifyButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -20314,14 +19962,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -20515,14 +20156,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -20696,14 +20330,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             var removeButton = new Button
                             {
-                                Content = "X",
-                                Background = Brush.Parse("#8b0000"),
-                                Width = 28,
-                                Height = 28,
-                                Padding = new Thickness(0),
-                                HorizontalContentAlignment = HorizontalAlignment.Center,
-                                VerticalContentAlignment = VerticalAlignment.Center
-                            };
+                                Classes = { "remove-button" } };
                             removeButton.Click += async (_, _) =>
                             {
                                 var proceed = await CheckStartLocalMod();
@@ -21124,8 +20751,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     Margin = new Thickness(8, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -21496,8 +21122,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var deleteButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
+                        Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     deleteButton.Click += async (s, e) =>
@@ -21803,8 +21428,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var closeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     Margin = new Thickness(8, 0, 0, 0)
                 };
                 closeButton.Click += (s, e) => pickerHost.Children.Remove(pickerRow);
@@ -21905,14 +21529,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
+                    Classes = { "remove-button" },
                     Margin = new Thickness(8, 0, 0, 0),
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -21956,8 +21574,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var removeButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     Margin = new Thickness(8, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -22124,8 +21741,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var deleteButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
+                        Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     deleteButton.Click += async (s, e) =>
@@ -23863,10 +23479,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#a00000"),
-                            Margin = new Thickness(0, 4, 0, 4),
-                            Width = 34
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(0, 4, 0, 4)
                         };
                         removeButton.Click += async (s, e) =>
                         {
@@ -24131,10 +23745,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#a00000"),
-                            Margin = new Thickness(0, 4, 0, 4),
-                            Width = 34
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(0, 4, 0, 4)
                         };
                         removeButton.Click += async (s, e) =>
                         {
@@ -24434,8 +24046,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var rowGrid = new Grid
                     {
-                        ColumnDefinitions = new ColumnDefinitions("150, *, Auto"),
-                        Margin = new Thickness(0, 0, 0, 0)
+                        ColumnDefinitions = new ColumnDefinitions("150, Auto, Auto"),
+                        Margin = new Thickness(0, 0, 0, 0),
+                        HorizontalAlignment = HorizontalAlignment.Left
                     };
 
                     var cultureCb = new ComboBox
@@ -24473,8 +24086,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var btnDel = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
+                            Classes = { "remove-button" },
                             VerticalAlignment = VerticalAlignment.Center
                         };
                         btnDel.Click += async (s, e) =>
@@ -24784,9 +24396,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var rowPanel = new Grid
                 {
                     ColumnDefinitions = mode == BuildLimitMode.Shared
-                        ? new ColumnDefinitions("*, 120, Auto")
-                        : new ColumnDefinitions("*, Auto"),
-                    Margin = new Thickness(0, 2, 0, 2)
+                        ? new ColumnDefinitions("Auto, 120, Auto")
+                        : new ColumnDefinitions("Auto, Auto"),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
 
                 var valueAcb = new AutoCompleteBox
@@ -24799,6 +24412,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 0, 8, 0)
                 };
                 string? selectedBuildLimitTarget = entry?.Value;
+                EditorTextFieldStyle.ConfigureSelector(valueAcb);
                 EnableDropdownAutoComplete(valueAcb);
                 valueAcb.TextChanged += async (s, e) =>
                 {
@@ -24915,8 +24529,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var btnDelRow = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
+                        Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     btnDelRow.Click += async (s, e) =>
@@ -24957,9 +24570,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var headerGrid = new Grid
                 {
                     ColumnDefinitions = mode == BuildLimitMode.Shared
-                        ? new ColumnDefinitions("*, 120, Auto")
-                        : new ColumnDefinitions("*, Auto"),
-                    Margin = new Thickness(0, 0, 0, 2)
+                        ? new ColumnDefinitions("Auto, 120, Auto")
+                        : new ColumnDefinitions("Auto, Auto"),
+                    Margin = new Thickness(0, 0, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
 
                 var valueHeader = new TextBlock
@@ -25027,7 +24641,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25167,7 +24781,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25229,6 +24843,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         ItemsSource = containSuggestions,
                         Margin = new Thickness(0, 0, 10, 0)
                     };
+                    EditorTextFieldStyle.ConfigureSelector(acbAdd);
                     EnableDropdownAutoComplete(acbAdd);
                     Grid.SetColumn(acbAdd, 0);
                     addGrid.Children.Add(acbAdd);
@@ -25350,7 +24965,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     btnDel.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -25537,6 +25152,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ItemsSource = MaterializeSuggestionItems(suggestions),
                 IsEnabled = !_isReadOnly
             };
+            EditorTextFieldStyle.ConfigureSelector(acb);
             EnableDropdownAutoComplete(acb);
             acb.TextChanged += async (s, e) => await HandleOtherFieldChangedAsync();
             return acb;
@@ -25614,7 +25230,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly
             };
             if (numeric)
+            {
+                EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
                 AttachDecimalBehavior(tb);
+            }
+            else
+            {
+                EditorTextFieldStyle.ConfigureTextBox(tb);
+            }
             tb.TextChanged += async (s, e) => await HandleOtherFieldChangedAsync();
             return tb;
         }
@@ -25624,7 +25247,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
                 return;
 
-            var rowGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("180, *, Auto"), Margin = new Thickness(0, 2, 0, 2) };
+            var rowGrid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto"),
+                Margin = new Thickness(0, 2, 0, 2),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
             var label = new TextBlock { Text = GetOtherSpecificAttributeLabel(key), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
             Grid.SetColumn(label, 0);
             rowGrid.Children.Add(label);
@@ -25731,7 +25359,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25782,7 +25410,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25830,7 +25458,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25911,7 +25539,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _fieldControls["farmingnumstops"] = numSpots;
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -25957,7 +25585,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26006,7 +25634,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26048,7 +25676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26122,7 +25750,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26171,7 +25799,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26220,7 +25848,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26262,7 +25890,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26358,7 +25986,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -26462,8 +26090,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(180, 0, 0, 0)
@@ -26584,8 +26211,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(180, 0, 0, 0)
@@ -26633,8 +26259,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var rowGrid = new Grid
                 {
-                    ColumnDefinitions = new ColumnDefinitions("*, Auto, 90, Auto, 90, Auto, 150, Auto"),
-                    Margin = new Thickness(0, 2, 0, 2)
+                    ColumnDefinitions = new ColumnDefinitions("Auto, Auto, 90, Auto, 90, Auto, 150, Auto"),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
 
                 var valueAcb = CreateValidatedOtherSuggestionBox(existing?.Value?.Trim() ?? "", otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
@@ -26680,8 +26307,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var deleteButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
+                        Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     deleteButton.Click += async (s, e) =>
@@ -26729,8 +26355,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -26782,7 +26407,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var rowStack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
 
-                var row1 = new Grid { ColumnDefinitions = new ColumnDefinitions("*, Auto, 160, Auto, 100, Auto"), Margin = new Thickness(0, 2, 0, 2) };
+                var row1 = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto, Auto, 160, Auto, 100, Auto"),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
                 var valueAcb = CreateValidatedOtherSuggestionBox(existing?.Value?.Trim() ?? "", otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
                 Grid.SetColumn(valueAcb, 0);
                 row1.Children.Add(valueAcb);
@@ -26805,7 +26435,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     deleteButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -26926,8 +26556,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -27010,7 +26639,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), Margin = new Thickness(8, 0, 0, 0) };
+                var deleteButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(8, 0, 0, 0) };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -27310,7 +26939,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     deleteButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -27408,7 +27037,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     deleteButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -27585,8 +27214,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -27701,7 +27329,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     deleteButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -27753,8 +27381,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -27896,8 +27523,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         var removeButton = new Button
                         {
-                            Content = "X",
-                            Background = Brush.Parse("#8b0000"),
+                            Classes = { "remove-button" },
                             VerticalAlignment = VerticalAlignment.Center
                         };
                         removeButton.Click += async (s, e) =>
@@ -27938,7 +27564,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28053,8 +27679,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var deleteButton = new Button
                     {
-                        Content = "X",
-                        Background = Brush.Parse("#8b0000"),
+                        Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     deleteButton.Click += async (s, e) =>
@@ -28102,8 +27727,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var deleteButton = new Button
                 {
-                    Content = "X",
-                    Background = Brush.Parse("#8b0000"),
+                    Classes = { "remove-button" },
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -28159,7 +27783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28190,7 +27814,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             bool showNonSocket = !string.IsNullOrWhiteSpace(nonSocketPlaceProtoId);
 
             var stack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 2) };
-            var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("180, Auto, *, Auto") };
+            var headerGrid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto, Auto"),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
             headerGrid.Children.Add(new TextBlock { Text = "Socket", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
 
             var socketLabel = new TextBlock { Text = "Socket Unit Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
@@ -28204,7 +27832,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28253,7 +27881,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return;
                 }
 
-                var rowGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("180, Auto, *, Auto"), Margin = new Thickness(0, 2, 0, 2) };
+                var rowGrid = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto, Auto"),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
                 rowGrid.Children.Add(new TextBlock { Text = "", Margin = new Thickness(0, 4, 10, 4) });
                 var nonSocketLabel = new TextBlock { Text = "Non Socket Place Proto ID", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
                 Grid.SetColumn(nonSocketLabel, 1);
@@ -28265,7 +27898,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var clearButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+                    var clearButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
                     clearButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -28322,7 +27955,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var addGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto") };
+                var addGrid = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto, Auto, Auto"),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
                 var acb = CreateOtherSuggestionBox("", otherAttributeSuggestions, title);
                 Grid.SetColumn(acb, 0);
                 addGrid.Children.Add(acb);
@@ -28368,7 +28005,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(addButton, 1);
                 addGrid.Children.Add(addButton);
 
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000") };
+                var deleteButton = new Button { Classes = { "remove-button" } };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28417,7 +28054,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28496,7 +28133,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28646,7 +28283,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var clearButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 24, 0, 0) };
+                    var clearButton = new Button { Classes = { "remove-button" }, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 24, 0, 0) };
                     clearButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -28743,7 +28380,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28893,7 +28530,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var clearButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 24, 0, 0) };
+                    var clearButton = new Button { Classes = { "remove-button" }, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 24, 0, 0) };
                     clearButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -28955,7 +28592,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -28981,7 +28618,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
 
             var minimapColor = unit.Element("minimapcolor");
-            var row1 = new Grid { ColumnDefinitions = new ColumnDefinitions("180, Auto, *, Auto, 100, Auto"), Margin = new Thickness(0, 2, 0, 2) };
+            var row1 = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto, Auto, 100, Auto"),
+                Margin = new Thickness(0, 2, 0, 2),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
             row1.Children.Add(new TextBlock { Text = "Minimap Visuals", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
 
             var iconLabel = new TextBlock { Text = "Icon", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
@@ -29004,7 +28646,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -29054,7 +28696,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             var replacement = unit.Element("replacement");
             var stack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
 
-            var row1 = new Grid { ColumnDefinitions = new ColumnDefinitions("180, Auto, 160, Auto, *, Auto"), Margin = new Thickness(0, 2, 0, 2) };
+            var row1 = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("180, Auto, 160, Auto, Auto, Auto"),
+                Margin = new Thickness(0, 2, 0, 2),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
             row1.Children.Add(new TextBlock { Text = "Replacement", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
 
             var typeLabel = new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
@@ -29099,7 +28746,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     row2.Children.Add(lifespanTb);
                     _fieldControls["replacement.lifespan"] = lifespanTb;
 
-                    var removeLifespanButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                    var removeLifespanButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     removeLifespanButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -29136,7 +28783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 };
 
-                var deleteButton = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -29794,7 +29441,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         void ShowTransformCommand(string initialValue)
         {
             transformCommandContainer.Children.Clear();
-            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("180, *, Auto") };
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto"),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
 
             var lbl = new TextBlock
             {
@@ -29813,6 +29464,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Margin = new Thickness(0, 0, 10, 0)
             };
+            EditorTextFieldStyle.ConfigureSelector(acb);
             EnableDropdownAutoComplete(acb);
             acb.TextChanged += async (s, e) =>
             {
@@ -29828,7 +29480,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -29903,6 +29555,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Margin = new Thickness(0, 4, 0, 4),
                 ItemsSource = tacticSuggestions
             };
+            EditorTextFieldStyle.ConfigureSelector(acb);
             EnableDropdownAutoComplete(acb);
             acb.TextChanged += async (s, e) =>
             {
@@ -29922,6 +29575,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Margin = new Thickness(0, 4, 0, 4)
             };
+            EditorTextFieldStyle.ConfigureTextBox(tb);
             tb.TextChanged += async (s, e) =>
             {
                 if (!_isPopulating)
@@ -30197,14 +29851,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var btn = new Button
             {
-                Content = "X",
-                Background = Brushes.Transparent,
-                Foreground = Brushes.LightGray,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(4, 0),
-                Margin = new Thickness(4, 0, 0, 0),
-                FontSize = 10,
-                VerticalAlignment = VerticalAlignment.Center
+                Classes = { "chip-remove-button" }
             };
             btn.Click += (s, e) => onRemove();
             stack.Children.Add(btn);
@@ -30450,6 +30097,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             state.ForcedVisibleFieldTags.Add("damagearea");
                             state.ForcedVisibleFieldTags.Add("damageflags");
                             state.ForcedVisibleFieldTags.Add("areasortmode");
+                            InitializeDamageAreaDefaults(state, requireAreaSortMode: true);
                         }
                     }
                     RefreshProtoActionMetadataPanels(state);
@@ -30508,8 +30156,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var showInitialCoreMinRange = UsesCoreMinRange(resolvedType) &&
                                       !isLinkedMaulAreaAction &&
-                                      (IsAttackActionType(resolvedType)
-                                          ? !string.IsNullOrWhiteSpace(
+                                      (IsAttackActionType(resolvedType) || IsChainAttackActionType(resolvedType) || IsAoeAttackActionType(resolvedType)
+                                          ? state.ForcedVisibleFieldTags.Contains("minrange") || !string.IsNullOrWhiteSpace(
                                               ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "minrange"))
                                           : isNewCustomAction || !string.IsNullOrWhiteSpace(
                                               ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "minrange")));
@@ -30596,14 +30244,36 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         mainStack.Children.Add(state.DamageSectionContainer);
 
-        var dmgLabel = new TextBlock { Text = "Damage:", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 6, 0, 2) };
+        var dmgLabel = new TextBlock
+        {
+            Tag = DamageHeaderTag,
+            Text = "Damage:",
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(0, 6, 0, 2),
+            IsVisible = false
+        };
         state.DamageSectionContainer.Children.Add(dmgLabel);
 
         var dmgContainer = new WrapPanel { Orientation = Orientation.Horizontal };
         state.DamageSectionContainer.Children.Add(dmgContainer);
 
+        var damageTypeLabel = new TextBlock
+        {
+            Text = "Type:",
+            Margin = new Thickness(0, 4, 8, 4),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = false
+        };
+        dmgContainer.Children.Add(damageTypeLabel);
+
         Button? addDamageButton = null;
         var isRefreshingDamageTypes = false;
+
+        void RefreshDamageSectionPresentation()
+        {
+            damageTypeLabel.IsVisible = state.DamageRows.Count > 0;
+            RefreshProtoActionDamageHeader(state);
+        }
 
         void RefreshDamageTypeOptions()
         {
@@ -30645,7 +30315,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 addDamageButton = new Button
                 {
-                    Content = "+ Damage",
+                    Content = "Add Damage",
                     Background = Brush.Parse("#2b7a0b"),
                     Margin = new Thickness(2, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
@@ -30655,7 +30325,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (!await CheckStartLocalMod())
                         return;
 
-                    AddDamageRow("Hack", "0");
+                    var usedTypes = state.DamageRows
+                        .Select(row => row.TypeCb.SelectedItem?.ToString() ?? "")
+                        .Where(type => !string.IsNullOrWhiteSpace(type))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var nextType = ProtoConstants.KnownDamageTypes
+                        .FirstOrDefault(type => !usedTypes.Contains(type));
+                    if (string.IsNullOrWhiteSpace(nextType))
+                        return;
+
+                    AddDamageRow(nextType, "0");
                     MarkDirty();
                 };
             }
@@ -30709,7 +30388,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -30718,6 +30397,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         state.DamageRows.Remove(rowState);
                         dmgContainer.Children.Remove(rowPanel);
                         RefreshDamageTypeOptions();
+                        RefreshDamageSectionPresentation();
                         EnsureAddDamageButton();
                         MarkDirty();
                     }
@@ -30727,6 +30407,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             dmgContainer.Children.Add(rowPanel);
             RefreshDamageTypeOptions();
+            RefreshDamageSectionPresentation();
             EnsureAddDamageButton();
         }
 
@@ -30735,6 +30416,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             AddDamageRow(dmg.DamageType, dmg.Amount);
         }
 
+        RefreshDamageSectionPresentation();
         EnsureAddDamageButton();
 
         if (!IsAutoRangedModifyActionType(resolvedType))
@@ -30747,90 +30429,138 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (!IsAutoRangedModifyActionType(resolvedType))
         {
-        var bonusLabel = new TextBlock { Text = "Damage Bonuses:", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 6, 0, 2) };
-        state.BonusSectionContainer.Children.Add(bonusLabel);
-
-        var bonusContainer = new StackPanel { Spacing = 4 };
-        state.BonusSectionContainer.Children.Add(bonusContainer);
-
-        void AddBonusRow(string btype, string bval)
-        {
-            var rowPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-
-            var typeAcb = new AutoCompleteBox
+            var bonusContainer = new WrapPanel
             {
-                Text = btype,
-                FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = (_barData != null ? _barData.UnitTypes.Concat(ProtoConstants.KnownUnitTypes).Concat(_barData.UnitNames) : Enumerable.Empty<string>()).Distinct().OrderBy(x => x).ToList(),
-                Width = 180,
-                IsEnabled = !_isReadOnly
+                Orientation = Orientation.Horizontal
             };
-            typeAcb.TextChanged += async (s, e) =>
+            state.BonusSectionContainer.Children.Add(bonusContainer);
+
+            var bonusLabel = new TextBlock
             {
-                if (!_isPopulating)
+                Text = "Bonuses:",
+                Margin = new Thickness(0, 4, 10, 6),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsVisible = false
+            };
+            bonusContainer.Children.Add(bonusLabel);
+
+            Button? btnAddBonus = null;
+
+            void RefreshBonusSectionPresentation()
+            {
+                bonusLabel.IsVisible = state.BonusRows.Count > 0;
+                RefreshProtoActionDamageHeader(state);
+            }
+
+            void EnsureAddBonusButtonAtEnd()
+            {
+                if (btnAddBonus == null)
+                    return;
+
+                bonusContainer.Children.Remove(btnAddBonus);
+                bonusContainer.Children.Add(btnAddBonus);
+            }
+
+            void AddBonusRow(string btype, string bval)
+            {
+                var rowPanel = new StackPanel
                 {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed) MarkDirty();
-                }
-            };
-            rowPanel.Children.Add(typeAcb);
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Margin = new Thickness(0, 0, 10, 6)
+                };
 
-            var valTb = new TextBox { Text = bval, IsEnabled = !_isReadOnly, Width = 80 };
-            AttachProtoActionDecimalBehavior(valTb);
-            valTb.TextChanged += async (s, e) =>
-            {
-                if (!_isPopulating)
+                var typeAcb = new AutoCompleteBox
                 {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed) MarkDirty();
-                }
-            };
-            rowPanel.Children.Add(valTb);
+                    Text = btype,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    ItemsSource = (_barData != null
+                        ? _barData.UnitTypes.Concat(ProtoConstants.KnownUnitTypes).Concat(_barData.UnitNames)
+                        : Enumerable.Empty<string>())
+                        .Distinct()
+                        .OrderBy(x => x)
+                        .ToList(),
+                    Width = 180,
+                    IsEnabled = !_isReadOnly
+                };
+                typeAcb.TextChanged += async (s, e) =>
+                {
+                    if (!_isPopulating)
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (proceed) MarkDirty();
+                    }
+                };
+                rowPanel.Children.Add(typeAcb);
 
-            var rowState = new BonusRowState { RowPanel = rowPanel, TypeAcb = typeAcb, ValTb = valTb };
-            state.BonusRows.Add(rowState);
+                var valTb = new TextBox { Text = bval, IsEnabled = !_isReadOnly, Width = 80 };
+                AttachProtoActionDecimalBehavior(valTb);
+                valTb.TextChanged += async (s, e) =>
+                {
+                    if (!_isPopulating)
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (proceed) MarkDirty();
+                    }
+                };
+                rowPanel.Children.Add(valTb);
+
+                var rowState = new BonusRowState { RowPanel = rowPanel, TypeAcb = typeAcb, ValTb = valTb };
+                state.BonusRows.Add(rowState);
+
+                if (!_isReadOnly)
+                {
+                    var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                    btnDel.Click += async (s, e) =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (proceed)
+                        {
+                            state.BonusRows.Remove(rowState);
+                            bonusContainer.Children.Remove(rowPanel);
+                            RefreshBonusSectionPresentation();
+                            MarkDirty();
+                        }
+                    };
+                    rowPanel.Children.Add(btnDel);
+                }
+
+                bonusContainer.Children.Add(rowPanel);
+                RefreshBonusSectionPresentation();
+                EnsureAddBonusButtonAtEnd();
+            }
+
+            foreach (var db in effectiveAction.DamageBonuses)
+            {
+                AddBonusRow(db.UnitType, db.Multiplier);
+            }
+
+            RefreshBonusSectionPresentation();
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Content = "X", Background = Brush.Parse("#8b0000"), VerticalAlignment = VerticalAlignment.Center };
-                btnDel.Click += async (s, e) =>
+                btnAddBonus = new Button
+                {
+                    Content = "Add Damage Bonus",
+                    Background = Brush.Parse("#2b7a0b"),
+                    Margin = new Thickness(0, 0, 0, 6),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                btnAddBonus.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
-                        state.BonusRows.Remove(rowState);
-                        bonusContainer.Children.Remove(rowPanel);
+                        AddBonusRow("", "1.0");
                         MarkDirty();
                     }
                 };
-                rowPanel.Children.Add(btnDel);
+                bonusContainer.Children.Add(btnAddBonus);
             }
-
-            bonusContainer.Children.Add(rowPanel);
-        }
-
-        foreach (var db in effectiveAction.DamageBonuses)
-        {
-            AddBonusRow(db.UnitType, db.Multiplier);
-        }
-
-        if (!_isReadOnly)
-        {
-            var btnAddBonus = new Button { Content = "+ Bonus", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 2, 0, 10) };
-            btnAddBonus.Click += async (s, e) =>
-            {
-                var proceed = await CheckStartLocalMod();
-                if (proceed)
-                {
-                    AddBonusRow("AbstractInfantry", "1.0");
-                    MarkDirty();
-                }
-            };
-            state.BonusSectionContainer.Children.Add(btnAddBonus);
-        }
         }
 
         state.DamageSectionContainer.Children.Add(state.DamageExtrasContainer);
+        RefreshProtoActionDamageHeader(state);
 
         RefreshProtoActionMetadataPanels(state);
 
