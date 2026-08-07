@@ -13,10 +13,11 @@ public partial class InputPromptWindow : SimpleWindow
         InitializeComponent();
     }
 
-    public InputPromptWindow(string message, string defaultValue = "") : this()
+    public InputPromptWindow(string message, string defaultValue = "", string confirmButtonText = "OK") : this()
     {
         _messageText.Text = message;
         _inputBox.Text = defaultValue;
+        _confirmButton.Content = confirmButtonText;
         Opened += (s, e) => _inputBox.Focus();
     }
 

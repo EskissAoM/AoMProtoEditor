@@ -23,6 +23,8 @@ public sealed class AssetPathEditor : Grid
     public AutoCompleteBox Editor { get; } = new() { FilterMode = AutoCompleteFilterMode.Contains, IsVisible = false };
     public string FullValue { get; private set; } = "";
     public IReadOnlyList<PathSuggestion> Suggestions { get; private set; } = [];
+    public event EventHandler? FullValueChanged;
+    public event EventHandler? EditingCompleted;
 
     public AssetPathEditor()
     {
@@ -79,6 +81,7 @@ public sealed class AssetPathEditor : Grid
         var next = value?.Trim() ?? ""; if (next == FullValue) return;
         FullValue = next;
         Refresh();
+        FullValueChanged?.Invoke(this, EventArgs.Empty);
         if (_changed != null) await _changed(next);
     }
     private void BeginEdit()
@@ -97,7 +100,17 @@ public sealed class AssetPathEditor : Grid
             }
         }, DispatcherPriority.Input);
     }
-    private void EndEdit() { _editing = false; Editor.IsVisible = false; CompactPresenter.IsVisible = true; Refresh(); }
+    private void EndEdit()
+    {
+        if (!_editing)
+            return;
+
+        _editing = false;
+        Editor.IsVisible = false;
+        CompactPresenter.IsVisible = true;
+        Refresh();
+        EditingCompleted?.Invoke(this, EventArgs.Empty);
+    }
     private void Refresh()
     {
         CompactPresenter.Text = Suggestions.FirstOrDefault(x => x.FullValue.Equals(FullValue, StringComparison.OrdinalIgnoreCase))?.DisplayValue ?? FullValue;

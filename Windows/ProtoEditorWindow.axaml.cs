@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -15,6 +17,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using CryBar;
 using CryBar.Bar;
 using CryBarEditor.Classes;
@@ -111,6 +114,79 @@ public partial class ProtoEditorWindow : SimpleWindow
     private bool _isPopulating;
     private string? _currentUnitName;
     private bool _isReadOnly;
+    private bool _isTacticsActionEditorMode;
+    private bool _tacticsActionEditorReadOnly;
+    private bool _allowTacticsEditorClose;
+    private bool _tacticsEditorClosePromptOpen;
+    private string? _tacticsEditorName;
+    private XDocument? _tacticsEditorDocument;
+    private Func<XDocument, Task>? _saveTacticsEditorDocumentAsync;
+    private readonly List<ProtoAction> _tacticsEditorSeedActions = [];
+    private bool _tacticsEditorSeedActionsConsumed;
+    private TacticDefinition? _tacticsEditorTacticDefinition;
+    private readonly List<TacticDefinition> _tacticsEditorTacticDefinitions = [];
+    private Action? _rebuildTacticsPriorityRows;
+
+    private enum OptionalBoolean
+    {
+        Omitted,
+        False,
+        True
+    }
+
+    private sealed class TacticActionReference
+    {
+        public string ActionName { get; set; } = "";
+        public int? Priority { get; set; }
+        public int? Probability { get; set; }
+        public string AttributeMode { get; set; } = "None";
+        public string AttributeValueText { get; set; } = "";
+        public XElement? SourceElement { get; set; }
+    }
+
+    private sealed class TacticAttackPriority
+    {
+        public string TargetType { get; set; } = "";
+        public string BonusFactorText { get; set; } = "";
+        public XElement? SourceElement { get; set; }
+    }
+
+    private sealed class TacticArmorOverride
+    {
+        public string Type { get; set; } = "";
+        public string ValueText { get; set; } = "";
+        public XElement? SourceElement { get; set; }
+    }
+
+    private sealed class TacticDefinition
+    {
+        public string Name { get; set; } = "Default";
+        public OptionalBoolean Active { get; set; }
+        public OptionalBoolean AbilityOnly { get; set; }
+        public string? AgeRequirement { get; set; }
+        public string? SpeedModifier { get; set; }
+        public string? MaxHpModifier { get; set; }
+        public string? DamageModifier { get; set; }
+        public string? UnitDamageModifier { get; set; }
+        public List<TacticAttackPriority> AttackPriorities { get; } = [];
+        public string? IdleAnim { get; set; }
+        public string? BoredAnim { get; set; }
+        public string? DeathAnim { get; set; }
+        public string? WalkAnim { get; set; }
+        public string? MoveAnim { get; set; }
+        public string? RunAnim { get; set; }
+        public List<TacticArmorOverride> ArmorOverrides { get; } = [];
+        public List<TacticActionReference> Actions { get; } = [];
+        public List<string> AttackTypes { get; } = [];
+        public List<string> ExcludeAttackTypes { get; } = [];
+        public string? AutoAttackType { get; set; }
+        public string? AttackResponseType { get; set; }
+        public string? AttackMoveType { get; set; }
+        public OptionalBoolean AutoRetarget { get; set; }
+        public OptionalBoolean RunAway { get; set; }
+        public List<XElement> UnknownElements { get; } = [];
+        public XElement? SourceElement { get; set; }
+    }
 
     private List<string> _allCurrentNames = [];
     private readonly ObservableCollectionExtended<UnitListItem> _filteredUnitNames = [];
@@ -229,12 +305,23 @@ public partial class ProtoEditorWindow : SimpleWindow
         Shared,
     }
 
+    private enum ProtoActionValueSource
+    {
+        ProtoOnly,
+        TacticsInherited,
+        ProtoOverride,
+    }
+
     private class ProtoActionWidgetState
     {
         public required ProtoAction Model { get; set; }
         // This is set only by the Add Proto Action flow. Tactics-only actions have no
         // source element too, so SourceElement cannot safely identify a new action.
         public bool IsNewCustomAction { get; init; }
+        public bool IsTacticsOnlyAction { get; init; }
+        public bool IsCurrentTacticsAction { get; set; }
+        public bool HasTacticsOnlyOverrides { get; set; }
+        public Button? ActionSelectorButton { get; set; }
         public bool IsLinkedMaulAreaAction { get; set; }
         public bool IsCreatingMaulAreaCompanion { get; set; }
         public ProtoActionWidgetState? MaulAreaCompanion { get; set; }
@@ -277,7 +364,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         public HashSet<string> ForcedVisibleFieldTags { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> SelectedFlagTags { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, CheckBox> CustomFlagControls { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<Control, string[]> CustomFlagSourceControls { get; } = [];
+        public Dictionary<Control, string> MirroredSimpleSourceControls { get; } = [];
         public Dictionary<string, string> CustomValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<Control, Grid> SourceMarkerHosts { get; } = [];
+        public Dictionary<Control, Thickness> SourceMarkerOriginalMargins { get; } = [];
+        public HashSet<Control> SourceMarkerHandlerControls { get; } = [];
         public Control? AutoBoostModifyProtoControl { get; set; }
         public string DefaultFlagsInitializedForType { get; set; } = "";
     }
@@ -576,6 +668,1576 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             await InitializeProtoEditorAsync();
         });
+    }
+
+    internal async Task InitializeTacticsActionEditorAsync(
+        string tacticsName,
+        bool isBuiltIn,
+        XDocument sourceDocument,
+        Func<XDocument, Task>? saveDocumentAsync)
+    {
+        _isTacticsActionEditorMode = true;
+        _tacticsActionEditorReadOnly = isBuiltIn;
+        _isReadOnly = isBuiltIn;
+        _tacticsEditorName = tacticsName;
+        _tacticsEditorDocument = new XDocument(sourceDocument);
+        _saveTacticsEditorDocumentAsync = saveDocumentAsync;
+        _tacticsEditorTacticDefinitions.Clear();
+        _tacticsEditorTacticDefinitions.AddRange(ParseTacticDefinitions(_tacticsEditorDocument));
+        if (_tacticsEditorTacticDefinitions.Count == 0)
+            _tacticsEditorTacticDefinitions.Add(new TacticDefinition());
+        _tacticsEditorTacticDefinition = _tacticsEditorTacticDefinitions[0];
+
+        Title = isBuiltIn ? $"View Tactics - {tacticsName}" : $"Edit Tactics - {tacticsName}";
+        Width = 1120;
+        Height = 780;
+        MinWidth = 760;
+        MinHeight = 520;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        await ShowStartupLoadingAsync("Loading action editor...");
+        try
+        {
+            await LoadProtoDataFromBar();
+
+            _tacticsEditorSeedActions.Clear();
+            _tacticsEditorSeedActionsConsumed = false;
+            foreach (var actionElement in _tacticsEditorDocument.Root?.Elements()
+                         .Where(element => element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase)) ?? [])
+            {
+                _tacticsEditorSeedActions.Add(ProtoXmlHandler.ParseProtoActionLikeElement(actionElement));
+            }
+
+            var syntheticUnit = new XElement("unit", new XAttribute("name", "__tactics_action_editor__"));
+            ProtoXmlHandler.SetProtoActions(
+                syntheticUnit,
+                _tacticsEditorSeedActions.Select(CloneForSyntheticProtoAction));
+
+            _modXmlDoc = new XDocument(new XElement("proto", syntheticUnit));
+            _modXmlRoot = _modXmlDoc.Root;
+            _currentUnitName = "__tactics_action_editor__";
+            _allCurrentNames = [_currentUnitName];
+            _currentUnitTacticsActions.Clear();
+            _currentUnitTacticsActionTypeMap.Clear();
+            _tacticsActionCache.Clear();
+            _tacticsActionTypeCache.Clear();
+
+            ConfigureTacticsActionEditorChrome(isBuiltIn);
+            BuildEditorPanel(_currentUnitName);
+            _sectionsButton.IsVisible = false;
+            _sectionsButton.IsEnabled = false;
+            _editorTabs.SelectedIndex = 1;
+            foreach (var item in _editorTabs.Items.OfType<TabItem>())
+                item.IsVisible = string.Equals(item.Header?.ToString(), "Actions", StringComparison.OrdinalIgnoreCase);
+
+            // A tactics file has only the shared action editor, so the tab selector
+            // adds no value. Reparent the Actions content directly into the host grid.
+            var actionsTab = _editorTabs.Items.OfType<TabItem>()
+                .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Actions", StringComparison.OrdinalIgnoreCase));
+            if (_editorTabs.Parent is Grid tabsHost && actionsTab?.Content is Control actionsContent)
+            {
+                actionsTab.Content = null;
+                var editorRow = Grid.GetRow(_editorTabs);
+                tabsHost.Children.Remove(_editorTabs);
+                Grid.SetRow(actionsContent, editorRow);
+                tabsHost.Children.Add(actionsContent);
+            }
+            _unitNameBox.IsVisible = false;
+            if (_unitNameBox.Parent is Grid nameRow)
+                nameRow.IsVisible = false;
+
+            // The first preview refresh can run before the shared action widgets
+            // have finished building. Render once more from the completed editor
+            // so every existing <action> is visible immediately.
+            UpdateXmlPreview(force: true);
+            _isDirty = false;
+        }
+        finally
+        {
+            HideStartupLoading();
+        }
+    }
+
+
+    private static List<TacticDefinition> ParseTacticDefinitions(XDocument document)
+    {
+        return document.Root?.Elements()
+            .Where(element => element.Name.LocalName.Equals("tactic", StringComparison.OrdinalIgnoreCase))
+            .Select(ParseTacticDefinition)
+            .ToList() ?? [];
+    }
+
+    private static TacticDefinition ParseTacticDefinition(XElement tacticElement)
+    {
+        var definition = new TacticDefinition { SourceElement = new XElement(tacticElement) };
+        var directName = tacticElement.Nodes().OfType<XText>()
+            .Select(node => node.Value.Trim())
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        definition.Name = directName ?? "";
+
+        foreach (var element in tacticElement.Elements())
+        {
+            var tag = element.Name.LocalName;
+            if (tag.Equals("action", StringComparison.OrdinalIgnoreCase))
+            {
+                var reference = new TacticActionReference
+                {
+                    ActionName = element.Value.Trim(),
+                    SourceElement = new XElement(element)
+                };
+                if (int.TryParse(element.Attribute("priority")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var priority))
+                    reference.Priority = Math.Clamp(priority, 0, 100);
+                if (int.TryParse(element.Attribute("probability")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var probability))
+                    reference.Probability = Math.Clamp(probability, 0, 100);
+                if (reference.Priority.HasValue && reference.Probability.HasValue)
+                    reference.Probability = null;
+                reference.AttributeMode = reference.Priority.HasValue ? "Priority" : reference.Probability.HasValue ? "Probability" : "None";
+                reference.AttributeValueText = (reference.Priority ?? reference.Probability)?.ToString(CultureInfo.InvariantCulture) ?? "";
+                definition.Actions.Add(reference);
+            }
+            else if (tag.Equals("active", StringComparison.OrdinalIgnoreCase))
+                definition.Active = ParseOptionalBoolean(element.Value);
+            else if (tag.Equals("abilityonly", StringComparison.OrdinalIgnoreCase))
+                definition.AbilityOnly = ParseOptionalBoolean(element.Value);
+            else if (tag.Equals("agerequirement", StringComparison.OrdinalIgnoreCase))
+                definition.AgeRequirement = element.Value.Trim();
+            else if (tag.Equals("speedmodifier", StringComparison.OrdinalIgnoreCase))
+                definition.SpeedModifier = element.Value.Trim();
+            else if (tag.Equals("maxhpmodifier", StringComparison.OrdinalIgnoreCase))
+                definition.MaxHpModifier = element.Value.Trim();
+            else if (tag.Equals("damagemodifier", StringComparison.OrdinalIgnoreCase))
+                definition.DamageModifier = element.Value.Trim();
+            else if (tag.Equals("unitdamagemodifier", StringComparison.OrdinalIgnoreCase))
+                definition.UnitDamageModifier = element.Value.Trim();
+            else if (tag.Equals("attackprioritytype", StringComparison.OrdinalIgnoreCase))
+            {
+                definition.AttackPriorities.Add(new TacticAttackPriority
+                {
+                    TargetType = element.Value.Trim(),
+                    BonusFactorText = element.Attribute("bonusfactor")?.Value?.Trim() ?? "",
+                    SourceElement = new XElement(element)
+                });
+            }
+            else if (tag.Equals("idleanim", StringComparison.OrdinalIgnoreCase))
+                definition.IdleAnim = element.Value.Trim();
+            else if (tag.Equals("boredanim", StringComparison.OrdinalIgnoreCase))
+                definition.BoredAnim = element.Value.Trim();
+            else if (tag.Equals("deathanim", StringComparison.OrdinalIgnoreCase))
+                definition.DeathAnim = element.Value.Trim();
+            else if (tag.Equals("walkanim", StringComparison.OrdinalIgnoreCase))
+                definition.WalkAnim = element.Value.Trim();
+            else if (tag.Equals("moveanim", StringComparison.OrdinalIgnoreCase))
+                definition.MoveAnim = element.Value.Trim();
+            else if (tag.Equals("runanim", StringComparison.OrdinalIgnoreCase))
+                definition.RunAnim = element.Value.Trim();
+            else if (tag.Equals("armoroverride", StringComparison.OrdinalIgnoreCase))
+            {
+                definition.ArmorOverrides.Add(new TacticArmorOverride
+                {
+                    Type = element.Attribute("type")?.Value?.Trim() ?? "",
+                    ValueText = element.Attribute("value")?.Value?.Trim() ?? "",
+                    SourceElement = new XElement(element)
+                });
+            }
+            else if (tag.Equals("attacktype", StringComparison.OrdinalIgnoreCase))
+                definition.AttackTypes.Add(element.Value.Trim());
+            else if (tag.Equals("excludeattacktype", StringComparison.OrdinalIgnoreCase))
+                definition.ExcludeAttackTypes.Add(element.Value.Trim());
+            else if (tag.Equals("autoattacktype", StringComparison.OrdinalIgnoreCase))
+                definition.AutoAttackType = element.Value.Trim();
+            else if (tag.Equals("attackresponsetype", StringComparison.OrdinalIgnoreCase))
+                definition.AttackResponseType = element.Value.Trim();
+            else if (tag.Equals("attackmovetype", StringComparison.OrdinalIgnoreCase))
+                definition.AttackMoveType = element.Value.Trim();
+            else if (tag.Equals("autoretarget", StringComparison.OrdinalIgnoreCase))
+                definition.AutoRetarget = ParseOptionalBoolean(element.Value);
+            else if (tag.Equals("runaway", StringComparison.OrdinalIgnoreCase))
+                definition.RunAway = ParseOptionalBoolean(element.Value);
+            else
+                definition.UnknownElements.Add(new XElement(element));
+        }
+
+        return definition;
+    }
+
+    private static OptionalBoolean ParseOptionalBoolean(string? value)
+    {
+        var normalized = value?.Trim() ?? "";
+        if (normalized == "1" || normalized.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return OptionalBoolean.True;
+        if (normalized == "0" || normalized.Equals("false", StringComparison.OrdinalIgnoreCase))
+            return OptionalBoolean.False;
+        return OptionalBoolean.Omitted;
+    }
+
+    private static XElement SerializeTacticDefinition(TacticDefinition definition)
+    {
+        var source = definition.SourceElement;
+        var tacticName = source?.Name ?? XName.Get("tactic");
+        var tacticAttributes = source != null ? source.Attributes() : Enumerable.Empty<XAttribute>();
+        var tactic = new XElement(tacticName, tacticAttributes);
+        tactic.Add(new XText(definition.Name.Trim()));
+
+        if (definition.Active == OptionalBoolean.True)
+            tactic.Add(new XElement("active", "1"));
+        else if (definition.Active == OptionalBoolean.False)
+            tactic.Add(new XElement("active", "0"));
+        if (definition.AbilityOnly == OptionalBoolean.True)
+            tactic.Add(new XElement("abilityonly", "1"));
+        else if (definition.AbilityOnly == OptionalBoolean.False)
+            tactic.Add(new XElement("abilityonly", "0"));
+
+        // Keep the supported tactic fields in the documented editor order:
+        // state flags, priority actions, probability actions, attack priorities,
+        // attack-type filters, automatic attack fields, then the remaining options.
+        foreach (var reference in definition.Actions
+                     .Where(reference => !reference.Probability.HasValue)
+                     .OrderByDescending(reference => reference.Priority ?? int.MinValue))
+        {
+            AddTacticActionReference(tactic, reference);
+        }
+
+        foreach (var reference in definition.Actions.Where(reference => reference.Probability.HasValue))
+            AddTacticActionReference(tactic, reference);
+
+        foreach (var priority in definition.AttackPriorities)
+        {
+            if (string.IsNullOrWhiteSpace(priority.TargetType))
+                continue;
+            var element = priority.SourceElement == null ? new XElement("attackprioritytype") : new XElement(priority.SourceElement);
+            element.Name = "attackprioritytype";
+            element.RemoveNodes();
+            element.SetValue(priority.TargetType.Trim());
+            element.SetAttributeValue("bonusfactor", string.IsNullOrWhiteSpace(priority.BonusFactorText) ? null : priority.BonusFactorText.Trim());
+            tactic.Add(element);
+        }
+
+        foreach (var value in definition.AttackTypes.Where(value => !string.IsNullOrWhiteSpace(value)))
+            tactic.Add(new XElement("attacktype", value.Trim()));
+        foreach (var value in definition.ExcludeAttackTypes.Where(value => !string.IsNullOrWhiteSpace(value)))
+            tactic.Add(new XElement("excludeattacktype", value.Trim()));
+        AddOptionalTacticValue(tactic, "autoattacktype", definition.AutoAttackType);
+        AddOptionalTacticValue(tactic, "attackresponsetype", definition.AttackResponseType);
+        AddOptionalTacticValue(tactic, "attackmovetype", definition.AttackMoveType);
+
+        AddOptionalTacticBoolean(tactic, "autoretarget", definition.AutoRetarget);
+        AddOptionalTacticBoolean(tactic, "runaway", definition.RunAway);
+        AddOptionalTacticValue(tactic, "speedmodifier", definition.SpeedModifier);
+        AddOptionalTacticValue(tactic, "maxhpmodifier", definition.MaxHpModifier);
+        AddOptionalTacticValue(tactic, "damagemodifier", definition.DamageModifier);
+        AddOptionalTacticValue(tactic, "unitdamagemodifier", definition.UnitDamageModifier);
+        AddOptionalTacticValue(tactic, "idleanim", definition.IdleAnim);
+        AddOptionalTacticValue(tactic, "boredanim", definition.BoredAnim);
+        AddOptionalTacticValue(tactic, "deathanim", definition.DeathAnim);
+        AddOptionalTacticValue(tactic, "walkanim", definition.WalkAnim);
+        AddOptionalTacticValue(tactic, "moveanim", definition.MoveAnim);
+        AddOptionalTacticValue(tactic, "runanim", definition.RunAnim);
+
+        foreach (var armor in definition.ArmorOverrides)
+        {
+            var element = armor.SourceElement == null ? new XElement("armoroverride") : new XElement(armor.SourceElement);
+            element.Name = "armoroverride";
+            element.RemoveNodes();
+            element.SetAttributeValue("type", armor.Type.Trim());
+            element.SetAttributeValue("value", armor.ValueText.Trim());
+            tactic.Add(element);
+        }
+
+        AddOptionalTacticValue(tactic, "agerequirement", definition.AgeRequirement);
+
+        foreach (var unknown in definition.UnknownElements)
+            tactic.Add(new XElement(unknown));
+        return tactic;
+    }
+
+    private static void AddTacticActionReference(XElement tactic, TacticActionReference reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference.ActionName))
+            return;
+
+        var action = reference.SourceElement == null ? new XElement("action") : new XElement(reference.SourceElement);
+        action.Name = "action";
+        action.RemoveNodes();
+        action.SetValue(reference.ActionName.Trim());
+        action.SetAttributeValue("priority", null);
+        action.SetAttributeValue("probability", null);
+        if (reference.Priority.HasValue)
+            action.SetAttributeValue("priority", Math.Clamp(reference.Priority.Value, 0, 100).ToString(CultureInfo.InvariantCulture));
+        else if (reference.Probability.HasValue)
+            action.SetAttributeValue("probability", Math.Clamp(reference.Probability.Value, 0, 100).ToString(CultureInfo.InvariantCulture));
+        tactic.Add(action);
+    }
+
+    private static void AddOptionalTacticValue(XElement parent, string tag, string? value)
+    {
+        if (value != null && !string.IsNullOrWhiteSpace(value))
+            parent.Add(new XElement(tag, value.Trim()));
+    }
+
+    private static void AddOptionalTacticBoolean(XElement parent, string tag, OptionalBoolean value)
+    {
+        if (value == OptionalBoolean.True)
+            parent.Add(new XElement(tag, "1"));
+    }
+
+    private void ReplaceTacticElements(XElement tacticsRoot)
+    {
+        var serialized = _tacticsEditorTacticDefinitions.Select(SerializeTacticDefinition).ToList();
+        var existing = tacticsRoot.Elements()
+            .Where(element => element.Name.LocalName.Equals("tactic", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (existing.Count > 0)
+        {
+            existing[0].AddBeforeSelf(serialized);
+            foreach (var element in existing)
+                element.Remove();
+        }
+        else
+        {
+            foreach (var tactic in serialized)
+                tacticsRoot.Add(tactic);
+        }
+    }
+
+    private void RefreshBasicTacticPreview()
+    {
+        ScheduleXmlPreviewRefresh();
+    }
+
+    private void BasicTacticValueChanged()
+    {
+        if (_isPopulating)
+            return;
+        MarkDirty();
+        RefreshBasicTacticPreview();
+    }
+
+    private AutoCompleteBox CreateBasicTacticAutoComplete(
+        string? value,
+        IEnumerable<string> suggestions,
+        bool selectAllOnFirstClick = true)
+    {
+        var items = suggestions
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var editor = new AutoCompleteBox
+        {
+            Text = value ?? "",
+            ItemsSource = items,
+            FilterMode = AutoCompleteFilterMode.Contains,
+            Width = EditorTextFieldStyle.StandardWidth,
+            IsEnabled = !_isReadOnly
+        };
+        EnableDropdownAutoComplete(editor, selectAllOnFirstClick);
+        return editor;
+    }
+
+    private Button CreateBasicTacticActionNamePicker(
+        TacticActionReference reference,
+        Func<IEnumerable<string>> suggestionProvider,
+        Action valueChanged)
+    {
+        var picker = new Button
+        {
+            // Tactic action names need less horizontal space than normal editor text fields.
+            // Keep the full value; this is only a visual width (roughly 30 characters).
+            Width = 228,
+            MinHeight = 30,
+            Padding = new Thickness(8, 4),
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            IsEnabled = !_isReadOnly
+        };
+
+        void RefreshDisplay()
+        {
+            picker.Content = string.IsNullOrWhiteSpace(reference.ActionName)
+                ? "Select action..."
+                : reference.ActionName.Trim();
+        }
+
+        picker.Click += (_, _) =>
+        {
+            // Build the choices at click time so newly created or renamed actions
+            // are available immediately without closing the tactics editor.
+            var choices = suggestionProvider()
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var choicesPanel = new StackPanel
+            {
+                Spacing = 2,
+                MinWidth = 212
+            };
+            var flyout = new Flyout
+            {
+                Placement = PlacementMode.BottomEdgeAlignedLeft
+            };
+
+            if (choices.Count == 0)
+            {
+                choicesPanel.Children.Add(new TextBlock
+                {
+                    Text = "No available actions",
+                    Foreground = Brushes.Gray,
+                    Margin = new Thickness(8, 6)
+                });
+            }
+            else
+            {
+                foreach (var choice in choices)
+                {
+                    var choiceButton = new Button
+                    {
+                        Content = choice,
+                        Background = Brushes.Transparent,
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Left,
+                        Padding = new Thickness(8, 5)
+                    };
+                    choiceButton.Click += (_, _) =>
+                    {
+                        reference.ActionName = choice;
+                        RefreshDisplay();
+                        flyout.Hide();
+                        valueChanged();
+                    };
+                    choicesPanel.Children.Add(choiceButton);
+                }
+            }
+
+            flyout.Content = new ScrollViewer
+            {
+                Content = choicesPanel,
+                MaxHeight = 320,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+            flyout.ShowAt(picker);
+        };
+
+        RefreshDisplay();
+        return picker;
+    }
+
+    private static void AttachBasicTacticBoundedIntegerBehavior(
+        TextBox editor,
+        TacticActionReference reference,
+        bool isProbability,
+        Action valueChanged)
+    {
+        var normalizing = false;
+        editor.TextChanged += (_, _) =>
+        {
+            if (normalizing)
+                return;
+
+            var raw = editor.Text?.Trim() ?? "";
+            var digitsOnly = new string(raw.Where(char.IsDigit).ToArray());
+            if (!string.Equals(raw, digitsOnly, StringComparison.Ordinal))
+            {
+                normalizing = true;
+                editor.Text = digitsOnly;
+                editor.CaretIndex = digitsOnly.Length;
+                normalizing = false;
+                raw = digitsOnly;
+            }
+
+            int? parsedValue = null;
+            if (int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+            {
+                var bounded = Math.Clamp(parsed, 0, 100);
+                parsedValue = bounded;
+                var normalizedText = bounded.ToString(CultureInfo.InvariantCulture);
+                if (!string.Equals(raw, normalizedText, StringComparison.Ordinal))
+                {
+                    normalizing = true;
+                    editor.Text = normalizedText;
+                    editor.CaretIndex = normalizedText.Length;
+                    normalizing = false;
+                    raw = normalizedText;
+                }
+            }
+
+            reference.AttributeMode = isProbability ? "Probability" : "Priority";
+            reference.AttributeValueText = raw;
+            if (isProbability)
+            {
+                reference.Probability = parsedValue;
+                reference.Priority = null;
+            }
+            else
+            {
+                reference.Priority = parsedValue;
+                reference.Probability = null;
+            }
+            valueChanged();
+        };
+    }
+    private static Button CreateRedRemoveButton()
+    {
+        return new Button
+        {
+            Content = "×",
+            Width = 28,
+            Height = 28,
+            MinWidth = 28,
+            MinHeight = 28,
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = Brush.Parse("#b00000"),
+            Foreground = Brushes.White
+        };
+    }
+
+    private void BuildBasicTacticEditor()
+    {
+        _rebuildTacticsPriorityRows = null;
+        if (_activeEditorPanel == null)
+            return;
+
+        var rootHost = new StackPanel { Spacing = 8 };
+        _activeEditorPanel.Children.Add(rootHost);
+        var tacticSelectorPanel = new WrapPanel { Orientation = Orientation.Horizontal };
+        var tacticContentHost = new StackPanel { Spacing = 8 };
+        rootHost.Children.Add(tacticSelectorPanel);
+        rootHost.Children.Add(tacticContentHost);
+        var priorityRebuilders = new List<Action>();
+
+        List<string> GetCurrentActionSuggestions()
+        {
+            var renderedActionNames = _protoActionWidgets
+                .Select(state => state.NameAcb.Text?.Trim() ?? "")
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (renderedActionNames.Count > 0)
+                return renderedActionNames;
+            return _tacticsEditorSeedActions
+                .Select(action => action.Name?.Trim() ?? "")
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        var unitTypeSuggestions = (_barData?.UnitTypes ?? [])
+            .Concat(GetAvailableTrainUnitNames())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var animationSuggestions = GetAvailableProtoActionAnimationNames();
+
+        static void AttachDecimalText(TextBox editor, Action<string> setter, Action changed, bool clampZeroToHundred = false)
+        {
+            var normalizing = false;
+            editor.TextChanged += (_, _) =>
+            {
+                if (normalizing)
+                    return;
+                var text = editor.Text?.Trim() ?? "";
+                if (clampZeroToHundred && decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    var bounded = Math.Clamp(parsed, 0m, 100m);
+                    if (bounded != parsed)
+                    {
+                        text = bounded.ToString(CultureInfo.InvariantCulture);
+                        normalizing = true;
+                        editor.Text = text;
+                        editor.CaretIndex = text.Length;
+                        normalizing = false;
+                    }
+                }
+                setter(text);
+                changed();
+            };
+        }
+
+        Control BuildDefinitionEditor(TacticDefinition definition, Action<string> updateTabHeader)
+        {
+            var container = new StackPanel { Spacing = 10, Margin = new Thickness(0, 8, 0, 0) };
+            var headerRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            var nameRow = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            nameRow.Children.Add(new TextBlock { Text = "Tactic Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+            var nameBox = new TextBox { Text = definition.Name, Width = 228, MaxWidth = 228, IsReadOnly = _isReadOnly };
+            nameBox.TextChanged += (_, _) =>
+            {
+                definition.Name = nameBox.Text?.Trim() ?? "";
+                updateTabHeader(string.IsNullOrWhiteSpace(definition.Name) ? "(Unnamed)" : definition.Name);
+                BasicTacticValueChanged();
+            };
+            nameRow.Children.Add(nameBox);
+            var activeCheck = new CheckBox
+            {
+                Content = "Active",
+                IsChecked = definition.Active != OptionalBoolean.False,
+                IsEnabled = !_isReadOnly,
+                Margin = new Thickness(14, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            activeCheck.IsCheckedChanged += (_, _) =>
+            {
+                definition.Active = activeCheck.IsChecked == true ? OptionalBoolean.True : OptionalBoolean.False;
+                BasicTacticValueChanged();
+            };
+            nameRow.Children.Add(activeCheck);
+            var abilityOnlyCheck = new CheckBox
+            {
+                Content = "Ability Only",
+                IsChecked = definition.AbilityOnly == OptionalBoolean.True,
+                IsEnabled = !_isReadOnly,
+                Margin = new Thickness(12, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            abilityOnlyCheck.IsCheckedChanged += (_, _) =>
+            {
+                definition.AbilityOnly = abilityOnlyCheck.IsChecked == true ? OptionalBoolean.True : OptionalBoolean.Omitted;
+                BasicTacticValueChanged();
+            };
+            nameRow.Children.Add(abilityOnlyCheck);
+            Grid.SetColumn(nameRow, 0);
+            headerRow.Children.Add(nameRow);
+            if (!_isReadOnly && _tacticsEditorTacticDefinitions.Count > 1)
+            {
+                var removeTactic = new Button
+                {
+                    Content = "Remove Tactic",
+                    Background = Brush.Parse("#8b0000"),
+                    Padding = new Thickness(8, 4),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                removeTactic.Click += (_, _) =>
+                {
+                    if (_tacticsEditorTacticDefinitions.Count <= 1)
+                        return;
+                    var index = _tacticsEditorTacticDefinitions.IndexOf(definition);
+                    if (index < 0)
+                        return;
+                    _tacticsEditorTacticDefinitions.RemoveAt(index);
+                    _tacticsEditorTacticDefinition = _tacticsEditorTacticDefinitions[Math.Min(index, _tacticsEditorTacticDefinitions.Count - 1)];
+                    BuildTabs();
+                    BasicTacticValueChanged();
+                };
+                Grid.SetColumn(removeTactic, 1);
+                headerRow.Children.Add(removeTactic);
+            }
+            container.Children.Add(headerRow);
+
+            IEnumerable<string> GetAvailableActionSuggestions(TacticActionReference current)
+            {
+                var usedNames = definition.Actions
+                    .Where(other => !ReferenceEquals(other, current))
+                    .Select(other => other.ActionName?.Trim() ?? "")
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return GetCurrentActionSuggestions().Where(value => !usedNames.Contains(value));
+            }
+
+            container.Children.Add(new TextBlock { Text = "Actions priority", FontWeight = FontWeight.SemiBold });
+            var priorityRows = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
+            container.Children.Add(priorityRows);
+            void RebuildPriorityRows()
+            {
+                priorityRows.Children.Clear();
+                foreach (var reference in definition.Actions.Where(reference => !reference.Probability.HasValue).ToList())
+                {
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6), VerticalAlignment = VerticalAlignment.Center };
+                    row.Children.Add(CreateBasicTacticActionNamePicker(reference, () => GetAvailableActionSuggestions(reference), BasicTacticValueChanged));
+                    var priority = new TextBox { Text = reference.Priority?.ToString(CultureInfo.InvariantCulture) ?? "", Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    AttachBasicTacticBoundedIntegerBehavior(priority, reference, false, BasicTacticValueChanged);
+                    row.Children.Add(priority);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) => { definition.Actions.Remove(reference); RebuildPriorityRows(); BasicTacticValueChanged(); };
+                        row.Children.Add(remove);
+                    }
+                    priorityRows.Children.Add(row);
+                }
+                if (!_isReadOnly)
+                {
+                    var add = new Button { Content = "Add Action", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 10, 6) };
+                    add.Click += (_, _) => { definition.Actions.Add(new TacticActionReference()); RebuildPriorityRows(); BasicTacticValueChanged(); };
+                    priorityRows.Children.Add(add);
+                }
+            }
+            priorityRebuilders.Add(RebuildPriorityRows);
+            RebuildPriorityRows();
+
+            var probabilityHost = new StackPanel { Spacing = 6 };
+            container.Children.Add(probabilityHost);
+            void RebuildProbabilitySection()
+            {
+                probabilityHost.Children.Clear();
+                var refs = definition.Actions.Where(reference => reference.Probability.HasValue).ToList();
+                if (refs.Count == 0)
+                {
+                    if (!_isReadOnly)
+                    {
+                        var show = new Button { Content = "Actions probability", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                        show.Click += (_, _) => { definition.Actions.Add(new TacticActionReference { Probability = 100, AttributeMode = "Probability", AttributeValueText = "100" }); RebuildProbabilitySection(); BasicTacticValueChanged(); };
+                        probabilityHost.Children.Add(show);
+                    }
+                    return;
+                }
+                probabilityHost.Children.Add(new TextBlock { Text = "Actions probability", FontWeight = FontWeight.SemiBold });
+                var rows = new WrapPanel { Orientation = Orientation.Horizontal };
+                probabilityHost.Children.Add(rows);
+                foreach (var reference in refs)
+                {
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    row.Children.Add(CreateBasicTacticActionNamePicker(reference, () => GetAvailableActionSuggestions(reference), BasicTacticValueChanged));
+                    var probability = new TextBox { Text = reference.Probability?.ToString(CultureInfo.InvariantCulture) ?? "", Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    AttachBasicTacticBoundedIntegerBehavior(probability, reference, true, BasicTacticValueChanged);
+                    row.Children.Add(probability);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) => { definition.Actions.Remove(reference); RebuildProbabilitySection(); BasicTacticValueChanged(); };
+                        row.Children.Add(remove);
+                    }
+                    rows.Children.Add(row);
+                }
+                if (!_isReadOnly)
+                {
+                    var add = new Button { Content = "Add Probability", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    add.Click += (_, _) => { definition.Actions.Add(new TacticActionReference { Probability = 100, AttributeMode = "Probability", AttributeValueText = "100" }); RebuildProbabilitySection(); BasicTacticValueChanged(); };
+                    probabilityHost.Children.Add(add);
+                }
+            }
+            RebuildProbabilitySection();
+
+            var attackPriorityHost = new StackPanel { Spacing = 6 };
+            container.Children.Add(attackPriorityHost);
+            void RebuildAttackPriorities()
+            {
+                attackPriorityHost.Children.Clear();
+                if (definition.AttackPriorities.Count > 0)
+                    attackPriorityHost.Children.Add(new TextBlock { Text = "Attack priority", FontWeight = FontWeight.SemiBold });
+                var rows = new WrapPanel { Orientation = Orientation.Horizontal };
+                attackPriorityHost.Children.Add(rows);
+                foreach (var priority in definition.AttackPriorities.ToList())
+                {
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    var type = CreateBasicTacticAutoComplete(priority.TargetType, unitTypeSuggestions);
+                    type.Width = 230;
+                    type.TextChanged += (_, _) => { priority.TargetType = type.Text?.Trim() ?? ""; BasicTacticValueChanged(); };
+                    row.Children.Add(type);
+                    var value = new TextBox { Text = priority.BonusFactorText, Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    AttachDecimalText(value, text => priority.BonusFactorText = text, BasicTacticValueChanged, true);
+                    row.Children.Add(value);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) => { definition.AttackPriorities.Remove(priority); RebuildAttackPriorities(); BasicTacticValueChanged(); };
+                        row.Children.Add(remove);
+                    }
+                    rows.Children.Add(row);
+                }
+                if (!_isReadOnly)
+                {
+                    var add = new Button { Content = "Attack Priority", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    add.Click += (_, _) => { definition.AttackPriorities.Add(new TacticAttackPriority { BonusFactorText = "50" }); RebuildAttackPriorities(); BasicTacticValueChanged(); };
+                    attackPriorityHost.Children.Add(add);
+                }
+            }
+            RebuildAttackPriorities();
+
+            Control CreateValueChip(string value, Action removeValue)
+            {
+                var chip = new Border { Background = Brush.Parse("#365f8c"), CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 4), Margin = new Thickness(0, 0, 6, 6) };
+                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                content.Children.Add(new TextBlock { Text = value, VerticalAlignment = VerticalAlignment.Center });
+                if (!_isReadOnly)
+                {
+                    var remove = new Button { Content = "×", Padding = new Thickness(0), MinWidth = 16, Width = 16, Height = 16, Background = Brushes.Transparent };
+                    remove.Click += (_, _) => removeValue();
+                    content.Children.Add(remove);
+                }
+                chip.Child = content;
+                return chip;
+            }
+
+            Control CreateChipListEditor(string title, List<string> values)
+            {
+                var panel = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnSpacing = 8, RowSpacing = 6 };
+                var label = new TextBlock { Text = title + ":", FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+                Grid.SetColumn(label, 0); Grid.SetRow(label, 0); panel.Children.Add(label);
+                var input = CreateBasicTacticAutoComplete("", unitTypeSuggestions); input.Width = 228; input.MaxWidth = 228;
+                Grid.SetColumn(input, 1); Grid.SetRow(input, 0); panel.Children.Add(input);
+                var chips = new WrapPanel { Orientation = Orientation.Horizontal };
+                Grid.SetColumn(chips, 1); Grid.SetRow(chips, 1); panel.Children.Add(chips);
+                void RebuildChips()
+                {
+                    chips.Children.Clear();
+                    foreach (var value in values.Where(value => !string.IsNullOrWhiteSpace(value)).ToList())
+                    {
+                        var captured = value;
+                        chips.Children.Add(CreateValueChip(captured, () => { values.Remove(captured); RebuildChips(); BasicTacticValueChanged(); }));
+                    }
+                }
+                void AddValue(string? selectedValue = null)
+                {
+                    if (_isReadOnly) return;
+                    var value = (selectedValue ?? input.Text)?.Trim() ?? "";
+                    if (string.IsNullOrWhiteSpace(value) || values.Contains(value, StringComparer.OrdinalIgnoreCase)) return;
+                    values.Add(value); input.SelectedItem = null; input.Text = ""; RebuildChips(); BasicTacticValueChanged();
+                }
+                RebuildChips();
+                input.SelectionChanged += (_, _) => { if (input.SelectedItem is string selected) AddValue(selected); };
+                input.KeyDown += (_, e) => { if (e.Key == Key.Enter) { AddValue(); e.Handled = true; } };
+                return panel;
+            }
+
+            var targetingLists = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 18 };
+            var attackTypesEditor = CreateChipListEditor("Attack Type", definition.AttackTypes);
+            var excludeTypesEditor = CreateChipListEditor("Exclude", definition.ExcludeAttackTypes);
+            Grid.SetColumn(attackTypesEditor, 0); Grid.SetColumn(excludeTypesEditor, 1);
+            targetingLists.Children.Add(attackTypesEditor); targetingLists.Children.Add(excludeTypesEditor);
+            container.Children.Add(targetingLists);
+
+            var singleValueGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), ColumnSpacing = 14 };
+            void AddSingleValueEditor(int column, string label, string? initial, Action<string?> setter)
+            {
+                var panel = new StackPanel { Spacing = 4 };
+                panel.Children.Add(new TextBlock { Text = label, FontWeight = FontWeight.SemiBold });
+                var editor = CreateBasicTacticAutoComplete(initial, unitTypeSuggestions); editor.HorizontalAlignment = HorizontalAlignment.Stretch; editor.Width = double.NaN;
+                editor.TextChanged += (_, _) => { setter(string.IsNullOrWhiteSpace(editor.Text) ? null : editor.Text.Trim()); BasicTacticValueChanged(); };
+                panel.Children.Add(editor); Grid.SetColumn(panel, column); singleValueGrid.Children.Add(panel);
+            }
+            AddSingleValueEditor(0, "Auto Attack Type", definition.AutoAttackType, value => definition.AutoAttackType = value);
+            AddSingleValueEditor(1, "Attack Response Type", definition.AttackResponseType, value => definition.AttackResponseType = value);
+            AddSingleValueEditor(2, "Attack Move Type", definition.AttackMoveType, value => definition.AttackMoveType = value);
+            container.Children.Add(singleValueGrid);
+
+            var flagsRow = new WrapPanel { Orientation = Orientation.Horizontal };
+            void AddFlagEditor(string label, OptionalBoolean initial, Action<OptionalBoolean> setter)
+            {
+                var check = new CheckBox { Content = label, IsChecked = initial == OptionalBoolean.True, IsEnabled = !_isReadOnly, Margin = new Thickness(0, 0, 18, 0) };
+                check.IsCheckedChanged += (_, _) => { setter(check.IsChecked == true ? OptionalBoolean.True : OptionalBoolean.Omitted); BasicTacticValueChanged(); };
+                flagsRow.Children.Add(check);
+            }
+            AddFlagEditor("Auto Retarget", definition.AutoRetarget, value => definition.AutoRetarget = value);
+            AddFlagEditor("Run Away", definition.RunAway, value => definition.RunAway = value);
+            container.Children.Add(flagsRow);
+
+            var advancedOptionsHost = new StackPanel { Spacing = 6 };
+            container.Children.Add(advancedOptionsHost);
+            var modifierHost = new StackPanel { Spacing = 6 };
+            var animationsHost = new StackPanel { Spacing = 6 };
+            var armorHost = new StackPanel { Spacing = 6 };
+            var ageHost = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var advancedButtonsHost = new WrapPanel { Orientation = Orientation.Horizontal };
+            advancedOptionsHost.Children.Add(modifierHost);
+            advancedOptionsHost.Children.Add(animationsHost);
+            advancedOptionsHost.Children.Add(armorHost);
+            advancedOptionsHost.Children.Add(ageHost);
+            advancedOptionsHost.Children.Add(advancedButtonsHost);
+
+            var modifiersExpanded = definition.SpeedModifier != null || definition.MaxHpModifier != null ||
+                                    definition.DamageModifier != null || definition.UnitDamageModifier != null;
+            var animationsExpanded = definition.IdleAnim != null || definition.BoredAnim != null || definition.DeathAnim != null ||
+                                     definition.WalkAnim != null || definition.MoveAnim != null || definition.RunAnim != null;
+
+            void RebuildAdvancedButtons()
+            {
+                advancedButtonsHost.Children.Clear();
+                if (_isReadOnly)
+                    return;
+
+                Button MakeAdvancedButton(string text, Action onClick)
+                {
+                    var button = new Button
+                    {
+                        Content = text,
+                        Background = Brush.Parse("#2b7a0b"),
+                        Margin = new Thickness(0, 0, 8, 6)
+                    };
+                    button.Click += (_, _) => onClick();
+                    return button;
+                }
+
+                var hasModifier = modifiersExpanded || definition.SpeedModifier != null || definition.MaxHpModifier != null ||
+                                  definition.DamageModifier != null || definition.UnitDamageModifier != null;
+                if (!hasModifier)
+                {
+                    advancedButtonsHost.Children.Add(MakeAdvancedButton("Add modifiers", () =>
+                    {
+                        modifiersExpanded = true;
+                        RebuildModifiers();
+                        RebuildAdvancedButtons();
+                    }));
+                }
+
+                var hasAnimations = animationsExpanded || definition.IdleAnim != null || definition.BoredAnim != null || definition.DeathAnim != null ||
+                                    definition.WalkAnim != null || definition.MoveAnim != null || definition.RunAnim != null;
+                if (!hasAnimations)
+                {
+                    advancedButtonsHost.Children.Add(MakeAdvancedButton("Special animations", () =>
+                    {
+                        animationsExpanded = true;
+                        RebuildAnimations();
+                        RebuildAdvancedButtons();
+                    }));
+                }
+
+                if (definition.ArmorOverrides.Count == 0)
+                {
+                    advancedButtonsHost.Children.Add(MakeAdvancedButton("Armor Override", () =>
+                    {
+                        definition.ArmorOverrides.Add(new TacticArmorOverride { Type = "Hack", ValueText = "0" });
+                        definition.ArmorOverrides.Add(new TacticArmorOverride { Type = "Pierce", ValueText = "0" });
+                        definition.ArmorOverrides.Add(new TacticArmorOverride { Type = "Crush", ValueText = "0" });
+                        RebuildArmorOverrides();
+                        RebuildAdvancedButtons();
+                        BasicTacticValueChanged();
+                    }));
+                }
+
+                if (definition.AgeRequirement == null)
+                {
+                    advancedButtonsHost.Children.Add(MakeAdvancedButton("Age Requirement", () =>
+                    {
+                        definition.AgeRequirement = "1";
+                        RebuildAgeRequirement();
+                        RebuildAdvancedButtons();
+                        BasicTacticValueChanged();
+                    }));
+                }
+            }
+
+            void RebuildModifiers()
+            {
+                modifierHost.Children.Clear();
+                var entries = new (string Label, Func<string?> Get, Action<string?> Set)[]
+                {
+                    ("Speed", () => definition.SpeedModifier, value => definition.SpeedModifier = value),
+                    ("Max HP", () => definition.MaxHpModifier, value => definition.MaxHpModifier = value),
+                    ("Damage", () => definition.DamageModifier, value => definition.DamageModifier = value),
+                    ("Unit Damage", () => definition.UnitDamageModifier, value => definition.UnitDamageModifier = value),
+                };
+                var anyValue = entries.Any(entry => entry.Get() != null);
+                if (!modifiersExpanded && !anyValue)
+                    return;
+
+                modifierHost.Children.Add(new TextBlock { Text = "Modifiers", FontWeight = FontWeight.SemiBold });
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+                modifierHost.Children.Add(wrap);
+                foreach (var entry in entries)
+                {
+                    var value = entry.Get();
+                    if (value == null)
+                    {
+                        if (!_isReadOnly)
+                        {
+                            var add = new Button { Content = entry.Label, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 6) };
+                            add.Click += (_, _) => { entry.Set("1.0"); RebuildModifiers(); BasicTacticValueChanged(); };
+                            wrap.Children.Add(add);
+                        }
+                        continue;
+                    }
+
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center });
+                    var editor = new TextBox { Text = value, Width = EditorNumericFieldStyle.CompactWidth, IsReadOnly = _isReadOnly };
+                    AttachDecimalText(editor, text => entry.Set(text), BasicTacticValueChanged);
+                    row.Children.Add(editor);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) =>
+                        {
+                            entry.Set(null);
+                            if (!entries.Any(candidate => candidate.Get() != null))
+                                modifiersExpanded = false;
+                            RebuildModifiers();
+                            RebuildAdvancedButtons();
+                            BasicTacticValueChanged();
+                        };
+                        row.Children.Add(remove);
+                    }
+                    wrap.Children.Add(row);
+                }
+            }
+
+            void RebuildAnimations()
+            {
+                animationsHost.Children.Clear();
+                var entries = new (string Label, Func<string?> Get, Action<string?> Set)[]
+                {
+                    ("Idle", () => definition.IdleAnim, v => definition.IdleAnim = v),
+                    ("Bored", () => definition.BoredAnim, v => definition.BoredAnim = v),
+                    ("Death", () => definition.DeathAnim, v => definition.DeathAnim = v),
+                    ("Walk", () => definition.WalkAnim, v => definition.WalkAnim = v),
+                    ("Move", () => definition.MoveAnim, v => definition.MoveAnim = v),
+                    ("Run", () => definition.RunAnim, v => definition.RunAnim = v),
+                };
+                var any = entries.Any(entry => entry.Get() != null);
+                if (!animationsExpanded && !any)
+                    return;
+
+                animationsHost.Children.Add(new TextBlock { Text = "Special animations", FontWeight = FontWeight.SemiBold });
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+                animationsHost.Children.Add(wrap);
+                foreach (var entry in entries)
+                {
+                    if (entry.Get() == null)
+                    {
+                        if (!_isReadOnly)
+                        {
+                            var add = new Button { Content = entry.Label, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 6) };
+                            add.Click += (_, _) => { entry.Set(""); RebuildAnimations(); BasicTacticValueChanged(); };
+                            wrap.Children.Add(add);
+                        }
+                        continue;
+                    }
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center });
+                    var editor = CreateBasicTacticAutoComplete(entry.Get(), animationSuggestions.Concat([entry.Get() ?? ""])); editor.Width = 220;
+                    editor.TextChanged += (_, _) => { entry.Set(editor.Text?.Trim() ?? ""); BasicTacticValueChanged(); };
+                    row.Children.Add(editor);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) =>
+                        {
+                            entry.Set(null);
+                            if (!entries.Any(candidate => candidate.Get() != null))
+                                animationsExpanded = false;
+                            RebuildAnimations();
+                            RebuildAdvancedButtons();
+                            BasicTacticValueChanged();
+                        };
+                        row.Children.Add(remove);
+                    }
+                    wrap.Children.Add(row);
+                }
+            }
+
+            void RebuildArmorOverrides()
+            {
+                armorHost.Children.Clear();
+                if (definition.ArmorOverrides.Count == 0)
+                    return;
+
+                armorHost.Children.Add(new TextBlock { Text = "Armor overrides", FontWeight = FontWeight.SemiBold });
+                armorHost.Children.Add(new TextBlock { Text = "Requires the ProtoUnit flag UseTacticArmorOverride.", FontStyle = FontStyle.Italic, Foreground = Brushes.Gray });
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+                armorHost.Children.Add(wrap);
+                foreach (var armor in definition.ArmorOverrides.ToList())
+                {
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    var type = new ComboBox
+                    {
+                        ItemsSource = new[] { "Hack", "Pierce", "Crush" },
+                        SelectedItem = new[] { "Hack", "Pierce", "Crush" }.FirstOrDefault(value => value.Equals(armor.Type, StringComparison.OrdinalIgnoreCase)),
+                        Width = 110,
+                        IsEnabled = !_isReadOnly
+                    };
+                    if (type.SelectedItem == null && !string.IsNullOrWhiteSpace(armor.Type))
+                        type.ItemsSource = new[] { armor.Type, "Hack", "Pierce", "Crush" }.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    type.SelectionChanged += (_, _) =>
+                    {
+                        if (type.SelectedItem is string selected)
+                        {
+                            armor.Type = selected;
+                            BasicTacticValueChanged();
+                        }
+                    };
+                    row.Children.Add(type);
+                    var value = new TextBox { Text = armor.ValueText, Width = EditorNumericFieldStyle.CompactWidth, IsReadOnly = _isReadOnly };
+                    AttachDecimalText(value, text => armor.ValueText = text, BasicTacticValueChanged);
+                    row.Children.Add(value);
+                    if (!_isReadOnly)
+                    {
+                        var remove = CreateRedRemoveButton();
+                        remove.Click += (_, _) =>
+                        {
+                            definition.ArmorOverrides.Remove(armor);
+                            RebuildArmorOverrides();
+                            RebuildAdvancedButtons();
+                            BasicTacticValueChanged();
+                        };
+                        row.Children.Add(remove);
+                    }
+                    wrap.Children.Add(row);
+                }
+            }
+
+            void RebuildAgeRequirement()
+            {
+                ageHost.Children.Clear();
+                if (definition.AgeRequirement == null)
+                    return;
+
+                ageHost.Children.Add(new TextBlock { Text = "Age Requirement", VerticalAlignment = VerticalAlignment.Center });
+                var ageValues = new (string Label, string Value)[]
+                {
+                    ("Archaic", "1"),
+                    ("Classical", "2"),
+                    ("Heroic", "3"),
+                    ("Mythic", "4"),
+                    ("Wonder", "5"),
+                };
+                var editor = new ComboBox
+                {
+                    ItemsSource = ageValues.Select(value => value.Label).ToList(),
+                    SelectedItem = ageValues.FirstOrDefault(value => value.Value == definition.AgeRequirement).Label,
+                    Width = 130,
+                    IsEnabled = !_isReadOnly
+                };
+                editor.SelectionChanged += (_, _) =>
+                {
+                    if (editor.SelectedItem is string selectedLabel)
+                    {
+                        var selected = ageValues.First(value => value.Label == selectedLabel);
+                        definition.AgeRequirement = selected.Value;
+                        BasicTacticValueChanged();
+                    }
+                };
+                ageHost.Children.Add(editor);
+                if (!_isReadOnly)
+                {
+                    var remove = CreateRedRemoveButton();
+                    remove.Click += (_, _) =>
+                    {
+                        definition.AgeRequirement = null;
+                        RebuildAgeRequirement();
+                        RebuildAdvancedButtons();
+                        BasicTacticValueChanged();
+                    };
+                    ageHost.Children.Add(remove);
+                }
+            }
+
+            RebuildModifiers();
+            RebuildAnimations();
+            RebuildArmorOverrides();
+            RebuildAgeRequirement();
+            RebuildAdvancedButtons();
+            return new ScrollViewer { Content = container, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        void BuildTabs()
+        {
+            if (_tacticsEditorTacticDefinitions.Count == 0)
+                return;
+
+            if (_tacticsEditorTacticDefinition == null || !_tacticsEditorTacticDefinitions.Contains(_tacticsEditorTacticDefinition))
+                _tacticsEditorTacticDefinition = _tacticsEditorTacticDefinitions[0];
+
+            tacticSelectorPanel.Children.Clear();
+            tacticContentHost.Children.Clear();
+            priorityRebuilders.Clear();
+
+            foreach (var definition in _tacticsEditorTacticDefinitions)
+            {
+                var tacticButton = new Button
+                {
+                    Content = string.IsNullOrWhiteSpace(definition.Name) ? "(Unnamed)" : definition.Name,
+                    Padding = new Thickness(8, 3),
+                    Margin = new Thickness(0, 0, 6, 6),
+                    Background = ReferenceEquals(definition, _tacticsEditorTacticDefinition)
+                        ? Brush.Parse("#2b3c57")
+                        : Brush.Parse("#252526")
+                };
+                tacticButton.Click += (_, _) =>
+                {
+                    if (ReferenceEquals(definition, _tacticsEditorTacticDefinition))
+                        return;
+                    _tacticsEditorTacticDefinition = definition;
+                    BuildTabs();
+                };
+                tacticSelectorPanel.Children.Add(tacticButton);
+
+                if (ReferenceEquals(definition, _tacticsEditorTacticDefinition))
+                {
+                    var tacticCard = new Border
+                    {
+                        Background = Brush.Parse("#1c1c1c"),
+                        BorderBrush = Brush.Parse("#3f3f46"),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(8),
+                        Padding = new Thickness(10),
+                        Margin = new Thickness(0, 4, 0, 4),
+                        Child = BuildDefinitionEditor(definition, text => tacticButton.Content = text)
+                    };
+                    tacticContentHost.Children.Add(tacticCard);
+                }
+            }
+
+            if (!_isReadOnly)
+            {
+                var addTactic = new Button
+                {
+                    Content = "Add Tactic",
+                    Background = Brush.Parse("#2b7a0b"),
+                    Padding = new Thickness(8, 3),
+                    Margin = new Thickness(10, 0, 0, 6)
+                };
+                addTactic.Click += (_, _) =>
+                {
+                    var newDefinition = new TacticDefinition { Name = "New Tactic" };
+                    _tacticsEditorTacticDefinitions.Add(newDefinition);
+                    _tacticsEditorTacticDefinition = newDefinition;
+                    BuildTabs();
+                    BasicTacticValueChanged();
+                };
+                tacticSelectorPanel.Children.Add(addTactic);
+            }
+
+            _rebuildTacticsPriorityRows = () =>
+            {
+                foreach (var rebuild in priorityRebuilders.ToList())
+                    rebuild();
+            };
+        }
+
+        BuildTabs();
+
+        RefreshBasicTacticPreview();
+    }
+
+    private static ProtoAction CloneForSyntheticProtoAction(ProtoAction action)
+    {
+        var clone = action.Clone();
+        // Tactics actions originate from an <action> element. The shared editor's
+        // synthetic unit must always contain <protoaction> elements, otherwise
+        // SetProtoActions preserves the source tag and later GetProtoActions/save
+        // lookups cannot see the action.
+        clone.SourceElement = null;
+        return clone;
+    }
+
+    private List<ProtoAction> GetTacticsEditorActions()
+    {
+        // Seed the first shared-editor build directly from the opened tactics
+        // document. This avoids depending on any unit/tactics lookup while the
+        // synthetic editor unit is still being initialized.
+        if (!_tacticsEditorSeedActionsConsumed)
+        {
+            _tacticsEditorSeedActionsConsumed = true;
+            return _tacticsEditorSeedActions.Select(CloneForSyntheticProtoAction).ToList();
+        }
+
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+            return [];
+
+        var syntheticUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+        return syntheticUnit == null
+            ? []
+            : ProtoXmlHandler.GetProtoActions(syntheticUnit);
+    }
+
+    private void ConfigureTacticsActionEditorChrome(bool isBuiltIn)
+    {
+        _unitListPanel.IsVisible = false;
+        _unitListSplitter.IsVisible = false;
+        _previewSplitter.IsVisible = true;
+        _xmlPreviewPanel.IsVisible = true;
+        _mainContentGrid.ColumnDefinitions[0].Width = new GridLength(0);
+        _mainContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
+        _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
+        _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
+        _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
+        _xmlPreviewText.IsReadOnly = true;
+        _xmlPreviewText.Focusable = true;
+        _xmlPreviewText.IsTabStop = true;
+        _applyXmlPreviewButton.IsVisible = false;
+
+        if (_mainToolbar.Child is not DockPanel toolbar)
+            return;
+
+        toolbar.Children.Clear();
+        var title = new TextBlock
+        {
+            Text = isBuiltIn ? $"View {_tacticsEditorName}" : $"Edit {_tacticsEditorName}",
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        toolbar.Children.Add(title);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        DockPanel.SetDock(buttons, Dock.Right);
+
+        var closeButton = new Button { Content = isBuiltIn ? "Close" : "Cancel", MinWidth = 90 };
+        closeButton.Click += async (_, _) => await RequestCloseTacticsActionEditorAsync();
+        buttons.Children.Add(closeButton);
+
+        if (!isBuiltIn)
+        {
+            var saveButton = new Button
+            {
+                Content = "Save",
+                MinWidth = 90,
+                Background = Brush.Parse("#2b7a0b")
+            };
+            saveButton.Click += async (_, _) => await SaveTacticsActionEditorAsync();
+            buttons.Children.Add(saveButton);
+        }
+
+        toolbar.Children.Add(buttons);
+    }
+
+    private void SortTacticPriorityReferencesForSave()
+    {
+        foreach (var definition in _tacticsEditorTacticDefinitions)
+        {
+            var priorities = definition.Actions
+                .Where(reference => !reference.Probability.HasValue)
+                .OrderByDescending(reference => reference.Priority ?? int.MinValue)
+                .ToList();
+            var probabilities = definition.Actions
+                .Where(reference => reference.Probability.HasValue)
+                .ToList();
+
+            definition.Actions.Clear();
+            definition.Actions.AddRange(priorities);
+            definition.Actions.AddRange(probabilities);
+        }
+    }
+
+    private XDocument BuildTacticsActionEditorDocument(bool validateSerializedActions = true)
+    {
+        if (_tacticsEditorDocument?.Root == null || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+            return new XDocument(new XElement("tactics"));
+
+        var syntheticUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+        if (syntheticUnit == null)
+            return new XDocument(_tacticsEditorDocument);
+
+        // Serialize from the currently rendered shared action widgets into a fresh
+        // temporary unit. The synthetic backing unit can be rebuilt or cleared by
+        // normal editor refreshes, so it must not be treated as the authoritative
+        // save source.
+        var serializedUnit = new XElement("unit", new XAttribute("name", "__tactics_action_save__"));
+        ApplyCurrentEdits(serializedUnit);
+        var updated = new XDocument(_tacticsEditorDocument);
+        var root = updated.Root ?? new XElement("tactics");
+        if (updated.Root == null)
+            updated.Add(root);
+
+        var existingActions = root.Elements()
+            .Where(element => element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var insertionAnchor = existingActions.FirstOrDefault();
+        var serializedActions = serializedUnit.Elements()
+            .Where(element =>
+                element.Name.LocalName.Equals("protoaction", StringComparison.OrdinalIgnoreCase) ||
+                element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase))
+            .Select(element =>
+            {
+                var action = new XElement(element) { Name = "action" };
+                return action;
+            })
+            .ToList();
+
+        // Never replace a non-empty tactics file with an empty action collection
+        // while action widgets are visibly open. This turns a destructive silent
+        // save into a clear error and preserves the existing file on disk.
+        if (validateSerializedActions && _protoActionWidgets.Count > 0 && serializedActions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The tactics actions could not be serialized. The existing tactics file was not changed.");
+        }
+
+        if (insertionAnchor != null)
+        {
+            insertionAnchor.AddBeforeSelf(serializedActions);
+            foreach (var element in existingActions)
+                element.Remove();
+        }
+        else
+        {
+            root.AddFirst(serializedActions);
+        }
+
+        ReplaceTacticElements(root);
+        return updated;
+    }
+
+    private async Task SaveTacticsActionEditorAsync()
+    {
+        if (_isReadOnly || _saveTacticsEditorDocumentAsync == null)
+            return;
+
+        var names = _protoActionWidgets
+            .Select(state => state.NameAcb.Text?.Trim() ?? "")
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+        if (names.Count != names.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+        {
+            var duplicatePrompt = new Prompt(PromptType.Error, "Duplicate action name", "Each tactics action must have a unique name.");
+            await duplicatePrompt.ShowDialog(this);
+            return;
+        }
+
+        if (_protoActionWidgets.Any(state => string.IsNullOrWhiteSpace(state.NameAcb.Text) || string.IsNullOrWhiteSpace(state.TypeAcb.Text)))
+        {
+            var requiredPrompt = new Prompt(PromptType.Error, "Missing action data", "Every action requires both a Name and a Type.");
+            await requiredPrompt.ShowDialog(this);
+            return;
+        }
+
+        foreach (var definition in _tacticsEditorTacticDefinitions)
+        {
+            if (string.IsNullOrWhiteSpace(definition.Name))
+            {
+                var prompt = new Prompt(PromptType.Error, "Missing tactic name", "Every tactic requires a name.");
+                await prompt.ShowDialog(this);
+                return;
+            }
+
+            foreach (var reference in definition.Actions)
+            {
+                if (string.IsNullOrWhiteSpace(reference.ActionName))
+                {
+                    var prompt = new Prompt(PromptType.Error, "Missing action reference", $"Every action reference in tactic '{definition.Name}' requires an action name.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+                if (reference.AttributeMode == "Priority" &&
+                    !string.IsNullOrWhiteSpace(reference.AttributeValueText) &&
+                    (!int.TryParse(reference.AttributeValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var priority) || priority < 0 || priority > 100))
+                {
+                    var prompt = new Prompt(PromptType.Error, "Invalid priority", $"Priority for '{reference.ActionName}' must be an integer from 0 to 100.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+                if (reference.AttributeMode == "Probability" &&
+                    (!int.TryParse(reference.AttributeValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var probability) || probability < 0 || probability > 100))
+                {
+                    var prompt = new Prompt(PromptType.Error, "Invalid probability", $"Probability for '{reference.ActionName}' must be an integer from 0 to 100.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+            }
+
+            foreach (var attackPriority in definition.AttackPriorities)
+            {
+                if (string.IsNullOrWhiteSpace(attackPriority.TargetType) ||
+                    !decimal.TryParse(attackPriority.BonusFactorText, NumberStyles.Float, CultureInfo.InvariantCulture, out var bonusFactor) ||
+                    bonusFactor < 0 || bonusFactor > 100)
+                {
+                    var prompt = new Prompt(PromptType.Error, "Invalid attack priority", $"Attack priority entries in tactic '{definition.Name}' require a target type and a bonus factor from 0 to 100.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+            }
+
+            foreach (var armor in definition.ArmorOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(armor.Type) || string.IsNullOrWhiteSpace(armor.ValueText) ||
+                    !decimal.TryParse(armor.ValueText, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                {
+                    var prompt = new Prompt(PromptType.Error, "Invalid armor override", $"Armor override entries in tactic '{definition.Name}' require both a type and numeric value.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+            }
+        }
+
+        try
+        {
+            SortTacticPriorityReferencesForSave();
+            var updated = BuildTacticsActionEditorDocument();
+            await _saveTacticsEditorDocumentAsync(updated);
+            _tacticsEditorDocument = new XDocument(updated);
+
+            // Keep the editor's backing unit synchronized with the document that
+            // was actually written. Subsequent saves in the same window therefore
+            // start from the committed action set rather than stale synthetic XML.
+            if (_modXmlRoot != null && !string.IsNullOrWhiteSpace(_currentUnitName))
+            {
+                var backingUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+                if (backingUnit != null)
+                {
+                    var committedActions = updated.Root?.Elements()
+                        .Where(element => element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase))
+                        .Select(ProtoXmlHandler.ParseProtoActionLikeElement)
+                        .ToList() ?? [];
+                    ProtoXmlHandler.SetProtoActions(
+                        backingUnit,
+                        committedActions.Select(CloneForSyntheticProtoAction));
+                }
+            }
+
+            // Keep the visible priority rows in the same order that was written
+            // to XML. Previously the model was sorted on Save, but the UI only
+            // reflected that order after another Add Action rebuild.
+            _rebuildTacticsPriorityRows?.Invoke();
+
+            _isDirty = false;
+            _statusMessage.Text = "Tactics saved.";
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to save tactics", ex.Message);
+            await prompt.ShowDialog(this);
+        }
+    }
+
+    private bool HasUnsavedTacticsEditorChanges()
+    {
+        if (_isReadOnly || !_isDirty)
+            return false;
+
+        // Some editor controls can raise a delayed change notification after a
+        // successful tactics save (for example after a dynamic row rebuild).
+        // The saved document is authoritative: only warn on close when the
+        // current serialized editor state actually differs from it.
+        try
+        {
+            var current = BuildTacticsActionEditorDocument();
+            return !XNode.DeepEquals(current, _tacticsEditorDocument);
+        }
+        catch
+        {
+            // If the current editor state cannot be serialized, keep the safe
+            // dirty-state behavior and ask before discarding it.
+            return true;
+        }
+    }
+
+    private async Task RequestCloseTacticsActionEditorAsync()
+    {
+        if (!HasUnsavedTacticsEditorChanges())
+        {
+            _isDirty = false;
+            _allowTacticsEditorClose = true;
+            Close();
+            return;
+        }
+
+        if (_tacticsEditorClosePromptOpen)
+            return;
+        _tacticsEditorClosePromptOpen = true;
+        try
+        {
+            var prompt = new Prompt(PromptType.Confirm, "Discard tactics changes?", "Close this tactics editor without saving your changes?");
+            await prompt.ShowDialog(this);
+            if (!prompt.Confirmed)
+                return;
+            _allowTacticsEditorClose = true;
+            Close();
+        }
+        finally
+        {
+            _tacticsEditorClosePromptOpen = false;
+        }
     }
 
     private async Task InitializeProtoEditorAsync()
@@ -1238,6 +2900,30 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void UpdateXmlPreview(bool force = false)
     {
+        if (_isTacticsActionEditorMode)
+        {
+            try
+            {
+                var previewDocument = BuildTacticsActionEditorDocument(validateSerializedActions: false);
+                var previewRoot = previewDocument.Root;
+                _xmlPreviewText.IsEnabled = previewRoot != null;
+                _xmlPreviewText.IsReadOnly = true;
+                _xmlPreviewText.Focusable = true;
+                _xmlPreviewText.IsTabStop = true;
+                _xmlPreviewText.Opacity = 1;
+                _xmlPreviewText.Background = Brush.Parse("#080808");
+                _xmlPreviewText.Foreground = Brush.Parse("#d9d9d9");
+                _applyXmlPreviewButton.IsVisible = false;
+                SetXmlPreviewText(previewRoot == null ? "" : FormatXmlForPreview(previewRoot));
+            }
+            catch
+            {
+                // Keep the last valid preview while the user is in the middle of
+                // entering an incomplete action value.
+            }
+            return;
+        }
+
         var modUnit = _modXmlRoot != null && !string.IsNullOrWhiteSpace(_currentUnitName)
             ? ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName)
             : null;
@@ -1269,7 +2955,232 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_showStoredRawXml && !_isReadOnly && _modXmlRoot != null)
             ApplyCurrentEdits(previewUnit);
 
+        RefreshTacticsOnlyActionTabMarkers(previewUnit);
         SetXmlPreviewText(FormatXmlForPreview(previewUnit));
+    }
+
+    private bool IsTacticsBackedProtoAction(ProtoAction action)
+    {
+        var actionName = action.Name?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(actionName) || !string.IsNullOrWhiteSpace(action.Type))
+            return false;
+
+        return _currentUnitTacticsActionTypeMap.TryGetValue(actionName, out var tacticsType) &&
+               !string.IsNullOrWhiteSpace(tacticsType);
+    }
+
+    private static Control CreateProtoActionSelectorContent(ProtoActionWidgetState state, string actionName)
+    {
+        if (!state.IsCurrentTacticsAction)
+            return new TextBlock { Text = actionName, VerticalAlignment = VerticalAlignment.Center };
+
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        row.Children.Add(new TextBlock { Text = actionName, VerticalAlignment = VerticalAlignment.Center });
+
+        var source = state.HasTacticsOnlyOverrides
+            ? ProtoActionValueSource.ProtoOverride
+            : ProtoActionValueSource.TacticsInherited;
+        var dot = CreateProtoActionSourceMarker(source);
+        if (dot != null)
+        {
+            dot.Margin = new Thickness(0);
+            dot.VerticalAlignment = VerticalAlignment.Center;
+            dot.HorizontalAlignment = HorizontalAlignment.Center;
+            ToolTip.SetTip(dot, state.HasTacticsOnlyOverrides
+                ? "This tactics action has protoaction overrides"
+                : "Action inherited from tactics");
+            row.Children.Add(dot);
+        }
+
+        return row;
+    }
+
+    private void RefreshTacticsOnlyActionTabMarkers(XElement previewUnit)
+    {
+        foreach (var state in _protoActionWidgets)
+        {
+            var actionName = state.NameAcb.Text?.Trim() ?? "";
+            state.IsCurrentTacticsAction = TryGetCurrentUnitTacticsAction(actionName, out var tacticsAction);
+
+            var previewAction = state.IsCurrentTacticsAction
+                ? ProtoXmlHandler.GetProtoActions(previewUnit)
+                    .FirstOrDefault(action => string.Equals(
+                        action.Name?.Trim() ?? "",
+                        actionName,
+                        StringComparison.OrdinalIgnoreCase))
+                : null;
+            var hasOverride = previewAction != null &&
+                              tacticsAction != null &&
+                              HasActualTacticsOverride(previewAction, tacticsAction);
+
+            state.HasTacticsOnlyOverrides = hasOverride;
+            if (state.ActionSelectorButton != null)
+                state.ActionSelectorButton.Content = CreateProtoActionSelectorContent(state, actionName);
+        }
+    }
+
+    private static bool HasSerializableProtoActionOverride(ProtoAction action)
+    {
+        // Name and type identify the tactics action; neither is an editable override.
+        // Ignore them even if a source/parser path leaves them in AdditionalElements.
+        var hasAdditionalOverride = action.AdditionalElements.Any(element =>
+            !element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+            !element.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase));
+
+        return !string.IsNullOrWhiteSpace(action.Rof) ||
+               !string.IsNullOrWhiteSpace(action.MaxRange) ||
+               action.Damages.Count > 0 ||
+               action.DamageBonuses.Count > 0 ||
+               hasAdditionalOverride;
+    }
+
+    private static bool HasActualTacticsOverride(ProtoAction protoAction, ProtoAction tacticsAction)
+    {
+        if (!string.IsNullOrWhiteSpace(protoAction.Rof) &&
+            !string.IsNullOrWhiteSpace(tacticsAction.Rof) &&
+            !ProtoActionSourceValuesEqual(protoAction.Rof, tacticsAction.Rof))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(protoAction.MaxRange) &&
+            !string.IsNullOrWhiteSpace(tacticsAction.MaxRange) &&
+            !ProtoActionSourceValuesEqual(protoAction.MaxRange, tacticsAction.MaxRange))
+        {
+            return true;
+        }
+
+        foreach (var protoDamage in protoAction.Damages)
+        {
+            var tacticsDamage = tacticsAction.Damages.FirstOrDefault(item =>
+                item.DamageType.Equals(protoDamage.DamageType, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(tacticsDamage.DamageType) &&
+                !ProtoActionSourceValuesEqual(protoDamage.Amount, tacticsDamage.Amount))
+            {
+                return true;
+            }
+        }
+
+        foreach (var protoBonus in protoAction.DamageBonuses)
+        {
+            var tacticsBonus = tacticsAction.DamageBonuses.FirstOrDefault(item =>
+                item.UnitType.Equals(protoBonus.UnitType, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(tacticsBonus.UnitType) &&
+                !ProtoActionSourceValuesEqual(protoBonus.Multiplier, tacticsBonus.Multiplier))
+            {
+                return true;
+            }
+        }
+
+        var protoAdditional = protoAction.AdditionalElements
+            .Where(IsProtoActionOverridePayloadElement)
+            .ToList();
+        var tacticsAdditional = tacticsAction.AdditionalElements
+            .Where(IsProtoActionOverridePayloadElement)
+            .ToList();
+
+        foreach (var protoElement in protoAdditional)
+        {
+            var sameTagProtoCount = protoAdditional.Count(element =>
+                element.Name.LocalName.Equals(protoElement.Name.LocalName, StringComparison.OrdinalIgnoreCase));
+            var tacticsCandidates = tacticsAdditional
+                .Where(element => element.Name.LocalName.Equals(
+                    protoElement.Name.LocalName,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (tacticsCandidates.Count == 0)
+                continue;
+
+            var keyAttribute = GetProtoActionOverrideKeyAttribute(protoElement);
+            if (!string.IsNullOrWhiteSpace(keyAttribute))
+            {
+                var keyValue = protoElement.Attribute(keyAttribute)?.Value?.Trim() ?? "";
+                var matchingCandidate = tacticsCandidates.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate.Attribute(keyAttribute)?.Value?.Trim() ?? "",
+                        keyValue,
+                        StringComparison.OrdinalIgnoreCase));
+                if (matchingCandidate != null &&
+                    !ProtoActionOverrideElementsEqual(protoElement, matchingCandidate))
+                {
+                    return true;
+                }
+
+                // A new keyed entry supplements tactics rather than overriding it.
+                continue;
+            }
+
+            if (tacticsCandidates.Any(candidate => ProtoActionOverrideElementsEqual(protoElement, candidate)))
+                continue;
+
+            // A singleton field has one logical value, so a different proto value is an override.
+            // Unmatched entries in repeated unkeyed lists are additive and remain tactics-inherited.
+            if (sameTagProtoCount == 1 && tacticsCandidates.Count == 1)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsProtoActionOverridePayloadElement(XElement element)
+        => !element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+           !element.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetProtoActionOverrideKeyAttribute(XElement element)
+    {
+        foreach (var candidate in new[] { "type", "targettype", "unittype", "protoid", "action", "name" })
+        {
+            if (element.Attributes().Any(attribute =>
+                    attribute.Name.LocalName.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+
+        return "";
+    }
+
+    private static bool ProtoActionOverrideElementsEqual(XElement left, XElement right)
+    {
+        if (!left.Name.LocalName.Equals(right.Name.LocalName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var leftAttributes = left.Attributes()
+            .ToDictionary(attribute => attribute.Name.LocalName, attribute => attribute.Value?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
+        var rightAttributes = right.Attributes()
+            .ToDictionary(attribute => attribute.Name.LocalName, attribute => attribute.Value?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
+        if (leftAttributes.Count != rightAttributes.Count)
+            return false;
+
+        foreach (var attribute in leftAttributes)
+        {
+            if (!rightAttributes.TryGetValue(attribute.Key, out var rightValue) ||
+                !ProtoActionSourceValuesEqual(attribute.Value, rightValue))
+            {
+                return false;
+            }
+        }
+
+        var leftChildren = left.Elements().ToList();
+        var rightChildren = right.Elements().ToList();
+        if (leftChildren.Count != rightChildren.Count)
+            return false;
+
+        if (leftChildren.Count == 0)
+            return ProtoActionSourceValuesEqual(left.Value, right.Value);
+
+        for (int i = 0; i < leftChildren.Count; i++)
+        {
+            if (!ProtoActionOverrideElementsEqual(leftChildren[i], rightChildren[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static string FormatXmlForPreview(XElement unit)
@@ -1359,7 +3270,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
-            Save_Click(this, e);
+            if (_isTacticsActionEditorMode)
+                _ = SaveTacticsActionEditorAsync();
+            else
+                Save_Click(this, e);
             e.Handled = true;
             return;
         }
@@ -1465,7 +3379,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _sectionsFlyoutPanel.Children.Add(button);
         }
 
-        var hasSections = _sectionJumpTargets.Count > 0;
+        var hasSections = !_isTacticsActionEditorMode && _sectionJumpTargets.Count > 0;
         _sectionsButton.IsVisible = hasSections;
         _sectionsButton.IsEnabled = hasSections;
     }
@@ -4186,6 +6100,364 @@ public partial class ProtoEditorWindow : SimpleWindow
         return false;
     }
 
+    private static bool ProtoActionSourceValuesEqual(string leftValue, string rightValue)
+    {
+        var left = leftValue?.Trim() ?? "";
+        var right = rightValue?.Trim() ?? "";
+        if (string.Equals(left, right, StringComparison.Ordinal))
+            return true;
+
+        return decimal.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNumber) &&
+               decimal.TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNumber) &&
+               leftNumber == rightNumber;
+    }
+
+    private static ProtoActionValueSource GetProtoActionValueSource(
+        string currentValue,
+        string protoValue,
+        string tacticsValue)
+    {
+        var current = currentValue?.Trim() ?? "";
+        var proto = protoValue?.Trim() ?? "";
+        var tactics = tacticsValue?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(tactics))
+            return ProtoActionValueSource.ProtoOnly;
+
+        // An explicit proto value is only an override when its effective value
+        // actually differs from tactics. This comparison is numeric-aware, so
+        // equivalent forms such as 12, 12.0 and 12.000000 stay inherited.
+        return ProtoActionSourceValuesEqual(current, tactics)
+            ? ProtoActionValueSource.TacticsInherited
+            : ProtoActionValueSource.ProtoOverride;
+    }
+
+    private static Border? CreateProtoActionSourceMarker(
+        ProtoActionValueSource source,
+        string tacticsValue = "")
+    {
+        if (source == ProtoActionValueSource.ProtoOnly)
+            return null;
+
+        var inherited = source == ProtoActionValueSource.TacticsInherited;
+        var marker = new Border
+        {
+            Width = 10,
+            Height = 10,
+            MinWidth = 10,
+            MinHeight = 10,
+            CornerRadius = new CornerRadius(5),
+            Background = Brush.Parse(inherited ? "#28d7e5" : "#f59e0b"),
+            Margin = new Thickness(0, 0, 3, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Tag = "protoaction-source-marker"
+        };
+        ToolTip.SetTip(marker, inherited
+            ? "Inherited from tactics"
+            : string.IsNullOrWhiteSpace(tacticsValue)
+                ? "Overrides tactics"
+                : $"Overrides tactics value: {tacticsValue}");
+        return marker;
+    }
+
+    private static string GetProtoActionSimpleSourceValue(ProtoAction action, string tag)
+    {
+        if (tag.Equals("rof", StringComparison.OrdinalIgnoreCase))
+            return action.Rof?.Trim() ?? "";
+        if (tag.Equals("maxrange", StringComparison.OrdinalIgnoreCase))
+            return action.MaxRange?.Trim() ?? "";
+        return ProtoXmlHandler.GetProtoActionSimpleFieldValue(action, tag)?.Trim() ?? "";
+    }
+
+    private bool IsProtoActionSimpleFieldDefinedInTactics(ProtoActionWidgetState state, string tag)
+    {
+        return TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction) &&
+               !string.IsNullOrWhiteSpace(GetProtoActionSimpleSourceValue(tacticsAction, tag));
+    }
+
+    private bool IsProtoActionStructuredFieldDefinedInTactics(ProtoActionWidgetState state, string tag)
+    {
+        return TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction) &&
+               ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsAction, tag).Count > 0;
+    }
+
+    private async Task<bool> BlockInheritedProtoActionRemovalAsync(
+        ProtoActionWidgetState state,
+        IEnumerable<string> simpleTags,
+        string displayName)
+    {
+        var inheritedTags = simpleTags
+            .Where(tag => IsProtoActionSimpleFieldDefinedInTactics(state, tag))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (inheritedTags.Count == 0)
+            return false;
+
+        await new Prompt(
+            PromptType.Error,
+            "Inherited Attribute",
+            $"{displayName} is defined by the linked tactics file and cannot be deleted from the protoaction. You may override its values, but the tactics value will always remain.")
+            .ShowDialog(this);
+        return true;
+    }
+
+    private async Task<bool> BlockInheritedStructuredProtoActionRemovalAsync(
+        ProtoActionWidgetState state,
+        string tag,
+        string displayName)
+    {
+        if (!IsProtoActionStructuredFieldDefinedInTactics(state, tag))
+            return false;
+
+        await new Prompt(
+            PromptType.Error,
+            "Inherited Attribute",
+            $"{displayName} is defined by the linked tactics file and cannot be deleted from the protoaction. You may override its values, but the tactics entries will always remain.")
+            .ShowDialog(this);
+        return true;
+    }
+
+    private void RemoveProtoActionSourceMarkers(ProtoActionWidgetState state)
+    {
+        foreach (var (control, host) in state.SourceMarkerHosts.ToList())
+        {
+            if (host.Parent is not Panel parent)
+                continue;
+
+            var index = parent.Children.IndexOf(host);
+            host.Children.Remove(control);
+            parent.Children.Remove(host);
+            if (parent is Grid)
+            {
+                Grid.SetRow(control, Grid.GetRow(host));
+                Grid.SetRowSpan(control, Grid.GetRowSpan(host));
+                Grid.SetColumn(control, Grid.GetColumn(host));
+                Grid.SetColumnSpan(control, Grid.GetColumnSpan(host));
+            }
+            if (state.SourceMarkerOriginalMargins.TryGetValue(control, out var originalMargin))
+                control.Margin = originalMargin;
+            parent.Children.Insert(index >= 0 ? index : parent.Children.Count, control);
+        }
+        state.SourceMarkerHosts.Clear();
+        state.SourceMarkerOriginalMargins.Clear();
+    }
+
+    private void AddProtoActionSourceMarker(
+        ProtoActionWidgetState state,
+        Control control,
+        ProtoActionValueSource source,
+        string tacticsValue = "")
+    {
+        var marker = CreateProtoActionSourceMarker(source, tacticsValue);
+        if (marker == null || control.Parent is not Panel parent)
+            return;
+
+        var index = parent.Children.IndexOf(control);
+        var controlMargin = control.Margin;
+        var hasExplicitWidth = !double.IsNaN(control.Width);
+        var host = new Grid
+        {
+            // Fixed-width row editors (for example Rate values) should retain their
+            // explicit width. Grid-hosted core fields such as ROF and Max Range must
+            // keep stretching to their original column; otherwise the wrapper sizes
+            // itself from the text content and places identical markers differently.
+            HorizontalAlignment = hasExplicitWidth
+                ? HorizontalAlignment.Left
+                : control.HorizontalAlignment,
+            VerticalAlignment = VerticalAlignment.Center,
+            Width = hasExplicitWidth ? control.Width : double.NaN,
+            MinWidth = control.MinWidth,
+            MaxWidth = control.MaxWidth,
+            Margin = controlMargin
+        };
+        if (parent is Grid)
+        {
+            Grid.SetRow(host, Grid.GetRow(control));
+            Grid.SetRowSpan(host, Grid.GetRowSpan(control));
+            Grid.SetColumn(host, Grid.GetColumn(control));
+            Grid.SetColumnSpan(host, Grid.GetColumnSpan(control));
+        }
+
+        parent.Children.Remove(control);
+        state.SourceMarkerOriginalMargins[control] = controlMargin;
+        control.Margin = new Thickness(0);
+        var markerRightInset = control switch
+        {
+            ComboBox => 24,
+            AutoCompleteBox or AssetPathEditor => 4,
+            _ => 3,
+        };
+        marker.Margin = new Thickness(0, 0, markerRightInset, 0);
+        Grid.SetRow(control, 0);
+        Grid.SetRowSpan(control, 1);
+        Grid.SetColumn(control, 0);
+        Grid.SetColumnSpan(control, 1);
+        host.Children.Add(control);
+        Grid.SetRow(marker, 0);
+        Grid.SetColumn(marker, 0);
+        host.Children.Add(marker);
+        parent.Children.Insert(index >= 0 ? index : parent.Children.Count, host);
+        state.SourceMarkerHosts[control] = host;
+
+        if (state.SourceMarkerHandlerControls.Add(control))
+        {
+            void RefreshLater() => Dispatcher.UIThread.Post(
+                () => RefreshProtoActionSourceMarkers(state),
+                DispatcherPriority.Background);
+
+            switch (control)
+            {
+                case TextBox textBox:
+                    // Rewrapping a focused TextBox after every typed character steals focus.
+                    // Refresh the source marker after the edit is committed instead.
+                    textBox.LostFocus += (_, _) => RefreshLater();
+                    break;
+                case AutoCompleteBox autoCompleteBox:
+                    // Do not refresh on SelectionChanged. On the first typed character Avalonia can
+                    // still report the previous SelectedItem while clearing it, which causes the
+                    // marker host to be rebuilt and steals focus from the embedded TextBox.
+                    // Refreshing on LostFocus is stable for both free typing and suggestion picks.
+                    autoCompleteBox.LostFocus += (_, _) => RefreshLater();
+                    break;
+                case ComboBox comboBox:
+                    comboBox.SelectionChanged += (_, _) => RefreshLater();
+                    break;
+                case CheckBox checkBox:
+                    checkBox.IsCheckedChanged += (_, _) => RefreshLater();
+                    break;
+                case AssetPathEditor assetPathEditor:
+                    // Rebuilding the marker host on each typed character steals focus from the
+                    // embedded AutoCompleteBox. Refresh after the edit is committed instead.
+                    assetPathEditor.EditingCompleted += (_, _) => RefreshLater();
+                    break;
+            }
+        }
+    }
+
+    private static void RegisterProtoActionFlagSourceControl(
+        ProtoActionWidgetState state,
+        Control control,
+        params string[] flagTags)
+    {
+        var normalizedTags = flagTags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(tag => tag.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (normalizedTags.Length > 0)
+            state.CustomFlagSourceControls[control] = normalizedTags;
+    }
+
+    private void RefreshProtoActionSourceMarkers(ProtoActionWidgetState state)
+    {
+        RemoveProtoActionSourceMarkers(state);
+        if (!TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction))
+            return;
+
+        void MarkSimple(Control control, string tag)
+        {
+            if (!control.IsVisible)
+                return;
+            var current = ReadTextLikeControlValue(control);
+            var proto = GetProtoActionSimpleSourceValue(state.Model, tag);
+            var tactics = GetProtoActionSimpleSourceValue(tacticsAction, tag);
+            AddProtoActionSourceMarker(state, control, GetProtoActionValueSource(current, proto, tactics), tactics);
+        }
+
+        MarkSimple(state.RofTb, "rof");
+        MarkSimple(state.MaxRangeTb, "maxrange");
+        if (state.JumpAttackMinRangeTb != null)
+            MarkSimple(state.JumpAttackMinRangeTb, "minrange");
+
+        foreach (var (tag, control) in state.AdditionalFieldControls)
+            MarkSimple(control, tag);
+
+        foreach (var (control, tag) in state.MirroredSimpleSourceControls.ToList())
+            MarkSimple(control, tag);
+
+        foreach (var (control, flagTags) in state.CustomFlagSourceControls.ToList())
+        {
+            if (!control.IsVisible || flagTags.Length == 0)
+                continue;
+
+            ProtoActionValueSource source;
+            string tacticsDescription;
+            if (flagTags.Length == 1)
+            {
+                var tag = flagTags[0];
+                var tacticsValue = GetProtoActionSimpleSourceValue(tacticsAction, tag);
+                if (string.IsNullOrWhiteSpace(tacticsValue))
+                    continue;
+
+                var protoValue = GetProtoActionSimpleSourceValue(state.Model, tag);
+                var currentValue = state.SelectedFlagTags.Contains(tag) ? "1" : "0";
+                source = GetProtoActionValueSource(currentValue, protoValue, tacticsValue);
+                tacticsDescription = GetProtoActionFlagDisplayLabel(tag);
+            }
+            else
+            {
+                var tacticsTag = flagTags.FirstOrDefault(tag =>
+                    IsProtoActionFlagEnabledValue(GetProtoActionSimpleSourceValue(tacticsAction, tag))) ??
+                    flagTags.FirstOrDefault(tag =>
+                        !string.IsNullOrWhiteSpace(GetProtoActionSimpleSourceValue(tacticsAction, tag)));
+                if (string.IsNullOrWhiteSpace(tacticsTag))
+                    continue;
+
+                var protoTag = flagTags.FirstOrDefault(tag =>
+                    !string.IsNullOrWhiteSpace(GetProtoActionSimpleSourceValue(state.Model, tag)));
+                var currentTag = flagTags.FirstOrDefault(state.SelectedFlagTags.Contains);
+                source = !string.IsNullOrWhiteSpace(protoTag)
+                    ? ProtoActionValueSource.ProtoOverride
+                    : string.Equals(currentTag, tacticsTag, StringComparison.OrdinalIgnoreCase)
+                        ? ProtoActionValueSource.TacticsInherited
+                        : ProtoActionValueSource.ProtoOverride;
+                tacticsDescription = string.Join(" / ", flagTags.Select(GetProtoActionFlagDisplayLabel));
+            }
+
+            AddProtoActionSourceMarker(state, control, source, tacticsDescription);
+        }
+
+        foreach (var (tag, rows) in state.StructuredFieldRows)
+        {
+            var protoEntries = ProtoXmlHandler.GetProtoActionStructuredFieldEntries(state.Model, tag);
+            var tacticsEntries = ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsAction, tag);
+            foreach (var row in rows)
+            {
+                var current = ReadTextLikeControlValue(row.ValueTb);
+                ProtoActionStructuredFieldEntry? protoMatch;
+                ProtoActionStructuredFieldEntry? tacticsMatch;
+
+                if ((tag.Equals("rate", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("typedmaxrange", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("minrate", StringComparison.OrdinalIgnoreCase)) &&
+                    row.AttributeEditors.TryGetValue("type", out var typeEditor))
+                {
+                    var currentType = ReadTextLikeControlValue(typeEditor).Trim();
+                    protoMatch = protoEntries.FirstOrDefault(entry =>
+                        entry.Attributes.TryGetValue("type", out var entryType) &&
+                        entryType.Trim().Equals(currentType, StringComparison.OrdinalIgnoreCase));
+                    tacticsMatch = tacticsEntries.FirstOrDefault(entry =>
+                        entry.Attributes.TryGetValue("type", out var entryType) &&
+                        entryType.Trim().Equals(currentType, StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    protoMatch = protoEntries.FirstOrDefault(entry =>
+                        string.Equals(entry.Value?.Trim() ?? "", current, StringComparison.OrdinalIgnoreCase));
+                    tacticsMatch = tacticsEntries.FirstOrDefault(entry =>
+                        string.Equals(entry.Value?.Trim() ?? "", current, StringComparison.OrdinalIgnoreCase));
+                }
+
+                var source = GetProtoActionValueSource(
+                    current,
+                    protoMatch?.Value ?? "",
+                    tacticsMatch?.Value ?? "");
+                AddProtoActionSourceMarker(state, row.ValueTb, source, tacticsMatch?.Value ?? "");
+            }
+        }
+    }
+
     private static ProtoAction CreateEffectiveProtoActionSnapshot(
         ProtoAction protoAction,
         string actionName,
@@ -4306,18 +6578,26 @@ public partial class ProtoEditorWindow : SimpleWindow
             .Select(x => new XElement(x))
             .ToList();
 
-        var clearedOnHitEffects = false;
-
         foreach (var protoElement in protoElements)
         {
-            if (protoElement.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase) &&
-                !clearedOnHitEffects)
+            if (protoElement.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase))
             {
-                // OnHitEffect behaves as a complex collection override. Once proto defines any
-                // OnHitEffect entries for an action, we should render the proto collection rather
-                // than appending it on top of tactics entries.
-                merged.RemoveAll(existing => existing.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase));
-                clearedOnHitEffects = true;
+                // Tactics and proto OnHitEffects are independent entries. Keep tactics effects and
+                // append proto effects. If malformed data defines the same type in both places, the
+                // proto entry wins so the editor never renders an accidental duplicate pair.
+                var protoType = ((string?)protoElement.Attribute("type") ?? "").Trim();
+                if (!string.IsNullOrWhiteSpace(protoType))
+                {
+                    merged.RemoveAll(existing =>
+                        existing.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(
+                            ((string?)existing.Attribute("type") ?? "").Trim(),
+                            protoType,
+                            StringComparison.OrdinalIgnoreCase));
+                }
+
+                merged.Add(new XElement(protoElement));
+                continue;
             }
 
             merged.RemoveAll(existing => ProtoActionAdditionalElementOverrides(protoElement, existing));
@@ -4393,9 +6673,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         var normalizedTactics = tacticsValue?.Trim() ?? "";
         var normalizedOriginal = originalProtoValue?.Trim() ?? "";
 
-        if (string.Equals(normalizedCurrent, normalizedTactics, StringComparison.Ordinal))
+        // Compare semantic values rather than compact editor text. Numeric values such as
+        // 1, 1.0 and 1.000 represent the same inherited tactics value.
+        if (ProtoActionSourceValuesEqual(normalizedCurrent, normalizedTactics))
         {
-            return string.Equals(normalizedOriginal, normalizedCurrent, StringComparison.Ordinal)
+            return ProtoActionSourceValuesEqual(normalizedOriginal, normalizedCurrent)
                 ? normalizedCurrent
                 : "";
         }
@@ -4886,14 +7168,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!string.IsNullOrWhiteSpace(currentValue))
             return currentValue;
 
-        if (tag.Equals("rof", StringComparison.OrdinalIgnoreCase))
-            return "1";
-
-        if (tag.Equals("maxrange", StringComparison.OrdinalIgnoreCase) ||
-            tag.Equals("devotiontime", StringComparison.OrdinalIgnoreCase))
-        {
+        if (tag.Equals("devotiontime", StringComparison.OrdinalIgnoreCase))
             return "0";
-        }
 
         if (tag.Equals("devotioncombatxpreward", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("devotionfavorreward", StringComparison.OrdinalIgnoreCase))
@@ -5075,6 +7351,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 RenderProtoActionFlags(state);
                 MarkDirty();
             };
+            state.CustomFlagControls["keepalive"] = keepAliveCheckBox;
+            RegisterProtoActionFlagSourceControl(state, keepAliveCheckBox, "keepalive");
             Grid.SetColumn(keepAliveCheckBox, 4);
             state.CoreFieldsGrid.Children.Add(keepAliveCheckBox);
         }
@@ -5391,6 +7669,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            state.CustomFlagControls["linearshockwave"] = linearShockwaveCheckBox;
+            RegisterProtoActionFlagSourceControl(state, linearShockwaveCheckBox, "linearshockwave");
             linearShockwaveCheckBox.IsCheckedChanged += async (_, _) =>
             {
                 if (_isPopulating)
@@ -5415,6 +7695,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsEnabled = !_isReadOnly,
             VerticalAlignment = VerticalAlignment.Center
         };
+        var invertedWorkOnFrozenTag = GetInvertedDefaultProtoActionFlagTag("workonfrozenunits");
+        state.CustomFlagControls[invertedWorkOnFrozenTag] = workOnFrozenUnitsCheckBox;
+        RegisterProtoActionFlagSourceControl(state, workOnFrozenUnitsCheckBox, invertedWorkOnFrozenTag);
         workOnFrozenUnitsCheckBox.IsCheckedChanged += async (_, _) =>
         {
             if (_isPopulating)
@@ -5444,6 +7727,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            state.CustomFlagControls["killoninvalidland"] = killOnInvalidLandCheckBox;
+            RegisterProtoActionFlagSourceControl(state, killOnInvalidLandCheckBox, "killoninvalidland");
             killOnInvalidLandCheckBox.IsCheckedChanged += async (_, _) =>
             {
                 if (_isPopulating)
@@ -5596,6 +7881,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         RenderProtoActionFlags(state);
         RenderProtoActionOptionalFields(state, currentSimpleValues, currentStructuredValues);
         MoveLikeBonusAttachmentRowsBelowRate(state, actionType);
+        RefreshProtoActionSourceMarkers(state);
     }
 
     private static void MoveLikeBonusAttachmentRowsBelowRate(ProtoActionWidgetState state, string actionType)
@@ -6573,6 +8859,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Width = 190
             };
+            RegisterProtoActionFlagSourceControl(state, modeCombo, "handlogic", "rangedlogic");
             modeCombo.SelectionChanged += async (_, _) =>
             {
                 if (_isPopulating || !await CheckStartLocalMod() || modeCombo.SelectedItem is not string selectedMode)
@@ -6684,6 +8971,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(18, 4, 0, 4)
                 };
+                state.CustomFlagControls["defaultattack"] = defaultAttackCheckBox;
+                RegisterProtoActionFlagSourceControl(state, defaultAttackCheckBox, "defaultattack");
                 defaultAttackCheckBox.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating || !await CheckStartLocalMod())
@@ -6856,6 +9145,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(12, 4, 0, 4)
                     };
+                    state.CustomFlagControls["volleymode"] = volleyModeCheckBox;
+                    RegisterProtoActionFlagSourceControl(state, volleyModeCheckBox, "volleymode");
                     volleyModeCheckBox.IsCheckedChanged += async (_, _) =>
                     {
                         if (_isPopulating || !await CheckStartLocalMod())
@@ -7026,6 +9317,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 foreach (var (flagTag, label) in ballisticFlagOptions.Where(option => state.SelectedFlagTags.Contains(option.Tag)))
                 {
+                    var tacticsFlagValue = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsFlagAction)
+                        ? GetProtoActionSimpleSourceValue(tacticsFlagAction, flagTag)
+                        : "";
+                    var protoFlagValue = GetProtoActionSimpleSourceValue(state.Model, flagTag);
+                    var flagSource = GetProtoActionValueSource("1", protoFlagValue, tacticsFlagValue);
                     var flagChip = CreateChip(label, async () =>
                     {
                         if (!await CheckStartLocalMod())
@@ -7035,7 +9331,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderProtoActionFlags(state);
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
-                    });
+                    }, flagSource, tacticsFlagValue);
                     flagChip.Margin = new Thickness(4, 0, 0, 0);
                     ballisticFlagsRow.Children.Add(flagChip);
                 }
@@ -7973,6 +10269,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IsEnabled = !_isReadOnly,
                         Width = 220
                     };
+                    RegisterProtoActionFlagSourceControl(state, subtypeCombo, "devotionneversacrifice");
                     subtypeCombo.SelectionChanged += async (_, _) =>
                     {
                         if (_isPopulating)
@@ -8019,6 +10316,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -8424,6 +10722,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var targetEnemyCheckBox = new CheckBox { Content = "Enemy", IsChecked = state.SelectedFlagTags.Contains("targetenemy"), IsEnabled = !_isReadOnly };
                 var includeNatureCheckBox = new CheckBox { Content = "Include Nature", IsChecked = includeNature, IsEnabled = !_isReadOnly };
                 var includeAlliesCheckBox = new CheckBox { Content = "Include Allies", IsChecked = state.SelectedFlagTags.Contains("includeally"), IsEnabled = !_isReadOnly };
+                state.CustomFlagControls["exclusive"] = exclusiveCheckBox;
+                RegisterProtoActionFlagSourceControl(state, exclusiveCheckBox, "exclusive");
+                state.CustomFlagControls["targetenemy"] = targetEnemyCheckBox;
+                RegisterProtoActionFlagSourceControl(state, targetEnemyCheckBox, "targetenemy");
+                state.CustomFlagControls["includenature"] = includeNatureCheckBox;
+                RegisterProtoActionFlagSourceControl(state, includeNatureCheckBox, "includenature");
+                state.CustomFlagControls["includeally"] = includeAlliesCheckBox;
+                RegisterProtoActionFlagSourceControl(state, includeAlliesCheckBox, "includeally");
+                RegisterProtoActionFlagSourceControl(state, targetSelfCheckBox, "targetenemy");
                 var targetRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Margin = new Thickness(18, 0, 0, 2), IsVisible = inverseAura };
                 targetRow.Children.Add(new TextBlock { Text = "Targets:", VerticalAlignment = VerticalAlignment.Center });
                 targetRow.Children.Add(targetSelfCheckBox);
@@ -9286,10 +11593,27 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var row = new WrapPanel { Orientation = Orientation.Horizontal };
                         row.Children.Add(new TextBlock { Text = "Type:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 8, 4) });
                         var initialType = entry != null && entry.Attributes.TryGetValue("type", out var entryType) ? entryType : "";
+                        var tacticsRateEntry = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsRateAction)
+                            ? ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsRateAction, "rate")
+                                .FirstOrDefault(candidate => candidate.Attributes.TryGetValue("type", out var candidateType) &&
+                                    candidateType.Equals(initialType, StringComparison.OrdinalIgnoreCase))
+                            : null;
+                        var protoRateEntry = ProtoXmlHandler.GetProtoActionStructuredFieldEntries(state.Model, "rate")
+                            .FirstOrDefault(candidate => candidate.Attributes.TryGetValue("type", out var candidateType) &&
+                                candidateType.Equals(initialType, StringComparison.OrdinalIgnoreCase));
+                        var isInheritedRateType = tacticsRateEntry != null;
                         var typeEditor = new AutoCompleteBox { Text = initialType, FilterMode = AutoCompleteFilterMode.Contains, Width = 180, IsEnabled = !_isReadOnly };
                         ConfigureStrictSuggestionAutoComplete(typeEditor, rateSuggestions, initialType);
                         typeEditor.TextChanged += async (_, _) => { if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
                         row.Children.Add(typeEditor);
+                        if (tacticsRateEntry != null)
+                        {
+                            AddProtoActionSourceMarker(
+                                state,
+                                typeEditor,
+                                GetProtoActionValueSource(initialType, protoRateEntry == null ? "" : initialType, initialType),
+                                initialType);
+                        }
                         var valueEditor = new TextBox { Text = entry?.Value ?? "1.0", Width = 90, IsEnabled = !_isReadOnly };
                         AttachProtoActionDecimalBehavior(valueEditor);
                         valueEditor.TextChanged += async (_, _) =>
@@ -9306,6 +11630,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var removeButton = new Button { Classes = { "remove-button" }, Margin = new Thickness(6, 0, 0, 0) };
                             removeButton.Click += async (_, _) =>
                             {
+                                if (isInheritedRateType)
+                                {
+                                    await new Prompt(
+                                        PromptType.Error,
+                                        "Inherited Attribute",
+                                        $"Rate type '{initialType}' is defined by the linked tactics file and cannot be removed. You may override its value.")
+                                        .ShowDialog(this);
+                                    return;
+                                }
                                 if (!await CheckStartLocalMod()) return;
                                 state.StructuredFieldRows["rate"].Remove(rowState);
                                 rateRowsPanel.Children.Remove(row);
@@ -9370,19 +11703,41 @@ public partial class ProtoEditorWindow : SimpleWindow
                     };
                     ConfigureStrictSuggestionAutoComplete(picker, suggestions.Where(value => !values.Contains(value, StringComparer.OrdinalIgnoreCase)).ToList(), "");
                     row.Children.Add(picker);
+                    var tacticsEntries = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsListAction)
+                        ? ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsListAction, tag)
+                        : [];
                     foreach (var value in values)
                     {
                         var selectedValue = value;
+                        var isInherited = tacticsEntries.Any(entry => string.Equals(
+                            entry.Value?.Trim() ?? "",
+                            selectedValue,
+                            StringComparison.OrdinalIgnoreCase));
+                        var source = isInherited
+                            ? ProtoActionValueSource.TacticsInherited
+                            : ProtoActionValueSource.ProtoOnly;
+                        var tacticsValue = isInherited ? selectedValue : "";
                         var chip = CreateChip(selectedValue, async () =>
                         {
                             if (!await CheckStartLocalMod())
                                 return;
 
+                            if (isInherited)
+                            {
+                                await new Prompt(
+                                    PromptType.Error,
+                                    "Inherited Attribute",
+                                    $"{label} '{selectedValue}' is defined by the linked tactics file and cannot be deleted from the protoaction.")
+                                    .ShowDialog(this);
+                                return;
+                            }
+
                             values.RemoveAll(item => item.Equals(selectedValue, StringComparison.OrdinalIgnoreCase));
                             state.CustomValues["autorangedmodify." + tag] = string.Join("|", values);
                             RefreshProtoActionMetadataPanels(state);
                             MarkDirty();
-                        });
+                            CommitChipAdditionAndRefreshXmlPreview();
+                        }, source, tacticsValue);
                         chip.Margin = new Thickness(4, 0, 0, 0);
                         row.Children.Add(chip);
                     }
@@ -9402,6 +11757,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         state.CustomValues["autorangedmodify." + tag] = string.Join("|", values);
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
+                        CommitChipAdditionAndRefreshXmlPreview();
                     }
                     picker.SelectionChanged += async (_, _) =>
                     {
@@ -9413,13 +11769,24 @@ public partial class ProtoEditorWindow : SimpleWindow
                     };
                     return row;
                 }
-                WrapPanel CreateAutoRangedUnitTypeReadOnlyRow(string label, IEnumerable<string> values)
+                WrapPanel CreateAutoRangedUnitTypeReadOnlyRow(string tag, string label, IEnumerable<string> values)
                 {
                     var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
                     row.Children.Add(new TextBlock { Text = label + ":", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
+                    var tacticsEntries = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsListAction)
+                        ? ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsListAction, tag)
+                        : [];
                     foreach (var value in values)
                     {
-                        var chip = CreateChip(value, () => { });
+                        var isInherited = tacticsEntries.Any(entry => string.Equals(
+                            entry.Value?.Trim() ?? "",
+                            value,
+                            StringComparison.OrdinalIgnoreCase));
+                        var chip = CreateChip(
+                            value,
+                            () => { },
+                            isInherited ? ProtoActionValueSource.TacticsInherited : ProtoActionValueSource.ProtoOnly,
+                            isInherited ? value : "");
                         chip.Margin = new Thickness(2, 0, 0, 0);
                         row.Children.Add(chip);
                     }
@@ -9466,12 +11833,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (!_isReadOnly)
                     state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedListRow("modifyabstracttype", "Target Unit Type", autoRangedUnitTypeSuggestions, targetUnitTypes));
                 else if (targetUnitTypes.Count > 0)
-                    state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("Target Unit Type", targetUnitTypes));
+                    state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("modifyabstracttype", "Target Unit Type", targetUnitTypes));
                 var forbiddenUnitTypes = GetAutoRangedList("forbidabstracttype");
                 if (!_isReadOnly)
                     state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedListRow("forbidabstracttype", "Forbid Unit Type", autoRangedUnitTypeSuggestions, forbiddenUnitTypes));
                 else if (forbiddenUnitTypes.Count > 0)
-                    state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("Forbid Unit Type", forbiddenUnitTypes));
+                    state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("forbidabstracttype", "Forbid Unit Type", forbiddenUnitTypes));
 
                 void AddOptionalProtoUnitList(string tag, string label)
                 {
@@ -9479,7 +11846,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (_isReadOnly)
                     {
                         if (values.Count > 0)
-                            state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow(label, values));
+                            state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow(tag, label, values));
                         return;
                     }
 
@@ -9534,16 +11901,24 @@ public partial class ProtoEditorWindow : SimpleWindow
                     foreach (var selectedTargetFlag in targetFlagOptions.Where(option => state.SelectedFlagTags.Contains(option.Item1)))
                     {
                         var targetFlag = selectedTargetFlag.Item1;
+                        var protoFlagValue = GetProtoActionSimpleSourceValue(state.Model, targetFlag);
+                        var tacticsFlagValue = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsTargetAction)
+                            ? GetProtoActionSimpleSourceValue(tacticsTargetAction, targetFlag)
+                            : "";
+                        var flagSource = GetProtoActionValueSource("1", protoFlagValue, tacticsFlagValue);
                         var targetFlagChip = CreateChip(selectedTargetFlag.Item2, async () =>
                         {
                             if (!await CheckStartLocalMod())
                                 return;
 
+                            // Removing an inherited target is a supported flag override. The shared
+                            // flag serializer writes <flag>0</flag> when tactics enables the flag.
                             state.SelectedFlagTags.Remove(targetFlag);
                             RenderProtoActionFlags(state);
                             RefreshProtoActionMetadataPanels(state);
                             MarkDirty();
-                        });
+                            CommitChipAdditionAndRefreshXmlPreview();
+                        }, flagSource, tacticsFlagValue);
                         targetFlagChip.Margin = new Thickness(4, 0, 0, 0);
                         targetFlagsRow.Children.Add(targetFlagChip);
                     }
@@ -9560,6 +11935,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderProtoActionFlags(state);
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
+                        CommitChipAdditionAndRefreshXmlPreview();
                     };
                     state.AdditionalFieldsContainer.Children.Add(targetFlagsRow);
                 }
@@ -9570,7 +11946,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         .Select(option => option.Item2)
                         .ToList();
                     if (existingTargetFlags.Count > 0)
-                        state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("Targets", existingTargetFlags));
+                        state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("", "Targets", existingTargetFlags));
                 }
 
                 if (isAutoRangedModify)
@@ -9586,6 +11962,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Margin = new Thickness(12, 0, 0, 0),
                         VerticalAlignment = VerticalAlignment.Center
                     };
+                    state.CustomFlagControls[tag] = checkBox;
+                    RegisterProtoActionFlagSourceControl(state, checkBox, tag);
                     checkBox.IsCheckedChanged += async (_, _) =>
                     {
                         if (_isPopulating || !await CheckStartLocalMod()) return;
@@ -9961,6 +12339,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 140
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -10326,6 +12705,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     VerticalAlignment = VerticalAlignment.Center
                 };
+                state.CustomFlagControls["mustfinishanimation"] = mustFinishEditor;
+                RegisterProtoActionFlagSourceControl(state, mustFinishEditor, "mustfinishanimation");
                 mustFinishEditor.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating)
@@ -11824,6 +14205,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 120
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -12970,6 +15352,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 110
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -13387,6 +15770,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 0, 12, 0)
                 };
                 state.CustomFlagControls["stealthinshallows"] = shallowsCheckBox;
+            RegisterProtoActionFlagSourceControl(state, shallowsCheckBox, "stealthinshallows");
                 shallowsCheckBox.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating)
@@ -13414,6 +15798,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 0, 12, 0)
                 };
                 state.CustomFlagControls["stealthanywhere"] = anywhereCheckBox;
+            RegisterProtoActionFlagSourceControl(state, anywhereCheckBox, "stealthanywhere");
                 anywhereCheckBox.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating)
@@ -13715,6 +16100,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 110
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -13978,6 +16364,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 state.CustomFlagControls["exclusive"] = exclusiveCheckBox;
+            RegisterProtoActionFlagSourceControl(state, exclusiveCheckBox, "exclusive");
                 exclusiveCheckBox.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating)
@@ -14088,6 +16475,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 110
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -14346,6 +16734,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -14390,6 +16779,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 state.CustomFlagControls["notsuspendbyattack"] = notSuspendByAttackCheckBox;
+            RegisterProtoActionFlagSourceControl(state, notSuspendByAttackCheckBox, "notsuspendbyattack");
                 notSuspendByAttackCheckBox.IsCheckedChanged += async (_, _) =>
                 {
                     if (_isPopulating)
@@ -14778,6 +17168,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 140
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -14987,6 +17378,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 110
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -15354,6 +17746,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 AttachProtoActionDecimalBehavior(maxRangeMirror);
+                state.MirroredSimpleSourceControls[maxRangeMirror] = "maxrange";
                 maxRangeMirror.TextChanged += async (_, _) =>
                 {
                     state.MaxRangeTb.Text = maxRangeMirror.Text;
@@ -15656,6 +18049,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "Allies",
                 !state.SelectedFlagTags.Contains("cannotbeconvertedbyallies"));
             state.CustomFlagControls["cannotbeconvertedbyallies"] = alliesCheckBox;
+            RegisterProtoActionFlagSourceControl(state, alliesCheckBox, "cannotbeconvertedbyallies");
             checkboxRow.Children.Add(alliesCheckBox);
             WireFlagCheckBox(alliesCheckBox, "cannotbeconvertedbyallies", checkedMeansPresent: false);
 
@@ -15663,6 +18057,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "Enemies",
                 !state.SelectedFlagTags.Contains("cannotbeconvertedbyenemies"));
             state.CustomFlagControls["cannotbeconvertedbyenemies"] = enemiesCheckBox;
+            RegisterProtoActionFlagSourceControl(state, enemiesCheckBox, "cannotbeconvertedbyenemies");
             checkboxRow.Children.Add(enemiesCheckBox);
             WireFlagCheckBox(enemiesCheckBox, "cannotbeconvertedbyenemies", checkedMeansPresent: false);
 
@@ -15670,6 +18065,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "Nature",
                 state.SelectedFlagTags.Contains("includenature"));
             state.CustomFlagControls["includenature"] = natureCheckBox;
+            RegisterProtoActionFlagSourceControl(state, natureCheckBox, "includenature");
             checkboxRow.Children.Add(natureCheckBox);
             WireFlagCheckBox(natureCheckBox, "includenature", checkedMeansPresent: true);
 
@@ -15722,6 +18118,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "Melee",
                 state.SelectedFlagTags.Contains("reflecthandattacks"));
             state.CustomFlagControls["reflecthandattacks"] = meleeCheckBox;
+            RegisterProtoActionFlagSourceControl(state, meleeCheckBox, "reflecthandattacks");
             checkboxRow.Children.Add(meleeCheckBox);
             WireReflectFlagCheckBox(meleeCheckBox, "reflecthandattacks");
 
@@ -15729,6 +18126,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "Ranged",
                 state.SelectedFlagTags.Contains("reflectrangedattacks"));
             state.CustomFlagControls["reflectrangedattacks"] = rangedCheckBox;
+            RegisterProtoActionFlagSourceControl(state, rangedCheckBox, "reflectrangedattacks");
             checkboxRow.Children.Add(rangedCheckBox);
             WireReflectFlagCheckBox(rangedCheckBox, "reflectrangedattacks");
 
@@ -15738,6 +18136,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             async Task RemoveOptionalModelAttachmentAsync()
             {
+                if (await BlockInheritedProtoActionRemovalAsync(
+                        state,
+                        OptionalModelAttachmentTags,
+                        "Model Attachment"))
+                {
+                    return;
+                }
+
                 var proceed = await CheckStartLocalMod();
                 if (!proceed)
                     return;
@@ -15862,6 +18268,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(0, 0, 12, 6)
                     };
+                    state.CustomFlagControls["modelattachmentonself"] = onSelfCheckBox;
+                    RegisterProtoActionFlagSourceControl(state, onSelfCheckBox, "modelattachmentonself");
                     onSelfCheckBox.IsCheckedChanged += async (_, _) =>
                     {
                         if (_isPopulating || !await CheckStartLocalMod()) return;
@@ -16090,6 +18498,17 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             async Task RemoveOptionalDamageAreaAsync()
             {
+                var inheritedDamageAreaTags = isSpecialAttackAreaMode
+                    ? OptionalAbductDamageAreaTags.Append("areasortmode")
+                    : OptionalAbductDamageAreaTags;
+                if (await BlockInheritedProtoActionRemovalAsync(
+                        state,
+                        inheritedDamageAreaTags,
+                        "Damage Area"))
+                {
+                    return;
+                }
+
                 var proceed = await CheckStartLocalMod();
                 if (!proceed)
                     return;
@@ -18266,6 +20685,35 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsSupported = IsSupportedOnHitEffectType((string?)x.Attribute("type"))
             })
             .ToList();
+        var protoOnHitEffects = GetProtoActionOnHitEffectElements(state.Model);
+        var tacticsOnHitEffects = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction)
+            ? GetProtoActionOnHitEffectElements(tacticsAction)
+            : [];
+
+        static XElement? FindOnHitEffectByType(IEnumerable<XElement> effects, string effectType)
+            => effects.FirstOrDefault(effect => string.Equals(
+                ((string?)effect.Attribute("type") ?? "").Trim(),
+                effectType,
+                StringComparison.OrdinalIgnoreCase));
+
+        ProtoActionValueSource GetOnHitEffectSource(XElement currentElement)
+        {
+            var currentType = ((string?)currentElement.Attribute("type") ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(currentType))
+                return ProtoActionValueSource.ProtoOnly;
+
+            var tacticsMatch = FindOnHitEffectByType(tacticsOnHitEffects, currentType);
+            if (tacticsMatch == null)
+                return ProtoActionValueSource.ProtoOnly;
+
+            if (XNode.DeepEquals(currentElement, tacticsMatch))
+                return ProtoActionValueSource.TacticsInherited;
+
+            var protoMatch = FindOnHitEffectByType(protoOnHitEffects, currentType);
+            return protoMatch != null || !XNode.DeepEquals(currentElement, tacticsMatch)
+                ? ProtoActionValueSource.ProtoOverride
+                : ProtoActionValueSource.TacticsInherited;
+        }
 
         if (effectEntries.Count == 0 &&
             !_isReadOnly &&
@@ -18321,6 +20769,20 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void AddOnHitEffectCard(ProtoActionOnHitEffectEntry entry)
         {
+            Action refreshOnHitSourceMarker = () => { };
+
+            async Task<bool> HandleCardChangedAsync()
+            {
+                var proceed = await HandleChangedAsync();
+                if (proceed)
+                {
+                    Dispatcher.UIThread.Post(
+                        refreshOnHitSourceMarker,
+                        DispatcherPriority.Background);
+                }
+                return proceed;
+            }
+
             var element = entry.Element;
             var effectType = (string?)element.Attribute("type") ?? "";
             var isNewEffect = string.IsNullOrWhiteSpace(effectType);
@@ -18344,7 +20806,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var headerRow = new Grid
             {
-                ColumnDefinitions = !_isReadOnly ? new ColumnDefinitions("Auto, 170, Auto, Auto, * , Auto") : new ColumnDefinitions("Auto, 170, Auto, Auto, *"),
+                ColumnDefinitions = !_isReadOnly ? new ColumnDefinitions("Auto, 170, Auto, Auto, *, Auto, Auto") : new ColumnDefinitions("Auto, 170, Auto, Auto, *, Auto"),
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             headerRow.Children.Add(new TextBlock
@@ -18381,8 +20843,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            activeCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
             Grid.SetColumn(activeCb, 3);
             headerRow.Children.Add(activeCb);
+
+            var onHitEffectSource = GetOnHitEffectSource(element);
+            var onHitSourceMarker = CreateProtoActionSourceMarker(onHitEffectSource);
+            if (onHitSourceMarker != null)
+            {
+                ToolTip.SetTip(onHitSourceMarker,
+                    onHitEffectSource == ProtoActionValueSource.TacticsInherited
+                        ? "On Hit Effect inherited from tactics"
+                        : "This On Hit Effect overrides the tactics effect of the same type");
+                onHitSourceMarker.Margin = new Thickness(6, 2, 6, 0);
+                Grid.SetColumn(onHitSourceMarker, 5);
+                headerRow.Children.Add(onHitSourceMarker);
+            }
 
             if (!isSupported)
             {
@@ -18404,17 +20880,37 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Classes = { "remove-button" } };
                 removeButton.Click += async (_, _) =>
                 {
+                    var rowToRemove = state.OnHitEffectRows.FirstOrDefault(x => ReferenceEquals(x.Card, card));
+                    if (rowToRemove == null)
+                        return;
+
+                    var rowIndex = state.OnHitEffectRows.IndexOf(rowToRemove);
+                    var currentEntries = CollectProtoActionOnHitEffectEntries(state);
+                    var currentElement = rowIndex >= 0 && rowIndex < currentEntries.Count
+                        ? currentEntries[rowIndex].Element
+                        : element;
+                    var currentType = ((string?)currentElement.Attribute("type") ?? "").Trim();
+                    var isDefinedInTactics = !string.IsNullOrWhiteSpace(currentType) &&
+                                             FindOnHitEffectByType(tacticsOnHitEffects, currentType) != null;
+                    if (isDefinedInTactics)
+                    {
+                        await new Prompt(
+                            PromptType.Error,
+                            "Inherited On Hit Effect",
+                            "This On Hit Effect is defined by the linked tactics file and cannot be deleted from the protoaction. You may override its values, but the tactics entry will always remain.")
+                            .ShowDialog(this);
+                        return;
+                    }
+
                     var proceed = await CheckStartLocalMod();
                     if (!proceed)
                         return;
 
-                    var rowToRemove = state.OnHitEffectRows.FirstOrDefault(x => ReferenceEquals(x.Card, card));
-                    if (rowToRemove != null)
-                        state.OnHitEffectRows.Remove(rowToRemove);
+                    state.OnHitEffectRows.Remove(rowToRemove);
                     cardsContainer.Children.Remove(card);
                     MarkDirty();
                 };
-                Grid.SetColumn(removeButton, isSupported ? 5 : 5);
+                Grid.SetColumn(removeButton, 6);
                 headerRow.Children.Add(removeButton);
             }
 
@@ -18432,7 +20928,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(targetUnitTypeAcb);
-            targetUnitTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            targetUnitTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var animAcb = new AutoCompleteBox
             {
@@ -18446,7 +20942,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(animAcb);
-            animAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            animAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var protoActionAcb = new AutoCompleteBox
             {
@@ -18460,7 +20956,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(protoActionAcb);
-            protoActionAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            protoActionAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var attachProtoAcb = new AutoCompleteBox
             {
@@ -18474,7 +20970,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(attachProtoAcb);
-            attachProtoAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            attachProtoAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var attachBoneAcb = new AutoCompleteBox
             {
@@ -18488,7 +20984,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(attachBoneAcb);
-            attachBoneAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            attachBoneAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var durationTb = new TextBox
             {
@@ -18499,7 +20995,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(durationTb);
-            durationTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            durationTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var delayTb = new TextBox
             {
@@ -18510,7 +21006,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(delayTb);
-            delayTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            delayTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var radiusTb = new TextBox
             {
@@ -18521,7 +21017,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(radiusTb);
-            radiusTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            radiusTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var stackLimitTb = new TextBox
             {
@@ -18532,7 +21028,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(stackLimitTb);
-            stackLimitTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            stackLimitTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var rateTb = new TextBox
             {
@@ -18543,7 +21039,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(rateTb);
-            rateTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            rateTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var probTb = new TextBox
             {
@@ -18554,7 +21050,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionProbabilityBehavior(probTb);
-            probTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            probTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var globalProbTb = new TextBox
             {
@@ -18565,7 +21061,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionProbabilityBehavior(globalProbTb);
-            globalProbTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            globalProbTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var playerRelationAcb = new AutoCompleteBox
             {
@@ -18579,7 +21075,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(playerRelationAcb);
-            playerRelationAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            playerRelationAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var rewardTypeAcb = new AutoCompleteBox
             {
@@ -18595,7 +21091,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(rewardTypeAcb);
-            rewardTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            rewardTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var amountTb = new TextBox
             {
@@ -18606,7 +21102,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(amountTb);
-            amountTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            amountTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var relativityAcb = new AutoCompleteBox
             {
@@ -18620,7 +21116,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(relativityAcb);
-            relativityAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            relativityAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var byUnitTypeAcb = new AutoCompleteBox
             {
@@ -18636,7 +21132,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(byUnitTypeAcb);
-            byUnitTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            byUnitTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var terrainTypeAcb = new AutoCompleteBox
             {
@@ -18655,7 +21151,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(terrainTypeAcb);
-            terrainTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            terrainTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var additiveCb = new CheckBox
             {
@@ -18663,7 +21159,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            additiveCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            additiveCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
 
             var deadOnlyCb = new CheckBox
             {
@@ -18671,7 +21167,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            deadOnlyCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            deadOnlyCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
 
             var hideVfxCb = new CheckBox
             {
@@ -18679,7 +21175,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            hideVfxCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            hideVfxCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
 
             var ignoreDeadHuntablesCb = new CheckBox
             {
@@ -18687,7 +21183,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            ignoreDeadHuntablesCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            ignoreDeadHuntablesCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
 
             var stealthOnlyCb = new CheckBox
             {
@@ -18696,7 +21192,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly && isSupported,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            stealthOnlyCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+            stealthOnlyCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
 
             var freezeTypeCb = new ComboBox
             {
@@ -18708,7 +21204,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             if (freezeTypeCb.SelectedItem == null && !string.IsNullOrWhiteSpace((string?)element.Attribute("freezetype")))
                 freezeTypeCb.SelectedItem = (string?)element.Attribute("freezetype");
-            freezeTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+            freezeTypeCb.SelectionChanged += async (_, _) => await HandleCardChangedAsync();
 
             var shadingTypeAcb = new AutoCompleteBox
             {
@@ -18722,7 +21218,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             EnableDropdownAutoComplete(shadingTypeAcb);
-            shadingTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            shadingTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var fadeTimeTb = new TextBox
             {
@@ -18733,7 +21229,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(fadeTimeTb);
-            fadeTimeTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            fadeTimeTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var factorTb = new TextBox
             {
@@ -18744,7 +21240,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(factorTb);
-            factorTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            factorTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var freezeDurationTb = new TextBox
             {
@@ -18755,7 +21251,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(freezeDurationTb);
-            freezeDurationTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            freezeDurationTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var freezeDamageTb = new TextBox
             {
@@ -18766,7 +21262,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : 90
             };
             AttachProtoActionDecimalBehavior(freezeDamageTb);
-            freezeDamageTb.TextChanged += async (_, _) => await HandleChangedAsync();
+            freezeDamageTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
             var rawXmlTb = new TextBox
             {
@@ -18862,6 +21358,29 @@ public partial class ProtoEditorWindow : SimpleWindow
                 RawXmlTb = rawXmlTb,
                 OriginalElement = new XElement(element),
                 IsSupported = isSupported
+            };
+
+            refreshOnHitSourceMarker = () =>
+            {
+                if (onHitSourceMarker == null)
+                    return;
+
+                var rowIndex = state.OnHitEffectRows.IndexOf(rowState);
+                if (rowIndex < 0)
+                    return;
+
+                var currentEntries = CollectProtoActionOnHitEffectEntries(state);
+                if (rowIndex >= currentEntries.Count)
+                    return;
+
+                var source = GetOnHitEffectSource(currentEntries[rowIndex].Element);
+                var inherited = source == ProtoActionValueSource.TacticsInherited;
+                onHitSourceMarker.IsVisible = source != ProtoActionValueSource.ProtoOnly;
+                onHitSourceMarker.Background = Brush.Parse(inherited ? "#28d7e5" : "#f59e0b");
+                ToolTip.SetTip(onHitSourceMarker,
+                    inherited
+                        ? "On Hit Effect inherited from tactics"
+                        : "This On Hit Effect overrides the tactics effect of the same type");
             };
 
             if (isSupported)
@@ -19595,7 +22114,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Margin = new Thickness(0, 0, 8, 0)
                         };
                         EnableDropdownAutoComplete(valueAcb);
-                        valueAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        valueAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         rowPanel.Children.Add(valueAcb);
 
                         if (isIgnoreType)
@@ -19731,7 +22250,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Margin = new Thickness(0, 0, 8, 0)
                         };
                         EnableDropdownAutoComplete(damageTypeAcb);
-                        damageTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        damageTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         rowPanel.Children.Add(damageTypeAcb);
 
                         var valueTb = new TextBox
@@ -19744,7 +22263,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Margin = new Thickness(0, 0, 8, 0)
                         };
                         AttachProtoActionDecimalBehavior(valueTb);
-                        valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        valueTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         rowPanel.Children.Add(valueTb);
 
                         var damageRowState = new OnHitEffectDamageRowState
@@ -19858,7 +22377,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         };
                         EnableDropdownAutoComplete(modifyTypeAcb);
-                        modifyTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        modifyTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(modifyTypeAcb, 1);
                         rowGrid.Children.Add(modifyTypeAcb);
 
@@ -19879,7 +22398,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 : new[] { "Multiply", "Add", "Set" }.FirstOrDefault(x => x.Equals(initialApplyType, StringComparison.OrdinalIgnoreCase)) ?? "Multiply",
                             IsEnabled = !_isReadOnly
                         };
-                        applyTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+                        applyTypeCb.SelectionChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(applyTypeCb, 3);
                         rowGrid.Children.Add(applyTypeCb);
 
@@ -19901,7 +22420,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = 90
                         };
                         EnableDropdownAutoComplete(damageTypeAcb);
-                        damageTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        damageTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(damageTypeAcb, 5);
                         rowGrid.Children.Add(damageTypeAcb);
 
@@ -19920,7 +22439,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         };
                         AttachProtoActionDecimalBehavior(valueTb);
-                        valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        valueTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(valueTb, 7);
                         rowGrid.Children.Add(valueTb);
 
@@ -19943,7 +22462,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 IsEnabled = !_isReadOnly,
                                 VerticalAlignment = VerticalAlignment.Center
                             };
-                            stackCb.IsCheckedChanged += async (_, _) => await HandleChangedAsync();
+                            stackCb.IsCheckedChanged += async (_, _) => await HandleCardChangedAsync();
                             Grid.SetColumn(stackCb, 9);
                             rowGrid.Children.Add(stackCb);
                         }
@@ -20064,7 +22583,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         };
                         EnableDropdownAutoComplete(modifyTypeAcb);
-                        modifyTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        modifyTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(modifyTypeAcb, 1);
                         rowGrid.Children.Add(modifyTypeAcb);
 
@@ -20086,7 +22605,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = 90
                         };
                         EnableDropdownAutoComplete(damageTypeAcb);
-                        damageTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        damageTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(damageTypeAcb, 3);
                         rowGrid.Children.Add(damageTypeAcb);
 
@@ -20106,7 +22625,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = _isReadOnly ? GetCompactReadOnlyEditorWidth(initialInit) : 100
                         };
                         AttachProtoActionDecimalBehavior(initTb);
-                        initTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        initTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(initTb, 5);
                         rowGrid.Children.Add(initTb);
 
@@ -20126,7 +22645,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = _isReadOnly ? GetCompactReadOnlyEditorWidth(initialFinal) : 100
                         };
                         AttachProtoActionDecimalBehavior(finalTb);
-                        finalTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        finalTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(finalTb, 7);
                         rowGrid.Children.Add(finalTb);
 
@@ -20257,7 +22776,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         };
                         EnableDropdownAutoComplete(modifyTypeAcb);
-                        modifyTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        modifyTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(modifyTypeAcb, 1);
                         rowGrid.Children.Add(modifyTypeAcb);
 
@@ -20278,7 +22797,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 : new[] { "Multiply", "Add", "Set" }.FirstOrDefault(x => x.Equals(initialApplyType, StringComparison.OrdinalIgnoreCase)) ?? "Multiply",
                             IsEnabled = !_isReadOnly
                         };
-                        applyTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+                        applyTypeCb.SelectionChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(applyTypeCb, 3);
                         rowGrid.Children.Add(applyTypeCb);
 
@@ -20300,7 +22819,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = 90
                         };
                         EnableDropdownAutoComplete(damageTypeAcb);
-                        damageTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        damageTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(damageTypeAcb, 5);
                         rowGrid.Children.Add(damageTypeAcb);
 
@@ -20320,7 +22839,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = _isReadOnly ? GetCompactReadOnlyEditorWidth(initialValue) : 100
                         };
                         AttachProtoActionDecimalBehavior(valueTb);
-                        valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        valueTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(valueTb, 7);
                         rowGrid.Children.Add(valueTb);
 
@@ -20432,7 +22951,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         };
                         EnableDropdownAutoComplete(modifyTypeAcb);
-                        modifyTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        modifyTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(modifyTypeAcb, 1);
                         rowGrid.Children.Add(modifyTypeAcb);
 
@@ -20454,7 +22973,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = 90
                         };
                         EnableDropdownAutoComplete(damageTypeAcb);
-                        damageTypeAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        damageTypeAcb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(damageTypeAcb, 3);
                         rowGrid.Children.Add(damageTypeAcb);
 
@@ -20474,7 +22993,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = _isReadOnly ? GetCompactReadOnlyEditorWidth(initialInit) : 100
                         };
                         AttachProtoActionDecimalBehavior(initTb);
-                        initTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        initTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(initTb, 5);
                         rowGrid.Children.Add(initTb);
 
@@ -20494,7 +23013,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = _isReadOnly ? GetCompactReadOnlyEditorWidth(initialFinal) : 100
                         };
                         AttachProtoActionDecimalBehavior(finalTb);
-                        finalTb.TextChanged += async (_, _) => await HandleChangedAsync();
+                        finalTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
                         Grid.SetColumn(finalTb, 7);
                         rowGrid.Children.Add(finalTb);
 
@@ -20878,17 +23397,37 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IncludeInSerialization = true
                 };
                 state.StructuredFieldRows[tag].Add(rowState);
+                var tacticsEntries = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsTargetAction)
+                    ? ProtoXmlHandler.GetProtoActionStructuredFieldEntries(tacticsTargetAction, tag)
+                    : [];
+                var tacticsValue = tacticsEntries.FirstOrDefault(entry =>
+                    string.Equals(entry.Value?.Trim() ?? "", normalizedValue, StringComparison.OrdinalIgnoreCase))?.Value ?? "";
+                var isInherited = !string.IsNullOrWhiteSpace(tacticsValue);
+                var source = isInherited
+                    ? ProtoActionValueSource.TacticsInherited
+                    : ProtoActionValueSource.ProtoOnly;
+
                 Border? chip = null;
                 chip = CreateChip(normalizedValue, async () =>
                 {
                     if (!await CheckStartLocalMod())
                         return;
 
+                    if (isInherited)
+                    {
+                        await new Prompt(
+                            PromptType.Error,
+                            "Inherited Attribute",
+                            $"{label} '{normalizedValue}' is defined by the linked tactics file and cannot be deleted from the protoaction.")
+                            .ShowDialog(this);
+                        return;
+                    }
+
                     state.StructuredFieldRows[tag].Remove(rowState);
                     if (chip != null)
                         chips.Children.Remove(chip);
                     MarkDirty();
-                });
+                }, source, tacticsValue);
                 chips.Children.Add(chip);
             }
 
@@ -20985,6 +23524,20 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void AddRow(ProtoActionStructuredFieldEntry? initialEntry = null)
             {
+                ProtoActionStructuredFieldEntry? inheritedEntry = null;
+                if ((tag.Equals("rate", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("typedmaxrange", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("minrate", StringComparison.OrdinalIgnoreCase)) &&
+                    initialEntry != null &&
+                    TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction))
+                {
+                    var initialType = initialEntry.Attributes.TryGetValue("type", out var typeValue) ? typeValue.Trim() : "";
+                    inheritedEntry = GetProtoActionStructuredFieldEntriesForEditor(tacticsAction, actionType, tag)
+                        .FirstOrDefault(entry => entry.Attributes.TryGetValue("type", out var candidateType) &&
+                                                 candidateType.Equals(initialType, StringComparison.OrdinalIgnoreCase));
+                }
+                var isInheritedRateType = inheritedEntry != null;
+
                 var rowPanel = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -21153,6 +23706,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                         attributeEditor = attributeTextBox;
                     }
 
+                    if (isInheritedRateType &&
+                        attributeName.Equals("type", StringComparison.OrdinalIgnoreCase))
+                    {
+                        attributeEditor.IsEnabled = false;
+                    }
+
                     rowState.AttributeEditors[attributeName] = attributeEditor;
                     var insertIndex = insertBefore != null ? rowPanel.Children.IndexOf(insertBefore) : -1;
                     if (insertIndex >= 0)
@@ -21284,7 +23843,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 Width = 170,
                                 IsEnabled = !_isReadOnly
                             };
-                            EnableDropdownAutoComplete(pickerAcb);
+                            EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);
 
                             async void AddSelectedAttribute()
                             {
@@ -21338,6 +23897,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                     };
                     deleteButton.Click += async (s, e) =>
                     {
+                        if (isInheritedRateType)
+                        {
+                            var inheritedType = initialEntry?.Attributes.TryGetValue("type", out var typeValue) == true ? typeValue : "Rate";
+                            await new Prompt(
+                                PromptType.Error,
+                                "Inherited Attribute",
+                                $"Rate type '{inheritedType}' is defined by the linked tactics file and cannot be removed. You may override its value.")
+                                .ShowDialog(this);
+                            return;
+                        }
+
                         var proceed = await CheckStartLocalMod();
                         if (proceed)
                         {
@@ -21408,38 +23978,26 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void SyncFlagCheckboxesFromFlags()
         {
-            foreach (var (tag, control) in state.AdditionalFieldControls)
+            foreach (var (control, flagTags) in state.CustomFlagSourceControls.ToList())
             {
-                if (!IsKnownProtoActionFlagTag(tag) || control is not CheckBox checkBox)
+                if (control is not CheckBox checkBox || flagTags.Length != 1 || checkBox.Parent == null)
                     continue;
 
-                if (IsInvertedDefaultProtoActionFlag(tag))
+                var tag = flagTags[0];
+                if (tag.Equals("active", StringComparison.OrdinalIgnoreCase))
+                {
+                    checkBox.IsChecked = state.CustomValues
+                        .GetValueOrDefault(ProtoActionActiveValueStateKey, "0")
+                        .Equals("1", StringComparison.OrdinalIgnoreCase);
                     continue;
+                }
 
-                checkBox.IsChecked = state.SelectedFlagTags.Contains(tag);
+                var isInverted = tag.Equals("cannotbeconvertedbyallies", StringComparison.OrdinalIgnoreCase) ||
+                                 tag.Equals("cannotbeconvertedbyenemies", StringComparison.OrdinalIgnoreCase);
+                checkBox.IsChecked = isInverted
+                    ? !state.SelectedFlagTags.Contains(tag)
+                    : state.SelectedFlagTags.Contains(tag);
             }
-
-            if (state.CustomFlagControls.TryGetValue("reflecthandattacks", out var meleeCheckBox))
-                meleeCheckBox.IsChecked = state.SelectedFlagTags.Contains("reflecthandattacks");
-            if (state.CustomFlagControls.TryGetValue("reflectrangedattacks", out var rangedCheckBox))
-                rangedCheckBox.IsChecked = state.SelectedFlagTags.Contains("reflectrangedattacks");
-            if (state.CustomFlagControls.TryGetValue("stealthinshallows", out var shallowsCheckBox))
-                shallowsCheckBox.IsChecked = state.SelectedFlagTags.Contains("stealthinshallows");
-            if (state.CustomFlagControls.TryGetValue("stealthanywhere", out var anywhereCheckBox))
-                anywhereCheckBox.IsChecked = state.SelectedFlagTags.Contains("stealthanywhere");
-            if (state.CustomFlagControls.TryGetValue("exclusive", out var exclusiveCheckBox))
-                exclusiveCheckBox.IsChecked = state.SelectedFlagTags.Contains("exclusive");
-
-            if (state.CustomFlagControls.TryGetValue("cannotbeconvertedbyallies", out var alliesCheckBox))
-                alliesCheckBox.IsChecked = !state.SelectedFlagTags.Contains("cannotbeconvertedbyallies");
-            if (state.CustomFlagControls.TryGetValue("cannotbeconvertedbyenemies", out var enemiesCheckBox))
-                enemiesCheckBox.IsChecked = !state.SelectedFlagTags.Contains("cannotbeconvertedbyenemies");
-            if (state.CustomFlagControls.TryGetValue("includenature", out var natureCheckBox))
-                natureCheckBox.IsChecked = state.SelectedFlagTags.Contains("includenature");
-            if (state.CustomFlagControls.TryGetValue("notsuspendbyattack", out var notSuspendByAttackCheckBox))
-                notSuspendByAttackCheckBox.IsChecked = state.SelectedFlagTags.Contains("notsuspendbyattack");
-            if (state.CustomFlagControls.TryGetValue("active", out var activeCheckBox))
-                activeCheckBox.IsChecked = state.CustomValues.GetValueOrDefault(ProtoActionActiveValueStateKey, "0").Equals("1", StringComparison.OrdinalIgnoreCase);
         }
 
         void RefreshFlagsDisplay()
@@ -21449,6 +24007,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                          .Where(x => !x.Equals("active", StringComparison.OrdinalIgnoreCase))
                          .OrderBy(GetProtoActionFlagDisplayLabel, StringComparer.OrdinalIgnoreCase))
             {
+                var protoFlagValue = GetProtoActionSimpleSourceValue(state.Model, tag);
+                var tacticsFlagValue = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsFlagAction)
+                    ? GetProtoActionSimpleSourceValue(tacticsFlagAction, tag)
+                    : "";
+                var flagSource = GetProtoActionValueSource("1", protoFlagValue, tacticsFlagValue);
                 var chip = CreateChip(GetProtoActionFlagDisplayLabel(tag), async () =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -21458,8 +24021,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         SyncFlagCheckboxesFromFlags();
                         MarkDirty();
                         RefreshFlagsDisplay();
+                        // AutoRangedModify Targets are a second visual representation of these
+                        // flags. Rebuild that panel so removing a flag chip removes its target chip.
+                        RefreshProtoActionMetadataPanels(state);
                     }
-                });
+                }, flagSource, tacticsFlagValue);
                 flagsWrap.Children.Add(chip);
             }
 
@@ -21492,7 +24058,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             HorizontalAlignment = HorizontalAlignment.Left
         };
         protoActionFlagPicker = acbAdd;
-        EnableDropdownAutoComplete(acbAdd);
+        EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
         Grid.SetColumn(acbAdd, 0);
         addFlagGrid.Children.Add(acbAdd);
 
@@ -21520,6 +24086,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 acbAdd.Text = "";
                 MarkDirty();
                 RefreshFlagsDisplay();
+                // Keep paired AutoRangedModify target chips synchronized when a flag is
+                // re-added from the generic Flags editor.
+                RefreshProtoActionMetadataPanels(state);
                 Dispatcher.UIThread.Post(() =>
                 {
                     CommitChipAdditionAndRefreshXmlPreview();
@@ -21764,6 +24333,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 removeButton.Click += async (s, e) =>
                 {
+                    if (await BlockInheritedProtoActionRemovalAsync(state, [tag], definition.Label))
+                        return;
+
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
@@ -21808,6 +24380,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 removeButton.Click += async (s, e) =>
                 {
+                    if (await BlockInheritedStructuredProtoActionRemovalAsync(state, tag, definition.Label))
+                        return;
+
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
@@ -21829,6 +24404,20 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void AddRow(ProtoActionStructuredFieldEntry? initialEntry = null)
             {
+                ProtoActionStructuredFieldEntry? inheritedEntry = null;
+                if ((tag.Equals("rate", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("typedmaxrange", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("minrate", StringComparison.OrdinalIgnoreCase)) &&
+                    initialEntry != null &&
+                    TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction))
+                {
+                    var initialType = initialEntry.Attributes.TryGetValue("type", out var typeValue) ? typeValue.Trim() : "";
+                    inheritedEntry = GetProtoActionStructuredFieldEntriesForEditor(tacticsAction, actionType, tag)
+                        .FirstOrDefault(entry => entry.Attributes.TryGetValue("type", out var candidateType) &&
+                                                 candidateType.Equals(initialType, StringComparison.OrdinalIgnoreCase));
+                }
+                var isInheritedRateType = inheritedEntry != null;
+
                 var rowPanel = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -21956,11 +24545,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                         attributeEditor = attributeTextBox;
                     }
 
+                    var isInheritedRateTypeEditor =
+                        isInheritedRateType &&
+                        attributeName.Equals("type", StringComparison.OrdinalIgnoreCase);
+                    if (isInheritedRateTypeEditor)
+                        attributeEditor.IsEnabled = false;
+
                     rowState.AttributeEditors[attributeName] = attributeEditor;
                     rowPanel.Children.Add(attributeEditor);
 
                     if (attributeName.Equals("type", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (isInheritedRateType)
+                            AddProtoActionSourceMarker(state, attributeEditor, ProtoActionValueSource.TacticsInherited, attributeValue);
                         AddValueEditor();
+                    }
                 }
 
                 AddValueEditor();
@@ -21974,6 +24573,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                     };
                     deleteButton.Click += async (s, e) =>
                     {
+                        if (isInheritedRateType)
+                        {
+                            var inheritedType = initialEntry?.Attributes.TryGetValue("type", out var typeValue) == true ? typeValue : "Rate";
+                            await new Prompt(
+                                PromptType.Error,
+                                "Inherited Attribute",
+                                $"Rate type '{inheritedType}' is defined by the linked tactics file and cannot be removed. You may override its value.")
+                                .ShowDialog(this);
+                            return;
+                        }
+
                         var proceed = await CheckStartLocalMod();
                         if (proceed)
                         {
@@ -22511,12 +25121,33 @@ public partial class ProtoEditorWindow : SimpleWindow
         return _protoActionTypeSuggestions.FirstOrDefault(x => x.Equals(normalized, StringComparison.OrdinalIgnoreCase)) ?? "";
     }
 
-    private void EnableDropdownAutoComplete(AutoCompleteBox autoCompleteBox)
+    private void EnableDropdownAutoComplete(AutoCompleteBox autoCompleteBox, bool selectAllOnFirstClick = true)
     {
         autoCompleteBox.MinimumPrefixLength = 0;
         autoCompleteBox.MinimumPopulateDelay = TimeSpan.Zero;
         bool suppressAutoOpen = false;
         bool userInteracted = false;
+        bool selectedAllForCurrentFocus = false;
+
+        void SelectAllOnInitialPointerFocus()
+        {
+            if (!selectAllOnFirstClick || selectedAllForCurrentFocus)
+                return;
+
+            selectedAllForCurrentFocus = true;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!autoCompleteBox.IsEnabled)
+                    return;
+
+                var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+                if (textEditor == null)
+                    return;
+
+                textEditor.Focus();
+                textEditor.SelectAll();
+            }, DispatcherPriority.Input);
+        }
 
         void OpenDropdownIfEnabled()
         {
@@ -22537,6 +25168,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             userInteracted = true;
             suppressAutoOpen = false;
+            SelectAllOnInitialPointerFocus();
             OpenDropdownIfEnabled();
         }, RoutingStrategies.Tunnel, handledEventsToo: true);
 
@@ -22561,6 +25193,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         autoCompleteBox.LostFocus += (s, e) =>
         {
             suppressAutoOpen = false;
+            selectedAllForCurrentFocus = false;
         };
     }
 
@@ -22582,6 +25215,87 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         typeAcb.ItemsSource = GetProtoActionTypeOptions(string.IsNullOrWhiteSpace(exactType) ? currentValue : exactType);
         typeAcb.IsEnabled = !_isReadOnly;
+    }
+
+    private static Dictionary<string, ProtoAction> CloneProtoActionMap(
+        IReadOnlyDictionary<string, ProtoAction> source)
+    {
+        var clone = new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in source)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.Key))
+                clone[entry.Key.Trim()] = entry.Value.Clone();
+        }
+
+        return clone;
+    }
+
+    private void MigrateProtoActionsForTacticsChange(
+        XElement unit,
+        IReadOnlyDictionary<string, ProtoAction> oldTacticsActions,
+        IReadOnlyDictionary<string, ProtoAction> newTacticsActions)
+    {
+        var existingProtoActions = ProtoXmlHandler.GetProtoActions(unit);
+        var migratedActions = new List<ProtoAction>();
+        var representedActionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var protoAction in existingProtoActions)
+        {
+            var actionName = protoAction.Name?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(actionName))
+                representedActionNames.Add(actionName);
+
+            oldTacticsActions.TryGetValue(actionName, out var oldTacticsAction);
+            var wasTacticsBacked = string.IsNullOrWhiteSpace(protoAction.Type) &&
+                                   !string.IsNullOrWhiteSpace(actionName) &&
+                                   oldTacticsAction is not null &&
+                                   !string.IsNullOrWhiteSpace(oldTacticsAction.Type);
+            var stillExistsInNewTactics = !string.IsNullOrWhiteSpace(actionName) &&
+                                          newTacticsActions.ContainsKey(actionName);
+
+            if (!wasTacticsBacked || stillExistsInNewTactics)
+            {
+                // Shared actions keep their raw proto overlay. The new tactics action becomes
+                // their base automatically, and any proto value continues to take priority.
+                migratedActions.Add(protoAction);
+                continue;
+            }
+
+            // The action no longer exists in the newly selected tactics file. Materialize the
+            // complete old effective action so no inherited data is lost. Existing proto values
+            // remain the overlay and therefore win over the old tactics values.
+            var inheritedType = oldTacticsAction!.Type.Trim();
+            var materialized = CreateEffectiveProtoActionSnapshot(
+                protoAction,
+                actionName,
+                inheritedType,
+                oldTacticsActions);
+            materialized.Name = actionName;
+            materialized.Type = inheritedType;
+            materialized.SourceElement = null;
+            migratedActions.Add(materialized);
+        }
+
+        foreach (var oldEntry in oldTacticsActions)
+        {
+            var actionName = oldEntry.Key?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(actionName) ||
+                newTacticsActions.ContainsKey(actionName) ||
+                representedActionNames.Contains(actionName))
+            {
+                continue;
+            }
+
+            // This was a completely inherited action with no proto overlay. Since it disappeared
+            // from the new tactics file, preserve it as a complete, normal proto-owned action.
+            var materialized = oldEntry.Value.Clone();
+            materialized.Name = actionName;
+            materialized.Type = oldEntry.Value.Type?.Trim() ?? "";
+            materialized.SourceElement = null;
+            migratedActions.Add(materialized);
+        }
+
+        ProtoXmlHandler.SetProtoActions(unit, migratedActions);
     }
 
     private void RefreshCurrentUnitProtoActionMetadata(XElement unit)
@@ -22924,6 +25638,595 @@ public partial class ProtoEditorWindow : SimpleWindow
         await prompt.ShowDialog(this);
     }
 
+    private const string NewTacticsTemplate = """
+<tactics>
+	<tactic>Default</tactic>
+</tactics>
+""";
+
+    private string? GetModTacticsDirectory()
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath))
+            return null;
+        var gameplayDirectory = Path.GetDirectoryName(_modFilePath);
+        return string.IsNullOrWhiteSpace(gameplayDirectory)
+            ? null
+            : Path.Combine(gameplayDirectory, "tactics");
+    }
+
+    private static string NormalizeManagedTacticsName(string value)
+    {
+        var normalized = value.Trim().Replace('/', '\\');
+        if (!normalized.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase))
+            normalized += ".tactics";
+        return normalized;
+    }
+
+    private string? GetCustomTacticsPath(string tacticsName)
+    {
+        var directory = GetModTacticsDirectory();
+        if (directory == null)
+            return null;
+        var relative = NormalizeManagedTacticsName(tacticsName).Replace('\\', Path.DirectorySeparatorChar);
+        return Path.Combine(directory, relative);
+    }
+
+    private HashSet<string> GetCustomTacticsNames()
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directory = GetModTacticsDirectory();
+        if (directory == null || !Directory.Exists(directory))
+            return result;
+
+        foreach (var path in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            var fileName = Path.GetFileName(path);
+            if (!fileName.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase) &&
+                !fileName.EndsWith(".tactics.xmb", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var relative = Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '\\');
+            if (relative.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                relative = relative[..^4];
+            result.Add(NormalizeManagedTacticsName(relative));
+        }
+        return result;
+    }
+
+    private Dictionary<string, int> GetTacticsUsageCounts()
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (_modXmlRoot == null)
+            return result;
+
+        foreach (var tacticsElement in _modXmlRoot.Descendants()
+                     .Where(element => element.Name.LocalName.Equals("tactics", StringComparison.OrdinalIgnoreCase)))
+        {
+            var name = NormalizeManagedTacticsName(tacticsElement.Value);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+            result[name] = result.GetValueOrDefault(name) + 1;
+        }
+        return result;
+    }
+
+    private async Task OpenTacticsManagerAsync()
+    {
+        if (_isReadOnly)
+            return;
+        if (!await CheckStartLocalMod() || _modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
+            return;
+
+        ApplyCurrentEdits();
+        var customNames = GetCustomTacticsNames();
+        var usageCounts = GetTacticsUsageCounts();
+        var items = GetAvailableTacticsNames()
+            .Select(name => new TacticsManagerItem(
+                name,
+                IsBuiltIn: !customNames.Contains(name),
+                UsageCount: usageCounts.GetValueOrDefault(name)))
+            .ToList();
+
+        var window = new TacticsManagerWindow(
+            items,
+            OpenManagedTacticsEditorAsync,
+            CreateManagedTacticsFileAsync,
+            DuplicateManagedTacticsFileAsync);
+        await window.ShowDialog(this);
+        if (window.Result == null)
+            return;
+
+        window.SetDeletedOriginalNames(customNames);
+        await ApplyTacticsManagerChangesAsync(window.Result);
+    }
+
+    private async Task<bool> CreateManagedTacticsFileAsync(string tacticsName)
+    {
+        var path = GetCustomTacticsPath(tacticsName);
+        if (path == null)
+            return false;
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                var existingPrompt = new Prompt(
+                    PromptType.Error,
+                    "Tactics already exists",
+                    $"A tactics file named '{tacticsName}' already exists.");
+                await existingPrompt.ShowDialog(this);
+                return false;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, NewTacticsTemplate, new UTF8Encoding(false));
+            _tacticsActionCache.Clear();
+            _tacticsActionTypeCache.Clear();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to create tactics", ex.Message);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DuplicateManagedTacticsFileAsync(string sourceName, bool sourceIsBuiltIn, string newName)
+    {
+        var targetPath = GetCustomTacticsPath(newName);
+        if (targetPath == null)
+            return false;
+
+        try
+        {
+            if (File.Exists(targetPath))
+            {
+                var existingPrompt = new Prompt(
+                    PromptType.Error,
+                    "Tactics already exists",
+                    $"A tactics file named '{newName}' already exists.");
+                await existingPrompt.ShowDialog(this);
+                return false;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+
+            if (!sourceIsBuiltIn)
+            {
+                var sourcePath = GetCustomTacticsPath(sourceName);
+                if (sourcePath == null || !File.Exists(sourcePath))
+                {
+                    var missingPrompt = new Prompt(
+                        PromptType.Error,
+                        "Tactics file not found",
+                        $"Could not find '{sourceName}' in the active mod tactics folder.");
+                    await missingPrompt.ShowDialog(this);
+                    return false;
+                }
+
+                File.Copy(sourcePath, targetPath, overwrite: false);
+            }
+            else
+            {
+                var document = LoadBuiltInTacticsDocumentForManagerEditor(sourceName)
+                    ?? BuildTacticsDocumentFromLoadedActions(sourceName);
+                if (document.Root == null)
+                {
+                    var loadPrompt = new Prompt(
+                        PromptType.Error,
+                        "Unable to duplicate tactics",
+                        $"Could not load '{sourceName}' from Data.bar.");
+                    await loadPrompt.ShowDialog(this);
+                    return false;
+                }
+
+                RemoveFormattingWhitespace(document);
+                ProtoXmlHandler.SaveProtoXml(document, targetPath);
+            }
+
+            _tacticsActionCache.Clear();
+            _tacticsActionTypeCache.Clear();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to duplicate tactics", ex.Message);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task OpenManagedTacticsEditorAsync(Window owner, string tacticsName, bool isBuiltIn)
+    {
+        XDocument document;
+        string? customPath = null;
+
+        if (!isBuiltIn)
+        {
+            customPath = GetCustomTacticsPath(tacticsName);
+            if (customPath == null || !File.Exists(customPath))
+            {
+                var prompt = new Prompt(PromptType.Error, "Tactics file not found", $"Could not find '{tacticsName}' in the active mod tactics folder.");
+                await prompt.ShowDialog(this);
+                return;
+            }
+
+            try
+            {
+                document = XDocument.Load(customPath, LoadOptions.PreserveWhitespace);
+            }
+            catch (Exception ex)
+            {
+                var prompt = new Prompt(PromptType.Error, "Unable to open tactics", ex.Message);
+                await prompt.ShowDialog(this);
+                return;
+            }
+        }
+        else
+        {
+            document = LoadBuiltInTacticsDocumentForManagerEditor(tacticsName)
+                ?? BuildTacticsDocumentFromLoadedActions(tacticsName);
+
+            if (document.Root == null ||
+                !document.Root.Elements().Any(element =>
+                    element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase)))
+            {
+                var prompt = new Prompt(
+                    PromptType.Error,
+                    "Unable to load tactics",
+                    $"No action definitions could be loaded from '{tacticsName}'.");
+                await prompt.ShowDialog(this);
+                return;
+            }
+        }
+
+        var editor = new TacticsEditorWindow();
+        await editor.InitializeTacticsActionEditorAsync(
+            tacticsName,
+            isBuiltIn,
+            document,
+            customPath == null
+                ? null
+                : async updatedDocument =>
+                {
+                    RemoveFormattingWhitespace(updatedDocument);
+                    ProtoXmlHandler.SaveProtoXml(updatedDocument, customPath);
+                    _tacticsActionCache.Clear();
+                    _tacticsActionTypeCache.Clear();
+                    if (!string.IsNullOrWhiteSpace(_currentUnitName) && _modXmlRoot != null)
+                    {
+                        var currentUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+                        if (currentUnit != null)
+                            RefreshCurrentUnitProtoActionMetadata(currentUnit);
+                        BuildEditorPanel(_currentUnitName, resetScroll: false);
+                    }
+                    await Task.CompletedTask;
+                });
+        await editor.ShowDialog(owner);
+    }
+
+
+    private static void RemoveFormattingWhitespace(XDocument document)
+    {
+        foreach (var textNode in document.DescendantNodes().OfType<XText>()
+                     .Where(node => string.IsNullOrWhiteSpace(node.Value))
+                     .ToList())
+        {
+            textNode.Remove();
+        }
+    }
+
+    private XDocument BuildTacticsDocumentFromLoadedActions(string tacticsName)
+    {
+        var root = new XElement("tactics");
+        var loadedActions = LoadTacticsActionsForManagerEditor(tacticsName);
+        foreach (var action in loadedActions.Values
+                     .OrderBy(action => action.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var temporaryUnit = new XElement("unit");
+            ProtoXmlHandler.SetProtoActions(temporaryUnit, [action.Clone()]);
+            var serialized = temporaryUnit.Element("protoaction");
+            if (serialized == null)
+                continue;
+
+            serialized.Name = "action";
+            root.Add(serialized);
+        }
+
+        return new XDocument(root);
+    }
+
+    private XDocument? LoadBuiltInTacticsDocumentForManagerEditor(string tacticsName)
+    {
+        var candidateFileNames = BuildTacticsCandidateRelativePaths(tacticsName)
+            .Select(path => path.Replace('\\', '/').Split('/').LastOrDefault())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Cast<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (candidateFileNames.Count == 0)
+            return null;
+
+        try
+        {
+            if (_protoDataBarFile != null && !string.IsNullOrWhiteSpace(_protoDataBarPath))
+            {
+                var cachedBarDocument = ExtractTacticsDocumentFromBar(
+                    _protoDataBarFile,
+                    _protoDataBarPath,
+                    candidateFileNames);
+                if (cachedBarDocument != null)
+                    return cachedBarDocument;
+            }
+
+            var hostBarFile = _host.CurrentBarFile;
+            var hostBarPath = _host.CurrentBarPath;
+            if (hostBarFile != null && !string.IsNullOrWhiteSpace(hostBarPath) &&
+                Path.GetFileName(hostBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
+            {
+                var hostDocument = ExtractTacticsDocumentFromBar(
+                    hostBarFile,
+                    hostBarPath,
+                    candidateFileNames);
+                if (hostDocument != null)
+                    return hostDocument;
+            }
+
+            var dataBarPath = ResolveDataBarPath();
+            if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
+            {
+                using var stream = File.OpenRead(dataBarPath);
+                var barFile = new BarFile(stream);
+                if (barFile.Load(out _))
+                {
+                    return ExtractTacticsDocumentFromBar(
+                        barFile,
+                        dataBarPath,
+                        candidateFileNames);
+                }
+            }
+        }
+        catch
+        {
+            // The action-map fallback below still gives older cached setups a chance.
+        }
+
+        return null;
+    }
+
+    private static XDocument? ExtractTacticsDocumentFromBar(
+        BarFile barFile,
+        string barPath,
+        HashSet<string> candidateFileNames)
+    {
+        var entries = barFile.Entries;
+        if (entries == null)
+            return null;
+
+        var matchingEntries = entries
+            .Where(entry =>
+            {
+                var normalizedEntryName = entry.Name.Replace('\\', '/');
+                var fileName = normalizedEntryName.Split('/').LastOrDefault() ?? "";
+                return normalizedEntryName.Contains("tactics", StringComparison.OrdinalIgnoreCase) &&
+                       fileName.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase) &&
+                       candidateFileNames.Contains(fileName);
+            })
+            .ToList();
+
+        using var dataStream = File.OpenRead(barPath);
+        foreach (var entry in matchingEntries)
+        {
+            var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+            var decompressed = new byte[size];
+            var readBytes = entry.ReadDataDecompressed(dataStream, decompressed);
+            if (readBytes <= 0)
+                continue;
+
+            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            if (string.IsNullOrWhiteSpace(xml))
+                continue;
+
+            var document = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+            if (document.Root != null &&
+                document.Root.Name.LocalName.Equals("tactics", StringComparison.OrdinalIgnoreCase))
+            {
+                return document;
+            }
+        }
+
+        return null;
+    }
+
+
+    private Dictionary<string, ProtoAction> LoadTacticsActionsForManagerEditor(string tacticsName)
+    {
+        var candidates = new List<string>();
+
+        void AddCandidate(string? value)
+        {
+            var normalized = value?.Trim() ?? "";
+            if (normalized.Length > 0 && !candidates.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+                candidates.Add(normalized);
+        }
+
+        AddCandidate(tacticsName);
+        if (tacticsName.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase))
+            AddCandidate(tacticsName[..^".tactics".Length]);
+        else
+            AddCandidate(tacticsName + ".tactics");
+
+        // Most unit references omit the extension while the manager deliberately
+        // displays it. Reuse whichever alias was populated during the startup scan
+        // before performing another BAR lookup.
+        foreach (var candidate in candidates)
+        {
+            if (_tacticsActionCache.TryGetValue(candidate, out var cached) && cached.Count > 0)
+                return cached;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            var loaded = LoadProtoActionsForTactics(candidate);
+            if (loaded.Count > 0)
+                return loaded;
+        }
+
+        return new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task ApplyTacticsManagerChangesAsync(TacticsManagerResult result)
+    {
+        if (_modXmlRoot == null || _modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
+            return;
+
+        var tacticsDirectory = GetModTacticsDirectory();
+        if (tacticsDirectory == null)
+            return;
+        Directory.CreateDirectory(tacticsDirectory);
+
+        try
+        {
+            foreach (var rename in result.Renames)
+            {
+                var oldPath = GetCustomTacticsPath(rename.OldName);
+                var newPath = GetCustomTacticsPath(rename.NewName);
+                if (oldPath == null || newPath == null || !File.Exists(oldPath))
+                    continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
+                File.Move(oldPath, newPath);
+                RenameTacticsReferences(rename.OldName, rename.NewName);
+            }
+
+            foreach (var createdName in result.CreatedNames)
+            {
+                var path = GetCustomTacticsPath(createdName);
+                if (path == null || File.Exists(path))
+                    continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, NewTacticsTemplate);
+            }
+
+            foreach (var deletedName in result.DeletedNames)
+            {
+                var path = GetCustomTacticsPath(deletedName);
+                if (path != null && File.Exists(path))
+                    File.Delete(path);
+            }
+
+            _tacticsActionTypeCache.Clear();
+            _tacticsActionCache.Clear();
+            ProtoXmlHandler.SaveProtoXml(_modXmlDoc, _modFilePath);
+            _isDirty = false;
+            _fileLabel.Text = _modFilePath;
+            _statusMessage.Text = "Tactics changes saved.";
+
+            if (!string.IsNullOrWhiteSpace(_currentUnitName))
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to manage tactics", ex.Message);
+            await prompt.ShowDialog(this);
+        }
+    }
+
+    private void RenameTacticsReferences(string oldName, string newName)
+    {
+        if (_modXmlRoot == null)
+            return;
+
+        var normalizedOld = NormalizeManagedTacticsName(oldName);
+        var normalizedNew = NormalizeManagedTacticsName(newName);
+        foreach (var tacticsElement in _modXmlRoot.Descendants()
+                     .Where(element => element.Name.LocalName.Equals("tactics", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (NormalizeManagedTacticsName(tacticsElement.Value)
+                .Equals(normalizedOld, StringComparison.OrdinalIgnoreCase))
+            {
+                tacticsElement.Value = normalizedNew;
+            }
+        }
+    }
+
+    private List<string> GetAvailableTacticsNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static string NormalizeTacticsName(string pathOrEntry, string? tacticsRoot = null)
+        {
+            var normalized = pathOrEntry.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            if (!string.IsNullOrWhiteSpace(tacticsRoot))
+                normalized = Path.GetRelativePath(tacticsRoot, normalized);
+            else
+            {
+                var marker = $"tactics{Path.DirectorySeparatorChar}";
+                var index = normalized.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (index >= 0)
+                    normalized = normalized[(index + marker.Length)..];
+                else
+                    normalized = Path.GetFileName(normalized);
+            }
+
+            if (normalized.EndsWith(".tactics.xmb", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized[..^".xmb".Length];
+            else if (normalized.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized[..^".xmb".Length];
+
+            normalized = normalized.Replace(Path.DirectorySeparatorChar, '\\').Trim();
+            if (!normalized.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase))
+                normalized += ".tactics";
+            return normalized;
+        }
+
+        static void AddLooseDirectory(HashSet<string> target, string? gameplayDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(gameplayDirectory))
+                return;
+            var tacticsDirectory = Path.Combine(gameplayDirectory, "tactics");
+            if (!Directory.Exists(tacticsDirectory))
+                return;
+
+            foreach (var path in Directory.GetFiles(tacticsDirectory, "*", SearchOption.AllDirectories))
+            {
+                var fileName = Path.GetFileName(path);
+                if (!fileName.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase) &&
+                    !fileName.EndsWith(".tactics.xmb", StringComparison.OrdinalIgnoreCase) &&
+                    !fileName.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var name = NormalizeTacticsName(path, tacticsDirectory);
+                if (!string.IsNullOrWhiteSpace(name))
+                    target.Add(name);
+            }
+        }
+
+        void AddBarEntries(BarFile? barFile)
+        {
+            if (barFile?.Entries == null)
+                return;
+            foreach (var entry in barFile.Entries)
+            {
+                if (!entry.Name.Contains("tactics", StringComparison.OrdinalIgnoreCase) ||
+                    !entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var name = NormalizeTacticsName(entry.Name);
+                if (!string.IsNullOrWhiteSpace(name))
+                    names.Add(name);
+            }
+        }
+
+        AddBarEntries(_protoDataBarFile);
+        if (_host.CurrentBarFile != null &&
+            string.Equals(Path.GetFileName(_host.CurrentBarPath), "Data.bar", StringComparison.OrdinalIgnoreCase))
+            AddBarEntries(_host.CurrentBarFile);
+
+        AddLooseDirectory(names, ResolveBaseGameplayDirectory());
+        AddLooseDirectory(names, string.IsNullOrWhiteSpace(_modFilePath) ? null : Path.GetDirectoryName(_modFilePath));
+
+        return names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private Dictionary<string, string> LoadProtoActionTypesForTactics(string tacticsName)
     {
         if (string.IsNullOrWhiteSpace(tacticsName))
@@ -22975,13 +26278,34 @@ public partial class ProtoEditorWindow : SimpleWindow
     private IEnumerable<string> GetTacticsCandidatePaths(string tacticsName)
     {
         var relatives = BuildTacticsCandidateRelativePaths(tacticsName);
+        var yielded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddDirectory(string? tacticsDirectory, List<string> output)
+        {
+            if (string.IsNullOrWhiteSpace(tacticsDirectory))
+                return;
+
+            foreach (var relative in relatives)
+            {
+                var candidate = Path.Combine(tacticsDirectory, relative);
+                if (yielded.Add(candidate))
+                    output.Add(candidate);
+            }
+        }
+
+        var candidates = new List<string>();
+
+        // The active mod must be checked as well as Data.bar/base data. Custom tactics
+        // discovered by the selector otherwise appeared valid but had no inherited actions.
+        AddDirectory(GetModTacticsDirectory(), candidates);
 
         var baseGameplayDir = ResolveBaseGameplayDirectory();
-        if (!string.IsNullOrWhiteSpace(baseGameplayDir))
-        {
-            foreach (var relative in relatives)
-                yield return Path.Combine(baseGameplayDir, "tactics", relative);
-        }
+        AddDirectory(
+            string.IsNullOrWhiteSpace(baseGameplayDir) ? null : Path.Combine(baseGameplayDir, "tactics"),
+            candidates);
+
+        foreach (var candidate in candidates)
+            yield return candidate;
     }
 
     private static List<string> BuildTacticsCandidateRelativePaths(string tacticsName)
@@ -23389,7 +26713,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else
         {
-            _isReadOnly = false;
+            _isReadOnly = _isTacticsActionEditorMode && _tacticsActionEditorReadOnly;
         }
 
         if (unit == null)
@@ -25134,7 +28458,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Margin = new Thickness(0, 0, 10, 0)
                     };
                     EditorTextFieldStyle.ConfigureSelector(acbAdd);
-                    EnableDropdownAutoComplete(acbAdd);
+                    EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
                     Grid.SetColumn(acbAdd, 0);
                     addGrid.Children.Add(acbAdd);
 
@@ -29277,7 +32601,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0)
                 };
-                EnableDropdownAutoComplete(pickerAcb);
+                EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);
                 Grid.SetColumn(pickerAcb, 0);
                 pickerRow.Children.Add(pickerAcb);
                 string? selectedAttributeLabel = null;
@@ -29584,7 +32908,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             unitTypePicker = acbAdd;
-            EnableDropdownAutoComplete(acbAdd);
+            EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
             Grid.SetColumn(acbAdd, 0);
             addTypeGrid.Children.Add(acbAdd);
 
@@ -29672,7 +32996,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             unitFlagPicker = acbAdd;
-            EnableDropdownAutoComplete(acbAdd);
+            EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
             Grid.SetColumn(acbAdd, 0);
             addFlagGrid.Children.Add(acbAdd);
 
@@ -29820,73 +33144,187 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _activeEditorPanel = _actionsEditorPanel;
         _activeEditorTabIndex = 1;
-        var tacticsGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("180, *") };
+        var tacticsGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,380,Auto,*") };
         tacticsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var tacticsLabel = new TextBlock
         {
             Text = "Tactics",
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 4, 10, 4)
+            Margin = new Thickness(0, 4, 8, 4)
         };
         Grid.SetColumn(tacticsLabel, 0);
         Grid.SetRow(tacticsLabel, 0);
         tacticsGrid.Children.Add(tacticsLabel);
 
         string initialTactics = ProtoXmlHandler.GetSimpleField(unit, "tactics") ?? "";
-        Control tacticsControl;
-        if (ProtoConstants.FieldSuggestions.TryGetValue("tactics", out var tacticSuggestions))
+        if (!string.IsNullOrWhiteSpace(initialTactics) &&
+            !initialTactics.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase))
         {
-            var acb = new AutoCompleteBox
-            {
-                Text = initialTactics,
-                FilterMode = AutoCompleteFilterMode.Contains,
-                IsEnabled = !_isReadOnly,
-                Margin = new Thickness(0, 4, 0, 4),
-                ItemsSource = tacticSuggestions
-            };
-            EditorTextFieldStyle.ConfigureSelector(acb);
-            EnableDropdownAutoComplete(acb);
-            acb.TextChanged += async (s, e) =>
-            {
-                if (!_isPopulating)
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed) MarkDirty();
-                }
-            };
-            tacticsControl = acb;
+            initialTactics += ".tactics";
         }
-        else
+        var availableTactics = GetAvailableTacticsNames();
+        if (!string.IsNullOrWhiteSpace(initialTactics) &&
+            !availableTactics.Contains(initialTactics.Trim(), StringComparer.OrdinalIgnoreCase))
         {
-            var tb = new TextBox
-            {
-                Text = initialTactics,
-                IsEnabled = !_isReadOnly,
-                Margin = new Thickness(0, 4, 0, 4)
-            };
-            EditorTextFieldStyle.ConfigureTextBox(tb);
-            tb.TextChanged += async (s, e) =>
-            {
-                if (!_isPopulating)
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed) MarkDirty();
-                }
-            };
-            tacticsControl = tb;
+            availableTactics.Add(initialTactics.Trim());
+            availableTactics = availableTactics.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         }
+
+        var tacticsControl = new AutoCompleteBox
+        {
+            Text = initialTactics,
+            FilterMode = AutoCompleteFilterMode.Contains,
+            IsEnabled = !_isReadOnly,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        EditorTextFieldStyle.ConfigureSelector(tacticsControl);
+        ConfigureStrictSuggestionAutoComplete(tacticsControl, availableTactics, initialTactics);
 
         Grid.SetColumn(tacticsControl, 1);
         Grid.SetRow(tacticsControl, 0);
         tacticsGrid.Children.Add(tacticsControl);
-        _fieldControls["tactics"] = tacticsControl;
-        _activeEditorPanel.Children.Add(tacticsGrid);
 
-        AddSectionHeader("Proto Actions");
-        var actions = ProtoXmlHandler.GetProtoActions(unit);
+        var manageTacticsIcon = new Grid
+        {
+            Width = 22,
+            Height = 22
+        };
+        manageTacticsIcon.Children.Add(new TextBlock
+        {
+            Text = "✎",
+            FontSize = 15,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -2, 0, 0),
+            RenderTransform = new ScaleTransform(-1, 1),
+            RenderTransformOrigin = RelativePoint.Center
+        });
+        manageTacticsIcon.Children.Add(new TextBlock
+        {
+            Text = "⚙",
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, -1, -1)
+        });
+
+        var manageTacticsButton = new Button
+        {
+            Content = manageTacticsIcon,
+            Width = 36,
+            Height = 32,
+            Padding = new Thickness(6),
+            Margin = new Thickness(6, 4, 0, 4),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            IsEnabled = !_isReadOnly,
+            IsVisible = _unitTabs.SelectedIndex == 1
+        };
+        ToolTip.SetTip(manageTacticsButton, "Manage tactics files");
+        manageTacticsButton.Click += async (_, _) => await OpenTacticsManagerAsync();
+        Grid.SetColumn(manageTacticsButton, 2);
+        Grid.SetRow(manageTacticsButton, 0);
+        tacticsGrid.Children.Add(manageTacticsButton);
+
+        _fieldControls["tactics"] = tacticsControl;
+        if (!_isTacticsActionEditorMode)
+            _activeEditorPanel.Children.Add(tacticsGrid);
+
+        var committedTacticsName = initialTactics.Trim();
+        var committedTacticsActions = CloneProtoActionMap(LoadProtoActionsForTactics(committedTacticsName));
+        var tacticsSelectionChangeInProgress = false;
+
+        async Task CommitSelectedTacticsAsync(string selectedName)
+        {
+            var newTacticsName = selectedName.Trim();
+            if (newTacticsName.Equals(committedTacticsName, StringComparison.OrdinalIgnoreCase) ||
+                tacticsSelectionChangeInProgress || _isPopulating || _isReadOnly ||
+                _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+                return;
+
+            tacticsSelectionChangeInProgress = true;
+            try
+            {
+                tacticsControl.Text = newTacticsName;
+                var proceed = await CheckStartLocalMod();
+                if (!proceed || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+                {
+                    tacticsControl.Text = committedTacticsName;
+                    return;
+                }
+
+                // Persist the proto overlay while the old tactics metadata is still active.
+                ApplyCurrentEdits();
+                var currentUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+                if (currentUnit == null)
+                    return;
+
+                ProtoXmlHandler.SetSimpleField(currentUnit, "tactics", newTacticsName);
+                var newTacticsActions = CloneProtoActionMap(LoadProtoActionsForTactics(newTacticsName));
+                MigrateProtoActionsForTacticsChange(currentUnit, committedTacticsActions, newTacticsActions);
+
+                committedTacticsName = newTacticsName;
+                committedTacticsActions = newTacticsActions;
+                RefreshCurrentUnitProtoActionMetadata(currentUnit);
+                MarkDirty();
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            }
+            finally
+            {
+                tacticsSelectionChangeInProgress = false;
+            }
+        }
+
+        tacticsControl.SelectionChanged += async (_, _) =>
+        {
+            if (tacticsControl.SelectedItem is string selectedValue)
+                await CommitSelectedTacticsAsync(selectedValue);
+        };
+        tacticsControl.LostFocus += async (_, _) =>
+        {
+            // An empty field explicitly means that the unit has no tactics file.
+            // Commit it just like selecting a file so inherited actions are materialized
+            // and all tactics markers/protections are cleared immediately.
+            if (string.IsNullOrWhiteSpace(tacticsControl.Text) &&
+                !string.IsNullOrWhiteSpace(committedTacticsName))
+            {
+                await CommitSelectedTacticsAsync("");
+            }
+        };
+
+        Panel? tacticsModeParentPanel = null;
+        StackPanel? tacticsModeActionsPanel = null;
+        if (_isTacticsActionEditorMode && _activeEditorPanel != null)
+        {
+            tacticsModeParentPanel = _activeEditorPanel;
+            tacticsModeActionsPanel = new StackPanel { Spacing = 10, Margin = new Thickness(0, 15, 0, 0) };
+            var tacticsModeTacticPanel = new StackPanel { Spacing = 10, Margin = new Thickness(0, 15, 0, 0) };
+            var modeTabs = new TabControl
+            {
+                ItemsSource = new[]
+                {
+                    new TabItem { Header = "Actions", Content = tacticsModeActionsPanel },
+                    new TabItem { Header = "Tactic", Content = tacticsModeTacticPanel },
+                },
+                SelectedIndex = 0
+            };
+            tacticsModeParentPanel.Children.Add(modeTabs);
+
+            _activeEditorPanel = tacticsModeTacticPanel;
+            BuildBasicTacticEditor();
+            _activeEditorPanel = tacticsModeActionsPanel;
+        }
+        else
+        {
+            AddSectionHeader("Proto Actions");
+        }
+
+        var actions = _isTacticsActionEditorMode
+            ? GetTacticsEditorActions()
+            : ProtoXmlHandler.GetProtoActions(unit);
         var actionsContainer = new StackPanel { Spacing = 10 };
-        _activeEditorPanel.Children.Add(actionsContainer);
+        (_activeEditorPanel ?? throw new InvalidOperationException("The action editor panel was not initialized.")).Children.Add(actionsContainer);
         var actionSelectorPanel = new WrapPanel { Orientation = Orientation.Horizontal };
         var actionDetailsPanel = new StackPanel { Spacing = 10 };
         actionsContainer.Children.Add(actionSelectorPanel);
@@ -29917,7 +33355,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var actionButton = new Button
                 {
-                    Content = actionName,
+                    Content = CreateProtoActionSelectorContent(actionState, actionName),
                     Padding = new Thickness(8, 3),
                     Margin = new Thickness(0, 0, 6, 6),
                     Background = ReferenceEquals(actionState, selectedAction)
@@ -29928,20 +33366,47 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     SelectAction(actionState);
                 };
+                actionState.ActionSelectorButton = actionButton;
                 actionSelectorPanel.Children.Add(actionButton);
 
                 if (actionState.WidgetBorder != null)
                     actionState.WidgetBorder.IsVisible = ReferenceEquals(actionState, selectedAction);
             }
+
+            if (_isTacticsActionEditorMode && !_isReadOnly)
+            {
+                var btnAddAction = new Button
+                {
+                    Content = "Add Action",
+                    Background = Brush.Parse("#2b7a0b"),
+                    Padding = new Thickness(8, 3),
+                    Margin = new Thickness(0, 0, 6, 6)
+                };
+                btnAddAction.Click += async (_, _) =>
+                {
+                    var proceed = await CheckStartLocalMod();
+                    if (proceed)
+                    {
+                        var newPa = new ProtoAction();
+                        SelectAction(AddProtoActionWidget(newPa, isNewCustomAction: true));
+                        MarkDirty();
+                    }
+                };
+                actionSelectorPanel.Children.Add(btnAddAction);
+            }
         }
 
-        ProtoActionWidgetState AddProtoActionWidget(ProtoAction pa, bool isNewCustomAction = false, bool isLinkedMaulAreaAction = false)
+        ProtoActionWidgetState AddProtoActionWidget(
+            ProtoAction pa,
+            bool isNewCustomAction = false,
+            bool isLinkedMaulAreaAction = false,
+            bool isTacticsOnlyAction = false)
         {
             var widget = CreateProtoActionWidget(pa, () =>
             {
                 MarkDirty();
                 RefreshActionSelector();
-            }, isNewCustomAction, isLinkedMaulAreaAction, EnsureMaulCompanionForAction);
+            }, isNewCustomAction, isLinkedMaulAreaAction, EnsureMaulCompanionForAction, isTacticsOnlyAction);
             actionDetailsPanel.Children.Add(widget);
             var state = _protoActionWidgets[^1];
             state.NameAcb.TextChanged += (_, _) => RefreshActionSelector();
@@ -30011,7 +33476,27 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         foreach (var action in actions)
         {
-            AddProtoActionWidget(action);
+            // A persisted override of a tactics-only action intentionally omits <type>.
+            // Use the raw protoaction type here: if the type exists only in tactics, the
+            // action remains tactics-backed after switching units or restarting the editor.
+            AddProtoActionWidget(action, isTacticsOnlyAction: IsTacticsBackedProtoAction(action));
+        }
+
+        var protoActionNames = actions
+            .Select(action => action.Name?.Trim() ?? "")
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!_isTacticsActionEditorMode)
+        {
+            foreach (var tacticsAction in _currentUnitTacticsActions.Values
+                         .Where(action => !string.IsNullOrWhiteSpace(action.Name) && !protoActionNames.Contains(action.Name.Trim()))
+                         .OrderBy(action => action.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var tacticsOnlyActionName = tacticsAction.Name.Trim();
+                AddProtoActionWidget(
+                    new ProtoAction { Name = tacticsOnlyActionName },
+                    isTacticsOnlyAction: true);
+            }
         }
 
         isBuildingInitialActions = false;
@@ -30038,7 +33523,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         RefreshActionSelector();
 
-        if (!_isReadOnly)
+        if (!_isReadOnly && !_isTacticsActionEditorMode)
         {
             var actionButtonsRow = new StackPanel
             {
@@ -30049,7 +33534,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var btnAddAction = new Button
             {
-                Content = "+ Add Proto Action",
+                Content = _isTacticsActionEditorMode ? "+ Add Action" : "+ Add Proto Action",
                 Background = Brush.Parse("#2b7a0b"),
                 Margin = new Thickness(0)
             };
@@ -30075,12 +33560,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 SelectAction(AddProtoActionWidget(pa));
             });
-            actionButtonsRow.Children.Add(btnCopyAction);
+            if (!_isTacticsActionEditorMode)
+                actionButtonsRow.Children.Add(btnCopyAction);
 
             // Keep management controls immediately beneath the Proto Actions
             // heading, before the selector buttons and selected action editor.
             actionsContainer.Children.Insert(0, actionButtonsRow);
         }
+
+        if (tacticsModeParentPanel != null)
+            _activeEditorPanel = tacticsModeParentPanel;
 
         RebuildPageSearchTargets();
         RebuildSectionJumpFlyout();
@@ -30123,7 +33612,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private Border CreateChip(string text, Action onRemove)
+    private Border CreateChip(
+        string text,
+        Action onRemove,
+        ProtoActionValueSource source = ProtoActionValueSource.ProtoOnly,
+        string tacticsValue = "")
     {
         var border = new Border
         {
@@ -30136,6 +33629,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         var stack = new StackPanel { Orientation = Orientation.Horizontal };
         var tb = new TextBlock { Text = text, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         stack.Children.Add(tb);
+
+        var sourceMarker = CreateProtoActionSourceMarker(source, tacticsValue);
+        if (sourceMarker != null)
+        {
+            sourceMarker.Margin = new Thickness(6, 0, 1, 0);
+            sourceMarker.VerticalAlignment = VerticalAlignment.Center;
+            stack.Children.Add(sourceMarker);
+        }
 
         if (!_isReadOnly)
         {
@@ -30156,7 +33657,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         Action onRemove,
         bool isNewCustomAction = false,
         bool isLinkedMaulAreaAction = false,
-        Action<ProtoActionWidgetState>? onActionTypeChanged = null)
+        Action<ProtoActionWidgetState>? onActionTypeChanged = null,
+        bool isTacticsOnlyAction = false)
     {
         string resolvedType = ResolveProtoActionType(pa.Name, pa.Type);
         var typeOptions = GetProtoActionTypeOptions(resolvedType);
@@ -30246,6 +33748,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             Model = pa.Clone(),
             IsNewCustomAction = isNewCustomAction,
+            IsTacticsOnlyAction = isTacticsOnlyAction,
+            IsCurrentTacticsAction = TryGetCurrentUnitTacticsAction(pa.Name, out var initialTacticsAction),
+            HasTacticsOnlyOverrides = initialTacticsAction != null &&
+                                       HasActualTacticsOverride(pa, initialTacticsAction),
             IsLinkedMaulAreaAction = isLinkedMaulAreaAction,
             Container = mainStack,
             NameAcb = nameAcb,
@@ -30270,7 +33776,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             RampageLayoutContainer = new StackPanel { Spacing = 4 }
         };
         state.WidgetBorder = border;
-        if (state.IsLinkedMaulAreaAction)
+        if (state.IsLinkedMaulAreaAction || state.IsTacticsOnlyAction)
         {
             nameAcb.IsEnabled = false;
             typeAcb.IsEnabled = false;
@@ -30329,6 +33835,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             btnRemove.Click += async (s, e) =>
             {
+                var actionName = state.NameAcb.Text?.Trim() ?? state.Model.Name?.Trim() ?? "";
+                if (TryGetCurrentUnitTacticsAction(actionName, out _))
+                {
+                    await new Prompt(
+                        PromptType.Error,
+                        "Tactics Action",
+                        "This action exists in the currently linked tactics file and cannot be removed. You may override its fields, but the tactics action will remain available.")
+                        .ShowDialog(this);
+                    return;
+                }
+
                 var proceed = await CheckStartLocalMod();
                 if (proceed)
                 {
@@ -30687,6 +34204,30 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             rowPanel.Children.Add(valTb);
 
+            string GetCurrentDamageType() => typeCb.SelectedItem?.ToString()?.Trim() ?? "";
+            Border? damageSourceMarker = null;
+            void RefreshDamageSourceMarker()
+            {
+                if (damageSourceMarker != null)
+                    rowPanel.Children.Remove(damageSourceMarker);
+                damageSourceMarker = null;
+
+                if (!TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction))
+                    return;
+                var type = GetCurrentDamageType();
+                var protoEntry = state.Model.Damages.FirstOrDefault(entry => entry.DamageType.Equals(type, StringComparison.OrdinalIgnoreCase));
+                var tacticsEntry = tacticsAction.Damages.FirstOrDefault(entry => entry.DamageType.Equals(type, StringComparison.OrdinalIgnoreCase));
+                var protoAmount = string.IsNullOrWhiteSpace(protoEntry.DamageType) ? "" : protoEntry.Amount;
+                var tacticsAmount = string.IsNullOrWhiteSpace(tacticsEntry.DamageType) ? "" : tacticsEntry.Amount;
+                var source = GetProtoActionValueSource(valTb.Text?.Trim() ?? "", protoAmount, tacticsAmount);
+                damageSourceMarker = CreateProtoActionSourceMarker(source, tacticsAmount);
+                if (damageSourceMarker != null)
+                    rowPanel.Children.Add(damageSourceMarker);
+            }
+            typeCb.SelectionChanged += (_, _) => RefreshDamageSourceMarker();
+            valTb.TextChanged += (_, _) => RefreshDamageSourceMarker();
+            RefreshDamageSourceMarker();
+
             var rowState = new DamageRowState { RowPanel = rowPanel, TypeCb = typeCb, ValTb = valTb };
             state.DamageRows.Add(rowState);
 
@@ -30787,6 +34328,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 180,
                     IsEnabled = !_isReadOnly
                 };
+                var isInheritedBonusType =
+                    !_isTacticsActionEditorMode &&
+                    TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var inheritedBonusTacticsAction) &&
+                    inheritedBonusTacticsAction.DamageBonuses.Any(entry =>
+                        entry.UnitType.Equals(btype, StringComparison.OrdinalIgnoreCase));
+                if (isInheritedBonusType)
+                    typeAcb.IsEnabled = false;
                 typeAcb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -30807,7 +34355,41 @@ public partial class ProtoEditorWindow : SimpleWindow
                         if (proceed) MarkDirty();
                     }
                 };
-                rowPanel.Children.Add(valTb);
+                var valueHost = new Grid
+                {
+                    Width = 80,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                valueHost.Children.Add(valTb);
+                rowPanel.Children.Add(valueHost);
+
+                Border? bonusSourceMarker = null;
+                void RefreshBonusSourceMarker()
+                {
+                    if (bonusSourceMarker != null)
+                        valueHost.Children.Remove(bonusSourceMarker);
+                    bonusSourceMarker = null;
+
+                    if (!TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction))
+                        return;
+                    var type = typeAcb.Text?.Trim() ?? "";
+                    var protoEntry = state.Model.DamageBonuses.FirstOrDefault(entry => entry.UnitType.Equals(type, StringComparison.OrdinalIgnoreCase));
+                    var tacticsEntry = tacticsAction.DamageBonuses.FirstOrDefault(entry => entry.UnitType.Equals(type, StringComparison.OrdinalIgnoreCase));
+                    var protoMultiplier = string.IsNullOrWhiteSpace(protoEntry.UnitType) ? "" : protoEntry.Multiplier;
+                    var tacticsMultiplier = string.IsNullOrWhiteSpace(tacticsEntry.UnitType) ? "" : tacticsEntry.Multiplier;
+                    var source = GetProtoActionValueSource(valTb.Text?.Trim() ?? "", protoMultiplier, tacticsMultiplier);
+                    bonusSourceMarker = CreateProtoActionSourceMarker(source, tacticsMultiplier);
+                    if (bonusSourceMarker != null)
+                    {
+                        bonusSourceMarker.Margin = new Thickness(0, 0, 3, 0);
+                        bonusSourceMarker.VerticalAlignment = VerticalAlignment.Center;
+                        valueHost.Children.Add(bonusSourceMarker);
+                    }
+                }
+                typeAcb.TextChanged += (_, _) => RefreshBonusSourceMarker();
+                valTb.TextChanged += (_, _) => RefreshBonusSourceMarker();
+                RefreshBonusSourceMarker();
 
                 var rowState = new BonusRowState { RowPanel = rowPanel, TypeAcb = typeAcb, ValTb = valTb };
                 state.BonusRows.Add(rowState);
@@ -30817,6 +34399,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
                     btnDel.Click += async (s, e) =>
                     {
+                        if (isInheritedBonusType)
+                        {
+                            var inheritedPrompt = new Prompt(
+                                PromptType.Error,
+                                "Inherited damage bonus",
+                                "This Damage Bonus type is supplied by the current tactics and cannot be removed. Its value can still be overridden.");
+                            await inheritedPrompt.ShowDialog(this);
+                            return;
+                        }
+
                         var proceed = await CheckStartLocalMod();
                         if (proceed)
                         {
@@ -30867,6 +34459,49 @@ public partial class ProtoEditorWindow : SimpleWindow
         RefreshProtoActionDamageHeader(state);
 
         RefreshProtoActionMetadataPanels(state);
+
+        // Type-keyed numeric rows are rendered by several action-specific editors.
+        // A type supplied by the current tactics action is identity data: keep the
+        // type and row protected while allowing the numeric value to be overridden.
+        if (TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var currentTacticsAction))
+        {
+            foreach (var structuredTag in new[] { "rate", "typedmaxrange", "minrate" })
+            {
+                if (!state.StructuredFieldRows.TryGetValue(structuredTag, out var renderedRows))
+                    continue;
+
+                var inheritedTypes = GetProtoActionStructuredFieldEntriesForEditor(
+                        currentTacticsAction,
+                        resolvedType,
+                        structuredTag)
+                    .Select(entry => entry.Attributes.TryGetValue("type", out var type) ? type.Trim() : "")
+                    .Where(type => !string.IsNullOrWhiteSpace(type))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var row in renderedRows)
+                {
+                    if (!row.AttributeEditors.TryGetValue("type", out var typeEditor))
+                        continue;
+
+                    var renderedType = typeEditor switch
+                    {
+                        AutoCompleteBox acb => acb.Text?.Trim() ?? "",
+                        TextBox textBox => textBox.Text?.Trim() ?? "",
+                        _ => ""
+                    };
+                    if (!inheritedTypes.Contains(renderedType))
+                        continue;
+
+                    typeEditor.IsEnabled = false;
+                    foreach (var removeButton in row.RowPanel.Children
+                                 .OfType<Button>()
+                                 .Where(button => button.Classes.Contains("remove-button")))
+                    {
+                        removeButton.IsEnabled = false;
+                    }
+                }
+            }
+        }
 
         return border;
     }
@@ -32232,10 +35867,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var pa = pw.Model.Clone();
             pa.Name = pw.NameAcb.Text?.Trim() ?? "";
-            pa.Type = TryResolveProtoActionType(pw.NameAcb.Text?.Trim() ?? "", out var resolvedType)
-                ? resolvedType
-                : GetExactProtoActionTypeMatch(pw.TypeAcb.Text);
-            ProtoAction? tacticsAction = TryGetCurrentUnitTacticsAction(pa.Name, out var matchedTacticsAction)
+            pa.Type = _isTacticsActionEditorMode
+                ? GetExactProtoActionTypeMatch(pw.TypeAcb.Text)
+                : TryResolveProtoActionType(pw.NameAcb.Text?.Trim() ?? "", out var resolvedType)
+                    ? resolvedType
+                    : GetExactProtoActionTypeMatch(pw.TypeAcb.Text);
+            ProtoAction? tacticsAction = !_isTacticsActionEditorMode &&
+                                         TryGetCurrentUnitTacticsAction(pa.Name, out var matchedTacticsAction)
                 ? matchedTacticsAction
                 : null;
 
@@ -32410,14 +36048,29 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .Select(x => new XElement(x.Element))
                 .ToList();
             var tacticsOnHitEffects = GetProtoActionOnHitEffectElements(tacticsAction ?? new ProtoAction());
-            var originalProtoOnHitEffects = GetProtoActionOnHitEffectElements(pw.Model);
             pa.AdditionalElements.RemoveAll(x => x.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase));
-            var protoOnHitEffects = ProtoActionElementListsEqual(currentOnHitEffects, tacticsOnHitEffects) &&
-                                    !ProtoActionElementListsEqual(originalProtoOnHitEffects, currentOnHitEffects)
-                ? []
-                : currentOnHitEffects;
-            foreach (var effect in protoOnHitEffects)
+
+            static XElement? FindOnHitEffectByType(IEnumerable<XElement> effects, XElement candidate)
+            {
+                var candidateType = ((string?)candidate.Attribute("type") ?? "").Trim();
+                return string.IsNullOrWhiteSpace(candidateType)
+                    ? null
+                    : effects.FirstOrDefault(effect => string.Equals(
+                        ((string?)effect.Attribute("type") ?? "").Trim(),
+                        candidateType,
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
+            foreach (var effect in currentOnHitEffects)
+            {
+                var tacticsMatch = FindOnHitEffectByType(tacticsOnHitEffects, effect);
+                // An unchanged inherited card belongs only to the shared tactics file. New proto
+                // cards and edited same-type overrides remain serialized in this unit.
+                if (tacticsMatch != null && XNode.DeepEquals(effect, tacticsMatch))
+                    continue;
+
                 pa.AdditionalElements.Add(new XElement(effect));
+            }
 
             foreach (var kvp in pw.AdditionalFieldControls)
             {
@@ -32533,6 +36186,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             foreach (var flagTag in ProtoActionMetadataCatalog.GetKnownFlagTags())
             {
+                var tacticsValue = tacticsAction != null
+                    ? ProtoXmlHandler.GetProtoActionSimpleFieldValue(tacticsAction, flagTag)
+                    : "";
+                var tacticsFlagIsEnabled = IsProtoActionFlagEnabledValue(tacticsValue) ||
+                    (tacticsAction != null &&
+                     GetProtoActionAdditionalElement(tacticsAction, flagTag) != null &&
+                     !tacticsValue.Trim().Equals("0", StringComparison.OrdinalIgnoreCase));
                 var currentValue = flagTag.Equals("active", StringComparison.OrdinalIgnoreCase)
                     ? (pw.CustomValues.GetValueOrDefault(ProtoActionActiveExplicitStateKey, "0").Equals("1", StringComparison.OrdinalIgnoreCase)
                         ? pw.CustomValues.GetValueOrDefault(ProtoActionActiveValueStateKey, "0")
@@ -32547,10 +36207,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         ? (pw.CustomValues.GetValueOrDefault(BuckAttackWorkOnFrozenUnitsExplicitStateKey, "0") == "1"
                             ? pw.CustomValues.GetValueOrDefault(BuckAttackWorkOnFrozenUnitsStateKey, "0")
                             : "")
-                    : (pw.SelectedFlagTags.Contains(flagTag) ? "1" : "");
-                var tacticsValue = tacticsAction != null
-                    ? ProtoXmlHandler.GetProtoActionSimpleFieldValue(tacticsAction, flagTag)
-                    : "";
+                    : pw.SelectedFlagTags.Contains(flagTag)
+                        ? "1"
+                        : tacticsFlagIsEnabled
+                            ? "0"
+                            : "";
                 var originalProtoValue = ProtoXmlHandler.GetProtoActionSimpleFieldValue(pw.Model, flagTag);
                 var protoValue = flagTag.Equals("active", StringComparison.OrdinalIgnoreCase)
                     ? currentValue switch
@@ -32653,6 +36314,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 : currentBonusEntries)
             {
                 pa.DamageBonuses.Add(bonusEntry);
+            }
+
+            if (!_isTacticsActionEditorMode && pw.IsTacticsOnlyAction)
+            {
+                // The tactics action already supplies its name/type. A generated protoaction
+                // contains only fields that differ from tactics, plus the name required to match it.
+                pa.Type = "";
+                pa.SourceElement = null;
+                if (!HasSerializableProtoActionOverride(pa))
+                    continue;
             }
 
             actionsList.Add(pa);
@@ -33453,6 +37124,19 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
+        if (_isTacticsActionEditorMode)
+        {
+            if (!_allowTacticsEditorClose && HasUnsavedTacticsEditorChanges())
+            {
+                e.Cancel = true;
+                await RequestCloseTacticsActionEditorAsync();
+                return;
+            }
+
+            base.OnClosing(e);
+            return;
+        }
+
         if (_isDirty)
         {
             e.Cancel = true;
@@ -33468,4 +37152,5 @@ public partial class ProtoEditorWindow : SimpleWindow
             base.OnClosing(e);
         }
     }
+
 }

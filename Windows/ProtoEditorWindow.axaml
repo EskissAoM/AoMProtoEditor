@@ -132,7 +132,7 @@
     <Grid>
     <DockPanel>
         <!-- Menu bar / Top toolbar -->
-        <Border DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
+        <Border x:Name="_mainToolbar" DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
             <DockPanel Margin="10,0">
                 <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                     <Button Content="🔄 Switch Mod" Click="SwitchMod_Click" />
@@ -146,9 +146,9 @@
         </Border>
 
         <!-- Main content -->
-        <Grid ColumnDefinitions="260,5,*,5,360">
+        <Grid x:Name="_mainContentGrid" ColumnDefinitions="260,5,*,5,430">
             <!-- Left panel: unit list -->
-            <Border Grid.Column="0" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
+            <Border x:Name="_unitListPanel" Grid.Column="0" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="Units" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
                     
@@ -175,7 +175,7 @@
                 </DockPanel>
             </Border>
 
-            <GridSplitter Grid.Column="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
 
             <!-- Right panel: fixed tools + scrollable editor -->
             <Border Grid.Column="2" Padding="15">
@@ -354,8 +354,8 @@
                     <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="#e3bd54" FontWeight="Bold" Margin="0,5,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Grid>
             </Border>
-            <GridSplitter Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
-            <Border Grid.Column="4" Padding="12" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+            <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Padding="12" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
                 <Grid RowDefinitions="Auto,*">
                     <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
                         <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center" />
