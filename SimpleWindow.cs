@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
@@ -8,6 +9,11 @@ namespace CryBarEditor.Classes;
 /// <summary>Minimal window base shared by the extracted Proto Editor dialogs.</summary>
 public abstract class SimpleWindow : Window, INotifyPropertyChanged
 {
+    protected SimpleWindow()
+    {
+        Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://AoMProtoEditor/Assets/editor_icon.png")));
+    }
+
     public new event PropertyChangedEventHandler? PropertyChanged;
 
     public void OnPropertyChanged(string propertyName) =>

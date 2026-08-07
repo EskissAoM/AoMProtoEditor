@@ -25712,8 +25712,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task OpenTacticsManagerAsync()
     {
-        if (_isReadOnly)
-            return;
         if (!await CheckStartLocalMod() || _modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
@@ -36958,6 +36956,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 await pErr.ShowDialog(this);
             }
         }
+    }
+
+    private void ProtounitEditView_Click(object? sender, RoutedEventArgs e)
+    {
+        _unitList.Focus();
+    }
+
+    private async void ProtounitTactics_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenTacticsManagerAsync();
     }
 
     private async void Settings_Click(object? sender, RoutedEventArgs e)

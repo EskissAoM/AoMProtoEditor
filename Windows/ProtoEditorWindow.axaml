@@ -126,6 +126,34 @@
             <Setter Property="Foreground" Value="#d9d9d9" />
             <Setter Property="Background" Value="#2b3c57" />
         </Style>
+        <Style Selector="Button.topNav">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Background" Value="#262629" />
+            <Setter Property="BorderBrush" Value="#4a4a4f" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Padding" Value="12,6" />
+        </Style>
+        <Style Selector="Button.topNav:pointerover">
+            <Setter Property="Background" Value="#303034" />
+            <Setter Property="BorderBrush" Value="#68686e" />
+        </Style>
+        <Style Selector="Button.topSave">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Background" Value="#2b7a0b" />
+            <Setter Property="BorderBrush" Value="#3a9215" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button.topSave:pointerover">
+            <Setter Property="Background" Value="#348f0e" />
+        </Style>
+        <Style Selector="Button.topMenuItem">
+            <Setter Property="Width" Value="125" />
+            <Setter Property="MinWidth" Value="125" />
+            <Setter Property="MaxWidth" Value="125" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Padding" Value="8,4" />
+        </Style>
 
     </Window.Styles>
 
@@ -134,14 +162,53 @@
         <!-- Menu bar / Top toolbar -->
         <Border x:Name="_mainToolbar" DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
             <DockPanel Margin="10,0">
+                <Button DockPanel.Dock="Right"
+                        Classes="topSave"
+                        Content="Save"
+                        Click="Save_Click"
+                        MinWidth="80"
+                        VerticalAlignment="Center" />
+
                 <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                    <Button Content="🔄 Switch Mod" Click="SwitchMod_Click" />
-                    <Button Content="+ Create Mod" Click="CreateMod_Click" Background="#2b7a0b" />
-                    <Button Content="💾 Save" Click="Save_Click" />
-                    <Button Content="💾 Save As" Click="SaveAs_Click" />
-                    <Button Content="⚙ Settings" Click="Settings_Click" />
+                    <Button Classes="topNav" Content="Mods">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Spacing="4" Margin="4">
+                                    <Button Classes="topMenuItem"
+                                            Content="Create a mod"
+                                            Click="CreateMod_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Switch mod"
+                                            Click="SwitchMod_Click" />
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button Classes="topNav" Content="Protounit">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Spacing="4" Margin="4">
+                                    <Button Classes="topMenuItem"
+                                            Content="Edit/view"
+                                            Click="ProtounitEditView_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Tactics"
+                                            Click="ProtounitTactics_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Abilities" />
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button Classes="topNav" Content="Technologies" />
+                    <Button Classes="topNav" Content="Gods" />
+                    <Button Classes="topNav" Content="Settings" Click="Settings_Click" />
                 </StackPanel>
-                <TextBlock x:Name="_fileLabel" Text="No file loaded" Foreground="Gray" VerticalAlignment="Center" HorizontalAlignment="Right" />
+
+                <!-- Kept only as an internal status sink for existing load/save code. -->
+                <TextBlock x:Name="_fileLabel" IsVisible="False" />
             </DockPanel>
         </Border>
 

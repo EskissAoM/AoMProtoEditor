@@ -75,3 +75,10 @@ For each changed optional or repeatable field, verify:
 - Chip remove controls use the original compact visual: transparent background, light-gray `X`, no border, and minimal padding.
 - The red 28×28 `remove-button` style is reserved for full-row or full-card removal.
 - Do not override chip remove content, padding, colors, or alignment locally.
+
+## Mirrored ProtoAction flag controls
+
+- A specialized checkbox, selector, or chip that represents a ProtoAction flag must stay synchronized with the generic Flags editor in both directions.
+- Register specialized checkboxes in `CustomFlagControls` and register every mirrored control with `RegisterProtoActionFlagSourceControl`.
+- Source markers use the underlying XML flag value: cyan when inherited from tactics, orange when proto overrides tactics, and no marker for proto-only flags.
+- Removing an inherited flag through either representation must preserve the existing explicit `0` proto override behavior; re-adding it restores inheritance and removes the redundant override.
