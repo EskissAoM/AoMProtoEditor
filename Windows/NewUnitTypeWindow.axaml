@@ -1,6 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="CryBarEditor.Windows.NewUnitTypeWindow"
+        x:Class="AoMDivineDataEditor.Windows.NewUnitTypeWindow"
         Title="New Unit Type" Width="320" Height="150"
         WindowStartupLocation="CenterOwner" CanResize="False"
         Foreground="#d9d9d9" Background="#141414">

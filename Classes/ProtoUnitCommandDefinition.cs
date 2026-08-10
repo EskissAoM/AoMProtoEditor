@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 public sealed class ProtoUnitCommandDefinition
 {

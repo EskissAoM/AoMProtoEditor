@@ -3,7 +3,7 @@ using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Layout;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 /// <summary>
 /// Shared compact presentation for numeric editor controls. The constant is

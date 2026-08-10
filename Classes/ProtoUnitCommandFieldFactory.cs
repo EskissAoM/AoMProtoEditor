@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 /// <summary>
 /// Shared ProtoUnit Command field constructors used by both the standalone command editor

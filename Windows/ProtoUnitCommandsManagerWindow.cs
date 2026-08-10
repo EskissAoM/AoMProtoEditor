@@ -6,9 +6,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 internal sealed record ProtoUnitCommandManagerItem(string Name, bool IsBuiltIn, int UsageCount);
 

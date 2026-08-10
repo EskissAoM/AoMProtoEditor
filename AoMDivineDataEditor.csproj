@@ -40,7 +40,7 @@
     <!-- Keep the in-repository regression suite beside the desktop application
        without compiling its xUnit sources into the desktop application itself. -->
   <ItemGroup>
-    <Compile Remove="AoMProtoEditor.Tests\**\*.cs" />
+    <Compile Remove="AoMDivineDataEditor.Tests\**\*.cs" />
   </ItemGroup>
 
 </Project>

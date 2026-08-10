@@ -6,9 +6,9 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 
 using AoMDivineDataEditor.GameData;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 public sealed class PickerItem
 {

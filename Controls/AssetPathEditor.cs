@@ -5,9 +5,9 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Controls;
+namespace AoMDivineDataEditor.Controls;
 
 public sealed class AssetPathEditor : Grid
 {

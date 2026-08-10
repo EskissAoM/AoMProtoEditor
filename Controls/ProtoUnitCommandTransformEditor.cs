@@ -6,9 +6,9 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Controls;
+namespace AoMDivineDataEditor.Controls;
 
 /// <summary>
 /// Shared Transform-command field editor used by both the standalone command editor

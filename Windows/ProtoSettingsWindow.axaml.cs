@@ -1,11 +1,11 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 public partial class ProtoSettingsWindow : SimpleWindow
 {

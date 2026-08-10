@@ -20,10 +20,11 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AoMDivineDataEditor.GameData;
-using CryBarEditor.Classes;
-using CryBarEditor.Controls;
+using AoMDivineDataEditor.Services;
+using AoMDivineDataEditor.Classes;
+using AoMDivineDataEditor.Controls;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 public partial class ProtoEditorWindow : SimpleWindow
 {
@@ -102,7 +103,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     ];
     private const string ProtoUnitNameFieldKey = "__proto_unit_name";
 
-    private readonly IProtoEditorHost _host;
+    private readonly IEditorGameDataService _gameData;
     private XElement? _barXmlRoot;
     private BarArchive? _protoDataBarFile;
     private string? _protoDataBarPath;
@@ -695,18 +696,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required TextBlock DamageTypeLabel { get; set; }
     }
 
-    public ProtoEditorWindow()
-    {
-        InitializeComponent();
-        InitializePageSearch();
-        InitializeXmlPreview();
-        InitializeEditorTabs();
-        _host = EmptyProtoEditorHost.Instance;
-    }
+    public ProtoEditorWindow() : this(new EditorGameDataService()) { }
 
-    public ProtoEditorWindow(IProtoEditorHost host)
+    public ProtoEditorWindow(IEditorGameDataService gameData)
     {
-        _host = host;
+        _gameData = gameData ?? throw new ArgumentNullException(nameof(gameData));
         DataContext = this;
         InitializeComponent();
         InitializePageSearch();
@@ -2673,17 +2667,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         _protoDataBarPath = null;
         ResetBarProtoActionSuggestionData();
 
-        var barFile = _host.CurrentBarFile;
-        var barPath = _host.CurrentBarPath;
-
-        if (barFile != null && barPath != null && Path.GetFileName(barPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-        {
-            _protoDataBarFile = barFile;
-            _protoDataBarPath = barPath;
-            ExtractProtoFromBar(barFile, barPath);
-            return;
-        }
-
         var dataBarPath = ResolveDataBarPath();
         if (!string.IsNullOrEmpty(dataBarPath) && File.Exists(dataBarPath))
         {
@@ -2716,18 +2699,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
-        if (barFile == null || barPath == null)
-        {
-            _statusMessage.Text = "Please load the game root folder or select Data.bar in settings.";
-            return;
-        }
-
-        ExtractProtoFromBar(barFile, barPath);
+        _statusMessage.Text = "Select Data.bar in settings to browse base-game data.";
     }
 
     private string? ResolveDataBarPath()
     {
-        var rootDirectory = _host.RootDirectory;
+        var rootDirectory = _gameData.RootDirectory;
         if (Directory.Exists(rootDirectory))
         {
             var direct = Path.Combine(rootDirectory, "data", "Data.bar");
@@ -4491,9 +4468,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         MergeBar(_protoDataBarFile, _protoDataBarPath);
-        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
-            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            MergeBar(_host.CurrentBarFile, _host.CurrentBarPath);
 
         var modPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
         if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
@@ -4599,13 +4573,6 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         try
         {
-            var barFile = _host.CurrentBarFile;
-            var barPath = _host.CurrentBarPath;
-            if (barFile != null && barPath != null && Path.GetFileName(barPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            {
-                return ExtractBloodGroupNamesFromBar(barFile, barPath);
-            }
-
             var dataBarPath = ResolveDataBarPath();
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
@@ -4709,7 +4676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
-        var rootDirectory = _host.RootDirectory;
+        var rootDirectory = _gameData.RootDirectory;
         if (Directory.Exists(rootDirectory))
         {
             var direct = Path.Combine(rootDirectory, "data", "gameplay");
@@ -4740,13 +4707,6 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         try
         {
-            var barFile = _host.CurrentBarFile;
-            var barPath = _host.CurrentBarPath;
-            if (barFile != null && barPath != null && Path.GetFileName(barPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            {
-                return ExtractTechNamesFromBar(barFile, barPath);
-            }
-
             var dataBarPath = ResolveDataBarPath();
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
@@ -26276,9 +26236,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         MergeBar(_protoDataBarFile, _protoDataBarPath);
-        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
-            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            MergeBar(_host.CurrentBarFile, _host.CurrentBarPath);
 
         var modPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml");
         if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
@@ -26410,7 +26367,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             string? text = null;
             if (!entries.TryGetValue(oldId, out text))
-                text = await _host.LookupStringKeyAsync(oldId);
+                text = await _gameData.LookupStringKeyAsync(oldId);
             if (text == null)
                 throw new InvalidOperationException($"Could not resolve string '{oldId}' while renaming '{oldName}'. The command was not renamed.");
 
@@ -26555,7 +26512,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 string? sourceText = null;
                 if (!stringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
                 if (sourceText == null)
                     throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
 
@@ -27421,7 +27378,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 string? sourceText = null;
                 if (!stringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
                 if (sourceText == null)
                     throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
 
@@ -27486,7 +27443,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return null;
         }
 
-        var editor = new AbilityEditorWindow(_host);
+        var editor = new AbilityEditorWindow(_gameData);
         await editor.InitializeAbilityDefinitionEditorAsync(
             abilityName,
             isBuiltIn,
@@ -27557,7 +27514,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 string? sourceText = null;
                 if (!renamedStringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
                 if (sourceText == null)
                     throw new InvalidOperationException($"Could not resolve string '{sourceId}' while renaming '{oldName}'. The ability was not renamed.");
 
@@ -28125,19 +28082,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return cachedBarDocument;
             }
 
-            var hostBarFile = _host.CurrentBarFile;
-            var hostBarPath = _host.CurrentBarPath;
-            if (hostBarFile != null && !string.IsNullOrWhiteSpace(hostBarPath) &&
-                Path.GetFileName(hostBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            {
-                var hostDocument = ExtractTacticsDocumentFromBar(
-                    hostBarFile,
-                    hostBarPath,
-                    candidateFileNames);
-                if (hostDocument != null)
-                    return hostDocument;
-            }
-
             var dataBarPath = ResolveDataBarPath();
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
@@ -28371,11 +28315,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         AddBarEntries(_protoDataBarFile);
-        if (_host.CurrentBarFile != null &&
-            string.Equals(Path.GetFileName(_host.CurrentBarPath), "Data.bar", StringComparison.OrdinalIgnoreCase))
-        {
-            AddBarEntries(_host.CurrentBarFile);
-        }
 
         return names;
     }
@@ -28447,9 +28386,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         AddBarEntries(_protoDataBarFile);
-        if (_host.CurrentBarFile != null &&
-            string.Equals(Path.GetFileName(_host.CurrentBarPath), "Data.bar", StringComparison.OrdinalIgnoreCase))
-            AddBarEntries(_host.CurrentBarFile);
 
         AddLooseDirectory(names, ResolveBaseGameplayDirectory());
         AddLooseDirectory(names, string.IsNullOrWhiteSpace(_modFilePath) ? null : Path.GetDirectoryName(_modFilePath));
@@ -28599,14 +28535,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return ExtractTacticsActionTypesFromBar(_protoDataBarFile, _protoDataBarPath, candidateFileNames);
             }
 
-            var barFile = _host.CurrentBarFile;
-            var barPath = _host.CurrentBarPath;
-            if (barFile != null && barPath != null &&
-                Path.GetFileName(barPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            {
-                return ExtractTacticsActionTypesFromBar(barFile, barPath, candidateFileNames);
-            }
-
             var dataBarPath = ResolveDataBarPath();
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
@@ -28640,14 +28568,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (_protoDataBarFile != null && !string.IsNullOrWhiteSpace(_protoDataBarPath))
             {
                 return ExtractTacticsActionsFromBar(_protoDataBarFile, _protoDataBarPath, candidateFileNames);
-            }
-
-            var barFile = _host.CurrentBarFile;
-            var barPath = _host.CurrentBarPath;
-            if (barFile != null && barPath != null &&
-                Path.GetFileName(barPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-            {
-                return ExtractTacticsActionsFromBar(barFile, barPath, candidateFileNames);
             }
 
             var dataBarPath = ResolveDataBarPath();
@@ -39501,7 +39421,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return config.UserFolderPath;
         }
 
-        var rootDirectory = _host.RootDirectory;
+        var rootDirectory = _gameData.RootDirectory;
         if (Directory.Exists(rootDirectory))
         {
             return Directory.GetParent(rootDirectory)?.FullName;
@@ -39678,7 +39598,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (modEntries.TryGetValue(stringId, out var modValue))
             return modValue;
 
-        return await _host.LookupStringKeyAsync(stringId);
+        return await _gameData.LookupStringKeyAsync(stringId);
     }
 
     private Dictionary<string, string> LoadCurrentModStringEntries(bool requireReadable = false)
@@ -40316,11 +40236,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         // Use the same Data.bar fallback chain as the working tactics/tech loaders.
         LoadBarAbilities(_protoDataBarFile, _protoDataBarPath);
-        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
-            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
-        {
-            LoadBarAbilities(_host.CurrentBarFile, _host.CurrentBarPath);
-        }
 
         var resolvedDataBarPath = ResolveDataBarPath();
         if (!string.IsNullOrWhiteSpace(resolvedDataBarPath) && File.Exists(resolvedDataBarPath) &&

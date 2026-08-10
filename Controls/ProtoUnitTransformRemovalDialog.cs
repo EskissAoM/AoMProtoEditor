@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 
-namespace CryBarEditor.Controls;
+namespace AoMDivineDataEditor.Controls;
 
 public enum ProtoUnitTransformRemovalChoice
 {

@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 public enum ProtoActionFieldEditorKind
 {

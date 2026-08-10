@@ -1,4 +1,4 @@
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 public sealed record PathSuggestion(string FullValue, string DisplayValue)
 {

@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 /// <summary>
 /// Parsed representation of a ProtoAction element within a unit.

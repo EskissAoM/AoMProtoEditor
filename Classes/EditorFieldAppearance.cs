@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 /// <summary>
 /// Shared field appearance used by the mature ProtoUnit/Ability/Tactics editors and

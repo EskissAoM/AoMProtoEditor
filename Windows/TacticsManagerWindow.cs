@@ -7,9 +7,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 internal sealed record TacticsManagerItem(string Name, bool IsBuiltIn, bool IsModifiedBuiltIn, int UsageCount);
 internal sealed record TacticsRenameOperation(string OldName, string NewName);

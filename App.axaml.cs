@@ -1,7 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using CryBarEditor.Windows;
+using AoMDivineDataEditor.Windows;
 
 namespace AoMDivineDataEditor;
 
@@ -13,7 +13,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new ProtoEditorWindow(new StandaloneProtoEditorHost());
+            desktop.MainWindow = new ProtoEditorWindow();
         }
 
         base.OnFrameworkInitializationCompleted();

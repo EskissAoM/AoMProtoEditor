@@ -4,7 +4,7 @@ using Avalonia.Platform;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 /// <summary>Minimal window base shared by the extracted Proto Editor dialogs.</summary>
 public abstract class SimpleWindow : Window, INotifyPropertyChanged

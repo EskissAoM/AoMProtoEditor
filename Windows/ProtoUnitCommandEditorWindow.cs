@@ -10,10 +10,10 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
-using CryBarEditor.Classes;
-using CryBarEditor.Controls;
+using AoMDivineDataEditor.Classes;
+using AoMDivineDataEditor.Controls;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 internal sealed class ProtoUnitCommandEditorContext
 {

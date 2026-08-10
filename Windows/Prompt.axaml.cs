@@ -2,14 +2,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Classes;
 
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 public partial class Prompt : SimpleWindow
 {

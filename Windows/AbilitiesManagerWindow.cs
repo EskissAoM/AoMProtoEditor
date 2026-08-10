@@ -6,9 +6,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using CryBarEditor.Classes;
+using AoMDivineDataEditor.Services;
+using AoMDivineDataEditor.Classes;
 
-namespace CryBarEditor.Windows;
+namespace AoMDivineDataEditor.Windows;
 
 internal sealed record AbilityManagerItem(string Name, bool IsBuiltIn, int UsageCount);
 internal sealed record AbilityRenameOperation(string OldName, string NewName);
@@ -380,7 +381,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
 
 internal sealed class AbilityEditorWindow : ProtoEditorWindow
 {
-    public AbilityEditorWindow(IProtoEditorHost host) : base(host)
+    public AbilityEditorWindow(IEditorGameDataService gameData) : base(gameData)
     {
         Width = 1120;
         Height = 780;

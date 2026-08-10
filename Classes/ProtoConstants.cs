@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CryBarEditor.Classes;
+namespace AoMDivineDataEditor.Classes;
 
 public enum FieldInputMode { Free, Suggest, Number }
 
