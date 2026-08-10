@@ -64,16 +64,16 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory != null)
         {
-            var direct = Path.Combine(directory.FullName, "AoMProtoEditor.csproj");
+            var direct = Path.Combine(directory.FullName, "AoMDivineDataEditor.csproj");
             if (File.Exists(direct))
                 return directory.FullName;
 
-            var sibling = Path.Combine(directory.FullName, "AoMProtoEditor", "AoMProtoEditor.csproj");
+            var sibling = Path.Combine(directory.FullName, "AoMDivineDataEditor", "AoMDivineDataEditor.csproj");
             if (File.Exists(sibling))
-                return Path.Combine(directory.FullName, "AoMProtoEditor");
+                return Path.Combine(directory.FullName, "AoMDivineDataEditor");
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate AoMProtoEditor.csproj from the test output directory.");
+        throw new DirectoryNotFoundException("Could not locate AoMDivineDataEditor.csproj from the test output directory.");
     }
 }

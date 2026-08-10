@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using AoMProtoEditor;
+using AoMDivineDataEditor;
 using CryBarEditor.Classes;
 using Xunit;
 

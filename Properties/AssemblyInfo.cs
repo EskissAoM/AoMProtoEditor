@@ -1,3 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("AoMProtoEditor.Tests")]
+[assembly: InternalsVisibleTo("AoMDivineDataEditor.Tests")]

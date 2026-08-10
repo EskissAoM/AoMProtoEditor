@@ -1,19 +1,19 @@
 # AoM Proto Editor regression tests
 
-This test project intentionally lives inside the main `AoMProtoEditor` folder.
+This test project intentionally lives inside the main `AoMDivineDataEditor` folder.
 The desktop project excludes `AoMProtoEditor.Tests/**/*.cs` from its own compile items.
 
-Run the full regression suite from the `AoMProtoEditor` folder:
+Run the full regression suite from the `AoMDivineDataEditor` folder:
 
 ```powershell
-dotnet test .\AoMProtoEditor.Tests\AoMProtoEditor.Tests.csproj
+dotnet test .\AoMProtoEditor.Tests\AoMDivineDataEditor.Tests.csproj
 ```
 
 For the normal pre-patch check, run:
 
 ```powershell
 dotnet build
-dotnet test .\AoMProtoEditor.Tests\AoMProtoEditor.Tests.csproj
+dotnet test .\AoMProtoEditor.Tests\AoMDivineDataEditor.Tests.csproj
 ```
 
 The suite currently protects:

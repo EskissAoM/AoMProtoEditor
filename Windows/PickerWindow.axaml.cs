@@ -5,7 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 
-using CryBar.Utilities;
+using AoMDivineDataEditor.GameData;
 using CryBarEditor.Classes;
 
 namespace CryBarEditor.Windows;

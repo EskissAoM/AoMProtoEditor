@@ -3,7 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using CryBarEditor.Windows;
 
-namespace AoMProtoEditor;
+namespace AoMDivineDataEditor;
 
 public partial class App : Application
 {

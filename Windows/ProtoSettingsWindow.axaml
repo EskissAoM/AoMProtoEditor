@@ -10,10 +10,10 @@
         Background="#141414"
         WindowStartupLocation="CenterOwner"
         CanResize="False" Width="500" Height="280"
-        Title="Proto Editor Settings">
+        Title="AoM Divine Data Editor Settings">
     <Border Padding="15" BorderThickness="1" BorderBrush="#3f3f46">
         <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Proto Editor Settings" FontWeight="Bold" FontSize="18" Margin="0,0,0,15" Foreground="#e3bd54" />
+            <TextBlock DockPanel.Dock="Top" Text="AoM Divine Data Editor Settings" FontWeight="Bold" FontSize="18" Margin="0,0,0,15" Foreground="#e3bd54" />
 
             <DockPanel DockPanel.Dock="Bottom" Margin="0,15,0,0" LastChildFill="False">
                 <Button DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" Margin="8,0,0,0" />

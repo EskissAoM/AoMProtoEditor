@@ -1,19 +1,18 @@
-using CryBar;
-using CryBar.Bar;
-using CryBar.Utilities;
+using System.Text;
+using AoMDivineDataEditor.GameData;
 using CryBarEditor.Classes;
 
-namespace AoMProtoEditor;
+namespace AoMDivineDataEditor;
 
 /// <summary>
 /// Gives the standalone editor the game-location context it needs without
-/// starting, referencing, or depending on the CryBarEditor application.
+/// depending on another editor application.
 /// </summary>
 internal sealed class StandaloneProtoEditorHost : IProtoEditorHost
 {
     Dictionary<string, string>? _baseGameStrings;
 
-    public BarFile? CurrentBarFile => null;
+    public BarArchive? CurrentBarFile => null;
     public string? CurrentBarPath => null;
 
     public string? RootDirectory
@@ -47,7 +46,7 @@ internal sealed class StandaloneProtoEditorHost : IProtoEditorHost
         try
         {
             using var stream = File.OpenRead(dataBar);
-            var archive = new BarFile(stream);
+            var archive = new BarArchive(stream);
             if (!archive.Load(out _) || archive.Entries is null)
                 return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -57,9 +56,8 @@ internal sealed class StandaloneProtoEditorHost : IProtoEditorHost
             if (entry is null)
                 return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            using var raw = entry.ReadDataRawPooledAsync(stream).AsTask().GetAwaiter().GetResult();
-            using var content = BarCompression.EnsureDecompressedPooled(raw, out _);
-            return StringTableParser.Parse(ConversionHelper.GetTextContent(content.Span, "string_table.txt"));
+            byte[] content = entry.ReadDataDecompressed(stream);
+            return StringTableParser.Parse(Encoding.UTF8.GetString(content));
         }
         catch
         {

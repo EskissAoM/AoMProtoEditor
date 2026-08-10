@@ -1,6 +1,6 @@
 using Avalonia;
 
-namespace AoMProtoEditor;
+namespace AoMDivineDataEditor;
 
 internal static class Program
 {

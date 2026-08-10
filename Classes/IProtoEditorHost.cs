@@ -1,16 +1,14 @@
 using System.Threading.Tasks;
-using CryBar.Bar;
+using AoMDivineDataEditor.GameData;
 
 namespace CryBarEditor.Classes;
 
 /// <summary>
-/// Supplies the optional game context used by the Proto Editor.  Keeping this
-/// small lets the editor run either inside CryBarEditor or as its own desktop
-/// application.
+/// Supplies the optional game context used by the data editor.
 /// </summary>
 public interface IProtoEditorHost
 {
-    BarFile? CurrentBarFile { get; }
+    BarArchive? CurrentBarFile { get; }
     string? CurrentBarPath { get; }
     string? RootDirectory { get; }
     ValueTask<string?> LookupStringKeyAsync(string key);
@@ -21,7 +19,7 @@ public sealed class EmptyProtoEditorHost : IProtoEditorHost
 {
     public static EmptyProtoEditorHost Instance { get; } = new();
 
-    public BarFile? CurrentBarFile => null;
+    public BarArchive? CurrentBarFile => null;
     public string? CurrentBarPath => null;
     public string? RootDirectory => null;
 

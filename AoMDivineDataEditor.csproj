@@ -6,8 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\editor_icon.ico</ApplicationIcon>
-    <AssemblyName>AoMProtoEditor</AssemblyName>
-    <RootNamespace>AoMProtoEditor</RootNamespace>
+    <AssemblyName>AoMDivineDataEditor</AssemblyName>
+    <RootNamespace>AoMDivineDataEditor</RootNamespace>
+    <Product>AoM Divine Data Editor</Product>
     <Version>1.0.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
@@ -29,20 +30,17 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.4" />
     <PackageReference Include="Material.Icons.Avalonia" Version="3.0.2" />
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
   </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
-  <!-- Keep the in-repository regression suite inside the AoMProtoEditor folder
+    <!-- Keep the in-repository regression suite beside the desktop application
        without compiling its xUnit sources into the desktop application itself. -->
   <ItemGroup>
     <Compile Remove="AoMProtoEditor.Tests\**\*.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\CryBarEditor\CryBar\CryBar.csproj" />
   </ItemGroup>
 
 </Project>

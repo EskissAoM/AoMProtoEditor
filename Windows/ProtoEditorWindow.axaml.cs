@@ -19,8 +19,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using CryBar;
-using CryBar.Bar;
+using AoMDivineDataEditor.GameData;
 using CryBarEditor.Classes;
 using CryBarEditor.Controls;
 
@@ -105,7 +104,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private readonly IProtoEditorHost _host;
     private XElement? _barXmlRoot;
-    private BarFile? _protoDataBarFile;
+    private BarArchive? _protoDataBarFile;
     private string? _protoDataBarPath;
     private XDocument? _modXmlDoc;
     private XElement? _modXmlRoot;
@@ -2593,7 +2592,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task InitializeProtoEditorAsync()
     {
-        await ShowStartupLoadingAsync("Loading Proto Editor...");
+        await ShowStartupLoadingAsync("Loading AoM Divine Data Editor...");
 
         try
         {
@@ -2694,7 +2693,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var loadedBarFile = await Task.Run(() =>
                 {
                     using var stream = File.OpenRead(dataBarPath);
-                    var file = new BarFile(stream);
+                    var file = new BarArchive(stream);
                     return file.Load(out _) ? file : null;
                 });
 
@@ -2750,7 +2749,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             : null;
     }
 
-    private void ExtractProtoFromBar(BarFile barFile, string barPath)
+    private void ExtractProtoFromBar(BarArchive barFile, string barPath)
     {
         DateTime lastWriteTimeUtc = File.GetLastWriteTimeUtc(barPath);
         double mtime = lastWriteTimeUtc.Ticks;
@@ -2806,7 +2805,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     int readBytes = entry.ReadDataDecompressed(tempStream, decompressed);
                     if (readBytes > 0)
                     {
-                        var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+                        var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
                         if (xml != null)
                         {
                             if (xml.StartsWith("<?xml"))
@@ -2847,7 +2846,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private Dictionary<string, string> LoadOrBuildGlobalTacticsActionTypes(BarFile barFile, string barPath)
+    private Dictionary<string, string> LoadOrBuildGlobalTacticsActionTypes(BarArchive barFile, string barPath)
     {
         var gameplayDirectory = ResolveBaseGameplayDirectory();
         var cached = ProtoEditorMetadataCacheStore.LoadGlobalTacticsActionTypes(barPath, gameplayDirectory);
@@ -4464,7 +4463,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             try { Merge(XDocument.Load(loose, LoadOptions.PreserveWhitespace), true); } catch { }
         }
 
-        void MergeBar(BarFile? bar, string? barPath)
+        void MergeBar(BarArchive? bar, string? barPath)
         {
             if (bar?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
             var entries = bar.Entries.Where(entry =>
@@ -4484,7 +4483,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var bytes = new byte[size];
                     var read = entry.ReadDataDecompressed(stream, bytes);
                     if (read <= 0) continue;
-                    var xml = BarFormatConverter.XMBtoFormattedXmlString(bytes.AsSpan(0, read));
+                    var xml = XmbReader.ToFormattedXml(bytes.AsSpan(0, read));
                     if (!string.IsNullOrWhiteSpace(xml)) Merge(XDocument.Parse(xml, LoadOptions.PreserveWhitespace), true);
                 }
                 catch { }
@@ -4611,7 +4610,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
                 using var stream = File.OpenRead(dataBarPath);
-                var file = new BarFile(stream);
+                var file = new BarArchive(stream);
                 if (file.Load(out _))
                     return ExtractBloodGroupNamesFromBar(file, dataBarPath);
             }
@@ -4624,7 +4623,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         return [];
     }
 
-    private static List<string> ExtractBloodGroupNamesFromBar(BarFile barFile, string barPath)
+    private static List<string> ExtractBloodGroupNamesFromBar(BarArchive barFile, string barPath)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
@@ -4645,7 +4644,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -4752,7 +4751,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
                 using var stream = File.OpenRead(dataBarPath);
-                var file = new BarFile(stream);
+                var file = new BarArchive(stream);
                 if (file.Load(out _))
                     return ExtractTechNamesFromBar(file, dataBarPath);
             }
@@ -4765,7 +4764,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         return [];
     }
 
-    private static List<string> ExtractTechNamesFromBar(BarFile barFile, string barPath)
+    private static List<string> ExtractTechNamesFromBar(BarArchive barFile, string barPath)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
@@ -4786,7 +4785,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -5010,7 +5009,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         return entries;
     }
 
-    private static Dictionary<string, string> ExtractProtoActionTypesFromTactics(BarFile barFile, string barPath)
+    private static Dictionary<string, string> ExtractProtoActionTypesFromTactics(BarArchive barFile, string barPath)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
@@ -5031,7 +5030,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -5083,7 +5082,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
                 {
                     var bytes = File.ReadAllBytes(path);
-                    xml = BarFormatConverter.XMBtoFormattedXmlString(bytes);
+                    xml = XmbReader.ToFormattedXml(bytes);
                 }
                 else
                 {
@@ -25711,7 +25710,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             try
             {
                 var xml = path.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)
-                    ? BarFormatConverter.XMBtoFormattedXmlString(File.ReadAllBytes(path))
+                    ? XmbReader.ToFormattedXml(File.ReadAllBytes(path))
                     : File.ReadAllText(path);
 
                 if (!string.IsNullOrWhiteSpace(xml))
@@ -26245,7 +26244,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             try { MergeDocument(XDocument.Load(loose, LoadOptions.PreserveWhitespace)); } catch { }
         }
 
-        void MergeBar(BarFile? bar, string? barPath)
+        void MergeBar(BarArchive? bar, string? barPath)
         {
             if (bar?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath))
                 return;
@@ -26268,7 +26267,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var bytes = new byte[size];
                     var read = entry.ReadDataDecompressed(stream, bytes);
                     if (read <= 0) continue;
-                    var xml = BarFormatConverter.XMBtoFormattedXmlString(bytes.AsSpan(0, read));
+                    var xml = XmbReader.ToFormattedXml(bytes.AsSpan(0, read));
                     if (!string.IsNullOrWhiteSpace(xml))
                         MergeDocument(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
                 }
@@ -28143,7 +28142,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
                 using var stream = File.OpenRead(dataBarPath);
-                var barFile = new BarFile(stream);
+                var barFile = new BarArchive(stream);
                 if (barFile.Load(out _))
                 {
                     return ExtractTacticsDocumentFromBar(
@@ -28162,7 +28161,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private static XDocument? ExtractTacticsDocumentFromBar(
-        BarFile barFile,
+        BarArchive barFile,
         string barPath,
         HashSet<string> candidateFileNames)
     {
@@ -28190,7 +28189,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -28354,7 +28353,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return normalized;
         }
 
-        void AddBarEntries(BarFile? barFile)
+        void AddBarEntries(BarArchive? barFile)
         {
             if (barFile?.Entries == null)
                 return;
@@ -28432,7 +28431,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
-        void AddBarEntries(BarFile? barFile)
+        void AddBarEntries(BarArchive? barFile)
         {
             if (barFile?.Entries == null)
                 return;
@@ -28477,7 +28476,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             try
             {
                 var xml = path.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)
-                    ? BarFormatConverter.XMBtoFormattedXmlString(File.ReadAllBytes(path))
+                    ? XmbReader.ToFormattedXml(File.ReadAllBytes(path))
                     : File.ReadAllText(path);
 
                 if (!string.IsNullOrWhiteSpace(xml))
@@ -28612,7 +28611,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
                 using var stream = File.OpenRead(dataBarPath);
-                var file = new BarFile(stream);
+                var file = new BarArchive(stream);
                 if (file.Load(out _))
                     return ExtractTacticsActionTypesFromBar(file, dataBarPath, candidateFileNames);
             }
@@ -28655,7 +28654,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
             {
                 using var stream = File.OpenRead(dataBarPath);
-                var file = new BarFile(stream);
+                var file = new BarArchive(stream);
                 if (file.Load(out _))
                     return ExtractTacticsActionsFromBar(file, dataBarPath, candidateFileNames);
             }
@@ -28668,7 +28667,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         return new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static Dictionary<string, string> ExtractTacticsActionTypesFromBar(BarFile barFile, string barPath, HashSet<string> candidateFileNames)
+    private static Dictionary<string, string> ExtractTacticsActionTypesFromBar(BarArchive barFile, string barPath, HashSet<string> candidateFileNames)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
@@ -28690,7 +28689,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -28726,7 +28725,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private static Dictionary<string, ProtoAction> ExtractTacticsActionsFromBar(BarFile barFile, string barPath, HashSet<string> candidateFileNames)
+    private static Dictionary<string, ProtoAction> ExtractTacticsActionsFromBar(BarArchive barFile, string barPath, HashSet<string> candidateFileNames)
     {
         var result = new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
         var entries = barFile.Entries;
@@ -28748,7 +28747,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (readBytes <= 0)
                 continue;
 
-            var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
             if (string.IsNullOrWhiteSpace(xml))
                 continue;
 
@@ -28779,7 +28778,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _barProtoActionSuggestionDataLoaded = true;
     }
 
-    private static (List<string> AnimationNames, List<string> AttachmentPaths, List<string> ModelAttachmentBones) ExtractProtoActionSuggestionDataFromBar(BarFile barFile, string barPath)
+    private static (List<string> AnimationNames, List<string> AttachmentPaths, List<string> ModelAttachmentBones) ExtractProtoActionSuggestionDataFromBar(BarArchive barFile, string barPath)
     {
         var animationNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var attachmentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -28806,7 +28805,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (readBytes <= 0)
                     continue;
 
-                var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+                var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
                 if (string.IsNullOrWhiteSpace(xml))
                     continue;
 
@@ -39575,7 +39574,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var userBase = GetConfiguredUserFolderPath();
         if (string.IsNullOrWhiteSpace(userBase))
         {
-            var pErr = new Prompt(PromptType.Error, "Settings Error", "User folder path is not configured. Set it in Proto Editor Settings or load the game root folder in CryBar first.");
+            var pErr = new Prompt(PromptType.Error, "Settings Error", "User folder path is not configured. Set it in AoM Divine Data Editor Settings.");
             await pErr.ShowDialog(this);
             return false;
         }
@@ -40160,7 +40159,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private static List<XDocument> ExtractAbilityDocumentsFromBar(BarFile barFile, string barPath)
+    private static List<XDocument> ExtractAbilityDocumentsFromBar(BarArchive barFile, string barPath)
     {
         var documents = new List<XDocument>();
         var entries = barFile.Entries;
@@ -40185,7 +40184,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var decompressed = new byte[size];
                 var readBytes = entry.ReadDataDecompressed(stream, decompressed);
                 if (readBytes <= 0) continue;
-                var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+                var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
                 if (!string.IsNullOrWhiteSpace(xml)) documents.Add(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
             }
             catch { }
@@ -40307,7 +40306,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         var loadedBarPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void LoadBarAbilities(BarFile? barFile, string? barPath)
+        void LoadBarAbilities(BarArchive? barFile, string? barPath)
         {
             if (barFile == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
             var fullPath = Path.GetFullPath(barPath);
@@ -40330,7 +40329,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             try
             {
                 using var dataStream = File.OpenRead(resolvedDataBarPath);
-                var dataBar = new BarFile(dataStream);
+                var dataBar = new BarArchive(dataStream);
                 if (dataBar.Load(out _)) LoadBarAbilities(dataBar, resolvedDataBarPath);
             }
             catch { }
