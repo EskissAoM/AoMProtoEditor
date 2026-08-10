@@ -20,7 +20,12 @@ public sealed class AssetPathEditor : Grid
         IsReadOnly = true,
         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch
     };
-    public AutoCompleteBox Editor { get; } = new() { FilterMode = AutoCompleteFilterMode.Contains, IsVisible = false };
+    public AutoCompleteBox Editor { get; } = new()
+    {
+        FilterMode = AutoCompleteFilterMode.Contains,
+        MinimumPrefixLength = 0,
+        IsVisible = false
+    };
     public string FullValue { get; private set; } = "";
     public IReadOnlyList<PathSuggestion> Suggestions { get; private set; } = [];
     public event EventHandler? FullValueChanged;
@@ -68,12 +73,15 @@ public sealed class AssetPathEditor : Grid
         _suppress = true;
         try { Editor.Text = FullValue; } finally { _suppress = false; }
         Refresh();
-        if (string.IsNullOrWhiteSpace(FullValue) && IsEnabled)
-        {
-            _editing = true;
-            CompactPresenter.IsVisible = false;
-            Editor.IsVisible = true;
-        }
+
+        // Always begin in compact mode, including for an empty path.  Automatically
+        // leaving an empty AutoCompleteBox in edit mode creates a focus race after its
+        // first LostFocus (the next click can immediately be consumed by EndEdit).
+        // Enter edit mode only from an explicit click, which also opens the complete
+        // suggestion list because MinimumPrefixLength is zero.
+        _editing = false;
+        Editor.IsVisible = false;
+        CompactPresenter.IsVisible = true;
     }
 
     private async Task SetValueAsync(string? value)

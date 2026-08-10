@@ -143,7 +143,10 @@ public static class ProtoXmlHandler
             doc.Save(writer);
 
         var xml = stringWriter.ToString();
-        xml = Regex.Replace(xml, @"<(armor|directionalarmor)([^>]*)\s*/>", "<$1$2></$1>");
+        // Expand only the exact armor-family tags that the game/editor expects with
+        // explicit closing tags. Requiring whitespace before attributes prevents the old
+        // "armor" prefix match from turning <armoroverride ... /> into </armor>.
+        xml = Regex.Replace(xml, @"<(armor|directionalarmor|armoroverride)(\s[^>]*)?\s*/>", "<$1$2></$1>");
         File.WriteAllText(path, xml, new UTF8Encoding(false));
     }
 
@@ -300,6 +303,12 @@ public static class ProtoXmlHandler
 
     public static void SetOptionalCommandEntries(XElement unit, IEnumerable<ProtoCommandEntry> entries)
         => SetCommandEntries(unit, "optionalcommand", entries);
+
+    public static ProtoCommandEntry? GetTransformCommandEntry(XElement unit)
+        => GetCommandEntries(unit, "transformcommand").FirstOrDefault();
+
+    public static void SetTransformCommandEntry(XElement unit, ProtoCommandEntry? entry)
+        => SetCommandEntries(unit, "transformcommand", entry == null ? [] : [entry]);
 
     public static List<string> GetContainList(XElement unit)
         => unit.Elements("contain").Select(e => e.Value?.Trim() ?? "").Where(v => v.Length > 0).ToList();

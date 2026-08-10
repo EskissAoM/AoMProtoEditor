@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using CryBarEditor.Classes;
 
 namespace CryBarEditor.Windows;
@@ -18,6 +19,8 @@ public partial class InputPromptWindow : SimpleWindow
         _messageText.Text = message;
         _inputBox.Text = defaultValue;
         _confirmButton.Content = confirmButtonText;
+        if (string.Equals(confirmButtonText, "Save", StringComparison.OrdinalIgnoreCase))
+            _confirmButton.Background = Brush.Parse("#2b7a0b");
         Opened += (s, e) => _inputBox.Focus();
     }
 

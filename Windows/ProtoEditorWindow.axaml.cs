@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -126,6 +127,20 @@ public partial class ProtoEditorWindow : SimpleWindow
     private TacticDefinition? _tacticsEditorTacticDefinition;
     private readonly List<TacticDefinition> _tacticsEditorTacticDefinitions = [];
     private Action? _rebuildTacticsPriorityRows;
+    private bool _isAbilityDefinitionEditorMode;
+    private bool _abilityDefinitionEditorReadOnly;
+    private bool _allowAbilityDefinitionEditorClose;
+    private bool _abilityDefinitionEditorClosePromptOpen;
+    private string? _abilityDefinitionEditorOriginalName;
+    private readonly Dictionary<string, List<XElement>> _duplicatedUnitRechargeFallbacks = new(StringComparer.OrdinalIgnoreCase);
+    private Func<string, XElement, Task>? _saveAbilityDefinitionAsync;
+    private Action? _captureAbilityEditorCurrent;
+    private Action? _refreshAbilityUnitActionValidity;
+    private AutoCompleteBox? _currentAbilityNameEditor;
+    private Func<Task<bool>>? _commitAbilityEditorNameBeforeSaveAsync;
+    private bool _abilityMainSavePointerPending;
+    private readonly Dictionary<string, TextBox> _abilityRechargeValueEditors = new(StringComparer.OrdinalIgnoreCase);
+    private TextBox? _abilityRangeIndicatorRangeEditorForValidation;
 
     private enum OptionalBoolean
     {
@@ -225,6 +240,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedTrainUnitNames;
     private List<string>? _cachedTechNames;
     private List<string>? _cachedCommandNames;
+    private string _lastProtoUnitTransformReadErrorSignature = "";
     private List<string>? _cachedBuildLimitTargets;
     private List<string>? _cachedResourceSubtypeNames;
     private List<string>? _cachedPlacementFileNames;
@@ -255,8 +271,46 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly List<CommandRowState> _trainCommandRows = [];
     private readonly List<CommandRowState> _techCommandRows = [];
     private readonly List<CommandRowState> _unitCommandRows = [];
+    private readonly ProtoUnitTransformAssignmentController _transformCommandAssignments = new();
+    private Func<Task<bool>>? _validateTransformAssignmentsBeforeUnitSaveAsync;
+    private Func<Task<bool>>? _saveActiveTransformCommandBeforeUnitSaveAsync;
     private readonly List<CommandRowState> _optionalCommandRows = [];
     private readonly List<ProtoActionWidgetState> _protoActionWidgets = [];
+
+    private sealed class AbilityEditorDraft
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "UnitAction";
+        public Dictionary<string, string> GeneralValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> GeneralFlags { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> PowerValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> PlacementTargetTypes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> RestrictedPlacementTargetTypes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> PlacementAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> PlacementAttributeValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> RangeIndicatorAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> PowerDisplayTexts { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ModifiedPowerDisplayTextTags { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> PowerFlags { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public string BoundMainRechargeAction { get; set; } = "";
+        public string BoundAuxRechargeAction { get; set; } = "";
+        public bool BoundMainActionFlagManaged { get; set; }
+        public bool BoundAuxActionFlagManaged { get; set; }
+        public bool SharedPowerReference { get; set; }
+        public XElement? GeneralSource { get; set; }
+        public XElement? PowerSource { get; set; }
+        public bool Modified { get; set; }
+    }
+
+    private readonly Dictionary<string, AbilityEditorDraft> _abilityDrafts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, XElement> _abilityPowerCatalog = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _availableAbilityNames = [];
+    private readonly Dictionary<string, XElement> _protoUnitCommandCatalog = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _builtInProtoUnitCommandNames = new(StringComparer.OrdinalIgnoreCase);
+    private bool _protoUnitCommandCatalogLoaded;
+    private string? _protoUnitCommandCatalogModPath;
+    private string _currentAbilityEditorName = "";
+    private bool _loadingAbilityEditor;
     private readonly List<BuildLimitTargetRowState> _buildLimitRows = [];
     private readonly List<ResourceConversionRowState> _resourceConversionRows = [];
     private readonly List<DependentUnitRowState> _dependentUnitRows = [];
@@ -759,6 +813,93 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
 
+    internal async Task InitializeAbilityDefinitionEditorAsync(
+        string abilityName,
+        bool isBuiltIn,
+        XElement powerElement,
+        string? modFilePath,
+        Func<string, XElement, Task>? saveAbilityDefinitionAsync,
+        IEnumerable<string>? knownAbilityNames = null)
+    {
+        _isAbilityDefinitionEditorMode = true;
+        _abilityDefinitionEditorReadOnly = isBuiltIn;
+        _isReadOnly = isBuiltIn;
+        _abilityDefinitionEditorOriginalName = abilityName;
+        _saveAbilityDefinitionAsync = saveAbilityDefinitionAsync;
+        _modFilePath = modFilePath;
+
+        Title = isBuiltIn ? $"View Ability - {abilityName}" : $"Edit Ability - {abilityName}";
+        Width = 1120;
+        Height = 780;
+        MinWidth = 760;
+        MinHeight = 520;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        await ShowStartupLoadingAsync("Loading ability editor...");
+        try
+        {
+            await LoadProtoDataFromBar();
+
+            var syntheticUnit = new XElement("unit", new XAttribute("name", "__ability_definition_editor__"));
+            _modXmlDoc = new XDocument(new XElement("proto", syntheticUnit));
+            _modXmlRoot = _modXmlDoc.Root;
+            _currentUnitName = "__ability_definition_editor__";
+            _allCurrentNames = [_currentUnitName];
+
+            _abilityDrafts.Clear();
+            _abilityPowerCatalog.Clear();
+            var draft = new AbilityEditorDraft
+            {
+                Name = abilityName,
+                PowerSource = new XElement(powerElement),
+                SharedPowerReference = false,
+                Modified = false
+            };
+            LoadAbilityChildren(draft, null, powerElement);
+            _abilityDrafts[abilityName] = draft;
+            _availableAbilityNames = (knownAbilityNames ?? [abilityName])
+                .Append(abilityName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            ConfigureAbilityDefinitionEditorChrome(isBuiltIn);
+            _isReadOnly = isBuiltIn;
+            BuildEditorPanel(_currentUnitName);
+            _sectionsButton.IsVisible = false;
+            _sectionsButton.IsEnabled = false;
+            _editorTabs.SelectedIndex = 3;
+            foreach (var item in _editorTabs.Items.OfType<TabItem>())
+                item.IsVisible = string.Equals(item.Header?.ToString(), "Abilities", StringComparison.OrdinalIgnoreCase);
+
+            var abilitiesTab = _editorTabs.Items.OfType<TabItem>()
+                .FirstOrDefault(item => string.Equals(item.Header?.ToString(), "Abilities", StringComparison.OrdinalIgnoreCase));
+            if (_editorTabs.Parent is Grid tabsHost && abilitiesTab?.Content is Control abilitiesContent)
+            {
+                abilitiesTab.Content = null;
+                var editorRow = Grid.GetRow(_editorTabs);
+                tabsHost.Children.Remove(_editorTabs);
+                Grid.SetRow(abilitiesContent, editorRow);
+                tabsHost.Children.Add(abilitiesContent);
+            }
+            _unitNameBox.IsVisible = false;
+            if (_unitNameBox.Parent is Grid nameRow)
+                nameRow.IsVisible = false;
+
+            UpdateXmlPreview(force: true);
+            _isDirty = false;
+        }
+        finally
+        {
+            HideStartupLoading();
+        }
+    }
+
+
+    internal string? CurrentAbilityDefinitionName => _abilityDefinitionEditorOriginalName;
+
+
     private static List<TacticDefinition> ParseTacticDefinitions(XDocument document)
     {
         return document.Root?.Elements()
@@ -935,12 +1076,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         foreach (var armor in definition.ArmorOverrides)
         {
-            var element = armor.SourceElement == null ? new XElement("armoroverride") : new XElement(armor.SourceElement);
-            element.Name = "armoroverride";
-            element.RemoveNodes();
-            element.SetAttributeValue("type", armor.Type.Trim());
-            element.SetAttributeValue("value", armor.ValueText.Trim());
-            tactic.Add(element);
+            // Rebuild armoroverride from scratch. Older editor builds could leave a malformed
+            // </armor> closing tag behind; never carry any legacy source shape forward.
+            tactic.Add(new XElement("armoroverride",
+                new XAttribute("type", armor.Type.Trim()),
+                new XAttribute("value", armor.ValueText.Trim())));
         }
 
         AddOptionalTacticValue(tactic, "agerequirement", definition.AgeRequirement);
@@ -1992,6 +2132,206 @@ public partial class ProtoEditorWindow : SimpleWindow
         toolbar.Children.Add(buttons);
     }
 
+
+    private void ConfigureAbilityDefinitionEditorChrome(bool isBuiltIn)
+    {
+        _unitListPanel.IsVisible = false;
+        _unitListSplitter.IsVisible = false;
+        _previewSplitter.IsVisible = true;
+        _xmlPreviewPanel.IsVisible = true;
+        _mainContentGrid.ColumnDefinitions[0].Width = new GridLength(0);
+        _mainContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
+        _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
+        _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
+        _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
+        _xmlPreviewText.IsReadOnly = true;
+        _xmlPreviewText.Focusable = true;
+        _xmlPreviewText.IsTabStop = true;
+        _applyXmlPreviewButton.IsVisible = false;
+
+        if (_mainToolbar.Child is not DockPanel toolbar)
+            return;
+
+        toolbar.Children.Clear();
+        toolbar.Children.Add(new TextBlock
+        {
+            Text = isBuiltIn ? $"View {_abilityDefinitionEditorOriginalName}" : $"Edit {_abilityDefinitionEditorOriginalName}",
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        DockPanel.SetDock(buttons, Dock.Right);
+
+        var closeButton = new Button { Content = isBuiltIn ? "Close" : "Cancel", MinWidth = 90 };
+        closeButton.Click += async (_, _) => await RequestCloseAbilityDefinitionEditorAsync();
+        buttons.Children.Add(closeButton);
+
+        if (!isBuiltIn)
+        {
+            var saveButton = new Button
+            {
+                Content = "Save",
+                MinWidth = 90,
+                Background = Brush.Parse("#2b7a0b")
+            };
+            saveButton.Click += async (_, _) => await SaveAbilityDefinitionEditorAsync();
+            buttons.Children.Add(saveButton);
+        }
+
+        toolbar.Children.Add(buttons);
+    }
+
+    private XElement BuildAbilityPowerElement(AbilityEditorDraft draft)
+    {
+        var source = draft.PowerSource ?? new XElement("power", new XAttribute("name", draft.Name));
+        var children = draft.PowerValues
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) &&
+                         !kv.Key.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
+                         !kv.Key.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
+                         !kv.Key.Equals("placement", StringComparison.OrdinalIgnoreCase) &&
+                         !kv.Key.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+            .Select(kv => new XElement(kv.Key, kv.Value))
+            .Concat(draft.PlacementTargetTypes.Select(value => new XElement("abstractplacementtargettype", value)))
+            .Concat(draft.RestrictedPlacementTargetTypes.Select(value => new XElement("explicitlyrestrictedplacementtargettype", value)))
+            .Concat(draft.PowerFlags.Select(flag => new XElement(flag, "1")))
+            .ToList();
+
+        var placementValue = draft.PowerValues.GetValueOrDefault("placement", "").Trim();
+        if (!string.IsNullOrWhiteSpace(placementValue))
+        {
+            var placementElement = new XElement("placement", placementValue);
+            foreach (var attribute in GetUnknownPlacementAttributesFromSource(draft))
+                placementElement.SetAttributeValue(attribute.Name, attribute.Value);
+            foreach (var attr in draft.PlacementAttributes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                var normalized = attr.ToLowerInvariant();
+                var originalName = draft.PlacementAttributeValues.Keys.FirstOrDefault(key => key.Equals(attr, StringComparison.OrdinalIgnoreCase));
+                var xmlName = normalized switch
+                {
+                    "allyorenemynotself" => "allyOrEnemyNotSelf",
+                    "natureonly" => "natureOnly",
+                    "allowdeadtarget" => "allowDeadTarget",
+                    "disallowwatercastradius" => "disallowWaterCastRadius",
+                    "fullybuiltonly" => "fullyBuiltOnly",
+                    _ => originalName ?? normalized
+                };
+                var value = draft.PlacementAttributeValues.TryGetValue(attr, out var preservedValue) ? preservedValue : "";
+                placementElement.SetAttributeValue(xmlName, value);
+            }
+            children.Add(placementElement);
+        }
+
+        var rangeIndicatorValue = draft.PowerValues.GetValueOrDefault("rangeindicator", "").Trim();
+        if (!string.IsNullOrWhiteSpace(rangeIndicatorValue))
+        {
+            var rangeIndicatorElement = new XElement("rangeindicator", rangeIndicatorValue);
+            foreach (var attr in draft.RangeIndicatorAttributes.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(attr.Value))
+                    rangeIndicatorElement.SetAttributeValue(attr.Key, attr.Value);
+            children.Add(rangeIndicatorElement);
+        }
+
+        var replacement = ReplaceKnownAbilityChildren(source, AbilityPowerFlags.Concat(AbilityPowerValueTags), children);
+        replacement.Name = "power";
+        replacement.SetAttributeValue("name", draft.Name);
+        replacement.SetAttributeValue("type", draft.Type);
+        replacement.Elements().Where(e => e.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) ||
+                                          e.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase)).Remove();
+        return replacement;
+    }
+
+    private async Task SaveAbilityDefinitionEditorAsync()
+    {
+        if (_abilityDefinitionEditorReadOnly || _saveAbilityDefinitionAsync == null)
+            return;
+
+        _captureAbilityEditorCurrent?.Invoke();
+        if (string.IsNullOrWhiteSpace(_currentAbilityEditorName) ||
+            !_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var draft) ||
+            string.IsNullOrWhiteSpace(draft.Name))
+        {
+            var prompt = new Prompt(PromptType.Error, "Ability name required", "Enter an internal ability name before saving.");
+            await prompt.ShowDialog(this);
+            return;
+        }
+
+        if (!await EnsureAbilityRangeIndicatorValuesBeforeSaveAsync(draft))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(_abilityDefinitionEditorOriginalName) &&
+            !_abilityDefinitionEditorOriginalName.Equals(draft.Name, StringComparison.OrdinalIgnoreCase) &&
+            _availableAbilityNames.Any(name =>
+                !name.Equals(_abilityDefinitionEditorOriginalName, StringComparison.OrdinalIgnoreCase) &&
+                name.Equals(draft.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            var prompt = new Prompt(PromptType.Error, "Ability name already exists", $"An ability named '{draft.Name}' already exists. Choose a different internal name.");
+            await prompt.ShowDialog(this);
+            return;
+        }
+
+        try
+        {
+            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            foreach (var tag in new[] { "displaynameid", "rolloverid" })
+            {
+                if (!draft.PowerDisplayTexts.TryGetValue(tag, out var text) || string.IsNullOrWhiteSpace(text))
+                    continue;
+                var id = draft.PowerValues.GetValueOrDefault(tag, "").Trim();
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    id = BuildUniqueAbilityStringId(draft.Name, tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase), stringEntries);
+                    draft.PowerValues[tag] = id;
+                }
+                stringEntries[id] = text;
+            }
+            SaveCurrentModStringEntries(stringEntries);
+
+            var power = BuildAbilityPowerElement(draft);
+            await _saveAbilityDefinitionAsync(_abilityDefinitionEditorOriginalName ?? draft.Name, power);
+            _abilityDefinitionEditorOriginalName = draft.Name;
+            draft.PowerSource = new XElement(power);
+            draft.Modified = false;
+            draft.ModifiedPowerDisplayTextTags.Clear();
+            _isDirty = false;
+            _allowAbilityDefinitionEditorClose = true;
+            _statusMessage.Text = "Ability saved.";
+            UpdateXmlPreview(force: true);
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to save ability", ex.Message);
+            await prompt.ShowDialog(this);
+        }
+    }
+
+    private async Task RequestCloseAbilityDefinitionEditorAsync()
+    {
+        if (!_isDirty || _abilityDefinitionEditorReadOnly)
+        {
+            _allowAbilityDefinitionEditorClose = true;
+            Close();
+            return;
+        }
+        if (_abilityDefinitionEditorClosePromptOpen) return;
+        _abilityDefinitionEditorClosePromptOpen = true;
+        try
+        {
+            var prompt = new Prompt(PromptType.Confirm, "Discard ability changes?", "You have unsaved ability changes. Close this window without saving them?");
+            await prompt.ShowDialog(this);
+            if (!prompt.Confirmed) return;
+            _allowAbilityDefinitionEditorClose = true;
+            Close();
+        }
+        finally { _abilityDefinitionEditorClosePromptOpen = false; }
+    }
+
     private void SortTacticPriorityReferencesForSave()
     {
         foreach (var definition in _tacticsEditorTacticDefinitions)
@@ -2092,6 +2432,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        var existingActionNames = names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var definition in _tacticsEditorTacticDefinitions)
         {
             if (string.IsNullOrWhiteSpace(definition.Name))
@@ -2106,6 +2448,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (string.IsNullOrWhiteSpace(reference.ActionName))
                 {
                     var prompt = new Prompt(PromptType.Error, "Missing action reference", $"Every action reference in tactic '{definition.Name}' requires an action name.");
+                    await prompt.ShowDialog(this);
+                    return;
+                }
+                if (!existingActionNames.Contains(reference.ActionName.Trim()))
+                {
+                    var prompt = new Prompt(
+                        PromptType.Error,
+                        "Missing referenced action",
+                        $"Tactic '{definition.Name}' references action '{reference.ActionName}', but that action does not exist in this tactics file. Update or remove the reference before saving.");
                     await prompt.ShowDialog(this);
                     return;
                 }
@@ -2900,6 +3251,28 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void UpdateXmlPreview(bool force = false)
     {
+        if (_isAbilityDefinitionEditorMode)
+        {
+            try
+            {
+                if (!_loadingAbilityEditor)
+                    _captureAbilityEditorCurrent?.Invoke();
+                var draft = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName);
+                var preview = draft == null ? null : BuildAbilityPowerElement(draft);
+                _xmlPreviewText.IsEnabled = preview != null;
+                _xmlPreviewText.IsReadOnly = true;
+                _xmlPreviewText.Focusable = true;
+                _xmlPreviewText.IsTabStop = true;
+                _xmlPreviewText.Opacity = 1;
+                _xmlPreviewText.Background = Brush.Parse("#080808");
+                _xmlPreviewText.Foreground = Brush.Parse("#d9d9d9");
+                _applyXmlPreviewButton.IsVisible = false;
+                SetXmlPreviewText(preview == null ? "" : FormatXmlForPreview(preview));
+            }
+            catch { }
+            return;
+        }
+
         if (_isTacticsActionEditorMode)
         {
             try
@@ -3272,6 +3645,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (_isTacticsActionEditorMode)
                 _ = SaveTacticsActionEditorAsync();
+            else if (_isAbilityDefinitionEditorMode)
+                _ = SaveAbilityDefinitionEditorAsync();
+            else if (_saveActiveTransformCommandBeforeUnitSaveAsync != null)
+                _ = SaveActiveTransformCommandAndUnitAsync();
             else
                 Save_Click(this, e);
             e.Handled = true;
@@ -3379,7 +3756,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _sectionsFlyoutPanel.Children.Add(button);
         }
 
-        var hasSections = !_isTacticsActionEditorMode && _sectionJumpTargets.Count > 0;
+        var hasSections = !_isTacticsActionEditorMode && !_isAbilityDefinitionEditorMode && _sectionJumpTargets.Count > 0;
         _sectionsButton.IsVisible = hasSections;
         _sectionsButton.IsEnabled = hasSections;
     }
@@ -3389,20 +3766,23 @@ public partial class ProtoEditorWindow : SimpleWindow
         var resolvedTabIndex = tabIndex ??
             (target.TranslatePoint(new Point(0, 0), _actionsEditorPanel) != null ? 1 :
              target.TranslatePoint(new Point(0, 0), _commandsEditorPanel) != null ? 2 :
-             target.TranslatePoint(new Point(0, 0), _trainResearchEditorPanel) != null ? 3 : 0);
+             target.TranslatePoint(new Point(0, 0), _abilitiesEditorPanel) != null ? 3 :
+             target.TranslatePoint(new Point(0, 0), _trainResearchEditorPanel) != null ? 4 : 0);
         _editorTabs.SelectedIndex = resolvedTabIndex;
         var targetPanel = resolvedTabIndex switch
         {
             1 => (Panel)_actionsEditorPanel,
             2 => _commandsEditorPanel,
-            3 => _trainResearchEditorPanel,
+            3 => _abilitiesEditorPanel,
+            4 => _trainResearchEditorPanel,
             _ => _statsEditorPanel
         };
         var targetScroll = resolvedTabIndex switch
         {
             1 => _actionsEditorScroll,
             2 => _commandsEditorScroll,
-            3 => _trainResearchEditorScroll,
+            3 => _abilitiesEditorScroll,
+            4 => _trainResearchEditorScroll,
             _ => _editorScroll
         };
         var targetOrigin = target.TranslatePoint(new Point(0, 0), targetPanel);
@@ -3438,7 +3818,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             1 => _actionsEditorScroll,
             2 => _commandsEditorScroll,
-            3 => _trainResearchEditorScroll,
+            3 => _abilitiesEditorScroll,
+            4 => _trainResearchEditorScroll,
             _ => _editorScroll
         }).Focus();
     }
@@ -3716,7 +4097,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         "selectionradius",
         "autoattackrange",
         "lifespan",
-        "auxrecharge",
         "resourcesubtype",
         "minimapvisuals",
         "resourcepriority",
@@ -3785,7 +4165,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         "respawntraindata",
         "sharedselectionunittypes",
         "decay",
-        "recharge",
         "replacement",
         "ondamagemodifiers",
     ];
@@ -3971,7 +4350,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var path in new[] { ResolveBaseGameplayXmlPath("techtree.xml"), GetCurrentModGameplayFilePath("techtree_mods.xml") })
+        foreach (var path in new[]
+        {
+            ResolveBaseGameplayXmlPath("techtree.xml"),
+            ResolveBaseGameplayXmlPath("aotg_techtree.techtree"),
+            GetCurrentModGameplayFilePath("techtree_mods.xml")
+        })
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                 continue;
@@ -4001,31 +4385,122 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> GetAvailableCommandNames()
     {
-        if (_cachedCommandNames != null)
-            return _cachedCommandNames;
-
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        EnsureProtoUnitCommandCatalogLoaded();
+        var names = new HashSet<string>(_protoUnitCommandCatalog.Keys, StringComparer.OrdinalIgnoreCase);
 
         void CollectFromRoot(XElement? root)
         {
-            if (root == null)
-                return;
-
+            if (root == null) return;
             foreach (var unit in root.Descendants("unit"))
             {
                 foreach (var entry in ProtoXmlHandler.GetCommandEntries(unit))
                 {
-                    if (!string.IsNullOrWhiteSpace(entry.Value))
-                        names.Add(entry.Value.Trim());
+                    if (!string.IsNullOrWhiteSpace(entry.Value)) names.Add(entry.Value.Trim());
                 }
             }
         }
 
         CollectFromRoot(_barXmlRoot);
         CollectFromRoot(_modXmlRoot);
-
         _cachedCommandNames = names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         return _cachedCommandNames;
+    }
+
+    private static string GetProtoUnitCommandName(XElement element)
+        => element.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+
+    private bool TryGetProtoUnitCommandDefinition(string commandName, out ProtoUnitCommandDefinition definition)
+    {
+        EnsureProtoUnitCommandCatalogLoaded();
+        if (_protoUnitCommandCatalog.TryGetValue(commandName, out var element))
+        {
+            definition = ProtoUnitCommandDefinition.FromElement(element);
+            return true;
+        }
+
+        definition = new ProtoUnitCommandDefinition();
+        return false;
+    }
+
+    private bool IsTransformUniqueCommand(string commandName)
+        => TryGetProtoUnitCommandDefinition(commandName, out var definition) &&
+           (definition.Flags.Contains("transformselected") || definition.Flags.Contains("transformvillager"));
+
+    private bool IsTransformMultipleCommand(string commandName)
+        => TryGetProtoUnitCommandDefinition(commandName, out var definition) && definition.Flags.Contains("transform");
+
+    private List<string> GetTransformCommandNames(bool multiple)
+    {
+        EnsureProtoUnitCommandCatalogLoaded();
+        return _protoUnitCommandCatalog.Keys
+            .Where(name => multiple ? IsTransformMultipleCommand(name) : IsTransformUniqueCommand(name))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void EnsureProtoUnitCommandCatalogLoaded(bool force = false)
+    {
+        var currentModPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
+        if (_protoUnitCommandCatalogLoaded && !force && string.Equals(_protoUnitCommandCatalogModPath, currentModPath, StringComparison.OrdinalIgnoreCase)) return;
+        _protoUnitCommandCatalogLoaded = true;
+        _protoUnitCommandCatalogModPath = currentModPath;
+        _protoUnitCommandCatalog.Clear();
+        _builtInProtoUnitCommandNames.Clear();
+
+        void Merge(XDocument doc, bool builtIn)
+        {
+            foreach (var command in doc.Descendants().Where(e => e.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase)))
+            {
+                var name = GetProtoUnitCommandName(command);
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                _protoUnitCommandCatalog[name] = new XElement(command);
+                if (builtIn) _builtInProtoUnitCommandNames.Add(name);
+            }
+        }
+
+        var loose = ResolveBaseGameplayXmlPath("proto_unit_commands.xml");
+        if (!string.IsNullOrWhiteSpace(loose) && File.Exists(loose))
+        {
+            try { Merge(XDocument.Load(loose, LoadOptions.PreserveWhitespace), true); } catch { }
+        }
+
+        void MergeBar(BarFile? bar, string? barPath)
+        {
+            if (bar?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
+            var entries = bar.Entries.Where(entry =>
+            {
+                var normalized = entry.Name.Replace('\\','/');
+                var file = normalized.Split('/').LastOrDefault() ?? "";
+                return file.Equals("proto_unit_commands.xml.xmb", StringComparison.OrdinalIgnoreCase) ||
+                       file.Equals("proto_unit_commands.xmb", StringComparison.OrdinalIgnoreCase);
+            }).ToList();
+            if (entries.Count == 0) return;
+            using var stream = File.OpenRead(barPath);
+            foreach (var entry in entries)
+            {
+                try
+                {
+                    var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+                    var bytes = new byte[size];
+                    var read = entry.ReadDataDecompressed(stream, bytes);
+                    if (read <= 0) continue;
+                    var xml = BarFormatConverter.XMBtoFormattedXmlString(bytes.AsSpan(0, read));
+                    if (!string.IsNullOrWhiteSpace(xml)) Merge(XDocument.Parse(xml, LoadOptions.PreserveWhitespace), true);
+                }
+                catch { }
+            }
+        }
+
+        MergeBar(_protoDataBarFile, _protoDataBarPath);
+        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
+            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
+            MergeBar(_host.CurrentBarFile, _host.CurrentBarPath);
+
+        var modPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
+        if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
+        {
+            try { Merge(XDocument.Load(modPath, LoadOptions.PreserveWhitespace), false); } catch { }
+        }
     }
 
     private List<string> GetAvailableBuildLimitTargets()
@@ -7749,64 +8224,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void ConfigureStrictSuggestionAutoComplete(AutoCompleteBox autoCompleteBox, IEnumerable<string> suggestions, string initialValue)
-    {
-        var suggestionList = suggestions
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (!string.IsNullOrWhiteSpace(initialValue) &&
-            !suggestionList.Any(x => x.Equals(initialValue, StringComparison.OrdinalIgnoreCase)))
-        {
-            suggestionList.Add(initialValue);
-            suggestionList = suggestionList
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        autoCompleteBox.ItemsSource = suggestionList;
-        EnableDropdownAutoComplete(autoCompleteBox);
-
-        string lastValidValue = suggestionList.FirstOrDefault(x => x.Equals(initialValue, StringComparison.OrdinalIgnoreCase))
-            ?? initialValue.Trim();
-
-        autoCompleteBox.SelectionChanged += (s, e) =>
-        {
-            if (autoCompleteBox.SelectedItem is string selectedValue)
-            {
-                autoCompleteBox.Text = selectedValue;
-                lastValidValue = selectedValue;
-            }
-        };
-
-        autoCompleteBox.LostFocus += (s, e) =>
-        {
-            if (_isPopulating)
-                return;
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_isPopulating)
-                    return;
-
-                var input = autoCompleteBox.Text?.Trim() ?? "";
-                if (string.IsNullOrWhiteSpace(input))
-                    return;
-
-                var match = suggestionList.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match))
-                {
-                    autoCompleteBox.Text = match;
-                    lastValidValue = match;
-                    return;
-                }
-
-                autoCompleteBox.Text = lastValidValue;
-            }, DispatcherPriority.Background);
-        };
-    }
+        => EditorAutoCompleteService.ConfigureStrict(
+            autoCompleteBox,
+            suggestions,
+            initialValue,
+            () => _isPopulating,
+            preserveUnknownInitialValue: true);
 
     private void RefreshProtoActionMetadataPanels(ProtoActionWidgetState state)
     {
@@ -24014,6 +24437,23 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var flagSource = GetProtoActionValueSource("1", protoFlagValue, tacticsFlagValue);
                 var chip = CreateChip(GetProtoActionFlagDisplayLabel(tag), async () =>
                 {
+                    var actionName = state.NameAcb.Text?.Trim() ?? "";
+                    if ((tag.Equals("chargeaction", StringComparison.OrdinalIgnoreCase) || tag.Equals("auxchargeaction", StringComparison.OrdinalIgnoreCase)) &&
+                        IsAbilityActionFlagProtected(actionName, tag))
+                    {
+                        await new Prompt(PromptType.Error, "Ability-linked action",
+                            "This action is used by an ability. The recharge action flag cannot be removed while that ability is linked to it.")
+                            .ShowDialog(this);
+                        return;
+                    }
+                    if ((tag.Equals("chargeaction", StringComparison.OrdinalIgnoreCase) || tag.Equals("auxchargeaction", StringComparison.OrdinalIgnoreCase)) &&
+                        IsActionFlagProtectedByTactics(actionName, tag))
+                    {
+                        await new Prompt(PromptType.Error, "Inherited flag",
+                            "This recharge action flag is required by the linked tactics file and cannot be removed here.")
+                            .ShowDialog(this);
+                        return;
+                    }
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
@@ -25122,80 +25562,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void EnableDropdownAutoComplete(AutoCompleteBox autoCompleteBox, bool selectAllOnFirstClick = true)
-    {
-        autoCompleteBox.MinimumPrefixLength = 0;
-        autoCompleteBox.MinimumPopulateDelay = TimeSpan.Zero;
-        bool suppressAutoOpen = false;
-        bool userInteracted = false;
-        bool selectedAllForCurrentFocus = false;
-
-        void SelectAllOnInitialPointerFocus()
-        {
-            if (!selectAllOnFirstClick || selectedAllForCurrentFocus)
-                return;
-
-            selectedAllForCurrentFocus = true;
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (!autoCompleteBox.IsEnabled)
-                    return;
-
-                var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
-                if (textEditor == null)
-                    return;
-
-                textEditor.Focus();
-                textEditor.SelectAll();
-            }, DispatcherPriority.Input);
-        }
-
-        void OpenDropdownIfEnabled()
-        {
-            if (_isPopulating || !autoCompleteBox.IsEnabled || suppressAutoOpen)
-                return;
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (!_isPopulating && autoCompleteBox.IsEnabled && !suppressAutoOpen)
-                    autoCompleteBox.IsDropDownOpen = true;
-            });
-        }
-
-        autoCompleteBox.AddHandler(InputElement.PointerPressedEvent, (sender, e) =>
-        {
-            if (_isPopulating || !autoCompleteBox.IsEnabled)
-                return;
-
-            userInteracted = true;
-            suppressAutoOpen = false;
-            SelectAllOnInitialPointerFocus();
-            OpenDropdownIfEnabled();
-        }, RoutingStrategies.Tunnel, handledEventsToo: true);
-
-        autoCompleteBox.SelectionChanged += (s, e) =>
-        {
-            suppressAutoOpen = true;
-            autoCompleteBox.IsDropDownOpen = false;
-        };
-
-        autoCompleteBox.TextChanged += (s, e) =>
-        {
-            if (_isPopulating || !autoCompleteBox.IsEnabled)
-                return;
-
-            if (userInteracted && string.IsNullOrWhiteSpace(autoCompleteBox.Text))
-            {
-                suppressAutoOpen = false;
-                OpenDropdownIfEnabled();
-            }
-        };
-
-        autoCompleteBox.LostFocus += (s, e) =>
-        {
-            suppressAutoOpen = false;
-            selectedAllForCurrentFocus = false;
-        };
-    }
+        => EditorAutoCompleteService.EnableDropdown(autoCompleteBox, () => _isPopulating, selectAllOnFirstClick);
 
     private void UpdateProtoActionTypeEditor(AutoCompleteBox typeAcb, string actionName)
     {
@@ -25334,13 +25701,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_tacticsActionCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        var barResolved = LoadProtoActionsFromBarTactics(cacheKey);
-        if (barResolved.Count > 0)
-        {
-            _tacticsActionCache[cacheKey] = barResolved;
-            return barResolved;
-        }
-
+        // Active-mod/loose tactics override Data.bar. This is important for imported
+        // mods that intentionally use the same tactics name as a built-in definition.
         foreach (var path in GetTacticsCandidatePaths(cacheKey))
         {
             if (!File.Exists(path))
@@ -25366,6 +25728,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 // Try the next candidate path.
             }
+        }
+
+        var barResolved = LoadProtoActionsFromBarTactics(cacheKey);
+        if (barResolved.Count > 0)
+        {
+            _tacticsActionCache[cacheKey] = barResolved;
+            return barResolved;
         }
 
         var emptyResult = new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
@@ -25710,18 +26079,1694 @@ public partial class ProtoEditorWindow : SimpleWindow
         return result;
     }
 
+
+    private HashSet<string> GetCustomAbilityPowerNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var path = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return names;
+        try
+        {
+            var doc = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
+            {
+                var name = GetAbilityElementName(power);
+                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
+            }
+        }
+        catch { }
+        return names;
+    }
+
+    private Dictionary<string, int> GetAbilityUsageCounts()
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        void CountDocument(XDocument doc)
+        {
+            if (doc.Root == null) return;
+            foreach (var ability in doc.Root.Descendants().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)))
+            {
+                var name = GetAbilityElementName(ability);
+                if (!string.IsNullOrWhiteSpace(name)) result[name] = result.GetValueOrDefault(name) + 1;
+            }
+        }
+
+        var gameplay = ResolveBaseGameplayDirectory();
+        var loosePath = string.IsNullOrWhiteSpace(gameplay) ? null : Path.Combine(gameplay, "abilities", "abilities.xml");
+        var countedBase = false;
+        if (!string.IsNullOrWhiteSpace(loosePath) && File.Exists(loosePath))
+        {
+            try { CountDocument(XDocument.Load(loosePath, LoadOptions.PreserveWhitespace)); countedBase = true; }
+            catch { }
+        }
+        if (!countedBase && _protoDataBarFile != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
+        {
+            foreach (var doc in ExtractAbilityDocumentsFromBar(_protoDataBarFile, _protoDataBarPath))
+                if (doc.Root?.Name.LocalName.Equals("abilities", StringComparison.OrdinalIgnoreCase) == true)
+                    CountDocument(doc);
+        }
+
+        var modPath = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
+        if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
+        {
+            try { CountDocument(XDocument.Load(modPath, LoadOptions.PreserveWhitespace)); }
+            catch { }
+        }
+        return result;
+    }
+
+    private int ResolveManagedAbilityUsageCount(string abilityName)
+    {
+        var usage = GetAbilityUsageCounts().GetValueOrDefault(abilityName);
+        if (!_isAbilityDefinitionEditorMode && _abilityDrafts.Values.Any(draft => draft.Name.Equals(abilityName, StringComparison.OrdinalIgnoreCase)))
+            usage = Math.Max(1, usage);
+        return usage;
+    }
+
+    private int CountProtoUnitCommandUsage(string commandName)
+        => CountProtoUnitCommandUsage(commandName, ignoredUnitName: null);
+
+    private int CountProtoUnitCommandUsage(string commandName, string? ignoredUnitName)
+    {
+        var count = 0;
+        if (_modXmlRoot == null) return count;
+        foreach (var unit in _modXmlRoot.Descendants("unit"))
+        {
+            if (!string.IsNullOrWhiteSpace(ignoredUnitName) &&
+                string.Equals(unit.Attribute("name")?.Value?.Trim(), ignoredUnitName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var used = ProtoXmlHandler.GetCommandEntries(unit).Any(x => x.Value.Equals(commandName, StringComparison.OrdinalIgnoreCase)) ||
+                       ProtoXmlHandler.GetOptionalCommandEntries(unit).Any(x => x.Value.Equals(commandName, StringComparison.OrdinalIgnoreCase)) ||
+                       string.Equals(ProtoXmlHandler.GetSimpleField(unit, "transformcommand"), commandName, StringComparison.OrdinalIgnoreCase);
+            if (used) count++;
+        }
+        return count;
+    }
+
+    private XDocument LoadProtoUnitCommandModsForUpdate()
+    {
+        var path = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        return LoadAbilityXmlDocumentForUpdate(path, "protounitcommandmods");
+    }
+
+    private void SaveProtoUnitCommandMods(XDocument doc)
+    {
+        var path = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        SaveAbilityXmlDocument(doc, path, ProtoUnitCommandDefinition.ExpandEmptyFlagElements);
+        _protoUnitCommandCatalogLoaded = false;
+        _cachedCommandNames = null;
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+    }
+
+
+    private XDocument LoadProtoUnitTransformModsForUpdate()
+    {
+        var path = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod unit transform file path could not be resolved.");
+        return LoadAbilityXmlDocumentForUpdate(path, "unittransformmods");
+    }
+
+    private void SaveProtoUnitTransformMods(XDocument doc)
+    {
+        var path = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod unit transform file path could not be resolved.");
+        SaveAbilityXmlDocument(doc, path);
+    }
+
+    private static string GetProtoUnitTransformCommand(XElement transform)
+        => transform.Elements().FirstOrDefault(child => child.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+
+    private static XElement? FindProtoUnitTransformByCommand(XDocument document, string commandName)
+        => document.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("transform", StringComparison.OrdinalIgnoreCase) &&
+            GetProtoUnitTransformCommand(element).Equals(commandName, StringComparison.OrdinalIgnoreCase));
+
+    public static XDocument LoadProtoUnitTransformModDocumentForRead(string path)
+        => LoadAbilityXmlDocumentForUpdate(path, "unittransformmods");
+
+    private void ReportProtoUnitTransformReadError(string path, Exception ex)
+    {
+        var lastWrite = File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : 0L;
+        var signature = $"{path}|{lastWrite}|{ex.Message}";
+        if (_lastProtoUnitTransformReadErrorSignature.Equals(signature, StringComparison.Ordinal))
+            return;
+
+        _lastProtoUnitTransformReadErrorSignature = signature;
+        Dispatcher.UIThread.Post(async () =>
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unit transform file",
+                $"'{Path.GetFileName(path)}' could not be read safely. Existing transform data from that mod file was not loaded.\n\n{ex.Message}")
+                .ShowDialog(this);
+        }, DispatcherPriority.Background);
+    }
+
+    private ProtoUnitTransformDefinition? LoadProtoUnitTransformDefinition(string commandName)
+    {
+        ProtoUnitTransformDefinition? result = null;
+
+        void MergeDocument(XDocument document)
+        {
+            var transform = FindProtoUnitTransformByCommand(document, commandName);
+            if (transform != null)
+                result = ProtoUnitTransformDefinition.FromElement(transform);
+        }
+
+        var loose = ResolveBaseGameplayXmlPath("unit_transform.xml");
+        if (!string.IsNullOrWhiteSpace(loose) && File.Exists(loose))
+        {
+            try { MergeDocument(XDocument.Load(loose, LoadOptions.PreserveWhitespace)); } catch { }
+        }
+
+        void MergeBar(BarFile? bar, string? barPath)
+        {
+            if (bar?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath))
+                return;
+            var entries = bar.Entries.Where(entry =>
+            {
+                var normalized = entry.Name.Replace('\\', '/');
+                var file = normalized.Split('/').LastOrDefault() ?? "";
+                return file.Equals("unit_transform.xml.xmb", StringComparison.OrdinalIgnoreCase) ||
+                       file.Equals("unit_transform.xmb", StringComparison.OrdinalIgnoreCase);
+            }).ToList();
+            if (entries.Count == 0)
+                return;
+
+            using var stream = File.OpenRead(barPath);
+            foreach (var entry in entries)
+            {
+                try
+                {
+                    var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+                    var bytes = new byte[size];
+                    var read = entry.ReadDataDecompressed(stream, bytes);
+                    if (read <= 0) continue;
+                    var xml = BarFormatConverter.XMBtoFormattedXmlString(bytes.AsSpan(0, read));
+                    if (!string.IsNullOrWhiteSpace(xml))
+                        MergeDocument(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
+                }
+                catch { }
+            }
+        }
+
+        MergeBar(_protoDataBarFile, _protoDataBarPath);
+        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
+            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
+            MergeBar(_host.CurrentBarFile, _host.CurrentBarPath);
+
+        var modPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml");
+        if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
+        {
+            try
+            {
+                MergeDocument(LoadProtoUnitTransformModDocumentForRead(modPath));
+                _lastProtoUnitTransformReadErrorSignature = "";
+            }
+            catch (Exception ex)
+            {
+                ReportProtoUnitTransformReadError(modPath, ex);
+            }
+        }
+
+        return result;
+    }
+
+    private static void RenameProtoUnitTransformCommandReference(XDocument document, string oldName, string newName)
+    {
+        var transform = FindProtoUnitTransformByCommand(document, oldName);
+        var command = transform?.Elements().FirstOrDefault(child => child.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase));
+        if (command != null)
+            command.Value = newName;
+    }
+
+    private static readonly string[] ProtoUnitCommandReferenceTags =
+    [
+        "prereqcommand", "sharedcommand", "removecommandprequeueonprequeue"
+    ];
+
+    internal static XElement NormalizeXmlElementForComparison(XElement element)
+    {
+        var normalized = new XElement(
+            element.Name,
+            element.Attributes()
+                .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
+                .ThenBy(attribute => attribute.Name.LocalName, StringComparer.Ordinal)
+                .Select(attribute => new XAttribute(attribute.Name, attribute.Value)));
+
+        foreach (var node in element.Nodes())
+        {
+            if (node is XElement child)
+            {
+                normalized.Add(NormalizeXmlElementForComparison(child));
+            }
+            else if (node is XText text && !string.IsNullOrWhiteSpace(text.Value))
+            {
+                normalized.Add(new XText(text.Value));
+            }
+        }
+
+        return normalized;
+    }
+
+    private static XElement NormalizeProtoUnitCommandForComparison(XElement element)
+        => NormalizeXmlElementForComparison(element);
+
+    private static IEnumerable<XElement> GetProtoUnitCommandReferenceElements(XDocument doc, string commandName)
+    {
+        return doc.Descendants()
+            .Where(element => ProtoUnitCommandReferenceTags.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase) &&
+                              element.Value.Trim().Equals(commandName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void RenameProtoUnitCommandReferencesInCommandDocument(XDocument doc, string oldName, string newName)
+    {
+        foreach (var reference in GetProtoUnitCommandReferenceElements(doc, oldName).ToList())
+            reference.Value = newName;
+    }
+
+    private static List<string> GetProtoUnitCommandReferrers(XDocument doc, string commandName)
+    {
+        return doc.Descendants()
+            .Where(element => element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase))
+            .Select(command => new
+            {
+                Name = GetProtoUnitCommandName(command),
+                References = command.Elements().Any(child =>
+                    ProtoUnitCommandReferenceTags.Contains(child.Name.LocalName, StringComparer.OrdinalIgnoreCase) &&
+                    child.Value.Trim().Equals(commandName, StringComparison.OrdinalIgnoreCase))
+            })
+            .Where(item => item.References && !item.Name.Equals(commandName, StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IEnumerable<string> GetProtoUnitCommandStringIds(XElement command)
+    {
+        foreach (var tag in ProtoUnitCommandStringTags)
+        {
+            var id = command.Elements()
+                .FirstOrDefault(element => element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase))
+                ?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(id))
+                yield return id;
+        }
+    }
+
+    private static HashSet<string> GetReferencedProtoUnitCommandStringIds(XDocument doc)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var command in doc.Descendants().Where(element =>
+                     element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var id in GetProtoUnitCommandStringIds(command))
+                result.Add(id);
+        }
+        return result;
+    }
+
+    private async Task<(Dictionary<string, string> Entries, HashSet<string> OldGeneratedIds)> MigrateProtoUnitCommandStringsForRenameAsync(
+        XElement command,
+        string oldName,
+        string newName)
+    {
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
+        var oldGeneratedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in ProtoUnitCommandStringTags)
+        {
+            var element = command.Elements().FirstOrDefault(child =>
+                child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+            var oldId = element?.Value?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(oldId))
+                continue;
+
+            string? text = null;
+            if (!entries.TryGetValue(oldId, out text))
+                text = await _host.LookupStringKeyAsync(oldId);
+            if (text == null)
+                throw new InvalidOperationException($"Could not resolve string '{oldId}' while renaming '{oldName}'. The command was not renamed.");
+
+            var newId = BuildUniqueProtoUnitCommandStringId(newName, tag, entries);
+            element!.Value = newId;
+            entries[newId] = text;
+            if (oldId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+                oldGeneratedIds.Add(oldId);
+        }
+        return (entries, oldGeneratedIds);
+    }
+
+    private void CleanupUnreferencedProtoUnitCommandStrings(
+        Dictionary<string, string> entries,
+        IEnumerable<string> candidateIds,
+        XDocument commandDocument)
+    {
+        var referenced = GetReferencedProtoUnitCommandStringIds(commandDocument);
+        var changed = false;
+        foreach (var id in candidateIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase) ||
+                referenced.Contains(id) ||
+                IsStringIdReferencedByCurrentProtoData(id))
+                continue;
+            changed |= entries.Remove(id);
+        }
+        if (changed)
+            SaveCurrentModStringEntries(entries);
+    }
+
+    private async Task CleanupProtoUnitCommandStringsWithWarningAsync(
+        Dictionary<string, string> entries,
+        IEnumerable<string> candidateIds,
+        XDocument commandDocument,
+        Window owner,
+        string operation)
+    {
+        try
+        {
+            CleanupUnreferencedProtoUnitCommandStrings(entries, candidateIds, commandDocument);
+        }
+        catch (Exception ex)
+        {
+            await new Prompt(
+                PromptType.Information,
+                "String cleanup incomplete",
+                $"{operation} succeeded, but some unused STR_PUC_* string entries could not be cleaned.\n\n{ex.Message}").ShowDialog(owner);
+        }
+    }
+
+    private bool IsProtoUnitCommandNameAvailable(string name, string? currentName = null)
+    {
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        return ProtoUnitCommandNamePolicy.IsAvailable(name, _protoUnitCommandCatalog.Keys, currentName);
+    }
+
+    private static void RenameProtoUnitCommandReferencesInProtoDocument(XDocument protoDocument, string oldName, string newName)
+    {
+        if (protoDocument.Root == null)
+            return;
+        foreach (var unit in protoDocument.Root.Descendants("unit"))
+        {
+            foreach (var child in unit.Elements().Where(element =>
+                         (element.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase) ||
+                          element.Name.LocalName.Equals("optionalcommand", StringComparison.OrdinalIgnoreCase)) &&
+                         element.Value.Trim().Equals(oldName, StringComparison.OrdinalIgnoreCase)))
+            {
+                child.Value = newName;
+            }
+
+            var transform = unit.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("transformcommand", StringComparison.OrdinalIgnoreCase) &&
+                element.Value.Trim().Equals(oldName, StringComparison.OrdinalIgnoreCase));
+            if (transform != null)
+                transform.Value = newName;
+        }
+    }
+
+    private void AdoptSavedProtoDocument(XDocument savedDocument)
+    {
+        _modXmlDoc = savedDocument;
+        _modXmlRoot = savedDocument.Root;
+    }
+
+    private async Task<bool> CreateProtoUnitCommandAsync(string name)
+    {
+        try
+        {
+            if (!IsProtoUnitCommandNameAvailable(name))
+                return false;
+
+            var doc = LoadProtoUnitCommandModsForUpdate();
+            doc.Root!.Add(new XElement("protounitcommand", new XElement("name", name)));
+            SaveProtoUnitCommandMods(doc);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await new Prompt(PromptType.Error, "Create command", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DuplicateProtoUnitCommandAsync(string sourceName, bool builtIn, string newName)
+    {
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        if (!_protoUnitCommandCatalog.TryGetValue(sourceName, out var source))
+        {
+            await new Prompt(PromptType.Error, "Duplicate command", $"Could not load command '{sourceName}'.").ShowDialog(this);
+            return false;
+        }
+        if (!ProtoUnitCommandNamePolicy.IsAvailable(newName, _protoUnitCommandCatalog.Keys))
+            return false;
+
+        Dictionary<string, string>? stringEntries = null;
+        Dictionary<string, string>? originalStringEntries = null;
+        XDocument? originalCommandDoc = null;
+        XDocument? originalTransformDoc = null;
+        var stringsSaved = false;
+        var commandSaved = false;
+        var transformSaved = false;
+        try
+        {
+            var clone = new XElement(source);
+            var nameNode = clone.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase));
+            if (nameNode == null)
+                clone.AddFirst(new XElement("name", newName));
+            else
+                nameNode.Value = newName;
+
+            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            stringEntries = new Dictionary<string, string>(originalStringEntries, StringComparer.OrdinalIgnoreCase);
+            foreach (var tag in ProtoUnitCommandStringTags)
+            {
+                var element = clone.Elements().FirstOrDefault(child =>
+                    child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+                var sourceId = element?.Value?.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(sourceId))
+                    continue;
+
+                string? sourceText = null;
+                if (!stringEntries.TryGetValue(sourceId, out sourceText))
+                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                if (sourceText == null)
+                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
+
+                var newId = BuildUniqueProtoUnitCommandStringId(newName, tag, stringEntries);
+                element!.Value = newId;
+                stringEntries[newId] = sourceText;
+            }
+
+            var doc = LoadProtoUnitCommandModsForUpdate();
+            originalCommandDoc = new XDocument(doc);
+            var sourceTransform = LoadProtoUnitTransformDefinition(sourceName);
+            XDocument? transformDoc = null;
+            if (sourceTransform != null)
+            {
+                transformDoc = LoadProtoUnitTransformModsForUpdate();
+                originalTransformDoc = new XDocument(transformDoc);
+                sourceTransform.Command = newName;
+                FindProtoUnitTransformByCommand(transformDoc, newName)?.Remove();
+                transformDoc.Root!.Add(sourceTransform.ToElement());
+            }
+
+            SaveCurrentModStringEntries(stringEntries);
+            stringsSaved = true;
+            doc.Root!.Add(clone);
+            SaveProtoUnitCommandMods(doc);
+            commandSaved = true;
+            if (transformDoc != null)
+            {
+                SaveProtoUnitTransformMods(transformDoc);
+                transformSaved = true;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (transformSaved && originalTransformDoc != null)
+            {
+                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
+            }
+            if (commandSaved && originalCommandDoc != null)
+            {
+                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
+            }
+            if (stringsSaved && originalStringEntries != null)
+            {
+                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
+            }
+            await new Prompt(PromptType.Error, "Duplicate command", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> RenameProtoUnitCommandAsync(string oldName, string newName)
+    {
+        XDocument? originalCommandDoc = null;
+        XDocument? originalTransformDoc = null;
+        XDocument? originalProtoDoc = null;
+        Dictionary<string, string>? stringEntries = null;
+        Dictionary<string, string>? originalStringEntries = null;
+        var oldGeneratedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stringsSaved = false;
+        var commandSaved = false;
+        var transformSaved = false;
+        var protoSaved = false;
+
+        try
+        {
+            var doc = LoadProtoUnitCommandModsForUpdate();
+            originalCommandDoc = new XDocument(doc);
+            var command = doc.Descendants().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                GetProtoUnitCommandName(element).Equals(oldName, StringComparison.OrdinalIgnoreCase));
+            if (command == null)
+                return false;
+            if (!IsProtoUnitCommandNameAvailable(newName, oldName))
+                throw new InvalidOperationException($"Command '{newName}' already exists.");
+
+            var nameElement = command.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase));
+            if (nameElement == null)
+                command.AddFirst(new XElement("name", newName));
+            else
+                nameElement.Value = newName;
+            RenameProtoUnitCommandReferencesInCommandDocument(doc, oldName, newName);
+
+            var transformDoc = LoadProtoUnitTransformModsForUpdate();
+            originalTransformDoc = new XDocument(transformDoc);
+            var transformChanged = FindProtoUnitTransformByCommand(transformDoc, oldName) != null;
+            RenameProtoUnitTransformCommandReference(transformDoc, oldName, newName);
+
+            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            (stringEntries, oldGeneratedStringIds) = await MigrateProtoUnitCommandStringsForRenameAsync(command, oldName, newName);
+
+            XDocument? updatedProtoDoc = null;
+            if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+            {
+                originalProtoDoc = new XDocument(_modXmlDoc);
+                updatedProtoDoc = new XDocument(_modXmlDoc);
+                RenameProtoUnitCommandReferencesInProtoDocument(updatedProtoDoc, oldName, newName);
+            }
+
+            SaveCurrentModStringEntries(stringEntries);
+            stringsSaved = true;
+            SaveProtoUnitCommandMods(doc);
+            commandSaved = true;
+            if (transformChanged)
+            {
+                SaveProtoUnitTransformMods(transformDoc);
+                transformSaved = true;
+            }
+
+            if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+            {
+                ProtoXmlHandler.SaveProtoXml(updatedProtoDoc, _modFilePath);
+                protoSaved = true;
+                AdoptSavedProtoDocument(updatedProtoDoc);
+            }
+
+            if (oldGeneratedStringIds.Count > 0)
+            {
+                await CleanupProtoUnitCommandStringsWithWarningAsync(
+                    stringEntries,
+                    oldGeneratedStringIds,
+                    doc,
+                    this,
+                    "The command rename");
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (protoSaved && originalProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+            {
+                try { ProtoXmlHandler.SaveProtoXml(originalProtoDoc, _modFilePath); } catch { }
+            }
+            if (transformSaved && originalTransformDoc != null)
+            {
+                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
+            }
+            if (commandSaved && originalCommandDoc != null)
+            {
+                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
+            }
+            if (stringsSaved && originalStringEntries != null)
+            {
+                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
+            }
+            if (originalProtoDoc != null)
+                AdoptSavedProtoDocument(originalProtoDoc);
+
+            await new Prompt(PromptType.Error, "Rename command", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private Task<bool> DeleteProtoUnitCommandAsync(string name)
+        => DeleteProtoUnitCommandCoreAsync(name, ignoredUnitName: null);
+
+    private async Task<bool> DeleteProtoUnitCommandCoreAsync(string name, string? ignoredUnitName)
+    {
+        if (CountProtoUnitCommandUsage(name, ignoredUnitName) > 0)
+            return false;
+        XDocument? originalCommandDoc = null;
+        XDocument? originalTransformDoc = null;
+        var commandSaved = false;
+        try
+        {
+            var doc = LoadProtoUnitCommandModsForUpdate();
+            originalCommandDoc = new XDocument(doc);
+            var command = doc.Descendants().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                GetProtoUnitCommandName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (command == null)
+                return false;
+
+            var referrers = GetProtoUnitCommandReferrers(doc, name);
+            if (referrers.Count > 0)
+            {
+                var shown = string.Join(", ", referrers.Take(5));
+                if (referrers.Count > 5)
+                    shown += $" (+{referrers.Count - 5} more)";
+                await new Prompt(
+                    PromptType.Error,
+                    "Command is referenced",
+                    $"'{name}' is referenced by another ProtoUnit command and cannot be removed.\n\nReferenced by: {shown}").ShowDialog(this);
+                return false;
+            }
+
+            var deletedStringIds = GetProtoUnitCommandStringIds(command)
+                .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string>? stringEntries = null;
+            if (deletedStringIds.Count > 0)
+                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+
+            var transformDoc = LoadProtoUnitTransformModsForUpdate();
+            originalTransformDoc = new XDocument(transformDoc);
+            var transform = FindProtoUnitTransformByCommand(transformDoc, name);
+            var transformChanged = transform != null;
+            transform?.Remove();
+
+            command.Remove();
+            SaveProtoUnitCommandMods(doc);
+            commandSaved = true;
+            if (transformChanged)
+            {
+                try
+                {
+                    SaveProtoUnitTransformMods(transformDoc);
+                }
+                catch
+                {
+                    if (originalCommandDoc != null)
+                    {
+                        try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
+                    }
+                    throw;
+                }
+            }
+
+            if (stringEntries != null && deletedStringIds.Count > 0)
+            {
+                await CleanupProtoUnitCommandStringsWithWarningAsync(
+                    stringEntries,
+                    deletedStringIds,
+                    doc,
+                    this,
+                    "The command deletion");
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (commandSaved && originalTransformDoc != null)
+            {
+                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
+            }
+            await new Prompt(PromptType.Error, "Delete command", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private ProtoUnitCommandEditorContext BuildProtoUnitCommandEditorContext(IReadOnlyDictionary<string, string>? stringTexts = null, string? commandName = null)
+    {
+        EnsureProtoUnitCommandCatalogLoaded();
+        return new ProtoUnitCommandEditorContext
+        {
+            CommandNames = _protoUnitCommandCatalog.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            TechNames = GetAvailableTechNames(),
+            ProtoUnitNames = GetAvailableTrainUnitNames(),
+            PowerNames = _availableAbilityNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            ActionNames = _knownProtoActionNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            IconPaths = GetAssetPathSuggestions("icon").ToList(),
+            StringTexts = stringTexts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ProtoUnitUsageCount = string.IsNullOrWhiteSpace(commandName) ? 0 : CountProtoUnitCommandUsage(commandName)
+        };
+    }
+
+    private static readonly string[] ProtoUnitCommandStringTags =
+    [
+        "displaynameid", "rollovertextid", "shortrollovertextid", "activerollovertextid", "disabledrollovertextid", "buildlimittextid"
+    ];
+
+    private static string GetProtoUnitCommandStringSuffix(string tag) => tag.ToLowerInvariant() switch
+    {
+        "displaynameid" => "NAME",
+        "rollovertextid" => "LR",
+        "shortrollovertextid" => "SR",
+        "activerollovertextid" => "ACTIVE_LR",
+        "disabledrollovertextid" => "DISABLED_LR",
+        "buildlimittextid" => "BUILD_LIMIT",
+        _ => tag.ToUpperInvariant()
+    };
+
+    private static string BuildProtoUnitCommandStringId(string commandName, string tag)
+    {
+        var normalized = new string(commandName.Trim().ToUpperInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+        while (normalized.Contains("__", StringComparison.Ordinal))
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+        normalized = normalized.Trim('_');
+        return $"STR_PUC_{normalized}_{GetProtoUnitCommandStringSuffix(tag)}";
+    }
+
+    private static string BuildUniqueProtoUnitCommandStringId(string commandName, string tag, IReadOnlyDictionary<string, string> entries)
+    {
+        var baseId = BuildProtoUnitCommandStringId(commandName, tag);
+        if (!entries.ContainsKey(baseId))
+            return baseId;
+        for (var suffix = 2; ; suffix++)
+        {
+            var candidate = $"{baseId}_{suffix}";
+            if (!entries.ContainsKey(candidate))
+                return candidate;
+        }
+    }
+
+    private async Task<Dictionary<string, string>> ResolveProtoUnitCommandStringTextsAsync(ProtoUnitCommandDefinition definition)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in ProtoUnitCommandStringTags)
+        {
+            var id = definition.Values.GetValueOrDefault(tag, "").Trim();
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+            result[tag] = await ResolveDisplayStringAsync(id) ?? id;
+        }
+        return result;
+    }
+
+    private void CaptureInlineTransformSourceSnapshots(TransformCommandAssignmentState state)
+    {
+        state.SnapshotCommandName = state.SourceCommandName;
+        state.LoadedCommandSnapshot = null;
+        state.LoadedTransformSnapshot = null;
+
+        if (state.SourceIsBuiltIn || string.IsNullOrWhiteSpace(state.SourceCommandName))
+            return;
+
+        var commandDoc = LoadProtoUnitCommandModsForUpdate();
+        var command = commandDoc.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+            GetProtoUnitCommandName(element).Equals(state.SourceCommandName, StringComparison.OrdinalIgnoreCase));
+        if (command != null)
+            state.LoadedCommandSnapshot = NormalizeProtoUnitCommandForComparison(command);
+
+        try
+        {
+            var transformDoc = LoadProtoUnitTransformModsForUpdate();
+            var transform = FindProtoUnitTransformByCommand(transformDoc, state.SourceCommandName);
+            if (transform != null)
+                state.LoadedTransformSnapshot = NormalizeXmlElementForComparison(transform);
+        }
+        catch (Exception ex)
+        {
+            var path = GetCurrentModGameplayFilePath("unit_transform_mods.xml");
+            if (!string.IsNullOrWhiteSpace(path))
+                ReportProtoUnitTransformReadError(path, ex);
+        }
+    }
+
+    private async Task<bool> ConfirmInlineTransformExternalChangesAsync(
+        TransformCommandAssignmentState state,
+        XElement currentCommand,
+        XElement? currentTransform)
+    {
+        var normalizedCommand = NormalizeProtoUnitCommandForComparison(currentCommand);
+        if (state.LoadedCommandSnapshot != null && !XNode.DeepEquals(normalizedCommand, state.LoadedCommandSnapshot))
+        {
+            var prompt = new Prompt(
+                PromptType.Confirm,
+                "Command changed on disk",
+                $"'{state.SourceCommandName}' changed in proto_unit_command_mods.xml after this Transform tab was loaded. Save and overwrite those external changes?",
+                confirmButtonText: "Save");
+            await prompt.ShowDialog(this);
+            if (!prompt.Confirmed)
+                return false;
+        }
+
+        var normalizedTransform = currentTransform == null ? null : NormalizeXmlElementForComparison(currentTransform);
+        var transformChanged =
+            (state.LoadedTransformSnapshot == null) != (normalizedTransform == null) ||
+            (state.LoadedTransformSnapshot != null && normalizedTransform != null &&
+             !XNode.DeepEquals(state.LoadedTransformSnapshot, normalizedTransform));
+        if (transformChanged)
+        {
+            var prompt = new Prompt(
+                PromptType.Confirm,
+                "Transform changed on disk",
+                $"The unit transform for '{state.SourceCommandName}' changed in unit_transform_mods.xml after this Transform tab was loaded. Save and overwrite those external changes?",
+                confirmButtonText: "Save");
+            await prompt.ShowDialog(this);
+            if (!prompt.Confirmed)
+                return false;
+        }
+
+        return true;
+    }
+
+    private (Dictionary<string, string> Entries, HashSet<string> OldGeneratedIds) PrepareProtoUnitCommandStrings(
+        ProtoUnitCommandDefinition definition,
+        string originalName,
+        IReadOnlyDictionary<string, string> texts)
+    {
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
+        var oldGeneratedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var renamed = !definition.Name.Equals(originalName, StringComparison.OrdinalIgnoreCase);
+        foreach (var tag in ProtoUnitCommandStringTags)
+        {
+            var text = texts.GetValueOrDefault(tag, "").Trim();
+            var existingId = definition.Values.GetValueOrDefault(tag, "").Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                definition.Values.Remove(tag);
+                continue;
+            }
+
+            var useExisting = !renamed && existingId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase);
+            var id = useExisting ? existingId : BuildUniqueProtoUnitCommandStringId(definition.Name, tag, entries);
+            if (renamed && existingId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+                oldGeneratedIds.Add(existingId);
+            definition.Values[tag] = id;
+            entries[id] = text;
+        }
+        return (entries, oldGeneratedIds);
+    }
+
+    private async Task<bool> SaveInlineTransformCommandDefinitionAsync(TransformCommandAssignmentState state)
+    {
+        if (state.Definition == null || state.TransformDefinition == null)
+            return false;
+
+        var desiredName = state.CommandName.Trim();
+        var sourceName = state.SourceCommandName.Trim();
+        if (string.IsNullOrWhiteSpace(desiredName))
+            return false;
+
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        var creatingNew = string.IsNullOrWhiteSpace(sourceName);
+        var creatingCopy = creatingNew || !desiredName.Equals(sourceName, StringComparison.OrdinalIgnoreCase);
+        if (!creatingCopy && state.SourceIsBuiltIn)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Original command",
+                "Original/Data.bar commands cannot be overwritten. Change the Command name and save to create a custom copy.").ShowDialog(this);
+            return false;
+        }
+
+        if (creatingCopy && !ProtoUnitCommandNamePolicy.IsAvailable(desiredName, _protoUnitCommandCatalog.Keys))
+        {
+            await new Prompt(PromptType.Error, "Command already exists", $"A command named '{desiredName}' already exists.").ShowDialog(this);
+            return false;
+        }
+
+        XDocument? originalCommandDoc = null;
+        XDocument? originalTransformDoc = null;
+        Dictionary<string, string>? originalStringEntries = null;
+        var stringsSaved = false;
+        var commandSaved = false;
+        var transformSaved = false;
+
+        try
+        {
+            var commandDoc = LoadProtoUnitCommandModsForUpdate();
+            originalCommandDoc = new XDocument(commandDoc);
+            var transformDoc = LoadProtoUnitTransformModsForUpdate();
+            originalTransformDoc = new XDocument(transformDoc);
+            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+
+            ProtoUnitCommandDefinition updated;
+            XElement? existingCustom = null;
+            if (!creatingCopy)
+            {
+                existingCustom = commandDoc.Descendants().FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                    GetProtoUnitCommandName(element).Equals(sourceName, StringComparison.OrdinalIgnoreCase));
+                if (existingCustom == null)
+                    throw new InvalidOperationException($"Custom command '{sourceName}' no longer exists.");
+                updated = ProtoUnitCommandDefinition.FromElement(existingCustom);
+            }
+            else if (creatingNew)
+            {
+                updated = new ProtoUnitCommandDefinition();
+            }
+            else
+            {
+                if (!_protoUnitCommandCatalog.TryGetValue(sourceName, out var sourceElement))
+                    throw new InvalidOperationException($"Source command '{sourceName}' could not be loaded.");
+                updated = ProtoUnitCommandDefinition.FromElement(sourceElement);
+            }
+
+            if (!creatingCopy && !state.SourceIsBuiltIn && existingCustom != null)
+            {
+                var currentTransform = FindProtoUnitTransformByCommand(transformDoc, sourceName);
+                if (!await ConfirmInlineTransformExternalChangesAsync(state, existingCustom, currentTransform))
+                    return false;
+            }
+
+            updated.Name = desiredName;
+            var stringTags = ProtoUnitCommandStringTags.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var tag in ProtoUnitCommandDefinition.ValueFieldTags)
+            {
+                if (stringTags.Contains(tag))
+                    continue;
+                if (state.Definition.Values.TryGetValue(tag, out var value) && !string.IsNullOrWhiteSpace(value))
+                    updated.Values[tag] = value;
+                else
+                    updated.Values.Remove(tag);
+            }
+
+            updated.RepeatableValues.Clear();
+            foreach (var pair in state.Definition.RepeatableValues)
+                updated.RepeatableValues[pair.Key] = pair.Value.ToList();
+            updated.Flags.Clear();
+            foreach (var flag in state.Definition.Flags)
+                updated.Flags.Add(flag);
+
+            ProtoUnitCommandTransformRules.EnsureStructuralFlag(
+                updated.Flags,
+                state.IsMultiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique);
+
+            var prepared = PrepareProtoUnitCommandStrings(updated, creatingCopy && !creatingNew ? sourceName : desiredName, state.StringTexts);
+            if (creatingCopy)
+                commandDoc.Root!.Add(updated.ToElement());
+            else
+                existingCustom!.ReplaceWith(updated.ToElement());
+
+            if (!creatingCopy)
+                FindProtoUnitTransformByCommand(transformDoc, sourceName)?.Remove();
+            FindProtoUnitTransformByCommand(transformDoc, desiredName)?.Remove();
+            var updatedTransform = state.TransformDefinition.Clone();
+            updatedTransform.Command = desiredName;
+            transformDoc.Root!.Add(updatedTransform.ToElement());
+
+            SaveCurrentModStringEntries(prepared.Entries);
+            stringsSaved = true;
+            SaveProtoUnitCommandMods(commandDoc);
+            commandSaved = true;
+            SaveProtoUnitTransformMods(transformDoc);
+            transformSaved = true;
+
+            if (prepared.OldGeneratedIds.Count > 0)
+            {
+                await CleanupProtoUnitCommandStringsWithWarningAsync(
+                    prepared.Entries,
+                    prepared.OldGeneratedIds,
+                    commandDoc,
+                    this,
+                    "The Transform command save");
+            }
+
+            state.CommandName = desiredName;
+            state.SourceCommandName = desiredName;
+            state.SourceIsBuiltIn = false;
+            state.Definition = updated;
+            state.TransformDefinition = updatedTransform;
+            state.SnapshotCommandName = desiredName;
+            var savedCommand = commandDoc.Descendants().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                GetProtoUnitCommandName(element).Equals(desiredName, StringComparison.OrdinalIgnoreCase));
+            state.LoadedCommandSnapshot = savedCommand == null ? null : NormalizeProtoUnitCommandForComparison(savedCommand);
+            var savedTransform = FindProtoUnitTransformByCommand(transformDoc, desiredName);
+            state.LoadedTransformSnapshot = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
+            state.DefinitionDirty = false;
+            EnsureProtoUnitCommandCatalogLoaded(force: true);
+            _cachedCommandNames = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (transformSaved && originalTransformDoc != null)
+            {
+                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
+            }
+            if (commandSaved && originalCommandDoc != null)
+            {
+                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
+            }
+            if (stringsSaved && originalStringEntries != null)
+            {
+                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
+            }
+            await new Prompt(PromptType.Error, "Save transform command", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<string?> OpenProtoUnitCommandEditorAsync(Window owner, string name, bool builtIn)
+    {
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        if (!_protoUnitCommandCatalog.TryGetValue(name, out var element))
+        {
+            await new Prompt(PromptType.Error, "Command", $"Command '{name}' could not be loaded.").ShowDialog(owner);
+            return null;
+        }
+
+        var definition = ProtoUnitCommandDefinition.FromElement(element);
+        var transformDefinition = LoadProtoUnitTransformDefinition(name);
+        var stringTexts = await ResolveProtoUnitCommandStringTextsAsync(definition);
+        var originalName = name;
+        var lastSavedCommandElement = NormalizeProtoUnitCommandForComparison(element);
+        XElement? lastSavedTransformElement = null;
+        if (!builtIn)
+        {
+            try
+            {
+                var currentTransformDoc = LoadProtoUnitTransformModsForUpdate();
+                var currentTransform = FindProtoUnitTransformByCommand(currentTransformDoc, name);
+                lastSavedTransformElement = currentTransform == null ? null : NormalizeXmlElementForComparison(currentTransform);
+            }
+            catch { }
+        }
+
+        ProtoUnitCommandEditorWindow? editor = null;
+        editor = new ProtoUnitCommandEditorWindow(
+            definition,
+            builtIn,
+            BuildProtoUnitCommandEditorContext(stringTexts, name),
+            transformDefinition,
+            async (updated, updatedStringTexts, updatedTransform) =>
+            {
+                if (builtIn)
+                    return false;
+
+                XDocument? originalCommandDoc = null;
+                XDocument? originalTransformDoc = null;
+                XDocument? originalProtoDoc = null;
+                Dictionary<string, string>? originalStringEntries = null;
+                var stringsSaved = false;
+                var commandSaved = false;
+                var transformSaved = false;
+                var protoSaved = false;
+
+                try
+                {
+                    var doc = LoadProtoUnitCommandModsForUpdate();
+                    originalCommandDoc = new XDocument(doc);
+                    var transformDoc = LoadProtoUnitTransformModsForUpdate();
+                    originalTransformDoc = new XDocument(transformDoc);
+                    var renamed = !updated.Name.Equals(originalName, StringComparison.OrdinalIgnoreCase);
+                    if (renamed && !ProtoUnitCommandNamePolicy.IsAvailable(updated.Name, _protoUnitCommandCatalog.Keys, originalName))
+                    {
+                        throw new InvalidOperationException($"Command '{updated.Name}' already exists.");
+                    }
+
+                    var existing = doc.Descendants().FirstOrDefault(command =>
+                        command.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                        GetProtoUnitCommandName(command).Equals(originalName, StringComparison.OrdinalIgnoreCase));
+                    if (existing == null)
+                        throw new InvalidOperationException($"Custom command '{originalName}' no longer exists.");
+
+                    var currentCommandElement = NormalizeProtoUnitCommandForComparison(existing);
+                    if (!XNode.DeepEquals(currentCommandElement, lastSavedCommandElement))
+                    {
+                        var overwritePrompt = new Prompt(
+                            PromptType.Confirm,
+                            "Command changed on disk",
+                            $"'{originalName}' changed in proto_unit_command_mods.xml after this editor was opened. Save and overwrite those external changes?",
+                            confirmButtonText: "Save");
+                        await overwritePrompt.ShowDialog(editor!);
+                        if (!overwritePrompt.Confirmed)
+                            return false;
+                    }
+
+                    var currentTransform = FindProtoUnitTransformByCommand(transformDoc, originalName);
+                    var currentTransformElement = currentTransform == null ? null : NormalizeXmlElementForComparison(currentTransform);
+                    var transformNeedsWrite = currentTransform != null || updatedTransform != null;
+                    var transformChangedExternally =
+                        (lastSavedTransformElement == null) != (currentTransformElement == null) ||
+                        (lastSavedTransformElement != null && currentTransformElement != null && !XNode.DeepEquals(lastSavedTransformElement, currentTransformElement));
+                    if (transformChangedExternally)
+                    {
+                        var overwritePrompt = new Prompt(
+                            PromptType.Confirm,
+                            "Transform changed on disk",
+                            $"The unit transform for '{originalName}' changed in unit_transform_mods.xml after this editor was opened. Save and overwrite those external changes?",
+                            confirmButtonText: "Save");
+                        await overwritePrompt.ShowDialog(editor!);
+                        if (!overwritePrompt.Confirmed)
+                            return false;
+                    }
+
+                    var prepared = PrepareProtoUnitCommandStrings(updated, originalName, updatedStringTexts);
+                    originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+
+                    existing.ReplaceWith(updated.ToElement());
+                    if (renamed)
+                        RenameProtoUnitCommandReferencesInCommandDocument(doc, originalName, updated.Name);
+
+                    currentTransform?.Remove();
+                    if (renamed)
+                        FindProtoUnitTransformByCommand(transformDoc, updated.Name)?.Remove();
+                    if (updatedTransform != null)
+                    {
+                        updatedTransform.Command = updated.Name;
+                        transformDoc.Root!.Add(updatedTransform.ToElement());
+                    }
+
+                    XDocument? updatedProtoDoc = null;
+                    if (renamed && _modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+                    {
+                        originalProtoDoc = new XDocument(_modXmlDoc);
+                        updatedProtoDoc = new XDocument(_modXmlDoc);
+                        RenameProtoUnitCommandReferencesInProtoDocument(updatedProtoDoc, originalName, updated.Name);
+                    }
+
+                    SaveCurrentModStringEntries(prepared.Entries);
+                    stringsSaved = true;
+                    SaveProtoUnitCommandMods(doc);
+                    commandSaved = true;
+                    if (transformNeedsWrite)
+                    {
+                        SaveProtoUnitTransformMods(transformDoc);
+                        transformSaved = true;
+                    }
+
+                    if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+                    {
+                        ProtoXmlHandler.SaveProtoXml(updatedProtoDoc, _modFilePath);
+                        protoSaved = true;
+                        AdoptSavedProtoDocument(updatedProtoDoc);
+                    }
+
+                    if (prepared.OldGeneratedIds.Count > 0)
+                    {
+                        await CleanupProtoUnitCommandStringsWithWarningAsync(
+                            prepared.Entries,
+                            prepared.OldGeneratedIds,
+                            doc,
+                            editor!,
+                            "The command save");
+                    }
+
+                    var savedCommand = doc.Descendants().FirstOrDefault(command =>
+                        command.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                        GetProtoUnitCommandName(command).Equals(updated.Name, StringComparison.OrdinalIgnoreCase));
+                    lastSavedCommandElement = NormalizeProtoUnitCommandForComparison(savedCommand ?? updated.ToElement());
+                    var savedTransform = FindProtoUnitTransformByCommand(transformDoc, updated.Name);
+                    lastSavedTransformElement = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
+                    if (renamed)
+                        originalName = updated.Name;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    if (protoSaved && originalProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+                    {
+                        try { ProtoXmlHandler.SaveProtoXml(originalProtoDoc, _modFilePath); } catch { }
+                    }
+                    if (transformSaved && originalTransformDoc != null)
+                    {
+                        try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
+                    }
+                    if (commandSaved && originalCommandDoc != null)
+                    {
+                        try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
+                    }
+                    if (stringsSaved && originalStringEntries != null)
+                    {
+                        try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
+                    }
+                    if (originalProtoDoc != null)
+                        AdoptSavedProtoDocument(originalProtoDoc);
+                    await new Prompt(PromptType.Error, "Save command", ex.Message).ShowDialog(editor!);
+                    return false;
+                }
+            });
+
+        await editor.ShowDialog(owner);
+        return editor.ResultName;
+    }
+
+    private async Task OpenProtoUnitCommandsManagerAsync()
+    {
+        if (_modXmlRoot == null)
+        {
+            await new Prompt(PromptType.Error, "Commands", "Select or create a mod before managing custom ProtoUnit commands.").ShowDialog(this);
+            return;
+        }
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        var items = _protoUnitCommandCatalog.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new ProtoUnitCommandManagerItem(name, _builtInProtoUnitCommandNames.Contains(name) &&
+                !IsCustomProtoUnitCommand(name), CountProtoUnitCommandUsage(name))).ToList();
+        var manager = new ProtoUnitCommandsManagerWindow(items, OpenProtoUnitCommandEditorAsync, CreateProtoUnitCommandAsync,
+            DuplicateProtoUnitCommandAsync, RenameProtoUnitCommandAsync, DeleteProtoUnitCommandAsync, CountProtoUnitCommandUsage);
+        await manager.ShowDialog(this);
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        _cachedCommandNames = null;
+        if (!string.IsNullOrWhiteSpace(_currentUnitName)) BuildEditorPanel(_currentUnitName, resetScroll: false);
+    }
+
+    private bool IsCustomProtoUnitCommand(string name)
+    {
+        var path = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+        try
+        {
+            var doc = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            return doc.Descendants().Any(e => e.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) && GetProtoUnitCommandName(e).Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch { return false; }
+    }
+
+    private async Task OpenAbilitiesManagerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath))
+        {
+            var prompt = new Prompt(PromptType.Error, "No active mod", "Load or create a local mod before managing abilities.");
+            await prompt.ShowDialog(this);
+            return;
+        }
+
+        _captureAbilityEditorCurrent?.Invoke();
+        var customNames = GetCustomAbilityPowerNames();
+        var usageCounts = GetAbilityUsageCounts();
+        foreach (var draft in _abilityDrafts.Values.Where(draft => !string.IsNullOrWhiteSpace(draft.Name)))
+            usageCounts[draft.Name] = Math.Max(1, usageCounts.GetValueOrDefault(draft.Name));
+        var items = _abilityPowerCatalog.Keys
+            .Union(customNames, StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => new AbilityManagerItem(
+                name,
+                IsBuiltIn: !customNames.Contains(name),
+                UsageCount: usageCounts.GetValueOrDefault(name)))
+            .ToList();
+
+        var window = new AbilitiesManagerWindow(
+            items,
+            OpenManagedAbilityEditorAsync,
+            CreateManagedAbilityAsync,
+            DuplicateManagedAbilityAsync,
+            RenameManagedAbilityAsync,
+            DeleteManagedAbilityAsync,
+            ResolveManagedAbilityUsageCount);
+        await window.ShowDialog(this);
+    }
+
+    private async Task<bool> CreateManagedAbilityAsync(string abilityName)
+    {
+        var path = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var doc = LoadAbilityXmlDocumentForUpdate(path, "powersmod");
+            if (doc.Root == null) doc.Add(new XElement("powersmod"));
+            doc.Root!.Name = "powersmod";
+            if (doc.Root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                             GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            var power = new XElement("power", new XAttribute("name", abilityName), new XAttribute("type", "UnitAction"));
+            doc.Root.Add(power);
+            SaveAbilityXmlDocument(doc, path);
+            _abilityPowerCatalog[abilityName] = new XElement(power);
+            RegisterAvailableAbilityName(abilityName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to create ability", ex.Message);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DuplicateManagedAbilityAsync(string sourceName, bool sourceIsBuiltIn, string newName)
+    {
+        if (!_abilityPowerCatalog.TryGetValue(sourceName, out var source))
+            return false;
+        var clone = new XElement(source);
+        clone.SetAttributeValue("name", newName);
+        try
+        {
+            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            var stringsChanged = false;
+            foreach (var tag in new[] { "displaynameid", "rolloverid" })
+            {
+                var element = clone.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+                var sourceId = element?.Value?.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(sourceId))
+                    continue;
+
+                string? sourceText = null;
+                if (!stringEntries.TryGetValue(sourceId, out sourceText))
+                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                if (sourceText == null)
+                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
+
+                var rollover = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase);
+                var newId = BuildUniqueAbilityStringId(newName, rollover, stringEntries);
+                element!.Value = newId;
+                stringEntries[newId] = sourceText;
+                stringsChanged = true;
+            }
+            if (stringsChanged)
+                SaveCurrentModStringEntries(stringEntries);
+            await SaveManagedAbilityPowerAsync(newName, clone, originalName: null);
+            _abilityPowerCatalog[newName] = new XElement(clone);
+            RegisterAvailableAbilityName(newName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to duplicate ability", ex.Message);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> RenameManagedAbilityAsync(string oldName, string newName)
+    {
+        if (!_abilityPowerCatalog.TryGetValue(oldName, out var power))
+            return false;
+        try
+        {
+            var renamed = new XElement(power);
+            renamed.SetAttributeValue("name", newName);
+            await SaveManagedAbilityPowerAsync(newName, renamed, oldName);
+            _abilityPowerCatalog.Remove(oldName);
+            _abilityPowerCatalog[newName] = new XElement(renamed);
+            if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to rename ability", ex.Message);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DeleteManagedAbilityAsync(string abilityName)
+    {
+        var result = new AbilityManagerResult();
+        result.DeletedNames.Add(abilityName);
+        await ApplyAbilityManagerChangesAsync(result);
+        return !_abilityPowerCatalog.ContainsKey(abilityName);
+    }
+
+    private async Task<string?> OpenManagedAbilityEditorAsync(Window owner, string abilityName, bool isBuiltIn)
+    {
+        if (!_abilityPowerCatalog.TryGetValue(abilityName, out var power))
+        {
+            var prompt = new Prompt(PromptType.Error, "Ability not found", $"Could not load '{abilityName}'.");
+            await prompt.ShowDialog(this);
+            return null;
+        }
+
+        var editor = new AbilityEditorWindow(_host);
+        await editor.InitializeAbilityDefinitionEditorAsync(
+            abilityName,
+            isBuiltIn,
+            new XElement(power),
+            _modFilePath,
+            isBuiltIn ? null : async (originalName, updatedPower) =>
+            {
+                var newName = GetAbilityElementName(updatedPower);
+                await SaveManagedAbilityPowerAsync(newName, updatedPower, originalName);
+                if (!originalName.Equals(newName, StringComparison.OrdinalIgnoreCase))
+                    _abilityPowerCatalog.Remove(originalName);
+                _abilityPowerCatalog[newName] = new XElement(updatedPower);
+
+                // The standalone ability editor has its own string cache. It may have just
+                // written Display Name/Rollover values to stringmods.txt, so never rebuild
+                // the ProtoUnit ability UI from this window's stale cache.
+                InvalidateModStringEntriesCache();
+                if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
+                    BuildEditorPanel(_currentUnitName, resetScroll: false);
+            },
+            _abilityPowerCatalog.Keys);
+        await editor.ShowDialog(owner);
+        return editor.CurrentAbilityDefinitionName;
+    }
+
+    private async Task SaveManagedAbilityPowerAsync(string abilityName, XElement updatedPower, string? originalName)
+    {
+        var path = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var doc = LoadAbilityXmlDocumentForUpdate(path, "powersmod");
+        if (doc.Root == null) doc.Add(new XElement("powersmod"));
+        doc.Root!.Name = "powersmod";
+
+        var oldName = string.IsNullOrWhiteSpace(originalName) ? abilityName : originalName;
+        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
+        {
+            var collision = doc.Root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                                         GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase));
+            collision |= _abilityPowerCatalog.Keys.Any(name =>
+                !name.Equals(oldName, StringComparison.OrdinalIgnoreCase) &&
+                name.Equals(abilityName, StringComparison.OrdinalIgnoreCase));
+            if (collision)
+                throw new InvalidOperationException($"An ability named '{abilityName}' already exists. Choose a different internal name.");
+        }
+        var existing = doc.Root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                                                GetAbilityElementName(e).Equals(oldName, StringComparison.OrdinalIgnoreCase));
+        var replacement = new XElement(updatedPower);
+        replacement.Name = "power";
+        replacement.SetAttributeValue("name", abilityName);
+        // The user may have edited powers_mods.xml manually while this editor was open.
+        // Preserve unsupported placement attributes from the current on-disk power, not only
+        // from the stale PowerSource captured when the editor window was opened.
+        MergeUnknownPlacementAttributes(existing, replacement);
+
+        Dictionary<string, string>? renamedStringEntries = null;
+        var oldStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
+        {
+            renamedStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            foreach (var tag in new[] { "displaynameid", "rolloverid" })
+            {
+                var replacementElement = replacement.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+                var sourceId = replacementElement?.Value?.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(sourceId))
+                    continue;
+
+                string? sourceText = null;
+                if (!renamedStringEntries.TryGetValue(sourceId, out sourceText))
+                    sourceText = await _host.LookupStringKeyAsync(sourceId);
+                if (sourceText == null)
+                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while renaming '{oldName}'. The ability was not renamed.");
+
+                var rollover = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase);
+                var newId = BuildUniqueAbilityStringId(abilityName, rollover, renamedStringEntries);
+                replacementElement!.Value = newId;
+                var updatedElement = updatedPower.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+                if (updatedElement != null)
+                    updatedElement.Value = newId;
+                renamedStringEntries[newId] = sourceText;
+                oldStringIds.Add(sourceId);
+            }
+
+            // Write the new IDs before changing powers_mods.xml. If the XML write then fails,
+            // the only side effect is harmless unused strings rather than a power that points
+            // at missing string IDs.
+            if (oldStringIds.Count > 0)
+                SaveCurrentModStringEntries(renamedStringEntries);
+        }
+
+        if (existing != null) existing.ReplaceWith(replacement); else doc.Root.Add(replacement);
+        SaveAbilityXmlDocument(doc, path);
+        _abilityPowerCatalog[abilityName] = new XElement(replacement);
+        RegisterAvailableAbilityName(abilityName);
+
+        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
+        {
+            RenameAbilityReferencesInMods(oldName, abilityName);
+
+            // Clean the previous generated IDs only after the power rename succeeded. A
+            // cleanup failure leaves harmless orphan strings but never breaks the renamed
+            // ability's references.
+            if (renamedStringEntries != null && oldStringIds.Count > 0)
+            {
+                var referencedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
+                    foreach (var id in GetAbilityDefinitionStringIds(power))
+                        referencedIds.Add(id);
+                foreach (var catalogEntry in _abilityPowerCatalog)
+                {
+                    if (catalogEntry.Key.Equals(oldName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    foreach (var id in GetAbilityDefinitionStringIds(catalogEntry.Value))
+                        referencedIds.Add(id);
+                }
+
+                var cleanupChanged = false;
+                foreach (var oldId in oldStringIds)
+                {
+                    if (oldId.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase) && !referencedIds.Contains(oldId))
+                        cleanupChanged |= renamedStringEntries.Remove(oldId);
+                }
+                if (cleanupChanged)
+                {
+                    try { SaveCurrentModStringEntries(renamedStringEntries); }
+                    catch { /* The rename is already safe; leave an orphan string rather than fail it. */ }
+                }
+            }
+        }
+    }
+
+    private void RenameAbilityReferencesInMods(string oldName, string newName)
+    {
+        var path = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        var doc = LoadAbilityXmlDocumentForUpdate(path, "abilitiesmods");
+        var changed = false;
+        foreach (var ability in doc.Root?.Descendants().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)) ?? [])
+        {
+            if (!GetAbilityElementName(ability).Equals(oldName, StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var text in ability.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).ToList()) text.Remove();
+            ability.AddFirst(new XText(newName));
+            changed = true;
+        }
+        if (changed) SaveAbilityXmlDocument(doc, path);
+    }
+
+    private static IEnumerable<string> GetAbilityDefinitionStringIds(XElement power)
+    {
+        foreach (var tag in new[] { "displaynameid", "rolloverid" })
+        {
+            var id = power.Elements()
+                .FirstOrDefault(element => element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase))
+                ?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(id))
+                yield return id;
+        }
+    }
+
+    private bool IsStringIdReferencedByCurrentProtoData(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || _modXmlRoot == null)
+            return false;
+
+        return _modXmlRoot.Descendants()
+            .Any(element => string.Equals(element.Value?.Trim(), id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task ApplyAbilityManagerChangesAsync(AbilityManagerResult result)
+    {
+        var powersPath = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (string.IsNullOrWhiteSpace(powersPath)) return;
+        try
+        {
+            var doc = LoadAbilityXmlDocumentForUpdate(powersPath, "powersmod");
+            if (doc.Root == null) doc.Add(new XElement("powersmod"));
+            doc.Root!.Name = "powersmod";
+
+            var deletedNames = result.DeletedNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var deletedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var power in doc.Root.Elements().Where(element =>
+                         element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                         deletedNames.Contains(GetAbilityElementName(element))))
+            {
+                foreach (var id in GetAbilityDefinitionStringIds(power))
+                    deletedStringIds.Add(id);
+            }
+
+            // Read stringmods before changing powers_mods.xml. If stringmods is locked
+            // or unreadable, deletion aborts instead of leaving a partially applied change.
+            Dictionary<string, string>? stringEntries = null;
+            if (deletedStringIds.Count > 0)
+                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+
+            foreach (var rename in result.Renames)
+            {
+                var power = doc.Root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                                                    GetAbilityElementName(e).Equals(rename.OldName, StringComparison.OrdinalIgnoreCase));
+                if (power == null) continue;
+                power.SetAttributeValue("name", rename.NewName);
+                RenameAbilityReferencesInMods(rename.OldName, rename.NewName);
+                if (_abilityPowerCatalog.Remove(rename.OldName, out var cached))
+                {
+                    cached.SetAttributeValue("name", rename.NewName);
+                    _abilityPowerCatalog[rename.NewName] = cached;
+                }
+            }
+
+            foreach (var deletedName in result.DeletedNames)
+            {
+                foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                                                      GetAbilityElementName(e).Equals(deletedName, StringComparison.OrdinalIgnoreCase)).ToList())
+                    power.Remove();
+                _abilityPowerCatalog.Remove(deletedName);
+            }
+
+            var stringsChanged = false;
+            if (stringEntries != null && deletedStringIds.Count > 0)
+            {
+                var remainingAbilityStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var power in doc.Root.Elements().Where(element => element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
+                    foreach (var id in GetAbilityDefinitionStringIds(power))
+                        remainingAbilityStringIds.Add(id);
+
+                // The catalog contains base-game powers too, so a string override that is
+                // still referenced by another Original/shared ability is kept.
+                foreach (var catalogEntry in _abilityPowerCatalog)
+                {
+                    if (deletedNames.Contains(catalogEntry.Key))
+                        continue;
+                    foreach (var id in GetAbilityDefinitionStringIds(catalogEntry.Value))
+                        remainingAbilityStringIds.Add(id);
+                }
+
+                foreach (var id in deletedStringIds)
+                {
+                    // Only clean ability-owned IDs, and only if nothing else we know about
+                    // still references them. This avoids deleting unrelated shared strings.
+                    if (!id.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase) ||
+                        remainingAbilityStringIds.Contains(id) ||
+                        IsStringIdReferencedByCurrentProtoData(id))
+                    {
+                        continue;
+                    }
+                    stringsChanged |= stringEntries.Remove(id);
+                }
+            }
+
+            SaveAbilityXmlDocument(doc, powersPath);
+            if (stringsChanged && stringEntries != null)
+                SaveCurrentModStringEntries(stringEntries);
+            if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            _statusMessage.Text = "Ability changes saved.";
+        }
+        catch (Exception ex)
+        {
+            var prompt = new Prompt(PromptType.Error, "Unable to manage abilities", ex.Message);
+            await prompt.ShowDialog(this);
+        }
+    }
+
     private async Task OpenTacticsManagerAsync()
     {
-        if (!await CheckStartLocalMod() || _modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
+        if (_modXmlRoot == null && !await EnsureLocalModAsync())
+            return;
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
         ApplyCurrentEdits();
         var customNames = GetCustomTacticsNames();
+        var builtInNames = GetBuiltInTacticsNames();
         var usageCounts = GetTacticsUsageCounts();
         var items = GetAvailableTacticsNames()
             .Select(name => new TacticsManagerItem(
                 name,
                 IsBuiltIn: !customNames.Contains(name),
+                IsModifiedBuiltIn: customNames.Contains(name) && builtInNames.Contains(name),
                 UsageCount: usageCounts.GetValueOrDefault(name)))
             .ToList();
 
@@ -25729,13 +27774,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             items,
             OpenManagedTacticsEditorAsync,
             CreateManagedTacticsFileAsync,
-            DuplicateManagedTacticsFileAsync);
+            DuplicateManagedTacticsFileAsync,
+            RenameManagedTacticsFileAsync,
+            DeleteManagedTacticsFileAsync);
         await window.ShowDialog(this);
-        if (window.Result == null)
-            return;
-
-        window.SetDeletedOriginalNames(customNames);
-        await ApplyTacticsManagerChangesAsync(window.Result);
     }
 
     private async Task<bool> CreateManagedTacticsFileAsync(string tacticsName)
@@ -25757,7 +27799,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, NewTacticsTemplate, new UTF8Encoding(false));
+            WriteTacticsTextAtomic(path, NewTacticsTemplate);
             _tacticsActionCache.Clear();
             _tacticsActionTypeCache.Clear();
             return true;
@@ -25803,24 +27845,23 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return false;
                 }
 
-                File.Copy(sourcePath, targetPath, overwrite: false);
+                CopyTacticsFileAtomic(sourcePath, targetPath);
             }
             else
             {
-                var document = LoadBuiltInTacticsDocumentForManagerEditor(sourceName)
-                    ?? BuildTacticsDocumentFromLoadedActions(sourceName);
-                if (document.Root == null)
+                var document = LoadBuiltInTacticsDocumentForManagerEditor(sourceName);
+                if (document?.Root == null)
                 {
                     var loadPrompt = new Prompt(
                         PromptType.Error,
                         "Unable to duplicate tactics",
-                        $"Could not load '{sourceName}' from Data.bar.");
+                        $"The full tactics definition for '{sourceName}' could not be loaded from Data.bar. Duplication was cancelled to avoid creating an incomplete tactics file.");
                     await loadPrompt.ShowDialog(this);
                     return false;
                 }
 
                 RemoveFormattingWhitespace(document);
-                ProtoXmlHandler.SaveProtoXml(document, targetPath);
+                SaveTacticsDocumentAtomic(document, targetPath);
             }
 
             _tacticsActionCache.Clear();
@@ -25833,6 +27874,27 @@ public partial class ProtoEditorWindow : SimpleWindow
             await prompt.ShowDialog(this);
             return false;
         }
+    }
+
+    private async Task<bool> RenameManagedTacticsFileAsync(string oldName, string newName)
+    {
+        var result = new TacticsManagerResult();
+        result.Renames.Add(new TacticsRenameOperation(oldName, newName));
+        await ApplyTacticsManagerChangesAsync(result);
+
+        var oldPath = GetCustomTacticsPath(oldName);
+        var newPath = GetCustomTacticsPath(newName);
+        return newPath != null && File.Exists(newPath) && (oldPath == null || !File.Exists(oldPath));
+    }
+
+    private async Task<bool> DeleteManagedTacticsFileAsync(string tacticsName)
+    {
+        var result = new TacticsManagerResult();
+        result.DeletedNames.Add(tacticsName);
+        await ApplyTacticsManagerChangesAsync(result);
+
+        var path = GetCustomTacticsPath(tacticsName);
+        return path == null || !File.Exists(path);
     }
 
     private async Task OpenManagedTacticsEditorAsync(Window owner, string tacticsName, bool isBuiltIn)
@@ -25854,11 +27916,35 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 document = XDocument.Load(customPath, LoadOptions.PreserveWhitespace);
             }
-            catch (Exception ex)
+            catch (Exception originalException)
             {
-                var prompt = new Prompt(PromptType.Error, "Unable to open tactics", ex.Message);
-                await prompt.ShowDialog(this);
-                return;
+                // Repair the exact malformed armoroverride closing tag produced by older
+                // editor builds, but do not broadly "fix" unrelated invalid XML.
+                try
+                {
+                    var raw = File.ReadAllText(customPath);
+                    var repaired = Regex.Replace(
+                        raw,
+                        @"(<armoroverride\b[^>]*>[^<]*)</armor>",
+                        "$1</armoroverride>",
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                    if (string.Equals(raw, repaired, StringComparison.Ordinal))
+                    {
+                        var prompt = new Prompt(PromptType.Error, "Unable to open tactics", originalException.Message);
+                        await prompt.ShowDialog(this);
+                        return;
+                    }
+                    document = XDocument.Parse(repaired, LoadOptions.PreserveWhitespace);
+                    // Persist the exact legacy repair immediately. Otherwise the preview is fixed
+                    // in memory while the malformed source file remains broken on disk.
+                    SaveTacticsDocumentAtomic(document, customPath);
+                }
+                catch
+                {
+                    var prompt = new Prompt(PromptType.Error, "Unable to open tactics", originalException.Message);
+                    await prompt.ShowDialog(this);
+                    return;
+                }
             }
         }
         else
@@ -25880,6 +27966,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         var editor = new TacticsEditorWindow();
+        var expectedCustomHash = customPath == null ? null : ComputeFileSha256(customPath);
         await editor.InitializeTacticsActionEditorAsync(
             tacticsName,
             isBuiltIn,
@@ -25888,8 +27975,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ? null
                 : async updatedDocument =>
                 {
+                    var currentHash = ComputeFileSha256(customPath);
+                    if (!string.Equals(expectedCustomHash, currentHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var changedPrompt = new Prompt(
+                            PromptType.Confirm,
+                            "Tactics changed on disk",
+                            "This tactics file changed on disk after it was opened. Saving now will overwrite those external changes. Continue?",
+                            confirmButtonText: "Save");
+                        await changedPrompt.ShowDialog(editor);
+                        if (!changedPrompt.Confirmed)
+                            return;
+                    }
+
                     RemoveFormattingWhitespace(updatedDocument);
-                    ProtoXmlHandler.SaveProtoXml(updatedDocument, customPath);
+                    SaveTacticsDocumentAtomic(updatedDocument, customPath);
+                    expectedCustomHash = ComputeFileSha256(customPath);
                     _tacticsActionCache.Clear();
                     _tacticsActionTypeCache.Clear();
                     if (!string.IsNullOrWhiteSpace(_currentUnitName) && _modXmlRoot != null)
@@ -25899,11 +28000,78 @@ public partial class ProtoEditorWindow : SimpleWindow
                             RefreshCurrentUnitProtoActionMetadata(currentUnit);
                         BuildEditorPanel(_currentUnitName, resetScroll: false);
                     }
-                    await Task.CompletedTask;
                 });
         await editor.ShowDialog(owner);
     }
 
+
+    private static string? ComputeFileSha256(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+        using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static void SaveXmlDocumentAtomic(XDocument document, string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            ProtoXmlHandler.SaveProtoXml(document, tempPath);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    private static void SaveTacticsDocumentAtomic(XDocument document, string path)
+        => SaveXmlDocumentAtomic(document, path);
+
+    private static void WriteTacticsTextAtomic(string path, string contents)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(tempPath, contents, new UTF8Encoding(false));
+            File.Move(tempPath, path, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    private static void CopyTacticsFileAtomic(string sourcePath, string targetPath)
+    {
+        var directory = Path.GetDirectoryName(targetPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = targetPath + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.Copy(sourcePath, tempPath, overwrite: false);
+            File.Move(tempPath, targetPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
 
     private static void RemoveFormattingWhitespace(XDocument document)
     {
@@ -26092,9 +28260,27 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var newPath = GetCustomTacticsPath(rename.NewName);
                 if (oldPath == null || newPath == null || !File.Exists(oldPath))
                     continue;
-                Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
-                File.Move(oldPath, newPath);
-                RenameTacticsReferences(rename.OldName, rename.NewName);
+                if (File.Exists(newPath))
+                    throw new IOException($"A tactics file named '{rename.NewName}' already exists.");
+
+                var xmlBackup = new XDocument(_modXmlDoc);
+                var moved = false;
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
+                    File.Move(oldPath, newPath);
+                    moved = true;
+                    RenameTacticsReferences(rename.OldName, rename.NewName);
+                    SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
+                }
+                catch
+                {
+                    _modXmlDoc = xmlBackup;
+                    _modXmlRoot = xmlBackup.Root;
+                    if (moved && File.Exists(newPath) && !File.Exists(oldPath))
+                        File.Move(newPath, oldPath);
+                    throw;
+                }
             }
 
             foreach (var createdName in result.CreatedNames)
@@ -26103,7 +28289,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (path == null || File.Exists(path))
                     continue;
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, NewTacticsTemplate);
+                WriteTacticsTextAtomic(path, NewTacticsTemplate);
             }
 
             foreach (var deletedName in result.DeletedNames)
@@ -26115,7 +28301,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             _tacticsActionTypeCache.Clear();
             _tacticsActionCache.Clear();
-            ProtoXmlHandler.SaveProtoXml(_modXmlDoc, _modFilePath);
             _isDirty = false;
             _fileLabel.Text = _modFilePath;
             _statusMessage.Text = "Tactics changes saved.";
@@ -26146,6 +28331,54 @@ public partial class ProtoEditorWindow : SimpleWindow
                 tacticsElement.Value = normalizedNew;
             }
         }
+    }
+
+    private HashSet<string> GetBuiltInTacticsNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static string NormalizeBarTacticsName(string entryName)
+        {
+            var normalized = entryName.Replace('/', '\\').Trim();
+            var marker = "tactics\\";
+            var index = normalized.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (index >= 0)
+                normalized = normalized[(index + marker.Length)..];
+            else
+                normalized = Path.GetFileName(normalized);
+
+            if (normalized.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized[..^4];
+            if (!normalized.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase))
+                normalized += ".tactics";
+            return normalized;
+        }
+
+        void AddBarEntries(BarFile? barFile)
+        {
+            if (barFile?.Entries == null)
+                return;
+
+            foreach (var entry in barFile.Entries)
+            {
+                if (!entry.Name.Contains("tactics", StringComparison.OrdinalIgnoreCase) ||
+                    !entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var name = NormalizeBarTacticsName(entry.Name);
+                if (!string.IsNullOrWhiteSpace(name))
+                    names.Add(name);
+            }
+        }
+
+        AddBarEntries(_protoDataBarFile);
+        if (_host.CurrentBarFile != null &&
+            string.Equals(Path.GetFileName(_host.CurrentBarPath), "Data.bar", StringComparison.OrdinalIgnoreCase))
+        {
+            AddBarEntries(_host.CurrentBarFile);
+        }
+
+        return names;
     }
 
     private List<string> GetAvailableTacticsNames()
@@ -26234,13 +28467,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_tacticsActionTypeCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        var barResolved = LoadProtoActionTypesFromBarTactics(cacheKey);
-        if (barResolved.Count > 0)
-        {
-            _tacticsActionTypeCache[cacheKey] = barResolved;
-            return barResolved;
-        }
-
+        // Keep type resolution consistent with action resolution: active mod first,
+        // Data.bar only as a fallback.
         foreach (var path in GetTacticsCandidatePaths(cacheKey))
         {
             if (!File.Exists(path))
@@ -26266,6 +28494,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 // Try the next candidate path.
             }
+        }
+
+        var barResolved = LoadProtoActionTypesFromBarTactics(cacheKey);
+        if (barResolved.Count > 0)
+        {
+            _tacticsActionTypeCache[cacheKey] = barResolved;
+            return barResolved;
         }
 
         var emptyResult = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -26642,10 +28877,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         _editorScroll.Offset = new Vector(0, 0);
         _actionsEditorScroll.Offset = new Vector(0, 0);
         _commandsEditorScroll.Offset = new Vector(0, 0);
+        _abilitiesEditorScroll.Offset = new Vector(0, 0);
         _trainResearchEditorScroll.Offset = new Vector(0, 0);
         Dispatcher.UIThread.Post(() => _editorScroll.Offset = new Vector(0, 0), DispatcherPriority.Loaded);
         Dispatcher.UIThread.Post(() => _actionsEditorScroll.Offset = new Vector(0, 0), DispatcherPriority.Loaded);
         Dispatcher.UIThread.Post(() => _commandsEditorScroll.Offset = new Vector(0, 0), DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() => _abilitiesEditorScroll.Offset = new Vector(0, 0), DispatcherPriority.Loaded);
         Dispatcher.UIThread.Post(() => _trainResearchEditorScroll.Offset = new Vector(0, 0), DispatcherPriority.Loaded);
     }
 
@@ -26654,6 +28891,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _statsEditorPanel.Children.Clear();
         _actionsEditorPanel.Children.Clear();
         _commandsEditorPanel.Children.Clear();
+        _abilitiesEditorPanel.Children.Clear();
         _trainResearchEditorPanel.Children.Clear();
         _suppressUnitNameChange = true;
         _unitNameBox.Text = "";
@@ -26673,6 +28911,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _statsEditorPanel.Children.Clear();
         _actionsEditorPanel.Children.Clear();
         _commandsEditorPanel.Children.Clear();
+        _abilitiesEditorPanel.Children.Clear();
         _trainResearchEditorPanel.Children.Clear();
         _activeEditorPanel = _statsEditorPanel;
         _activeEditorTabIndex = 0;
@@ -26689,6 +28928,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         _trainCommandRows.Clear();
         _techCommandRows.Clear();
         _unitCommandRows.Clear();
+        _transformCommandAssignments.Clear();
+        _validateTransformAssignmentsBeforeUnitSaveAsync = null;
+        _saveActiveTransformCommandBeforeUnitSaveAsync = null;
         _optionalCommandRows.Clear();
         _protoActionWidgets.Clear();
         _buildLimitRows.Clear();
@@ -26711,7 +28953,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else
         {
-            _isReadOnly = _isTacticsActionEditorMode && _tacticsActionEditorReadOnly;
+            _isReadOnly = _isAbilityDefinitionEditorMode
+                ? _abilityDefinitionEditorReadOnly
+                : _isTacticsActionEditorMode && _tacticsActionEditorReadOnly;
         }
 
         if (unit == null)
@@ -33031,114 +35275,995 @@ public partial class ProtoEditorWindow : SimpleWindow
             _activeEditorPanel.Children.Insert(_activeEditorPanel.Children.IndexOf(flagsWrap), addFlagGrid);
         }
 
-        _activeEditorPanel = _trainResearchEditorPanel;
+        _activeEditorPanel = _abilitiesEditorPanel;
         _activeEditorTabIndex = 3;
+        BuildAbilitiesEditor(unit);
+
+        _activeEditorPanel = _trainResearchEditorPanel;
+        _activeEditorTabIndex = 4;
         AddCommandSection("Train Units", "Proto Unit", ProtoXmlHandler.GetTrainEntries(unit), GetAvailableTrainUnitNames(), _trainCommandRows);
         AddCommandSection("Research Techs", "Tech", ProtoXmlHandler.GetTechEntries(unit), GetAvailableTechNames(), _techCommandRows);
 
         _activeEditorPanel = _commandsEditorPanel;
         _activeEditorTabIndex = 2;
-        AddCommandSection("Commands", "Command", ProtoXmlHandler.GetCommandEntries(unit), GetAvailableCommandNames(), _unitCommandRows);
+        var allUnitCommandEntries = ProtoXmlHandler.GetCommandEntries(unit).ToList();
+        var transformCommandEntries = allUnitCommandEntries
+            .Where(entry => IsTransformUniqueCommand(entry.Value) || IsTransformMultipleCommand(entry.Value))
+            .ToList();
+        var regularCommandEntries = allUnitCommandEntries
+            .Where(entry => !IsTransformUniqueCommand(entry.Value) && !IsTransformMultipleCommand(entry.Value))
+            .ToList();
+        var regularCommandNames = GetAvailableCommandNames()
+            .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
+            .ToList();
+        AddCommandSection("Commands", "Command", regularCommandEntries, regularCommandNames, _unitCommandRows);
 
         var optionalCommands = ProtoXmlHandler.GetOptionalCommandEntries(unit);
         if (_isReadOnly && optionalCommands.Count > 0)
         {
-            AddCommandSection("Optional Commands", "Command", optionalCommands, GetAvailableCommandNames(), _optionalCommandRows);
+            AddCommandSection("Optional Commands", "Command", optionalCommands, regularCommandNames, _optionalCommandRows);
         }
 
-        string? initialTransformCommand = ProtoXmlHandler.GetSimpleField(unit, "transformcommand");
-        var transformCommandContainer = new StackPanel { Margin = new Thickness(0, 4, 0, 4) };
+        var currentTransformUnitName = unit.Attribute("name")?.Value?.Trim() ?? _currentUnitName ?? "";
+        var transformCommandContainer = new StackPanel { Margin = new Thickness(0, 8, 0, 4), Spacing = 6 };
         _activeEditorPanel.Children.Add(transformCommandContainer);
 
-        void ShowTransformCommand(string initialValue)
+        transformCommandContainer.Children.Add(new TextBlock
         {
-            transformCommandContainer.Children.Clear();
-            var grid = new Grid
+            Text = "Transform Commands",
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(0, 4, 0, 2)
+        });
+
+        var transformTabs = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        transformCommandContainer.Children.Add(transformTabs);
+
+        var transformCardHost = new StackPanel { Spacing = 8 };
+        transformCommandContainer.Children.Add(transformCardHost);
+        var transformAddHost = new StackPanel { Spacing = 4 };
+        transformCommandContainer.Children.Add(transformAddHost);
+        TransformCommandAssignmentState? activeTransformState = null;
+
+        ComboBox CreateTransformPositionCombo(string currentValue, IReadOnlyList<string> standardValues, bool enabled = true)
+        {
+            var values = standardValues.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(currentValue) && !standardValues.Contains(currentValue, StringComparer.OrdinalIgnoreCase))
+                values = values.Concat([currentValue]);
+
+            return new ComboBox
             {
-                ColumnDefinitions = new ColumnDefinitions("180, Auto, Auto"),
+                ItemsSource = values.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                SelectedItem = !string.IsNullOrWhiteSpace(currentValue) ? currentValue : "0",
+                IsEnabled = !_isReadOnly && enabled,
+                Width = 62,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-
-            var lbl = new TextBlock
-            {
-                Text = "Transform Command",
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(lbl, 0);
-            grid.Children.Add(lbl);
-
-            var acb = new AutoCompleteBox
-            {
-                Text = initialValue,
-                PlaceholderText = "Transform Command",
-                FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = GetAvailableCommandNames(),
-                IsEnabled = !_isReadOnly,
-                Margin = new Thickness(0, 0, 10, 0)
-            };
-            EditorTextFieldStyle.ConfigureSelector(acb);
-            EnableDropdownAutoComplete(acb);
-            acb.TextChanged += async (s, e) =>
-            {
-                if (!_isPopulating)
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed) MarkDirty();
-                }
-            };
-            Grid.SetColumn(acb, 1);
-            grid.Children.Add(acb);
-            _fieldControls["transformcommand"] = acb;
-
-            if (!_isReadOnly)
-            {
-                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
-                btnDel.Click += async (s, e) =>
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                    {
-                        _fieldControls.Remove("transformcommand");
-                        MarkDirty();
-                        ShowAddTransformCommandButton();
-                    }
-                };
-                Grid.SetColumn(btnDel, 2);
-                grid.Children.Add(btnDel);
-            }
-
-            transformCommandContainer.Children.Add(grid);
         }
 
-        void ShowAddTransformCommandButton()
+        async Task EnsureTransformStateLoadedAsync(TransformCommandAssignmentState state)
         {
-            transformCommandContainer.Children.Clear();
-            if (!_isReadOnly)
+            if (state.Definition != null)
             {
-                var btnAdd = new Button
+                if (!state.SourceIsBuiltIn &&
+                    !string.IsNullOrWhiteSpace(state.SourceCommandName) &&
+                    !state.SnapshotCommandName.Equals(state.SourceCommandName, StringComparison.OrdinalIgnoreCase))
+                    CaptureInlineTransformSourceSnapshots(state);
+                return;
+            }
+
+            EnsureProtoUnitCommandCatalogLoaded(force: true);
+            if (!_protoUnitCommandCatalog.TryGetValue(state.CommandName, out var element))
+                return;
+
+            state.Definition = ProtoUnitCommandDefinition.FromElement(element);
+            state.TransformDefinition = LoadProtoUnitTransformDefinition(state.CommandName) ?? new ProtoUnitTransformDefinition
+            {
+                Command = state.CommandName
+            };
+            state.StringTexts = await ResolveProtoUnitCommandStringTextsAsync(state.Definition);
+            state.SourceCommandName = state.CommandName;
+            state.SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(state.CommandName) && !IsCustomProtoUnitCommand(state.CommandName);
+            if (!state.SourceIsBuiltIn)
+                CaptureInlineTransformSourceSnapshots(state);
+            state.DefinitionDirty = false;
+        }
+
+        void MarkTransformDefinitionDirty(TransformCommandAssignmentState state, Button saveButton)
+        {
+            if (_isReadOnly)
+                return;
+            state.DefinitionDirty = true;
+            saveButton.IsVisible = true;
+            MarkDirty();
+        }
+
+        async Task<bool> PersistTransformAssignmentsNowAsync()
+        {
+            if (_modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
+                return true;
+
+            var dirtyBefore = _isDirty;
+            try
+            {
+                var uniqueState = _transformCommandAssignments.UniqueAssignment;
+                ProtoXmlHandler.SetTransformCommandEntry(unit, uniqueState == null
+                    ? null
+                    : new ProtoCommandEntry { Value = uniqueState.CommandName.Trim() });
+
+                var regularNames = GetAvailableCommandNames()
+                    .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
+                    .ToList();
+                var entries = CollectValidCommandEntries(_unitCommandRows, regularNames);
+                entries.AddRange(_transformCommandAssignments.BuildCommandEntries(
+                    IsTransformUniqueCommand,
+                    IsTransformMultipleCommand));
+                ProtoXmlHandler.SetCommandEntries(unit, entries);
+                ProtoXmlHandler.SaveProtoXml(_modXmlDoc, _modFilePath);
+                _isDirty = dirtyBefore;
+                _statusMessage.Text = "Transform assignment removed.";
+                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _isDirty = dirtyBefore;
+                await new Prompt(PromptType.Error, "Save failed", $"Could not save the Transform assignment change:\n{ex.Message}").ShowDialog(this);
+                return false;
+            }
+        }
+
+        async Task RenderTransformAssignmentAsync(TransformCommandAssignmentState state)
+        {
+            activeTransformState = state;
+            await EnsureTransformStateLoadedAsync(state);
+            transformCardHost.Children.Clear();
+            RenderTransformTabs();
+
+            if (state.Definition == null)
+                return;
+
+            var definition = state.Definition;
+            var transformDefinition = state.TransformDefinition ??= new ProtoUnitTransformDefinition { Command = state.CommandName };
+            var context = BuildProtoUnitCommandEditorContext(state.StringTexts);
+            var sourceTransformUnitName = transformDefinition.From?.Trim() ?? "";
+            var sourceBelongsToOtherUnit = !string.IsNullOrWhiteSpace(state.SourceCommandName) &&
+                                           !string.IsNullOrWhiteSpace(sourceTransformUnitName) &&
+                                           !sourceTransformUnitName.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase);
+            var definitionEditorEnabled = !_isReadOnly && !sourceBelongsToOtherUnit;
+
+            var card = new Border
+            {
+                Background = Brush.Parse("#181818"),
+                BorderBrush = Brush.Parse("#3f3f46"),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12),
+                CornerRadius = new CornerRadius(6),
+                Width = 810,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            var content = new StackPanel { Spacing = 8 };
+            card.Child = content;
+            transformCardHost.Children.Add(card);
+
+            var saveDefinitionButton = new Button
+            {
+                Content = "Save",
+                Background = Brush.Parse("#2b7a0b"),
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(8, 0, 0, 0),
+                IsVisible = !_isReadOnly && (state.DefinitionDirty || sourceBelongsToOtherUnit)
+            };
+
+            var header = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("70,70,248,198,*,Auto,Auto"),
+                Width = 786,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            void AddHeader(string text, int column)
+            {
+                var block = new TextBlock
                 {
-                    Content = "+ Add Transform Command (for one time transformation only)",
-                    Background = Brush.Parse("#2b7a0b"),
-                    Margin = new Thickness(0, 4, 0, 4),
+                    Text = text,
+                    FontWeight = FontWeight.Bold,
+                    Margin = new Thickness(0, 0, 8, 2)
+                };
+                Grid.SetRow(block, 0);
+                Grid.SetColumn(block, column);
+                header.Children.Add(block);
+            }
+
+            AddHeader("Row", 0);
+            AddHeader("Column", 1);
+            AddHeader("Command", 2);
+            AddHeader("Type", 3);
+
+            if (_isReadOnly)
+            {
+                var rowValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Row, 62, enabled: false);
+                rowValue.Margin = new Thickness(0, 0, 8, 0);
+                Grid.SetRow(rowValue, 1);
+                Grid.SetColumn(rowValue, 0);
+                header.Children.Add(rowValue);
+
+                var columnValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Column, 62, enabled: false);
+                columnValue.Margin = new Thickness(0, 0, 8, 0);
+                Grid.SetRow(columnValue, 1);
+                Grid.SetColumn(columnValue, 1);
+                header.Children.Add(columnValue);
+            }
+            else
+            {
+                var rowCb = CreateTransformPositionCombo(state.Row, TrainTechRowOptions, definitionEditorEnabled);
+                rowCb.Margin = new Thickness(0, 0, 8, 0);
+                rowCb.SelectionChanged += async (_, _) =>
+                {
+                    if (_isPopulating)
+                        return;
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.Row = rowCb.SelectedItem as string ?? rowCb.SelectedValue as string ?? "0";
+                    MarkDirty();
+                };
+                Grid.SetRow(rowCb, 1);
+                Grid.SetColumn(rowCb, 0);
+                header.Children.Add(rowCb);
+
+                var columnCb = CreateTransformPositionCombo(state.Column, TrainTechColumnOptions, definitionEditorEnabled);
+                columnCb.Margin = new Thickness(0, 0, 8, 0);
+                columnCb.SelectionChanged += async (_, _) =>
+                {
+                    if (_isPopulating)
+                        return;
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.Column = columnCb.SelectedItem as string ?? columnCb.SelectedValue as string ?? "0";
+                    MarkDirty();
+                };
+                Grid.SetRow(columnCb, 1);
+                Grid.SetColumn(columnCb, 1);
+                header.Children.Add(columnCb);
+            }
+
+            Control commandNameEditorControl;
+            TextBox? commandNameTextBox = null;
+            AutoCompleteBox? commandNameAutoComplete = null;
+            if (!_isReadOnly && string.IsNullOrWhiteSpace(state.SourceCommandName))
+            {
+                var suggestions = GetTransformCommandNames(state.IsMultiple)
+                    .Where(name => !_transformCommandAssignments.Any(other =>
+                        !ReferenceEquals(other, state) && other.CommandName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                commandNameAutoComplete = new AutoCompleteBox
+                {
+                    Text = state.CommandName,
+                    ItemsSource = suggestions,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    Width = 240,
+                    MaxWidth = 240,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                btnAdd.Click += async (s, e) =>
+                EditorTextFieldStyle.ConfigureSelector(commandNameAutoComplete);
+                commandNameAutoComplete.Width = 240;
+                commandNameAutoComplete.MaxWidth = 240;
+                EditorFieldAppearance.ApplyStandard(commandNameAutoComplete);
+                EditorAutoCompleteService.EnableDropdown(commandNameAutoComplete, () => _isPopulating, selectAllOnFirstClick: false);
+                commandNameAutoComplete.TextChanged += (_, _) =>
                 {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                    {
-                        MarkDirty();
-                        ShowTransformCommand("");
-                    }
+                    if (_isPopulating) return;
+                    var nextName = commandNameAutoComplete.Text?.Trim() ?? "";
+                    if (state.CommandName.Equals(nextName, StringComparison.Ordinal)) return;
+                    state.CommandName = nextName;
+                    definition.Name = nextName;
+                    transformDefinition.Command = nextName;
+                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                    RenderTransformTabs();
                 };
-                transformCommandContainer.Children.Add(btnAdd);
+                commandNameAutoComplete.SelectionChanged += (_, _) =>
+                {
+                    if (_isPopulating || commandNameAutoComplete.SelectedItem is not string selected) return;
+                    Dispatcher.UIThread.Post(async () =>
+                    {
+                        if (_transformCommandAssignments.Any(other =>
+                            !ReferenceEquals(other, state) && other.CommandName.Equals(selected, StringComparison.OrdinalIgnoreCase)))
+                            return;
+                        state.CommandName = selected;
+                        state.SourceCommandName = selected;
+                        state.SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(selected) && !IsCustomProtoUnitCommand(selected);
+                        state.SnapshotCommandName = "";
+                        state.LoadedCommandSnapshot = null;
+                        state.LoadedTransformSnapshot = null;
+                        state.Definition = null;
+                        state.TransformDefinition = LoadProtoUnitTransformDefinition(selected);
+                        state.StringTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        state.DefinitionDirty = false;
+                        RenderTransformTabs();
+                        await RenderTransformAssignmentAsync(state);
+                    }, DispatcherPriority.Background);
+                };
+                commandNameEditorControl = commandNameAutoComplete;
+            }
+            else
+            {
+                commandNameTextBox = ProtoUnitCommandFieldFactory.CreateTextBox(state.CommandName, 240, !_isReadOnly);
+                commandNameTextBox.TextChanged += (_, _) =>
+                {
+                    if (_isReadOnly || _isPopulating) return;
+                    var nextName = commandNameTextBox.Text?.Trim() ?? "";
+                    if (state.CommandName.Equals(nextName, StringComparison.Ordinal)) return;
+                    state.CommandName = nextName;
+                    definition.Name = nextName;
+                    transformDefinition.Command = nextName;
+                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                    RenderTransformTabs();
+                };
+                commandNameEditorControl = commandNameTextBox;
+            }
+            Grid.SetRow(commandNameEditorControl, 1);
+            Grid.SetColumn(commandNameEditorControl, 2);
+            header.Children.Add(commandNameEditorControl);
+
+            Control typeEditor;
+            if (!_isReadOnly && definitionEditorEnabled && !state.IsMultiple)
+            {
+                var typeCombo = new ComboBox
+                {
+                    ItemsSource = new[] { "Transform (Unique)", "Transform (Multiple)" },
+                    SelectedItem = "Transform (Unique)",
+                    Width = 190,
+                    MaxWidth = 190,
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                typeCombo.SelectionChanged += (_, _) =>
+                {
+                    if (_isPopulating || typeCombo.SelectedItem as string != "Transform (Multiple)")
+                        return;
+
+                    state.IsMultiple = true;
+                    ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Multiple);
+                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                    MarkDirty();
+                    _ = RenderTransformAssignmentAsync(state);
+                };
+                typeEditor = typeCombo;
+            }
+            else
+            {
+                typeEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
+                    state.IsMultiple ? "Transform (Multiple)" : "Transform (Unique)", 190, enabled: false);
+            }
+            typeEditor.Margin = new Thickness(0, 0, 8, 0);
+            Grid.SetRow(typeEditor, 1);
+            Grid.SetColumn(typeEditor, 3);
+            header.Children.Add(typeEditor);
+
+            Grid.SetRow(saveDefinitionButton, 0);
+            Grid.SetRowSpan(saveDefinitionButton, 2);
+            Grid.SetColumn(saveDefinitionButton, 5);
+            saveDefinitionButton.VerticalAlignment = VerticalAlignment.Top;
+            header.Children.Add(saveDefinitionButton);
+
+            if (!_isReadOnly)
+            {
+                var remove = new Button
+                {
+                    Content = "Remove",
+                    Background = Brush.Parse("#8b0000"),
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(8, 0, 0, 0)
+                };
+                remove.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+
+                    // Unsaved drafts are not shared commands yet. Removing one only discards the draft.
+                    var existingSourceName = state.SourceCommandName.Trim();
+                    var existingCustom = !string.IsNullOrWhiteSpace(existingSourceName) &&
+                                         IsCustomProtoUnitCommand(existingSourceName);
+                    var choice = ProtoUnitTransformRemovalChoice.OnlyThisUnit; // Original/Data.bar: detach from this ProtoUnit only.
+                    if (existingCustom)
+                    {
+                        choice = await ProtoUnitTransformRemovalDialog.ShowAsync(this, existingSourceName);
+                        if (choice == ProtoUnitTransformRemovalChoice.Cancel)
+                            return;
+                    }
+
+                    var oldIndex = _transformCommandAssignments.IndexOf(state);
+                    _transformCommandAssignments.Remove(state);
+                    if (ReferenceEquals(activeTransformState, state))
+                        activeTransformState = _transformCommandAssignments.FirstOrDefault();
+
+                    if (string.IsNullOrWhiteSpace(existingSourceName))
+                    {
+                        RenderTransformTabs();
+                        transformCardHost.Children.Clear();
+                        if (activeTransformState != null)
+                            await RenderTransformAssignmentAsync(activeTransformState);
+                        RefreshTransformAddArea();
+                        return;
+                    }
+
+                    if (!await PersistTransformAssignmentsNowAsync())
+                    {
+                        _transformCommandAssignments.Insert(Math.Clamp(oldIndex, 0, _transformCommandAssignments.Count), state);
+                        activeTransformState = state;
+                        RenderTransformTabs();
+                        await RenderTransformAssignmentAsync(state);
+                        return;
+                    }
+
+                    if (choice == ProtoUnitTransformRemovalChoice.RemoveTotally && existingCustom)
+                    {
+                        var deleted = await DeleteProtoUnitCommandCoreAsync(existingSourceName, currentTransformUnitName);
+                        if (!deleted)
+                        {
+                            await new Prompt(
+                                PromptType.Error,
+                                "Command kept",
+                                $"'{existingSourceName}' was removed from this ProtoUnit, but its command definition could not be deleted because it is still used or referenced elsewhere.").ShowDialog(this);
+                        }
+                    }
+
+                    RenderTransformTabs();
+                    transformCardHost.Children.Clear();
+                    if (activeTransformState != null)
+                        await RenderTransformAssignmentAsync(activeTransformState);
+                    RefreshTransformAddArea();
+                };
+                Grid.SetRow(remove, 0);
+                Grid.SetRowSpan(remove, 2);
+                Grid.SetColumn(remove, 6);
+                header.Children.Add(remove);
+            }
+            content.Children.Add(header);
+
+            var details = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("115,240,Auto,240,*"),
+                ColumnSpacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            for (var rowIndex = 0; rowIndex < 5; rowIndex++)
+                details.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            void AddLabel(string text, int row, int column)
+            {
+                var label = new TextBlock
+                {
+                    Text = text,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 2, 8, 2)
+                };
+                Grid.SetRow(label, row);
+                Grid.SetColumn(label, column);
+                details.Children.Add(label);
+            }
+
+            void AddEditor(Control editor, int row, int column, int span = 1)
+            {
+                editor.Margin = new Thickness(0, 2, 0, 2);
+                Grid.SetRow(editor, row);
+                Grid.SetColumn(editor, column);
+                if (span > 1)
+                    Grid.SetColumnSpan(editor, span);
+                details.Children.Add(editor);
+            }
+
+            AddLabel("Display Name", 0, 0);
+            var displayNameEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("displaynameid", ""), 240, definitionEditorEnabled);
+            displayNameEditor.TextChanged += (_, _) =>
+            {
+                if (!definitionEditorEnabled || _isPopulating) return;
+                var next = displayNameEditor.Text ?? "";
+                if (state.StringTexts.GetValueOrDefault("displaynameid", "").Equals(next, StringComparison.Ordinal)) return;
+                state.StringTexts["displaynameid"] = next;
+                MarkTransformDefinitionDirty(state, saveDefinitionButton);
+            };
+            AddEditor(displayNameEditor, 0, 1);
+
+            AddLabel("Icon", 0, 2);
+            var iconEditor = new AssetPathEditor { Width = 240, IsEnabled = definitionEditorEnabled };
+            iconEditor.Configure(definition.Values.GetValueOrDefault("icon", ""), context.IconPaths, value =>
+            {
+                if (!definition.Values.GetValueOrDefault("icon", "").Equals(value, StringComparison.Ordinal))
+                {
+                    definition.Values["icon"] = value;
+                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                }
+                return Task.CompletedTask;
+            });
+            AddEditor(iconEditor, 0, 3);
+
+            AddLabel("Rollover", 1, 0);
+            var rolloverEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("rollovertextid", ""), 603, definitionEditorEnabled);
+            rolloverEditor.MinHeight = 54;
+            rolloverEditor.AcceptsReturn = true;
+            rolloverEditor.TextWrapping = TextWrapping.Wrap;
+            rolloverEditor.TextChanged += (_, _) =>
+            {
+                if (!definitionEditorEnabled || _isPopulating) return;
+                var next = rolloverEditor.Text ?? "";
+                if (state.StringTexts.GetValueOrDefault("rollovertextid", "").Equals(next, StringComparison.Ordinal)) return;
+                state.StringTexts["rollovertextid"] = next;
+                MarkTransformDefinitionDirty(state, saveDefinitionButton);
+            };
+            AddEditor(rolloverEditor, 1, 1, 3);
+
+            // The Transform-specific rows are shared with the standalone ProtoUnit Command editor.
+            // The inline host keeps ownership of card actions/persistence and locks the source ProtoUnit.
+            content.Children.Add(details);
+            var sharedTransformEditor = new ProtoUnitCommandTransformEditor(
+                transformDefinition,
+                definition.Values,
+                context.ProtoUnitNames,
+                context.TechNames,
+                context.PowerNames,
+                editable: definitionEditorEnabled,
+                lockFrom: true,
+                changed: () => MarkTransformDefinitionDirty(state, saveDefinitionButton),
+                isBusy: () => _isPopulating);
+            content.Children.Add(sharedTransformEditor);
+
+            var fromEditor = sharedTransformEditor.FromEditor;
+            var toEditor = sharedTransformEditor.ToEditor;
+            var prereqTechEditor = sharedTransformEditor.PrereqTechEditor;
+            var associatedTechEditor = sharedTransformEditor.AssociatedTechEditor;
+            fromEditor.BorderBrush = sourceBelongsToOtherUnit ? Brush.Parse("#d64545") : Brush.Parse("#3f3f46");
+
+            var sharedFlagsEditor = new ProtoUnitCommandFlagsEditor(
+                definition.Flags,
+                editable: definitionEditorEnabled,
+                transformKind: () => state.IsMultiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique,
+                changed: () => MarkTransformDefinitionDirty(state, saveDefinitionButton),
+                isBusy: () => _isPopulating);
+            content.Children.Add(sharedFlagsEditor);
+
+            async Task<bool> SaveTransformDefinitionAsync()
+            {
+                definition.Name = commandNameAutoComplete?.Text?.Trim() ?? commandNameTextBox?.Text?.Trim() ?? "";
+                state.CommandName = definition.Name;
+                transformDefinition.Command = state.CommandName;
+
+                if (sourceBelongsToOtherUnit && state.CommandName.Equals(state.SourceCommandName, StringComparison.OrdinalIgnoreCase))
+                {
+                    await new Prompt(
+                        PromptType.Error,
+                        "Transform command belongs to another unit",
+                        $"'{state.SourceCommandName}' transforms '{sourceTransformUnitName}', not '{currentTransformUnitName}'. Change the Command name and save to create a custom copy for this ProtoUnit.").ShowDialog(this);
+                    return false;
+                }
+
+                // Inline Transform commands always belong to the ProtoUnit being edited.
+                transformDefinition.From = currentTransformUnitName;
+                transformDefinition.To = toEditor.Text?.Trim() ?? "";
+                transformDefinition.Tech = prereqTechEditor.Text?.Trim() ?? "";
+                definition.Values["associatedtech"] = associatedTechEditor.Text?.Trim() ?? "";
+
+                var validation = sharedTransformEditor.ValidateRequired(currentTransformUnitName);
+                if (string.IsNullOrWhiteSpace(state.CommandName) || !validation.IsValid)
+                {
+                    var message = !validation.FromValid && !string.IsNullOrWhiteSpace(transformDefinition.From) &&
+                                  !transformDefinition.From.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase)
+                        ? $"This Transform command belongs to '{transformDefinition.From}', but the edited ProtoUnit is '{currentTransformUnitName}'. Change Transform to '{currentTransformUnitName}' and use a new command name to create a custom copy."
+                        : "Command Name, Transform, To, Prereq Tech and Associated Tech are required and must use valid existing entries.";
+                    await new Prompt(PromptType.Error, "Transform command", message).ShowDialog(this);
+                    return false;
+                }
+
+                if (!await SaveInlineTransformCommandDefinitionAsync(state))
+                    return false;
+
+                saveDefinitionButton.IsVisible = false;
+                MarkDirty();
+                RenderTransformTabs();
+                RefreshTransformAddArea();
+                _statusMessage.Text = "Transform command saved.";
+                await RenderTransformAssignmentAsync(state);
+                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
+                return true;
+            }
+
+            saveDefinitionButton.Click += async (_, _) => await SaveTransformDefinitionAsync();
+
+            if (commandNameAutoComplete != null)
+            {
+                commandNameAutoComplete.KeyDown += async (_, e) =>
+                {
+                    if (e.Key != Key.Enter || commandNameAutoComplete.SelectedItem != null)
+                        return;
+                    e.Handled = true;
+                    await SaveTransformDefinitionAsync();
+                };
+            }
+            if (commandNameTextBox != null)
+            {
+                commandNameTextBox.KeyDown += async (_, e) =>
+                {
+                    if (e.Key != Key.Enter)
+                        return;
+                    e.Handled = true;
+                    await SaveTransformDefinitionAsync();
+                };
+            }
+
+            _saveActiveTransformCommandBeforeUnitSaveAsync = async () =>
+            {
+                if (!ReferenceEquals(activeTransformState, state))
+                    return true;
+                if (!state.DefinitionDirty && !sourceBelongsToOtherUnit)
+                    return true;
+                return await SaveTransformDefinitionAsync();
+            };
+        }
+
+        async Task AddNewMultipleTransformTabAsync()
+        {
+            var definition = new ProtoUnitCommandDefinition();
+            ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Multiple);
+            var state = new TransformCommandAssignmentState
+            {
+                IsMultiple = true,
+                Row = "0",
+                Column = "0",
+                Definition = definition,
+                TransformDefinition = new ProtoUnitTransformDefinition { From = currentTransformUnitName },
+                DefinitionDirty = true
+            };
+            _transformCommandAssignments.Add(state);
+            activeTransformState = state;
+            MarkDirty();
+            RenderTransformTabs();
+            await RenderTransformAssignmentAsync(state);
+            RefreshTransformAddArea();
+        }
+
+        void RenderTransformTabs()
+        {
+            transformTabs.Children.Clear();
+            if (activeTransformState == null)
+                _saveActiveTransformCommandBeforeUnitSaveAsync = null;
+            foreach (var state in _transformCommandAssignments)
+            {
+                var label = string.IsNullOrWhiteSpace(state.CommandName) ? "New Transform" : state.CommandName;
+                var tab = new Button
+                {
+                    Content = label,
+                    Margin = new Thickness(0, 0, 6, 6),
+                    Padding = new Thickness(10, 4),
+                    Background = ReferenceEquals(state, activeTransformState) ? Brush.Parse("#28466f") : Brush.Parse("#2b2b2b")
+                };
+                tab.Click += (_, _) => _ = RenderTransformAssignmentAsync(state);
+                transformTabs.Children.Add(tab);
+            }
+
+            if (!_isReadOnly && !_transformCommandAssignments.Any(state => !state.IsMultiple))
+            {
+                var add = new Button
+                {
+                    Content = "Add Transform Command",
+                    Background = Brush.Parse("#2b7a0b"),
+                    Margin = new Thickness(0, 0, 6, 6),
+                    Padding = new Thickness(10, 4),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                add.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+                    if (_transformCommandAssignments.Any(state => state.IsMultiple))
+                        await AddNewMultipleTransformTabAsync();
+                    else
+                        ShowTransformTypePicker();
+                };
+                transformTabs.Children.Add(add);
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(initialTransformCommand))
-            ShowTransformCommand(initialTransformCommand);
-        else
-            ShowAddTransformCommandButton();
+        async Task CommitTransformSelection(bool multiple, AutoCompleteBox selector, ComboBox rowPicker, ComboBox columnPicker)
+        {
+            var input = selector.Text?.Trim() ?? "";
+            var validNames = GetTransformCommandNames(multiple);
+            var match = validNames.FirstOrDefault(name => name.Equals(input, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(match))
+                return;
+            if (_transformCommandAssignments.Any(state => state.CommandName.Equals(match, StringComparison.OrdinalIgnoreCase)))
+                return;
+            if (!multiple && _transformCommandAssignments.Any(state => !state.IsMultiple))
+                return;
+            if (!await CheckStartLocalMod())
+                return;
+
+            var state = new TransformCommandAssignmentState
+            {
+                CommandName = match,
+                SourceCommandName = match,
+                SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(match) && !IsCustomProtoUnitCommand(match),
+                IsMultiple = multiple,
+                Row = rowPicker.SelectedItem as string ?? rowPicker.SelectedValue as string ?? "0",
+                Column = columnPicker.SelectedItem as string ?? columnPicker.SelectedValue as string ?? "0",
+                TransformDefinition = LoadProtoUnitTransformDefinition(match)
+            };
+            _transformCommandAssignments.Add(state);
+            activeTransformState = state;
+            MarkDirty();
+            RenderTransformTabs();
+            await RenderTransformAssignmentAsync(state);
+            RefreshTransformAddArea();
+        }
+
+        void ShowTransformCommandPicker(bool multiple)
+        {
+            transformAddHost.Children.Clear();
+            var validNames = GetTransformCommandNames(multiple)
+                .Where(name => !_transformCommandAssignments.Any(state => state.CommandName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            var panel = new StackPanel { Spacing = 2, HorizontalAlignment = HorizontalAlignment.Left };
+            var header = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("70,70,248,Auto,Auto"),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            header.Children.Add(new TextBlock { Text = "Row", FontWeight = FontWeight.Bold });
+            var columnHeader = new TextBlock { Text = "Column", FontWeight = FontWeight.Bold };
+            Grid.SetColumn(columnHeader, 1);
+            header.Children.Add(columnHeader);
+            var commandHeader = new TextBlock { Text = "Command", FontWeight = FontWeight.Bold };
+            Grid.SetColumn(commandHeader, 2);
+            header.Children.Add(commandHeader);
+            panel.Children.Add(header);
+
+            var row = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("70,70,248,Auto,Auto"),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            var rowPicker = CreateTransformPositionCombo("0", TrainTechRowOptions);
+            rowPicker.Margin = new Thickness(0, 0, 8, 0);
+            Grid.SetColumn(rowPicker, 0);
+            row.Children.Add(rowPicker);
+            var columnPicker = CreateTransformPositionCombo("0", TrainTechColumnOptions);
+            columnPicker.Margin = new Thickness(0, 0, 8, 0);
+            Grid.SetColumn(columnPicker, 1);
+            row.Children.Add(columnPicker);
+
+            var selector = new AutoCompleteBox
+            {
+                FilterMode = AutoCompleteFilterMode.Contains,
+                ItemsSource = validNames,
+                PlaceholderText = multiple ? "Transform (Multiple) command" : "Transform (Unique) command"
+            };
+            EditorTextFieldStyle.ConfigureSelector(selector);
+            EditorFieldAppearance.ApplyStandard(selector);
+            selector.Width = 240;
+            selector.MaxWidth = 240;
+            selector.Margin = new Thickness(0, 0, 8, 0);
+            EditorAutoCompleteService.EnableDropdown(selector, () => _isPopulating, selectAllOnFirstClick: false);
+            Grid.SetColumn(selector, 2);
+            row.Children.Add(selector);
+
+            var save = new Button
+            {
+                Content = "Save",
+                Background = Brush.Parse("#2b7a0b"),
+                Padding = new Thickness(8, 4),
+                Margin = new Thickness(0, 0, 6, 0),
+                IsVisible = false
+            };
+            Grid.SetColumn(save, 3);
+            row.Children.Add(save);
+
+            var cancel = new Button { Content = "Cancel", Padding = new Thickness(8, 4) };
+            cancel.Click += (_, _) => RefreshTransformAddArea();
+            Grid.SetColumn(cancel, 4);
+            row.Children.Add(cancel);
+            panel.Children.Add(row);
+            transformAddHost.Children.Add(panel);
+
+            selector.TextChanged += (_, _) =>
+            {
+                save.IsVisible = !string.IsNullOrWhiteSpace(selector.Text);
+            };
+
+            selector.SelectionChanged += (_, _) =>
+            {
+                if (selector.SelectedItem is string selected)
+                {
+                    selector.Text = selected;
+                    Dispatcher.UIThread.Post(
+                        () => _ = CommitTransformSelection(multiple, selector, rowPicker, columnPicker),
+                        DispatcherPriority.Background);
+                }
+            };
+
+            async Task SaveTransformPickerAsync()
+            {
+                var input = selector.Text?.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(input))
+                    return;
+
+                var existingMatch = validNames.FirstOrDefault(name => name.Equals(input, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(existingMatch))
+                {
+                    await CommitTransformSelection(multiple, selector, rowPicker, columnPicker);
+                    return;
+                }
+
+                EnsureProtoUnitCommandCatalogLoaded(force: true);
+                if (!ProtoUnitCommandNamePolicy.IsAvailable(input, _protoUnitCommandCatalog.Keys))
+                {
+                    await new Prompt(
+                        PromptType.Error,
+                        "Command already exists",
+                        $"A command named '{input}' already exists but is not a compatible {(multiple ? "Transform (Multiple)" : "Transform (Unique)")} command.").ShowDialog(this);
+                    return;
+                }
+
+                if (!await CheckStartLocalMod())
+                    return;
+
+                var definition = new ProtoUnitCommandDefinition { Name = input };
+                if (multiple)
+                    ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Multiple);
+                else
+                    ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Unique);
+
+                var state = new TransformCommandAssignmentState
+                {
+                    CommandName = input,
+                    SourceCommandName = "",
+                    SourceIsBuiltIn = false,
+                    IsMultiple = multiple,
+                    Row = rowPicker.SelectedItem as string ?? rowPicker.SelectedValue as string ?? "0",
+                    Column = columnPicker.SelectedItem as string ?? columnPicker.SelectedValue as string ?? "0",
+                    Definition = definition,
+                    TransformDefinition = new ProtoUnitTransformDefinition
+                    {
+                        Command = input,
+                        From = currentTransformUnitName
+                    },
+                    DefinitionDirty = true
+                };
+                _transformCommandAssignments.Add(state);
+                activeTransformState = state;
+                MarkDirty();
+                transformAddHost.Children.Clear();
+                RenderTransformTabs();
+                await RenderTransformAssignmentAsync(state);
+            }
+
+            save.Click += async (_, _) => await SaveTransformPickerAsync();
+            selector.KeyDown += async (_, e) =>
+            {
+                if (e.Key != Key.Enter || selector.SelectedItem != null)
+                    return;
+                e.Handled = true;
+                await SaveTransformPickerAsync();
+            };
+        }
+
+        void ShowTransformTypePicker()
+        {
+            transformAddHost.Children.Clear();
+            var row = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,200,Auto"),
+                ColumnSpacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            row.Children.Add(new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center });
+            var typePicker = new ComboBox
+            {
+                ItemsSource = new[] { "Transform (Unique)", "Transform (Multiple)" },
+                Width = 200,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            Grid.SetColumn(typePicker, 1);
+            row.Children.Add(typePicker);
+            var cancel = new Button { Content = "Cancel", Padding = new Thickness(8, 4) };
+            cancel.Click += (_, _) => RefreshTransformAddArea();
+            Grid.SetColumn(cancel, 2);
+            row.Children.Add(cancel);
+            transformAddHost.Children.Add(row);
+
+            typePicker.SelectionChanged += (_, _) =>
+            {
+                if (typePicker.SelectedItem is not string type)
+                    return;
+                ShowTransformCommandPicker(type.Equals("Transform (Multiple)", StringComparison.OrdinalIgnoreCase));
+            };
+        }
+
+        void RefreshTransformAddArea()
+        {
+            transformAddHost.Children.Clear();
+            RenderTransformTabs();
+        }
+
+        var initialTransformEntry = ProtoXmlHandler.GetTransformCommandEntry(unit);
+        if (initialTransformEntry != null && !string.IsNullOrWhiteSpace(initialTransformEntry.Value))
+        {
+            var matchingCommandEntry = transformCommandEntries.FirstOrDefault(entry =>
+                entry.Value.Equals(initialTransformEntry.Value, StringComparison.OrdinalIgnoreCase));
+            var uniqueState = new TransformCommandAssignmentState
+            {
+                CommandName = initialTransformEntry.Value,
+                SourceCommandName = initialTransformEntry.Value,
+                SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(initialTransformEntry.Value) && !IsCustomProtoUnitCommand(initialTransformEntry.Value),
+                IsMultiple = false,
+                Row = string.IsNullOrWhiteSpace(matchingCommandEntry?.Row) ? "0" : matchingCommandEntry.Row,
+                Column = string.IsNullOrWhiteSpace(matchingCommandEntry?.Column) ? "0" : matchingCommandEntry.Column,
+                MergeMode = matchingCommandEntry?.MergeMode ?? "",
+                TransformDefinition = LoadProtoUnitTransformDefinition(initialTransformEntry.Value)
+            };
+            _transformCommandAssignments.Add(uniqueState);
+        }
+
+        foreach (var entry in transformCommandEntries)
+        {
+            if (_transformCommandAssignments.Any(state => state.CommandName.Equals(entry.Value, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var isMultiple = IsTransformMultipleCommand(entry.Value);
+            if (!isMultiple && _transformCommandAssignments.Any(state => !state.IsMultiple))
+                continue;
+            _transformCommandAssignments.Add(new TransformCommandAssignmentState
+            {
+                CommandName = entry.Value,
+                SourceCommandName = entry.Value,
+                SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(entry.Value) && !IsCustomProtoUnitCommand(entry.Value),
+                IsMultiple = isMultiple,
+                Row = string.IsNullOrWhiteSpace(entry.Row) ? "0" : entry.Row,
+                Column = string.IsNullOrWhiteSpace(entry.Column) ? "0" : entry.Column,
+                MergeMode = entry.MergeMode,
+                TransformDefinition = LoadProtoUnitTransformDefinition(entry.Value)
+            });
+        }
+
+        activeTransformState = _transformCommandAssignments.FirstOrDefault();
+        RenderTransformTabs();
+        if (activeTransformState != null)
+            _ = RenderTransformAssignmentAsync(activeTransformState);
+        RefreshTransformAddArea();
+
+        _validateTransformAssignmentsBeforeUnitSaveAsync = async () =>
+        {
+            foreach (var state in _transformCommandAssignments)
+            {
+                if (state.DefinitionDirty)
+                {
+                    activeTransformState = state;
+                    await RenderTransformAssignmentAsync(state);
+                    await new Prompt(
+                        PromptType.Error,
+                        "Unsaved Transform command",
+                        $"Save the Transform command '{state.CommandName}' with the green Save button before saving the ProtoUnit.").ShowDialog(this);
+                    return false;
+                }
+
+                var transform = state.TransformDefinition ?? LoadProtoUnitTransformDefinition(state.CommandName);
+                if (transform == null || string.IsNullOrWhiteSpace(transform.From) ||
+                    transform.From.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                activeTransformState = state;
+                await RenderTransformAssignmentAsync(state);
+                await new Prompt(
+                    PromptType.Error,
+                    "Transform command",
+                    $"'{state.CommandName}' transforms '{transform.From}', but this ProtoUnit is '{currentTransformUnitName}'. Change the Transform field to '{currentTransformUnitName}' and save the command under a new name before saving the ProtoUnit.").ShowDialog(this);
+                return false;
+            }
+            return true;
+        };
+
 
         _activeEditorPanel = _actionsEditorPanel;
         _activeEditorTabIndex = 1;
@@ -33411,6 +36536,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!isBuildingInitialActions && selectedAction == null)
                 selectedAction = state;
             RefreshActionSelector();
+            _refreshAbilityUnitActionValidity?.Invoke();
             return state;
         }
 
@@ -33614,40 +36740,15 @@ public partial class ProtoEditorWindow : SimpleWindow
         string text,
         Action onRemove,
         ProtoActionValueSource source = ProtoActionValueSource.ProtoOnly,
-        string tacticsValue = "")
+        string tacticsValue = "",
+        bool allowRemove = true)
     {
-        var border = new Border
-        {
-            Background = Brush.Parse("#3a5a78"),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(8, 4),
-            Margin = new Thickness(2)
-        };
-
-        var stack = new StackPanel { Orientation = Orientation.Horizontal };
-        var tb = new TextBlock { Text = text, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        stack.Children.Add(tb);
-
         var sourceMarker = CreateProtoActionSourceMarker(source, tacticsValue);
-        if (sourceMarker != null)
-        {
-            sourceMarker.Margin = new Thickness(6, 0, 1, 0);
-            sourceMarker.VerticalAlignment = VerticalAlignment.Center;
-            stack.Children.Add(sourceMarker);
-        }
-
-        if (!_isReadOnly)
-        {
-            var btn = new Button
-            {
-                Classes = { "chip-remove-button" }
-            };
-            btn.Click += (s, e) => onRemove();
-            stack.Children.Add(btn);
-        }
-
-        border.Child = stack;
-        return border;
+        return EditorChipService.CreateBlueChip(
+            text,
+            allowRemove ? onRemove : null,
+            readOnly: _isReadOnly,
+            marker: sourceMarker);
     }
 
     private Border CreateProtoActionWidget(
@@ -33855,6 +36956,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     _protoActionWidgets.Remove(state);
                     onRemove();
+                    _refreshAbilityUnitActionValidity?.Invoke();
                     if (border.Parent is Panel p)
                     {
                         p.Children.Remove(border);
@@ -33890,6 +36992,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
 
                     UpdateProtoActionTypeEditor(typeAcb, name);
+                    _refreshAbilityUnitActionValidity?.Invoke();
                     if (state.IsNewCustomAction &&
                         !state.CustomValues.ContainsKey("attack.mode") &&
                         IsAttackActionType(typeAcb.Text?.Trim() ?? "") &&
@@ -35455,22 +38558,28 @@ public partial class ProtoEditorWindow : SimpleWindow
             unit.Element("decay")?.Remove();
         }
 
-        unit.Element("rechargetime")?.Remove();
-        unit.Element("recharge")?.Remove();
-        unit.Element("rechargeincludetypes")?.Remove();
-        unit.Element("rechargeexcludetypes")?.Remove();
+        var abilityUsesMainRecharge = _abilityDrafts.Values.Any(draft =>
+            draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction"));
         if (_fieldControls.TryGetValue("recharge.mode", out var rechargeModeCtrl) && rechargeModeCtrl is ComboBox rechargeModeCb)
         {
+            unit.Element("rechargetime")?.Remove();
+            unit.Element("recharge")?.Remove();
+            unit.Element("rechargeincludetypes")?.Remove();
+            unit.Element("rechargeexcludetypes")?.Remove();
             var rechargeMode = rechargeModeCb.SelectedItem as string ?? "Time";
             var rechargeValue = _fieldControls.TryGetValue("recharge.value", out var rechargeValueCtrl) && rechargeValueCtrl is TextBox rechargeValueTb
                 ? rechargeValueTb.Text?.Trim() ?? ""
                 : "";
-            var rechargeInit = _fieldControls.TryGetValue("recharge.init", out var rechargeInitCtrl) && rechargeInitCtrl is TextBox rechargeInitTb
-                ? rechargeInitTb.Text?.Trim() ?? ""
-                : "";
-
-            if (string.IsNullOrWhiteSpace(rechargeInit))
-                rechargeInit = "1";
+            var rechargeInit = "";
+            if (_fieldControls.TryGetValue("recharge.init", out var rechargeInitCtrl))
+            {
+                rechargeInit = rechargeInitCtrl switch
+                {
+                    CheckBox startChargedCb => startChargedCb.IsChecked == false ? "0" : "",
+                    TextBox rechargeInitTb => string.IsNullOrWhiteSpace(rechargeInitTb.Text) ? "1" : rechargeInitTb.Text.Trim(),
+                    _ => ""
+                };
+            }
 
             if (rechargeMode.Equals("Time", StringComparison.OrdinalIgnoreCase))
             {
@@ -35498,23 +38607,36 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
             }
         }
+        else if (_abilityDrafts.Count > 0 && !abilityUsesMainRecharge)
+        {
+            unit.Element("rechargetime")?.Remove();
+            unit.Element("recharge")?.Remove();
+            unit.Element("rechargeincludetypes")?.Remove();
+            unit.Element("rechargeexcludetypes")?.Remove();
+        }
 
-        unit.Element("auxrechargetime")?.Remove();
-        unit.Element("auxrecharge")?.Remove();
-        unit.Element("auxrechargeincludetypes")?.Remove();
-        unit.Element("auxrechargeexcludetypes")?.Remove();
+        var abilityUsesAuxRecharge = _abilityDrafts.Values.Any(draft =>
+            draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction"));
         if (_fieldControls.TryGetValue("auxrecharge.mode", out var auxRechargeModeCtrl) && auxRechargeModeCtrl is ComboBox auxRechargeModeCb)
         {
+            unit.Element("auxrechargetime")?.Remove();
+            unit.Element("auxrecharge")?.Remove();
+            unit.Element("auxrechargeincludetypes")?.Remove();
+            unit.Element("auxrechargeexcludetypes")?.Remove();
             var auxRechargeMode = auxRechargeModeCb.SelectedItem as string ?? "Time";
             var auxRechargeValue = _fieldControls.TryGetValue("auxrecharge.value", out var auxRechargeValueCtrl) && auxRechargeValueCtrl is TextBox auxRechargeValueTb
                 ? auxRechargeValueTb.Text?.Trim() ?? ""
                 : "";
-            var auxRechargeInit = _fieldControls.TryGetValue("auxrecharge.init", out var auxRechargeInitCtrl) && auxRechargeInitCtrl is TextBox auxRechargeInitTb
-                ? auxRechargeInitTb.Text?.Trim() ?? ""
-                : "";
-
-            if (string.IsNullOrWhiteSpace(auxRechargeInit))
-                auxRechargeInit = "1";
+            var auxRechargeInit = "";
+            if (_fieldControls.TryGetValue("auxrecharge.init", out var auxRechargeInitCtrl))
+            {
+                auxRechargeInit = auxRechargeInitCtrl switch
+                {
+                    CheckBox startChargedCb => startChargedCb.IsChecked == false ? "0" : "",
+                    TextBox auxRechargeInitTb => string.IsNullOrWhiteSpace(auxRechargeInitTb.Text) ? "1" : auxRechargeInitTb.Text.Trim(),
+                    _ => ""
+                };
+            }
 
             if (auxRechargeMode.Equals("Time", StringComparison.OrdinalIgnoreCase))
             {
@@ -35541,6 +38663,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SaveUnitTypeListElement("auxrechargeexcludetypes", _currentAuxRechargeExcludeTypes);
                 }
             }
+        }
+        else if (_abilityDrafts.Count > 0 && !abilityUsesAuxRecharge)
+        {
+            unit.Element("auxrechargetime")?.Remove();
+            unit.Element("auxrecharge")?.Remove();
+            unit.Element("auxrechargeincludetypes")?.Remove();
+            unit.Element("auxrechargeexcludetypes")?.Remove();
         }
 
         if (_fieldControls.TryGetValue("minimapcolor.red", out var redCtrl) && redCtrl is TextBox redTb)
@@ -35673,18 +38802,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ProtoXmlHandler.RemoveSimpleField(unit, tag);
         }
 
-        if (_fieldControls.TryGetValue("transformcommand", out var transformCtrl) && transformCtrl is AutoCompleteBox transformAcb)
+        var uniqueTransformState = _transformCommandAssignments.UniqueAssignment;
+        if (uniqueTransformState != null && !string.IsNullOrWhiteSpace(uniqueTransformState.CommandName))
         {
-            var input = transformAcb.Text?.Trim() ?? "";
-            var match = GetAvailableCommandNames().FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase)) ?? "";
-            if (!string.IsNullOrWhiteSpace(match))
-                ProtoXmlHandler.SetSimpleField(unit, "transformcommand", match);
-            else
-                ProtoXmlHandler.RemoveSimpleField(unit, "transformcommand");
+            ProtoXmlHandler.SetTransformCommandEntry(unit, new ProtoCommandEntry
+            {
+                Value = uniqueTransformState.CommandName.Trim()
+            });
         }
         else
         {
-            ProtoXmlHandler.RemoveSimpleField(unit, "transformcommand");
+            ProtoXmlHandler.SetTransformCommandEntry(unit, null);
         }
 
         if (_fieldControls.TryGetValue("maxcontained", out var maxContainedCtrl) && maxContainedCtrl is TextBox maxContainedTb)
@@ -35856,7 +38984,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         ProtoXmlHandler.SetTrainEntries(unit, CollectValidCommandEntries(_trainCommandRows, GetAvailableTrainUnitNames()));
         ProtoXmlHandler.SetTechEntries(unit, CollectValidCommandEntries(_techCommandRows, GetAvailableTechNames()));
-        ProtoXmlHandler.SetCommandEntries(unit, CollectValidCommandEntries(_unitCommandRows, GetAvailableCommandNames()));
+        var regularCommandNamesForSave = GetAvailableCommandNames()
+            .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
+            .ToList();
+        var commandEntries = CollectValidCommandEntries(_unitCommandRows, regularCommandNamesForSave);
+        commandEntries.AddRange(_transformCommandAssignments.BuildCommandEntries(
+            IsTransformUniqueCommand,
+            IsTransformMultipleCommand));
+        ProtoXmlHandler.SetCommandEntries(unit, commandEntries);
 
         var actionsList = new List<ProtoAction>();
         var selfDestructProtoActionName = "";
@@ -36342,6 +39477,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void MarkDirty()
     {
         if (_isPopulating || _suppressEditorChangeTracking) return;
+        if (_isAbilityDefinitionEditorMode) _allowAbilityDefinitionEditorClose = false;
         _showStoredRawXml = false;
         _isDirty = true;
         _fileLabel.Text = (_modFilePath ?? "Unsaved Mod") + " *";
@@ -36546,13 +39682,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         return await _host.LookupStringKeyAsync(stringId);
     }
 
-    private Dictionary<string, string> LoadCurrentModStringEntries()
+    private Dictionary<string, string> LoadCurrentModStringEntries(bool requireReadable = false)
     {
         var path = GetCurrentModStringsPath();
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        if (string.Equals(_cachedModStringEntriesPath, path, StringComparison.OrdinalIgnoreCase) &&
+        if (!requireReadable &&
+            string.Equals(_cachedModStringEntriesPath, path, StringComparison.OrdinalIgnoreCase) &&
             _cachedModStringEntries != null)
         {
             return _cachedModStringEntries;
@@ -36565,9 +39702,33 @@ public partial class ProtoEditorWindow : SimpleWindow
             _cachedModStringEntries = parsed;
             return parsed;
         }
-        catch
+        catch (Exception ex)
         {
+            if (requireReadable)
+                throw new InvalidOperationException($"The existing stringmods file could not be read safely: '{path}'. No string changes were written.", ex);
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static void AtomicWriteAllText(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempPath = Path.Combine(directory ?? ".", $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, content);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch { }
         }
     }
 
@@ -36576,10 +39737,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         var path = GetCurrentModStringsPath();
         if (string.IsNullOrWhiteSpace(path))
             return;
-
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(dir))
-            Directory.CreateDirectory(dir);
 
         using var writer = new StringWriter();
         writer.WriteLine("Language = \"English\"");
@@ -36591,7 +39748,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             writer.WriteLine($"ID = \"{entry.Key}\"   ;   Str = \"{escaped}\"");
         }
 
-        File.WriteAllText(path, writer.ToString());
+        AtomicWriteAllText(path, writer.ToString());
         _cachedModStringEntriesPath = path;
         _cachedModStringEntries = new Dictionary<string, string>(entries, StringComparer.OrdinalIgnoreCase);
     }
@@ -36608,14 +39765,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (!File.Exists(path))
         {
-            File.WriteAllText(path, "Language = \"English\"\n\n");
+            AtomicWriteAllText(path, "Language = \"English\"\n\n");
             InvalidateModStringEntriesCache();
         }
     }
 
     private void RemoveStringEntries(IEnumerable<string> ids)
     {
-        var entries = LoadCurrentModStringEntries();
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
         var changed = false;
 
         foreach (var id in ids.Where(x => !string.IsNullOrWhiteSpace(x)))
@@ -36649,7 +39806,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
             return;
 
-        var entries = LoadCurrentModStringEntries();
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
         var displayId = _currentStringFieldIds.GetValueOrDefault("displaynameid");
         var displayText = _fieldControls.TryGetValue("displaynameid", out var displayCtrl) && displayCtrl is TextBox displayTb
             ? displayTb.Text?.Trim() ?? ""
@@ -36688,7 +39845,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void InitializeUnitStringValues(string unitName, string displayName, string longRollover, string shortRollover)
     {
-        var entries = LoadCurrentModStringEntries();
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("displaynameid"))] = displayName;
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("rollovertextid"))] = longRollover;
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("shortrollovertextid"))] = shortRollover;
@@ -36843,16 +40000,3035 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+
+    private static readonly string[] AbilityGeneralFlags =
+    [
+        "alwaysdisabledingrid", "chargetimeasrof", "noautocast", "castonself", "actioncommand",
+        "auxchargetimeasrof", "notcastable", "donotforcestop", "bindtochargeaction",
+        "bindtoauxchargeaction", "enabledduringaction", "inactivewhenfullhp"
+    ];
+
+    private static readonly string[] AbilityGeneralValueTags = ["tech", "rof", "columnoverride"];
+
+    private static readonly string[] AbilityPowerValueTags =
+    [
+        "icon", "displaynameid", "rolloverid", "abstractplacementtargettype", "placement", "unitaction",
+        "rangeindicator", "cursortype", "activetime", "radius", "explicitlyrestrictedplacementtargettype",
+        "replacerolloverid", "replaceicon"
+    ];
+
+    private static readonly string[] AbilityPowerFlags = ["allowduringnorush", "onlyfromstealth", "notblockable"];
+
+    private static readonly HashSet<string> AbilityManagedPlacementAttributes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "enemy", "ally", "includeally", "allownature", "allyorenemynotself", "natureonly",
+        "allowgroundtarget", "disallowwhenattackingdisabled", "disallowwatercast", "disallowlandcast",
+        "allowdeadtarget", "disallowwatercastradius", "fullybuiltonly"
+    };
+
+    private static IEnumerable<XAttribute> GetUnknownPlacementAttributesFromSource(AbilityEditorDraft draft)
+    {
+        var placement = draft.PowerSource?.Elements()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("placement", StringComparison.OrdinalIgnoreCase));
+        if (placement == null)
+            yield break;
+
+        foreach (var attribute in placement.Attributes())
+        {
+            if (!AbilityManagedPlacementAttributes.Contains(attribute.Name.LocalName))
+                yield return new XAttribute(attribute);
+        }
+    }
+
+    internal static void MergeUnknownPlacementAttributes(XElement? sourcePower, XElement targetPower)
+    {
+        var sourcePlacement = sourcePower?.Elements()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("placement", StringComparison.OrdinalIgnoreCase));
+        var targetPlacement = targetPower.Elements()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("placement", StringComparison.OrdinalIgnoreCase));
+        if (sourcePlacement == null || targetPlacement == null)
+            return;
+
+        foreach (var attribute in sourcePlacement.Attributes())
+        {
+            if (AbilityManagedPlacementAttributes.Contains(attribute.Name.LocalName))
+                continue;
+            if (targetPlacement.Attributes().Any(existing => existing.Name.LocalName.Equals(attribute.Name.LocalName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            targetPlacement.SetAttributeValue(attribute.Name, attribute.Value);
+        }
+    }
+
+    private static string AbilityFieldLabel(string tag)
+    {
+        var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["alwaysdisabledingrid"] = "Always Disabled In Grid",
+            ["chargetimeasrof"] = "Charge Time As ROF",
+            ["noautocast"] = "No Autocast",
+            ["castonself"] = "Cast On Self",
+            ["actioncommand"] = "Action Command",
+            ["auxchargetimeasrof"] = "Aux Charge Time As ROF",
+            ["notcastable"] = "Not Castable",
+            ["donotforcestop"] = "Do Not Force Stop",
+            ["bindtochargeaction"] = "Bind To Charge Action",
+            ["bindtoauxchargeaction"] = "Bind To Aux Charge Action",
+            ["enabledduringaction"] = "Enabled During Action",
+            ["inactivewhenfullhp"] = "Inactive When Full HP",
+            ["tech"] = "Enabled by tech",
+            ["rof"] = "ROF",
+            ["columnoverride"] = "Force to column",
+            ["displaynameid"] = "Display Name",
+            ["rolloverid"] = "Rollover",
+            ["abstractplacementtargettype"] = "Target Type",
+            ["unitaction"] = "Unit Action",
+            ["rangeindicator"] = "Range Indicator",
+            ["cursortype"] = "Cursor Type",
+            ["activetime"] = "Active Time",
+            ["explicitlyrestrictedplacementtargettype"] = "Restricted Target Type",
+            ["replacerolloverid"] = "Replace Rollover ID",
+            ["replaceicon"] = "Replace Icon",
+            ["allowduringnorush"] = "Allow During No Rush",
+            ["onlyfromstealth"] = "Only From Stealth",
+            ["notblockable"] = "Not Blockable"
+        };
+        return known.TryGetValue(tag, out var label) ? label : char.ToUpperInvariant(tag[0]) + tag[1..];
+    }
+
+    private static string GetAbilityElementName(XElement element)
+    {
+        var attrName = element.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(attrName))
+            return attrName;
+        var childName = element.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(childName))
+            return childName;
+        return element.Nodes().OfType<XText>().Select(t => t.Value.Trim()).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
+    }
+
+    private static void LoadAbilityChildren(AbilityEditorDraft draft, XElement? general, XElement? power)
+    {
+        if (general != null)
+        {
+            foreach (var child in general.Elements())
+            {
+                var tag = child.Name.LocalName.ToLowerInvariant();
+                if (AbilityGeneralFlags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                    draft.GeneralFlags.Add(tag);
+                else if (AbilityGeneralValueTags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                    draft.GeneralValues[tag] = child.Value;
+            }
+        }
+        if (power != null)
+        {
+            var type = power.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(type))
+                draft.Type = type;
+            foreach (var child in power.Elements())
+            {
+                var tag = child.Name.LocalName.ToLowerInvariant();
+                if (AbilityPowerFlags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                    draft.PowerFlags.Add(tag);
+                else if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase))
+                {
+                    var value = child.Value.Trim();
+                    if (!string.IsNullOrWhiteSpace(value)) draft.PlacementTargetTypes.Add(value);
+                }
+                else if (tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase))
+                {
+                    var value = child.Value.Trim();
+                    if (!string.IsNullOrWhiteSpace(value)) draft.RestrictedPlacementTargetTypes.Add(value);
+                }
+                else if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.PowerValues[tag] = child.Value;
+                    foreach (var attr in child.Attributes())
+                    {
+                        draft.PlacementAttributes.Add(attr.Name.LocalName.ToLowerInvariant());
+                        draft.PlacementAttributeValues[attr.Name.LocalName] = attr.Value;
+                    }
+                }
+                else if (tag.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.PowerValues[tag] = child.Value;
+                    foreach (var attr in child.Attributes())
+                        draft.RangeIndicatorAttributes[attr.Name.LocalName.ToLowerInvariant()] = attr.Value;
+                }
+                else if (AbilityPowerValueTags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                    draft.PowerValues[tag] = child.Value;
+            }
+        }
+    }
+
+    private static List<XDocument> ExtractAbilityDocumentsFromBar(BarFile barFile, string barPath)
+    {
+        var documents = new List<XDocument>();
+        var entries = barFile.Entries;
+        if (entries == null || !File.Exists(barPath)) return documents;
+
+        var matching = entries.Where(entry =>
+        {
+            var normalized = entry.Name.Replace('\\', '/');
+            var fileName = normalized.Split('/').LastOrDefault() ?? "";
+            return normalized.Contains("abilities", StringComparison.OrdinalIgnoreCase) &&
+                   fileName.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase) &&
+                   (fileName.Equals("abilities.xml.xmb", StringComparison.OrdinalIgnoreCase) ||
+                    fileName.EndsWith(".abilities.xmb", StringComparison.OrdinalIgnoreCase));
+        }).ToList();
+
+        using var stream = File.OpenRead(barPath);
+        foreach (var entry in matching)
+        {
+            try
+            {
+                var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+                var decompressed = new byte[size];
+                var readBytes = entry.ReadDataDecompressed(stream, decompressed);
+                if (readBytes <= 0) continue;
+                var xml = BarFormatConverter.XMBtoFormattedXmlString(decompressed.AsSpan(0, readBytes));
+                if (!string.IsNullOrWhiteSpace(xml)) documents.Add(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
+            }
+            catch { }
+        }
+        return documents;
+    }
+
+    private string? GetCurrentModAbilitiesFilePath(string fileName)
+    {
+        var gameplayPath = GetCurrentModGameplayFilePath(fileName);
+        if (string.IsNullOrWhiteSpace(gameplayPath)) return null;
+        var gameplayDirectory = Path.GetDirectoryName(gameplayPath);
+        return string.IsNullOrWhiteSpace(gameplayDirectory)
+            ? null
+            : Path.Combine(gameplayDirectory, "abilities", fileName);
+    }
+
+    private void RegisterAvailableAbilityName(string abilityName)
+    {
+        abilityName = abilityName?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(abilityName)) return;
+        if (!_availableAbilityNames.Contains(abilityName, StringComparer.OrdinalIgnoreCase))
+            _availableAbilityNames.Add(abilityName);
+        _availableAbilityNames = _availableAbilityNames
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (_currentAbilityNameEditor != null)
+            _currentAbilityNameEditor.ItemsSource = _availableAbilityNames.ToList();
+    }
+
+    private void LoadAbilitySources(string unitName)
+    {
+        _abilityDrafts.Clear();
+        _abilityPowerCatalog.Clear();
+        var allNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unitAssociations = new List<XElement>();
+
+        void AddAssociation(XElement ability)
+        {
+            var name = GetAbilityElementName(ability);
+            if (string.IsNullOrWhiteSpace(name)) return;
+            allNames.Add(name);
+            var index = unitAssociations.FindIndex(x => GetAbilityElementName(x).Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) unitAssociations[index] = new XElement(ability);
+            else unitAssociations.Add(new XElement(ability));
+        }
+
+        var gameplay = ResolveBaseGameplayDirectory();
+        var abilitiesDirectory = string.IsNullOrWhiteSpace(gameplay) ? null : Path.Combine(gameplay, "abilities");
+        if (!string.IsNullOrWhiteSpace(abilitiesDirectory) && Directory.Exists(abilitiesDirectory))
+        {
+            var abilitiesPath = Path.Combine(abilitiesDirectory, "abilities.xml");
+            if (File.Exists(abilitiesPath))
+            {
+                try
+                {
+                    var doc = XDocument.Load(abilitiesPath, LoadOptions.PreserveWhitespace);
+                    foreach (var ability in doc.Root?.Descendants().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)) ?? [])
+                    {
+                        var name = GetAbilityElementName(ability);
+                        if (!string.IsNullOrWhiteSpace(name)) allNames.Add(name);
+                    }
+                    foreach (var unitNode in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals(unitName, StringComparison.OrdinalIgnoreCase)) ?? [])
+                    {
+                        foreach (var ability in unitNode.Elements().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)))
+                            AddAssociation(ability);
+                    }
+                }
+                catch { }
+            }
+
+            foreach (var path in Directory.EnumerateFiles(abilitiesDirectory, "*.abilities", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    var doc = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+                    foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
+                    {
+                        var name = GetAbilityElementName(power);
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        allNames.Add(name);
+                        _abilityPowerCatalog[name] = new XElement(power);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        void MergeAbilityDocuments(IEnumerable<XDocument> documents)
+        {
+            foreach (var doc in documents)
+            {
+                if (doc.Root == null) continue;
+                if (doc.Root.Name.LocalName.Equals("abilities", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var ability in doc.Root.Descendants().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var name = GetAbilityElementName(ability);
+                        if (!string.IsNullOrWhiteSpace(name)) allNames.Add(name);
+                    }
+                    foreach (var unitNode in doc.Root.Elements().Where(e => e.Name.LocalName.Equals(unitName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        foreach (var ability in unitNode.Elements().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)))
+                            AddAssociation(ability);
+                    }
+                }
+                else if (doc.Root.Name.LocalName.Equals("powers", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var name = GetAbilityElementName(power);
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        allNames.Add(name);
+                        _abilityPowerCatalog[name] = new XElement(power);
+                    }
+                }
+            }
+        }
+
+        var loadedBarPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void LoadBarAbilities(BarFile? barFile, string? barPath)
+        {
+            if (barFile == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
+            var fullPath = Path.GetFullPath(barPath);
+            if (!loadedBarPaths.Add(fullPath)) return;
+            MergeAbilityDocuments(ExtractAbilityDocumentsFromBar(barFile, fullPath));
+        }
+
+        // Use the same Data.bar fallback chain as the working tactics/tech loaders.
+        LoadBarAbilities(_protoDataBarFile, _protoDataBarPath);
+        if (_host.CurrentBarFile != null && !string.IsNullOrWhiteSpace(_host.CurrentBarPath) &&
+            Path.GetFileName(_host.CurrentBarPath).Equals("Data.bar", StringComparison.OrdinalIgnoreCase))
+        {
+            LoadBarAbilities(_host.CurrentBarFile, _host.CurrentBarPath);
+        }
+
+        var resolvedDataBarPath = ResolveDataBarPath();
+        if (!string.IsNullOrWhiteSpace(resolvedDataBarPath) && File.Exists(resolvedDataBarPath) &&
+            !loadedBarPaths.Contains(Path.GetFullPath(resolvedDataBarPath)))
+        {
+            try
+            {
+                using var dataStream = File.OpenRead(resolvedDataBarPath);
+                var dataBar = new BarFile(dataStream);
+                if (dataBar.Load(out _)) LoadBarAbilities(dataBar, resolvedDataBarPath);
+            }
+            catch { }
+        }
+
+        var abilitiesModsPath = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
+        if (!string.IsNullOrWhiteSpace(abilitiesModsPath) && File.Exists(abilitiesModsPath))
+        {
+            try
+            {
+                var doc = XDocument.Load(abilitiesModsPath, LoadOptions.PreserveWhitespace);
+                foreach (var unitNode in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals(unitName, StringComparison.OrdinalIgnoreCase)) ?? [])
+                {
+                    foreach (var ability in unitNode.Elements().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)))
+                        AddAssociation(ability);
+                }
+            }
+            catch { }
+        }
+
+        var powersModsPath = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (!string.IsNullOrWhiteSpace(powersModsPath) && File.Exists(powersModsPath))
+        {
+            try
+            {
+                var doc = XDocument.Load(powersModsPath, LoadOptions.PreserveWhitespace);
+                foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
+                {
+                    var name = GetAbilityElementName(power);
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    allNames.Add(name);
+                    _abilityPowerCatalog[name] = new XElement(power);
+                }
+            }
+            catch { }
+        }
+
+        foreach (var association in unitAssociations)
+        {
+            var name = GetAbilityElementName(association);
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            _abilityPowerCatalog.TryGetValue(name, out var power);
+            var draft = new AbilityEditorDraft
+            {
+                Name = name,
+                GeneralSource = new XElement(association),
+                PowerSource = power == null ? null : new XElement(power),
+                SharedPowerReference = power != null
+            };
+            LoadAbilityChildren(draft, association, power);
+            var bindingMetadata = AbilityBindingMetadataStore.Get(_modFilePath, unitName, name);
+            if (bindingMetadata != null)
+            {
+                draft.BoundMainRechargeAction = bindingMetadata.MainAction?.Trim() ?? "";
+                draft.BoundAuxRechargeAction = bindingMetadata.AuxAction?.Trim() ?? "";
+                draft.BoundMainActionFlagManaged = bindingMetadata.MainOwnsChargeAction;
+                draft.BoundAuxActionFlagManaged = bindingMetadata.AuxOwnsChargeAction;
+            }
+            _abilityDrafts[name] = draft;
+        }
+
+        _availableAbilityNames = allNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static XElement ReplaceKnownAbilityChildren(XElement source, IEnumerable<string> knownTags, IEnumerable<XElement> replacements)
+    {
+        var clone = new XElement(source);
+        var known = new HashSet<string>(knownTags, StringComparer.OrdinalIgnoreCase);
+        clone.Elements().Where(e => known.Contains(e.Name.LocalName)).Remove();
+        clone.Add(replacements);
+        return clone;
+    }
+
+    internal static string BuildAbilityStringId(string abilityName, bool rollover)
+    {
+        var normalized = new string(abilityName.Trim().ToUpperInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+        while (normalized.Contains("__", StringComparison.Ordinal))
+            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
+        normalized = normalized.Trim('_');
+        return $"STR_ABILITY_{normalized}{(rollover ? "_LR" : "")}";
+    }
+
+    private string BuildUniqueAbilityStringId(string abilityName, bool rollover, IReadOnlyDictionary<string, string> stringEntries)
+    {
+        var baseId = BuildAbilityStringId(abilityName, rollover);
+        var reserved = new HashSet<string>(stringEntries.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (var power in _abilityPowerCatalog.Values)
+        {
+            var tag = rollover ? "rolloverid" : "displaynameid";
+            var id = power.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(id)) reserved.Add(id);
+        }
+        if (!reserved.Contains(baseId)) return baseId;
+
+        var stem = rollover && baseId.EndsWith("_LR", StringComparison.OrdinalIgnoreCase) ? baseId[..^3] : baseId;
+        for (var suffix = 2; ; suffix++)
+        {
+            var candidate = $"{stem}_{suffix}{(rollover ? "_LR" : "")}";
+            if (!reserved.Contains(candidate)) return candidate;
+        }
+    }
+
+    internal static XDocument LoadAbilityXmlDocumentForUpdate(string path, string rootName)
+    {
+        if (!File.Exists(path))
+            return new XDocument(new XElement(rootName));
+
+        try
+        {
+            var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            if (document.Root == null)
+                throw new InvalidDataException("The XML document has no root element.");
+            return document;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"The existing XML file could not be read safely: '{path}'. No replacement file was created.", ex);
+        }
+    }
+
+    internal static void SaveAbilityXmlDocument(XDocument document, string path, Func<string, string>? serializedXmlTransform = null)
+    {
+        foreach (var whitespace in document.DescendantNodes().OfType<XText>()
+                     .Where(text => string.IsNullOrWhiteSpace(text.Value)).ToList())
+        {
+            whitespace.Remove();
+        }
+
+        document.Declaration = null;
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory ?? ".", $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var settings = new System.Xml.XmlWriterSettings
+        {
+            Indent = true,
+            IndentChars = "\t",
+            NewLineChars = Environment.NewLine,
+            NewLineHandling = System.Xml.NewLineHandling.Replace,
+            OmitXmlDeclaration = true
+        };
+        try
+        {
+            using (var writer = System.Xml.XmlWriter.Create(tempPath, settings))
+                document.Save(writer);
+            if (serializedXmlTransform != null)
+            {
+                var serialized = File.ReadAllText(tempPath);
+                File.WriteAllText(tempPath, serializedXmlTransform(serialized));
+            }
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch { }
+        }
+    }
+
+    private void SaveAbilityDrafts()
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath) || string.IsNullOrWhiteSpace(_currentUnitName)) return;
+
+        var abilitiesPath = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
+        if (!string.IsNullOrWhiteSpace(abilitiesPath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(abilitiesPath)!);
+            var doc = LoadAbilityXmlDocumentForUpdate(abilitiesPath, "abilitiesmods");
+            if (doc.Root == null) doc.Add(new XElement("abilitiesmods"));
+            var root = doc.Root!;
+            root.Name = "abilitiesmods";
+            var existingUnit = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase));
+            var replacementUnit = new XElement(_currentUnitName);
+            foreach (var draft in _abilityDrafts.Values.Where(d => !string.IsNullOrWhiteSpace(d.Name)))
+            {
+                var source = draft.GeneralSource ?? new XElement("ability", new XText(draft.Name));
+                var children = draft.GeneralValues.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).Select(kv => new XElement(kv.Key, kv.Value))
+                    .Concat(draft.GeneralFlags.Select(flag => new XElement(flag, "1")));
+                var result = ReplaceKnownAbilityChildren(source, AbilityGeneralFlags.Concat(AbilityGeneralValueTags), children);
+                foreach (var text in result.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).ToList()) text.Remove();
+                result.AddFirst(new XText(draft.Name));
+                replacementUnit.Add(result);
+            }
+            if (existingUnit != null)
+            {
+                if (replacementUnit.HasElements) existingUnit.ReplaceWith(replacementUnit);
+                else existingUnit.Remove();
+            }
+            else if (replacementUnit.HasElements) root.Add(replacementUnit);
+            SaveAbilityXmlDocument(doc, abilitiesPath);
+        }
+
+        var modified = _abilityDrafts.Values.Where(d => d.Modified && !d.SharedPowerReference && !string.IsNullOrWhiteSpace(d.Name))
+            .GroupBy(d => d.Name, StringComparer.OrdinalIgnoreCase).Select(g => g.Last()).ToList();
+        if (modified.Count > 0)
+        {
+            var powersPath = GetCurrentModGameplayFilePath("powers_mods.xml");
+            if (!string.IsNullOrWhiteSpace(powersPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(powersPath)!);
+                var doc = LoadAbilityXmlDocumentForUpdate(powersPath, "powersmod");
+                if (doc.Root == null) doc.Add(new XElement("powersmod"));
+                var root = doc.Root!;
+                root.Name = "powersmod";
+                var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+                var stringsChanged = false;
+                foreach (var draft in modified)
+                {
+                    foreach (var tag in new[] { "displaynameid", "rolloverid" })
+                    {
+                        if (!draft.PowerDisplayTexts.TryGetValue(tag, out var text) || string.IsNullOrWhiteSpace(text))
+                            continue;
+
+                        var id = draft.PowerValues.GetValueOrDefault(tag, "").Trim();
+                        var generatedId = false;
+                        if (string.IsNullOrWhiteSpace(id))
+                        {
+                            id = BuildUniqueAbilityStringId(draft.Name, tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase), stringEntries);
+                            draft.PowerValues[tag] = id;
+                            generatedId = true;
+                        }
+
+                        if (generatedId || draft.ModifiedPowerDisplayTextTags.Contains(tag))
+                        {
+                            stringEntries[id] = text;
+                            stringsChanged = true;
+                        }
+                    }
+
+                    var source = draft.PowerSource ?? new XElement("power", new XAttribute("name", draft.Name));
+                    var children = draft.PowerValues
+                        .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) &&
+                                     !kv.Key.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
+                                     !kv.Key.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
+                                     !kv.Key.Equals("placement", StringComparison.OrdinalIgnoreCase) &&
+                                     !kv.Key.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+                        .Select(kv => new XElement(kv.Key, kv.Value))
+                        .Concat(draft.PlacementTargetTypes.Select(value => new XElement("abstractplacementtargettype", value)))
+                        .Concat(draft.RestrictedPlacementTargetTypes.Select(value => new XElement("explicitlyrestrictedplacementtargettype", value)))
+                        .Concat(draft.PowerFlags.Select(flag => new XElement(flag, "1")))
+                        .ToList();
+                    var placementValue = draft.PowerValues.GetValueOrDefault("placement", "").Trim();
+                    if (!string.IsNullOrWhiteSpace(placementValue))
+                    {
+                        var placementElement = new XElement("placement", placementValue);
+                        foreach (var attribute in GetUnknownPlacementAttributesFromSource(draft))
+                            placementElement.SetAttributeValue(attribute.Name, attribute.Value);
+                        foreach (var attr in draft.PlacementAttributes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            var normalized = attr.ToLowerInvariant();
+                            var originalName = draft.PlacementAttributeValues.Keys.FirstOrDefault(key => key.Equals(attr, StringComparison.OrdinalIgnoreCase));
+                            var xmlName = normalized switch
+                            {
+                                "allyorenemynotself" => "allyOrEnemyNotSelf",
+                                "natureonly" => "natureOnly",
+                                "allowdeadtarget" => "allowDeadTarget",
+                                "disallowwatercastradius" => "disallowWaterCastRadius",
+                                "fullybuiltonly" => "fullyBuiltOnly",
+                                _ => originalName ?? normalized
+                            };
+                            var value = draft.PlacementAttributeValues.TryGetValue(attr, out var preservedValue) ? preservedValue : "";
+                            placementElement.SetAttributeValue(xmlName, value);
+                        }
+                        children.Add(placementElement);
+                    }
+                    var rangeIndicatorValue = draft.PowerValues.GetValueOrDefault("rangeindicator", "").Trim();
+                    if (!string.IsNullOrWhiteSpace(rangeIndicatorValue))
+                    {
+                        var rangeIndicatorElement = new XElement("rangeindicator", rangeIndicatorValue);
+                        foreach (var attr in draft.RangeIndicatorAttributes.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                            if (!string.IsNullOrWhiteSpace(attr.Value))
+                                rangeIndicatorElement.SetAttributeValue(attr.Key, attr.Value);
+                        children.Add(rangeIndicatorElement);
+                    }
+                    var replacement = ReplaceKnownAbilityChildren(source, AbilityPowerFlags.Concat(AbilityPowerValueTags), children);
+                    replacement.SetAttributeValue("name", draft.Name);
+                    replacement.SetAttributeValue("type", draft.Type);
+                    replacement.Elements().Where(e => e.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) || e.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase)).Remove();
+                    var existing = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) && GetAbilityElementName(e).Equals(draft.Name, StringComparison.OrdinalIgnoreCase));
+                    // Use the freshly loaded powers_mods.xml as the preservation source so
+                    // unsupported placement attributes added manually after the UI opened survive.
+                    MergeUnknownPlacementAttributes(existing, replacement);
+                    if (existing != null) existing.ReplaceWith(replacement); else root.Add(replacement);
+                    _abilityPowerCatalog[draft.Name] = new XElement(replacement);
+                    RegisterAvailableAbilityName(draft.Name);
+                }
+                SaveAbilityXmlDocument(doc, powersPath);
+                if (stringsChanged)
+                    SaveCurrentModStringEntries(stringEntries);
+            }
+        }
+
+        SaveCurrentAbilityBindingMetadata();
+
+        foreach (var draft in _abilityDrafts.Values)
+        {
+            draft.Modified = false;
+            draft.ModifiedPowerDisplayTextTags.Clear();
+        }
+    }
+
+    private List<AbilityBindingMetadataRecord> BuildCurrentAbilityBindingMetadataRecords()
+    {
+        var records = new List<AbilityBindingMetadataRecord>();
+        foreach (var draft in _abilityDrafts.Values.Where(draft => !string.IsNullOrWhiteSpace(draft.Name)))
+        {
+            var usesMain = draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction");
+            var usesAux = draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction");
+            if (!usesMain && !usesAux)
+                continue;
+            records.Add(new AbilityBindingMetadataRecord
+            {
+                AbilityName = draft.Name,
+                MainAction = usesMain ? draft.BoundMainRechargeAction : "",
+                MainOwnsChargeAction = usesMain && draft.BoundMainActionFlagManaged,
+                AuxAction = usesAux ? draft.BoundAuxRechargeAction : "",
+                AuxOwnsChargeAction = usesAux && draft.BoundAuxActionFlagManaged
+            });
+        }
+        return records;
+    }
+
+    private void SaveCurrentAbilityBindingMetadata()
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath) || string.IsNullOrWhiteSpace(_currentUnitName)) return;
+        AbilityBindingMetadataStore.ReplaceUnit(_modFilePath, _currentUnitName, BuildCurrentAbilityBindingMetadataRecords());
+    }
+
+    private bool IsAbilityActionFlagProtected(string actionName, string flagTag, AbilityEditorDraft? ignoreDraft = null)
+    {
+        if (string.IsNullOrWhiteSpace(actionName)) return false;
+        foreach (var draft in _abilityDrafts.Values)
+        {
+            if (ReferenceEquals(draft, ignoreDraft))
+                continue;
+
+            if (flagTag.Equals("chargeaction", StringComparison.OrdinalIgnoreCase) &&
+                draft.BoundMainRechargeAction.Equals(actionName, StringComparison.OrdinalIgnoreCase) &&
+                (draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction")))
+                return true;
+            if (flagTag.Equals("auxchargeaction", StringComparison.OrdinalIgnoreCase) &&
+                draft.BoundAuxRechargeAction.Equals(actionName, StringComparison.OrdinalIgnoreCase) &&
+                (draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction")))
+                return true;
+        }
+        return false;
+    }
+
+    private bool IsActionFlagProtectedByTactics(string actionName, string flagTag)
+    {
+        return TryGetCurrentUnitTacticsAction(actionName, out var tacticsAction) &&
+               IsProtoActionFlagEnabledValue(GetProtoActionSimpleSourceValue(tacticsAction, flagTag));
+    }
+
+    private bool SetAbilityLinkedActionFlag(string actionName, string flagTag, bool enabled, AbilityEditorDraft? ignoreDraft = null, bool managedByAbility = false)
+    {
+        if (string.IsNullOrWhiteSpace(actionName)) return false;
+        var state = _protoActionWidgets.FirstOrDefault(widget =>
+            string.Equals(widget.NameAcb.Text?.Trim(), actionName.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (state == null) return false;
+
+        if (enabled)
+        {
+            var inheritedFromTactics = IsActionFlagProtectedByTactics(actionName, flagTag);
+            var alreadyInProto = IsProtoActionFlagEnabledValue(GetProtoActionSimpleSourceValue(state.Model, flagTag));
+            state.SelectedFlagTags.Add(flagTag);
+            if (!inheritedFromTactics && !alreadyInProto)
+            {
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, flagTag, "1");
+                RenderProtoActionFlags(state);
+                return true;
+            }
+            RenderProtoActionFlags(state);
+            return false;
+        }
+
+        if (managedByAbility && !IsAbilityActionFlagProtected(actionName, flagTag, ignoreDraft))
+        {
+            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, flagTag, "");
+            if (!IsActionFlagProtectedByTactics(actionName, flagTag))
+                state.SelectedFlagTags.Remove(flagTag);
+        }
+        RenderProtoActionFlags(state);
+        return false;
+    }
+
+    private void ReleaseAbilityActionBindings(AbilityEditorDraft draft)
+    {
+        var main = draft.BoundMainRechargeAction;
+        var aux = draft.BoundAuxRechargeAction;
+        var mainManaged = draft.BoundMainActionFlagManaged;
+        var auxManaged = draft.BoundAuxActionFlagManaged;
+        draft.BoundMainRechargeAction = "";
+        draft.BoundAuxRechargeAction = "";
+        draft.BoundMainActionFlagManaged = false;
+        draft.BoundAuxActionFlagManaged = false;
+        SetAbilityLinkedActionFlag(main, "chargeaction", false, draft, mainManaged);
+        SetAbilityLinkedActionFlag(aux, "auxchargeaction", false, draft, auxManaged);
+    }
+
+    private void BuildAbilitiesEditor(XElement unit)
+    {
+        // Standalone ability definitions are read-only only for original/Data.bar powers.
+        // Do not let the synthetic unit used by this editor leak a read-only state into
+        // custom abilities. The rest of this builder intentionally reuses _isReadOnly.
+        if (_isAbilityDefinitionEditorMode)
+            _isReadOnly = _abilityDefinitionEditorReadOnly;
+
+        var unitName = unit.Attribute("name")?.Value?.Trim() ?? _currentUnitName ?? "";
+        if (!_isAbilityDefinitionEditorMode)
+            LoadAbilitySources(unitName);
+        _abilitiesEditorPanel.Children.Clear();
+        _abilityRechargeValueEditors.Clear();
+        _abilityRangeIndicatorRangeEditorForValidation = null;
+
+        _currentRechargeIncludeTypes = new HashSet<string>(
+            unit.Element("rechargeincludetypes")?.Elements("unittype")
+                .Select(x => x.Value?.Trim() ?? "").Where(x => x.Length > 0) ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        _currentRechargeExcludeTypes = new HashSet<string>(
+            unit.Element("rechargeexcludetypes")?.Elements("unittype")
+                .Select(x => x.Value?.Trim() ?? "").Where(x => x.Length > 0) ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        _currentAuxRechargeIncludeTypes = new HashSet<string>(
+            unit.Element("auxrechargeincludetypes")?.Elements("unittype")
+                .Select(x => x.Value?.Trim() ?? "").Where(x => x.Length > 0) ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        _currentAuxRechargeExcludeTypes = new HashSet<string>(
+            unit.Element("auxrechargeexcludetypes")?.Elements("unittype")
+                .Select(x => x.Value?.Trim() ?? "").Where(x => x.Length > 0) ?? [],
+            StringComparer.OrdinalIgnoreCase);
+
+        var container = new StackPanel { Spacing = 10 };
+        _abilitiesEditorPanel.Children.Add(container);
+        var abilityTabs = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = !_isAbilityDefinitionEditorMode
+        };
+        container.Children.Add(abilityTabs);
+
+        var card = new Border
+        {
+            Background = Brush.Parse("#181818"),
+            BorderBrush = Brush.Parse("#3f3f46"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12),
+            IsVisible = false
+        };
+        var body = new StackPanel { Spacing = 10 };
+        card.Child = body;
+        container.Children.Add(card);
+
+        var nameRow = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        nameRow.Children.Add(new TextBlock { Text = "Ability Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 8, 4) });
+        var nameBox = new AutoCompleteBox
+        {
+            Width = 260,
+            FilterMode = AutoCompleteFilterMode.Contains,
+            ItemsSource = _isAbilityDefinitionEditorMode ? Array.Empty<string>() : _availableAbilityNames,
+            IsEnabled = !_isReadOnly,
+            PlaceholderText = "Existing or custom ability"
+        };
+        EnableDropdownAutoComplete(nameBox, selectAllOnFirstClick: false);
+        if (!_isAbilityDefinitionEditorMode)
+            _currentAbilityNameEditor = nameBox;
+        nameRow.Children.Add(nameBox);
+        nameRow.Children.Add(new TextBlock { Text = "Type:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 4, 8, 4) });
+        var typeBox = new ComboBox { Width = 140, ItemsSource = new[] { "UnitAction", "GeneralEffect" }, SelectedIndex = 0, IsEnabled = !_isReadOnly };
+        nameRow.Children.Add(typeBox);
+        var rechargeChoiceLabel = new TextBlock
+        {
+            Text = "Recharge",
+            Margin = new Thickness(0, 4, 8, 4),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var rechargeChoice = new ComboBox
+        {
+            Width = 150,
+            ItemsSource = new[] { "None", "Main Recharge", "Aux recharge" },
+            SelectedIndex = 0,
+            IsEnabled = !_isReadOnly
+        };
+        var rechargeChoiceGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) };
+        rechargeChoiceGroup.Children.Add(rechargeChoiceLabel);
+        rechargeChoiceGroup.Children.Add(rechargeChoice);
+        nameRow.Children.Add(rechargeChoiceGroup);
+        var manageAbilitiesIcon = new Grid
+        {
+            Width = 22,
+            Height = 22
+        };
+        manageAbilitiesIcon.Children.Add(new TextBlock
+        {
+            Text = "✎",
+            FontSize = 15,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -2, 0, 0),
+            RenderTransform = new ScaleTransform(-1, 1),
+            RenderTransformOrigin = RelativePoint.Center
+        });
+        manageAbilitiesIcon.Children.Add(new TextBlock
+        {
+            Text = "⚙",
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, -1, -1)
+        });
+        var createAbilitySaveButton = new Button
+        {
+            Content = "Save",
+            Background = Brush.Parse("#2b7a0b"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            IsVisible = false
+        };
+        var manageAbilitiesButton = new Button
+        {
+            Content = manageAbilitiesIcon,
+            Width = 36,
+            Height = 32,
+            Padding = new Thickness(6),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 8, 0),
+            IsVisible = !_isAbilityDefinitionEditorMode && !_isReadOnly
+        };
+        ToolTip.SetTip(manageAbilitiesButton, "Manage abilities");
+        var removeAbilityButton = new Button
+        {
+            Content = "Remove",
+            Background = Brush.Parse("#8b0000"),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = !_isReadOnly && !_isAbilityDefinitionEditorMode
+        };
+        var abilityHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto") };
+        Grid.SetColumn(nameRow, 0);
+        Grid.SetColumn(createAbilitySaveButton, 1);
+        Grid.SetColumn(manageAbilitiesButton, 2);
+        Grid.SetColumn(removeAbilityButton, 3);
+        abilityHeader.Children.Add(nameRow);
+        abilityHeader.Children.Add(createAbilitySaveButton);
+        abilityHeader.Children.Add(manageAbilitiesButton);
+        abilityHeader.Children.Add(removeAbilityButton);
+        body.Children.Add(abilityHeader);
+        var abilityDetailsHost = new StackPanel { Spacing = 10 };
+        body.Children.Add(abilityDetailsHost);
+
+        var generalValues = new Dictionary<string, TextBox>(StringComparer.OrdinalIgnoreCase);
+        var generalValueHosts = new Dictionary<string, StackPanel>(StringComparer.OrdinalIgnoreCase);
+        var selectedGeneralFlags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var powerValues = new Dictionary<string, TextBox>(StringComparer.OrdinalIgnoreCase);
+        var powerValueHosts = new Dictionary<string, StackPanel>(StringComparer.OrdinalIgnoreCase);
+        var powerDisplayTextBoxes = new Dictionary<string, TextBox>(StringComparer.OrdinalIgnoreCase);
+        var powerFlags = new Dictionary<string, CheckBox>(StringComparer.OrdinalIgnoreCase);
+        var openPowerOptionalTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var powerValueRemoveButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
+        AssetPathEditor? abilityIconEditor = null;
+        AutoCompleteBox? abilityUnitActionEditor = null;
+        Border? abilityUnitActionBorder = null;
+        TextBlock? abilityUnitActionWarning = null;
+        ComboBox? abilityPlacementEditor = null;
+        ComboBox? abilityRangeIndicatorEditor = null;
+        TextBox? abilityRangeIndicatorRangeEditor = null;
+        TextBlock? abilityRangeIndicatorWidthLabel = null;
+        TextBox? abilityRangeIndicatorWidthEditor = null;
+        TextBlock? abilityRangeIndicatorSpeedLabel = null;
+        TextBox? abilityRangeIndicatorSpeedEditor = null;
+        ComboBox? abilityCursorTypeEditor = null;
+        AutoCompleteBox? abilityTargetTypeEditor = null;
+        AutoCompleteBox? abilityRestrictedTargetTypeEditor = null;
+        WrapPanel? abilityTargetTypeChips = null;
+        WrapPanel? abilityRestrictedTargetTypeChips = null;
+        var selectedAbilityTargetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectedAbilityRestrictedTargetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        WrapPanel? placementTargetsHost = null;
+        WrapPanel? placementFlagsHost = null;
+        CheckBox? placementAllTarget = null;
+        CheckBox? placementEnemyTarget = null;
+        CheckBox? placementAllyTarget = null;
+        CheckBox? placementNatureTarget = null;
+        AutoCompleteBox? placementFlagPicker = null;
+        WrapPanel? placementFlagChips = null;
+        var selectedPlacementFlags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var abilityLoadVersion = 0;
+        var abilityNameCreationPromptOpen = false;
+        var abilityNameRemovePointerPending = false;
+        var abilityNameCancelRefocusPending = false;
+
+        var generalAttributesLabel = new TextBlock { Text = "Ability attributes", FontWeight = FontWeight.SemiBold, IsVisible = false };
+        abilityDetailsHost.Children.Add(generalAttributesLabel);
+        var attrRow = new WrapPanel { Orientation = Orientation.Horizontal, IsVisible = !_isAbilityDefinitionEditorMode };
+        abilityDetailsHost.Children.Add(attrRow);
+        var generalValueButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
+        var openGeneralOptionalTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AutoCompleteBox? abilityTechEditor = null;
+        ComboBox? abilityColumnOverrideEditor = null;
+
+        foreach (var tag in AbilityGeneralValueTags)
+        {
+            var slot = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 6) };
+            var host = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, IsVisible = false };
+            host.Children.Add(new TextBlock { Text = AbilityFieldLabel(tag), VerticalAlignment = VerticalAlignment.Center });
+
+            var backingTextBox = new TextBox { IsVisible = false };
+            generalValues[tag] = backingTextBox;
+            generalValueHosts[tag] = host;
+
+            Control editor;
+            if (tag.Equals("tech", StringComparison.OrdinalIgnoreCase))
+            {
+                abilityTechEditor = new AutoCompleteBox
+                {
+                    Width = 220,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    ItemsSource = GetAvailableTechNames(),
+                    IsEnabled = !_isReadOnly
+                };
+                EnableDropdownAutoComplete(abilityTechEditor, selectAllOnFirstClick: false);
+                editor = abilityTechEditor;
+            }
+            else if (tag.Equals("columnoverride", StringComparison.OrdinalIgnoreCase))
+            {
+                abilityColumnOverrideEditor = new ComboBox
+                {
+                    Width = 75,
+                    ItemsSource = new[] { "0", "1", "2", "3", "4", "5" },
+                    IsEnabled = !_isReadOnly
+                };
+                editor = abilityColumnOverrideEditor;
+            }
+            else
+            {
+                var tb = new TextBox { Width = 110, IsEnabled = !_isReadOnly };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
+                tb.AddHandler(InputElement.TextInputEvent, (_, args) =>
+                {
+                    var proposed = (tb.Text ?? "") + args.Text;
+                    if (!double.TryParse(proposed, NumberStyles.Float, CultureInfo.InvariantCulture, out double _) &&
+                        proposed is not "." and not "-" and not "-.")
+                        args.Handled = true;
+                }, RoutingStrategies.Tunnel);
+                generalValues[tag] = tb;
+                editor = tb;
+            }
+
+            host.Children.Add(editor);
+
+            var button = new Button
+            {
+                Content = AbilityFieldLabel(tag),
+                Background = Brush.Parse("#2b7a0b"),
+                IsVisible = !_isReadOnly
+            };
+            generalValueButtons[tag] = button;
+            button.Click += async (_, _) =>
+            {
+                var proceed = await CheckStartLocalMod();
+                if (!proceed) return;
+                openGeneralOptionalTags.Add(tag);
+                RenderGeneralOptionalButtons();
+                editor.Focus();
+                MarkDirty();
+            };
+
+            if (!_isReadOnly)
+            {
+                var remove = new Button
+                {
+                    Content = "X", Background = Brush.Parse("#8b0000"), Width = 28, Height = 28,
+                    Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center,
+                    VerticalContentAlignment = VerticalAlignment.Center
+                };
+                remove.Click += async (_, _) =>
+                {
+                    var proceed = await CheckStartLocalMod();
+                    if (!proceed) return;
+                    WriteGeneralValue(tag, "");
+                    openGeneralOptionalTags.Remove(tag);
+                    RenderGeneralOptionalButtons();
+                    MarkDirty();
+                };
+                host.Children.Add(remove);
+            }
+
+            slot.Children.Add(host);
+            slot.Children.Add(button);
+            attrRow.Children.Add(slot);
+        }
+
+        string ReadGeneralValue(string tag)
+        {
+            if (tag.Equals("tech", StringComparison.OrdinalIgnoreCase))
+                return abilityTechEditor?.Text?.Trim() ?? "";
+            if (tag.Equals("columnoverride", StringComparison.OrdinalIgnoreCase))
+                return abilityColumnOverrideEditor?.SelectedItem as string ?? "";
+            return generalValues[tag].Text?.Trim() ?? "";
+        }
+
+        void WriteGeneralValue(string tag, string value)
+        {
+            value ??= "";
+            generalValues[tag].Text = value;
+            if (tag.Equals("tech", StringComparison.OrdinalIgnoreCase) && abilityTechEditor != null)
+                abilityTechEditor.Text = value;
+            else if (tag.Equals("columnoverride", StringComparison.OrdinalIgnoreCase) && abilityColumnOverrideEditor != null)
+                abilityColumnOverrideEditor.SelectedItem = new[] { "0", "1", "2", "3", "4", "5" }.FirstOrDefault(item => item.Equals(value, StringComparison.OrdinalIgnoreCase));
+        }
+
+        void RenderGeneralOptionalButtons()
+        {
+            var anyVisible = false;
+            foreach (var tag in AbilityGeneralValueTags)
+            {
+                var hasValue = !string.IsNullOrWhiteSpace(ReadGeneralValue(tag));
+                var showField = hasValue || openGeneralOptionalTags.Contains(tag);
+                generalValueHosts[tag].IsVisible = showField;
+                generalValueButtons[tag].IsVisible = !_isReadOnly && !showField;
+                anyVisible |= showField;
+            }
+            generalAttributesLabel.IsVisible = anyVisible;
+        }
+
+        var flagsSection = new WrapPanel { Orientation = Orientation.Horizontal, IsVisible = !_isAbilityDefinitionEditorMode };
+        flagsSection.Children.Add(new TextBlock
+        {
+            Text = "Flags",
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
+        });
+        var flagsWrap = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var abilityFlagPicker = new AutoCompleteBox
+        {
+            FilterMode = AutoCompleteFilterMode.Contains,
+            MinWidth = 120,
+            MaxWidth = 200,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            IsVisible = !_isReadOnly
+        };
+        EnableDropdownAutoComplete(abilityFlagPicker, selectAllOnFirstClick: false);
+        flagsSection.Children.Add(abilityFlagPicker);
+        flagsSection.Children.Add(flagsWrap);
+        abilityDetailsHost.Children.Add(flagsSection);
+
+        bool UsesMainAbilityRecharge() =>
+            selectedGeneralFlags.Contains("chargetimeasrof") || selectedGeneralFlags.Contains("bindtochargeaction");
+
+        bool UsesAuxAbilityRecharge() =>
+            selectedGeneralFlags.Contains("auxchargetimeasrof") || selectedGeneralFlags.Contains("bindtoauxchargeaction");
+
+        void SyncRechargeChoiceFromFlags()
+        {
+            _loadingAbilityEditor = true;
+            try
+            {
+                rechargeChoice.SelectedItem = UsesMainAbilityRecharge()
+                    ? "Main Recharge"
+                    : UsesAuxAbilityRecharge()
+                        ? "Aux recharge"
+                        : "None";
+            }
+            finally { _loadingAbilityEditor = false; }
+        }
+
+        var rechargeHost = new StackPanel { Spacing = 6, IsVisible = !_isAbilityDefinitionEditorMode };
+        abilityDetailsHost.Children.Add(rechargeHost);
+        void RenderRecharge()
+        {
+            rechargeHost.Children.Clear();
+            foreach (var key in new[] { "recharge.mode", "recharge.value", "recharge.init", "auxrecharge.mode", "auxrecharge.value", "auxrecharge.init" })
+                _fieldControls.Remove(key);
+
+            var useMain = UsesMainAbilityRecharge();
+            var useAux = UsesAuxAbilityRecharge();
+            if (!useMain && !useAux)
+                return;
+
+            rechargeHost.Children.Add(new TextBlock { Text = "Recharge", FontWeight = FontWeight.SemiBold });
+
+            void AddRechargeLine(string prefix, string title)
+            {
+                var isAux = prefix.StartsWith("aux", StringComparison.OrdinalIgnoreCase);
+                var timeElement = unit.Element(isAux ? "auxrechargetime" : "rechargetime");
+                var typedElement = unit.Element(isAux ? "auxrecharge" : "recharge");
+                var rawMode = typedElement?.Attribute("type")?.Value
+                    ?? timeElement?.Attribute("type")?.Value
+                    ?? "Time";
+                var mode = rawMode.Equals("Time", StringComparison.OrdinalIgnoreCase)
+                    ? "Time"
+                    : KnownRechargeTypes.FirstOrDefault(type => type.Equals(rawMode, StringComparison.OrdinalIgnoreCase)) ?? "Time";
+                var value = timeElement?.Value ?? typedElement?.Value ?? "";
+                var init = timeElement?.Attribute("init")?.Value ?? typedElement?.Attribute("init")?.Value;
+
+                var lineHost = new StackPanel { Spacing = 5 };
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+                var modeCb = new ComboBox { Width = 130, ItemsSource = (new[] { "Time" }).Concat(KnownRechargeTypes).ToArray(), SelectedItem = mode, IsEnabled = !_isReadOnly };
+                if (modeCb.SelectedItem == null) modeCb.SelectedItem = "Time";
+                var valueTb = new TextBox { Text = value, Width = 90, IsEnabled = !_isReadOnly };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(valueTb);
+                valueTb.AddHandler(InputElement.TextInputEvent, (_, args) =>
+                {
+                    var proposed = (valueTb.Text ?? "") + args.Text;
+                    if (!double.TryParse(proposed, NumberStyles.Float, CultureInfo.InvariantCulture, out double _) &&
+                        proposed is not "." and not "-" and not "-.")
+                        args.Handled = true;
+                }, RoutingStrategies.Tunnel);
+                var startChargedCb = new CheckBox
+                {
+                    Content = "Start charged",
+                    IsChecked = !string.Equals(init, "0", StringComparison.OrdinalIgnoreCase),
+                    IsEnabled = !_isReadOnly,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                row.Children.Add(modeCb);
+                row.Children.Add(new TextBlock { Text = "Value", VerticalAlignment = VerticalAlignment.Center });
+                row.Children.Add(valueTb);
+                row.Children.Add(startChargedCb);
+
+                AutoCompleteBox? boundActionPicker = null;
+                var isGeneralEffectAbility = string.Equals(typeBox.SelectedItem as string, "GeneralEffect", StringComparison.OrdinalIgnoreCase);
+                if (isGeneralEffectAbility)
+                {
+                    row.Children.Add(new TextBlock
+                    {
+                        Text = "Bind to unit action",
+                        Margin = new Thickness(12, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center
+                    });
+                    var actionNames = _protoActionWidgets
+                        .Select(state => state.NameAcb.Text?.Trim() ?? "")
+                        .Concat(ProtoXmlHandler.GetProtoActions(unit).Select(action => action.Name?.Trim() ?? ""))
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    var currentDraft = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName);
+                    var boundAction = isAux ? currentDraft?.BoundAuxRechargeAction : currentDraft?.BoundMainRechargeAction;
+                    boundActionPicker = new AutoCompleteBox
+                    {
+                        Width = 220,
+                        Text = boundAction ?? "",
+                        ItemsSource = actionNames,
+                        FilterMode = AutoCompleteFilterMode.Contains,
+                        IsEnabled = !_isReadOnly
+                    };
+                    EnableDropdownAutoComplete(boundActionPicker, selectAllOnFirstClick: false);
+                    row.Children.Add(boundActionPicker);
+                }
+
+                lineHost.Children.Add(row);
+                _fieldControls[$"{prefix}.mode"] = modeCb;
+                _fieldControls[$"{prefix}.value"] = valueTb;
+                _fieldControls[$"{prefix}.init"] = startChargedCb;
+                _abilityRechargeValueEditors[prefix] = valueTb;
+
+                var filtersHost = new StackPanel { Spacing = 5, Margin = new Thickness(0, 0, 0, 2) };
+                lineHost.Children.Add(filtersHost);
+
+                HashSet<string> IncludeTypes() => isAux
+                    ? (_currentAuxRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                    : (_currentRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                HashSet<string> ExcludeTypes() => isAux
+                    ? (_currentAuxRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                    : (_currentRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+                StackPanel CreateTypeFilterEditor(string label, HashSet<string> values)
+                {
+                    var editor = new StackPanel { Spacing = 3 };
+                    var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+                    const double filterLabelWidth = 95;
+                    const double filterGap = 7;
+                    var labelBlock = new TextBlock { Text = label, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, Width = filterLabelWidth };
+                    header.Children.Add(labelBlock);
+                    // Chips begin where the picker begins, not under the label.
+                    var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(filterLabelWidth + filterGap, 0, 0, 0) };
+
+                    AutoCompleteBox? picker = null;
+                    void Refresh()
+                    {
+                        wrap.Children.Clear();
+                        foreach (var item in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList())
+                        {
+                            var captured = item;
+                            wrap.Children.Add(CreateChip(captured, async () =>
+                            {
+                                var proceed = await CheckStartLocalMod();
+                                if (!proceed) return;
+                                values.Remove(captured);
+                                Refresh();
+                                MarkDirty();
+                            }));
+                        }
+                        if (picker != null)
+                            picker.ItemsSource = GetAvailableBuildLimitTargets().Where(value => !values.Contains(value)).ToList();
+                    }
+
+                    if (!_isReadOnly)
+                    {
+                        picker = new AutoCompleteBox
+                        {
+                            Width = 220,
+                            FilterMode = AutoCompleteFilterMode.Contains,
+                            PlaceholderText = "Unit type or proto unit"
+                        };
+                        EnableDropdownAutoComplete(picker, selectAllOnFirstClick: false);
+                        picker.SelectionChanged += async (_, _) =>
+                        {
+                            if (picker.SelectedItem is not string selected || values.Contains(selected)) return;
+                            var proceed = await CheckStartLocalMod();
+                            if (!proceed) return;
+                            values.Add(selected);
+                            picker.Text = "";
+                            picker.SelectedItem = null;
+                            Refresh();
+                            MarkDirty();
+                        };
+                        header.Children.Add(picker);
+                    }
+                    editor.Children.Add(header);
+                    editor.Children.Add(wrap);
+                    Refresh();
+                    return editor;
+                }
+
+                void RenderFilters()
+                {
+                    filtersHost.Children.Clear();
+                    var selectedMode = modeCb.SelectedItem as string ?? "Time";
+                    var supportsFilters = selectedMode.Equals("Kills", StringComparison.OrdinalIgnoreCase) ||
+                                          selectedMode.Equals("Damage", StringComparison.OrdinalIgnoreCase) ||
+                                          selectedMode.Equals("Attacks", StringComparison.OrdinalIgnoreCase);
+                    if (!supportsFilters) return;
+
+                    var filtersRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 12 };
+                    var includeEditor = CreateTypeFilterEditor("Include Type", IncludeTypes());
+                    var excludeEditor = CreateTypeFilterEditor("Exclude", ExcludeTypes());
+                    Grid.SetColumn(includeEditor, 0);
+                    Grid.SetColumn(excludeEditor, 1);
+                    filtersRow.Children.Add(includeEditor);
+                    filtersRow.Children.Add(excludeEditor);
+                    filtersHost.Children.Add(filtersRow);
+                }
+
+                async void RechargeChanged(bool modeChanged = false)
+                {
+                    if (_loadingAbilityEditor || _isPopulating) return;
+                    var proceed = await CheckStartLocalMod();
+                    if (!proceed) return;
+                    if (modeChanged) RenderFilters();
+                    MarkDirty();
+                }
+                modeCb.SelectionChanged += (_, _) => RechargeChanged(modeChanged: true);
+                valueTb.TextChanged += (_, _) => RechargeChanged();
+                startChargedCb.IsCheckedChanged += (_, _) => RechargeChanged();
+                if (boundActionPicker != null)
+                {
+                    async void CommitBoundAction()
+                    {
+                        if (_loadingAbilityEditor || _isPopulating || _isReadOnly ||
+                            !_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft)) return;
+                        var typed = boundActionPicker.Text?.Trim() ?? "";
+                        var valid = (boundActionPicker.ItemsSource as IEnumerable<string>)?
+                            .FirstOrDefault(action => action.Equals(typed, StringComparison.OrdinalIgnoreCase)) ?? "";
+                        if (!string.IsNullOrWhiteSpace(typed) && string.IsNullOrWhiteSpace(valid)) return;
+                        var oldAction = isAux ? currentDraft.BoundAuxRechargeAction : currentDraft.BoundMainRechargeAction;
+                        var oldManaged = isAux ? currentDraft.BoundAuxActionFlagManaged : currentDraft.BoundMainActionFlagManaged;
+                        if (string.Equals(oldAction, valid, StringComparison.OrdinalIgnoreCase)) return;
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed) return;
+                        SetAbilityLinkedActionFlag(oldAction, isAux ? "auxchargeaction" : "chargeaction", false, currentDraft, oldManaged);
+                        var addedByAbility = SetAbilityLinkedActionFlag(valid, isAux ? "auxchargeaction" : "chargeaction", true);
+                        if (isAux)
+                        {
+                            currentDraft.BoundAuxRechargeAction = valid;
+                            currentDraft.BoundAuxActionFlagManaged = addedByAbility;
+                        }
+                        else
+                        {
+                            currentDraft.BoundMainRechargeAction = valid;
+                            currentDraft.BoundMainActionFlagManaged = addedByAbility;
+                        }
+                        currentDraft.Modified = true;
+                        MarkDirty();
+                    }
+                    boundActionPicker.SelectionChanged += (_, _) =>
+                    {
+                        if (boundActionPicker.SelectedItem is string selected)
+                        {
+                            _loadingAbilityEditor = true;
+                            try { boundActionPicker.Text = selected; }
+                            finally { _loadingAbilityEditor = false; }
+                            CommitBoundAction();
+                        }
+                    };
+                    boundActionPicker.LostFocus += (_, _) => CommitBoundAction();
+                }
+                RenderFilters();
+                rechargeHost.Children.Add(lineHost);
+            }
+
+            if (useMain) AddRechargeLine("recharge", "");
+            if (useAux) AddRechargeLine("auxrecharge", "");
+        }
+
+        abilityDetailsHost.Children.Add(new TextBlock { Text = "Ability description", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) });
+        var descriptionHost = new StackPanel { Spacing = 6 };
+        abilityDetailsHost.Children.Add(descriptionHost);
+        var descriptionCore = new StackPanel { Spacing = 4 };
+        var descriptionOptional = new WrapPanel { Orientation = Orientation.Horizontal };
+        var descriptionButtons = new WrapPanel { Orientation = Orientation.Horizontal };
+        descriptionHost.Children.Add(descriptionCore);
+        descriptionHost.Children.Add(descriptionOptional);
+        descriptionHost.Children.Add(descriptionButtons);
+
+        foreach (var tag in AbilityPowerValueTags)
+        {
+            var item = new StackPanel { Margin = new Thickness(0, 0, 12, 7), IsVisible = false };
+            item.Children.Add(new TextBlock { Text = AbilityFieldLabel(tag), Margin = new Thickness(0, 0, 0, 3) });
+            var fieldRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+
+            if (tag.Equals("unitaction", StringComparison.OrdinalIgnoreCase))
+            {
+                var actionNames = _protoActionWidgets
+                    .Select(state => state.NameAcb.Text?.Trim() ?? "")
+                    .Concat(ProtoXmlHandler.GetProtoActions(unit).Select(action => action.Name?.Trim() ?? ""))
+                    .Concat(_isAbilityDefinitionEditorMode ? _protoActionTypeMap.Keys : Enumerable.Empty<string>())
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                abilityUnitActionEditor = new AutoCompleteBox
+                {
+                    Width = 300,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    ItemsSource = actionNames,
+                    IsEnabled = !_isReadOnly
+                };
+                EnableDropdownAutoComplete(abilityUnitActionEditor, selectAllOnFirstClick: false);
+                abilityUnitActionBorder = new Border
+                {
+                    BorderBrush = Brush.Parse("#555555"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(3),
+                    Child = abilityUnitActionEditor
+                };
+                fieldRow.Children.Add(abilityUnitActionBorder);
+                abilityUnitActionWarning = new TextBlock
+                {
+                    Text = "This action is missing in this ProtoUnit.",
+                    Foreground = Brush.Parse("#ef5350"),
+                    FontStyle = FontStyle.Italic,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsVisible = false
+                };
+                fieldRow.Children.Add(abilityUnitActionWarning);
+            }
+            else if (tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+            {
+                abilityIconEditor = new AssetPathEditor
+                {
+                    Width = 300,
+                    IsEnabled = !_isReadOnly,
+                    Opacity = _isReadOnly ? 0.55 : 1.0,
+                    VerticalAlignment = VerticalAlignment.Bottom
+                };
+                abilityIconEditor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#4a4a4a" : "#1b1b1b");
+                fieldRow.Children.Add(abilityIconEditor);
+            }
+            else if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase))
+            {
+                abilityPlacementEditor = new ComboBox
+                {
+                    Width = 120,
+                    ItemsSource = new[] { "Full", "Unit", "Self", "Skip", "Overlap" },
+                    IsEnabled = !_isReadOnly
+                };
+
+                // Placement and Targets share the first row. Placement flags always use a
+                // second row whose label begins directly below the Targets label.
+                var placementRows = new StackPanel { Spacing = 6 };
+                var placementFlow = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MaxWidth = _isAbilityDefinitionEditorMode ? 540 : 900
+                };
+                placementFlow.Children.Add(abilityPlacementEditor);
+
+                placementTargetsHost = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(28, 0, 12, 0)
+                };
+                placementTargetsHost.Children.Add(new TextBlock
+                {
+                    Text = "Targets:",
+                    Width = 72,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                placementAllTarget = new CheckBox { Content = "Self", IsChecked = true, IsEnabled = !_isReadOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                placementEnemyTarget = new CheckBox { Content = "Enemy", IsEnabled = !_isReadOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                placementAllyTarget = new CheckBox { Content = "Ally", IsEnabled = !_isReadOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                placementNatureTarget = new CheckBox { Content = "Nature", IsEnabled = !_isReadOnly, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                placementTargetsHost.Children.Add(placementAllTarget);
+                placementTargetsHost.Children.Add(placementEnemyTarget);
+                placementTargetsHost.Children.Add(placementAllyTarget);
+                placementTargetsHost.Children.Add(placementNatureTarget);
+                placementFlow.Children.Add(placementTargetsHost);
+                placementRows.Children.Add(placementFlow);
+
+                placementFlagsHost = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(148, 0, 0, 0),
+                    MaxWidth = _isAbilityDefinitionEditorMode ? 390 : 620
+                };
+                placementFlagsHost.Children.Add(new TextBlock
+                {
+                    Text = "Placement flags",
+                    Width = 106,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                placementFlagPicker = new AutoCompleteBox
+                {
+                    Width = _isAbilityDefinitionEditorMode ? 170 : 190,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    IsEnabled = !_isReadOnly,
+                    IsVisible = !_isReadOnly
+                };
+                EnableDropdownAutoComplete(placementFlagPicker, selectAllOnFirstClick: false);
+                placementFlagChips = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MaxWidth = _isAbilityDefinitionEditorMode ? 300 : 360
+                };
+                placementFlagsHost.Children.Add(placementFlagPicker);
+                placementFlagsHost.Children.Add(placementFlagChips);
+                placementRows.Children.Add(placementFlagsHost);
+
+                item.Children.Add(placementRows);
+                powerValueHosts[tag] = item;
+                continue;
+            }
+            else if (tag.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+            {
+                var backingTextBox = new TextBox { IsVisible = false };
+                powerValues[tag] = backingTextBox;
+                abilityRangeIndicatorEditor = new ComboBox
+                {
+                    Width = 110,
+                    ItemsSource = new[] { "Circle", "Arrow", "Cone" },
+                    IsEnabled = !_isReadOnly
+                };
+                fieldRow.Children.Add(abilityRangeIndicatorEditor);
+                fieldRow.Children.Add(new TextBlock { Text = "Range", VerticalAlignment = VerticalAlignment.Center });
+                abilityRangeIndicatorRangeEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
+                _abilityRangeIndicatorRangeEditorForValidation = abilityRangeIndicatorRangeEditor;
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorRangeEditor);
+                fieldRow.Children.Add(abilityRangeIndicatorRangeEditor);
+                abilityRangeIndicatorWidthLabel = new TextBlock { Text = "Width", VerticalAlignment = VerticalAlignment.Center };
+                fieldRow.Children.Add(abilityRangeIndicatorWidthLabel);
+                abilityRangeIndicatorWidthEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorWidthEditor);
+                fieldRow.Children.Add(abilityRangeIndicatorWidthEditor);
+                abilityRangeIndicatorSpeedLabel = new TextBlock { Text = "Speed", VerticalAlignment = VerticalAlignment.Center };
+                fieldRow.Children.Add(abilityRangeIndicatorSpeedLabel);
+                abilityRangeIndicatorSpeedEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorSpeedEditor);
+                fieldRow.Children.Add(abilityRangeIndicatorSpeedEditor);
+                foreach (var numericEditor in new[] { abilityRangeIndicatorRangeEditor!, abilityRangeIndicatorWidthEditor!, abilityRangeIndicatorSpeedEditor! })
+                {
+                    numericEditor.AddHandler(InputElement.TextInputEvent, (_, args) =>
+                    {
+                        var proposed = (numericEditor.Text ?? "") + args.Text;
+                        if (!double.TryParse(proposed, NumberStyles.Float, CultureInfo.InvariantCulture, out double _) &&
+                            proposed is not "." and not "-" and not "-.")
+                            args.Handled = true;
+                    }, RoutingStrategies.Tunnel);
+                }
+            }
+            else if (tag.Equals("cursortype", StringComparison.OrdinalIgnoreCase))
+            {
+                var backingTextBox = new TextBox { IsVisible = false };
+                powerValues[tag] = backingTextBox;
+                abilityCursorTypeEditor = new ComboBox
+                {
+                    Width = 150,
+                    ItemsSource = new[] { "Standard", "Heal", "Repair", "AltConvert", "Bolster", "Ankh", "GatherShrine" },
+                    SelectedItem = "Standard",
+                    IsEnabled = !_isReadOnly
+                };
+                fieldRow.Children.Add(abilityCursorTypeEditor);
+            }
+            else if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) ||
+                     tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase))
+            {
+                item.Children.Clear();
+                var acb = new AutoCompleteBox
+                {
+                    Width = tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) ? 260 : 230,
+                    FilterMode = AutoCompleteFilterMode.Contains,
+                    IsEnabled = !_isReadOnly,
+                    IsVisible = !_isReadOnly
+                };
+                EnableDropdownAutoComplete(acb, selectAllOnFirstClick: false);
+                fieldRow.Children.Add(new TextBlock
+                {
+                    Text = AbilityFieldLabel(tag),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 7, 0)
+                });
+                var chipLeft = tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) ? 142 : 82;
+                var chips = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(chipLeft, 3, 0, 0) };
+                if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase))
+                {
+                    abilityTargetTypeEditor = acb;
+                    abilityTargetTypeChips = chips;
+                }
+                else
+                {
+                    abilityRestrictedTargetTypeEditor = acb;
+                    abilityRestrictedTargetTypeChips = chips;
+                    item.Margin = new Thickness(28, 0, 12, 7);
+                }
+                fieldRow.Children.Add(acb);
+                item.Children.Add(fieldRow);
+                item.Children.Add(chips);
+                powerValueHosts[tag] = item;
+                continue;
+            }
+            else
+            {
+                var tb = new TextBox
+                {
+                    Width = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase) ? 650 :
+                            tag.Equals("displaynameid", StringComparison.OrdinalIgnoreCase) ? 360 : 300,
+                    IsEnabled = !_isReadOnly
+                };
+                if (tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase))
+                {
+                    tb.MinHeight = 54;
+                    tb.TextWrapping = TextWrapping.Wrap;
+                    tb.AcceptsReturn = true;
+                }
+                if (tag is "activetime" or "radius")
+                {
+                    EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
+                    tb.AddHandler(InputElement.TextInputEvent, (_, args) =>
+                    {
+                        var proposed = (tb.Text ?? "") + args.Text;
+                        if (!double.TryParse(proposed, NumberStyles.Float, CultureInfo.InvariantCulture, out double _) &&
+                            proposed is not "." and not "-" and not "-.")
+                            args.Handled = true;
+                    }, RoutingStrategies.Tunnel);
+                }
+                fieldRow.Children.Add(tb);
+                if (tag is "displaynameid" or "rolloverid")
+                    powerDisplayTextBoxes[tag] = tb;
+                else
+                    powerValues[tag] = tb;
+            }
+
+            item.Children.Add(fieldRow);
+            powerValueHosts[tag] = item;
+        }
+
+        var unitActionCoreOrder = new[]
+        {
+            "unitaction", "displaynameid", "rolloverid", "icon", "placement",
+            "abstractplacementtargettype", "explicitlyrestrictedplacementtargettype"
+        };
+        var generalEffectCoreOrder = new[] { "displaynameid", "rolloverid", "icon" };
+        var powerFlagWrap = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var tag in AbilityPowerFlags)
+        {
+            var cb = new CheckBox { Content = AbilityFieldLabel(tag), Margin = new Thickness(0, 0, 14, 5), IsEnabled = !_isReadOnly };
+            powerFlags[tag] = cb;
+            powerFlagWrap.Children.Add(cb);
+        }
+        abilityDetailsHost.Children.Add(powerFlagWrap);
+
+        foreach (var tag in AbilityPowerValueTags)
+        {
+            var capturedTag = tag;
+            var removeButton = new Button
+            {
+                Content = "X",
+                Background = Brush.Parse("#8b0000"),
+                Width = 28,
+                Height = 28,
+                Padding = new Thickness(0),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                IsVisible = false
+            };
+            removeButton.Click += async (_, _) =>
+            {
+                var proceed = await CheckStartLocalMod();
+                if (!proceed) return;
+                ClearAbilityPowerOptional(capturedTag);
+                openPowerOptionalTags.Remove(capturedTag);
+                RenderDescriptionLayout();
+                AbilityChanged();
+            };
+            powerValueRemoveButtons[capturedTag] = removeButton;
+            var valueRow = powerValueHosts[capturedTag].Children.OfType<StackPanel>()
+                .FirstOrDefault(panel => panel.Orientation == Orientation.Horizontal);
+            if (valueRow != null) valueRow.Children.Add(removeButton);
+            else powerValueHosts[capturedTag].Children.Add(removeButton);
+        }
+
+        void RenderAbilityTargetChips()
+        {
+            var allSuggestions = GetAvailableBuildLimitTargets();
+
+            void RefreshSet(AutoCompleteBox? picker, WrapPanel? chips, HashSet<string> values)
+            {
+                if (picker != null)
+                    picker.ItemsSource = allSuggestions.Where(value => !values.Contains(value)).ToList();
+                if (chips == null) return;
+                chips.Children.Clear();
+                foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList())
+                {
+                    var captured = value;
+                    var sharedPowerReadOnly = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName)?.SharedPowerReference == true;
+                    chips.Children.Add(CreateChip(captured, async () =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed) return;
+                        values.Remove(captured);
+                        RefreshSet(picker, chips, values);
+                        AbilityChanged();
+                    }, allowRemove: !sharedPowerReadOnly));
+                }
+            }
+
+            RefreshSet(abilityTargetTypeEditor, abilityTargetTypeChips, selectedAbilityTargetTypes);
+            RefreshSet(abilityRestrictedTargetTypeEditor, abilityRestrictedTargetTypeChips, selectedAbilityRestrictedTargetTypes);
+        }
+
+        void RenderRangeIndicatorOptions()
+        {
+            var indicator = abilityRangeIndicatorEditor?.SelectedItem as string ?? "";
+            var showWidth = indicator.Equals("Arrow", StringComparison.OrdinalIgnoreCase);
+            var showSpeed = indicator.Equals("Circle", StringComparison.OrdinalIgnoreCase);
+            if (abilityRangeIndicatorWidthLabel != null) abilityRangeIndicatorWidthLabel.IsVisible = showWidth;
+            if (abilityRangeIndicatorWidthEditor != null) abilityRangeIndicatorWidthEditor.IsVisible = showWidth;
+            if (abilityRangeIndicatorSpeedLabel != null) abilityRangeIndicatorSpeedLabel.IsVisible = showSpeed;
+            if (abilityRangeIndicatorSpeedEditor != null) abilityRangeIndicatorSpeedEditor.IsVisible = showSpeed;
+        }
+
+        void RenderPlacementOptions()
+        {
+            if (placementTargetsHost == null || placementFlagsHost == null) return;
+            var isUnitPlacement = string.Equals(abilityPlacementEditor?.SelectedItem as string, "Unit", StringComparison.OrdinalIgnoreCase);
+            placementTargetsHost.IsVisible = isUnitPlacement;
+            placementFlagsHost.IsVisible = isUnitPlacement;
+            if (!isUnitPlacement) return;
+
+            if (placementFlagPicker != null)
+            {
+                var placementFlags = new[]
+                {
+                    "allowgroundtarget", "disallowwhenattackingdisabled", "disallowwatercast", "disallowlandcast",
+                    "allowdeadtarget", "disallowwatercastradius", "fullybuiltonly"
+                };
+                placementFlagPicker.ItemsSource = placementFlags.Where(flag => !selectedPlacementFlags.Contains(flag)).ToList();
+            }
+            if (placementFlagChips != null)
+            {
+                placementFlagChips.Children.Clear();
+                foreach (var flag in selectedPlacementFlags.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList())
+                {
+                    var captured = flag;
+                    var sharedPowerReadOnly = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName)?.SharedPowerReference == true;
+                    placementFlagChips.Children.Add(CreateChip(captured, async () =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed) return;
+                        selectedPlacementFlags.Remove(captured);
+                        RenderPlacementOptions();
+                        AbilityChanged();
+                    }, allowRemove: !sharedPowerReadOnly));
+                }
+            }
+        }
+
+        string ReadAbilityPowerValue(string tag)
+        {
+            if (tag is "displaynameid" or "rolloverid")
+                return powerDisplayTextBoxes[tag].Text?.Trim() ?? "";
+            if (tag.Equals("unitaction", StringComparison.OrdinalIgnoreCase))
+                return abilityUnitActionEditor?.Text?.Trim() ?? "";
+            if (tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                return abilityIconEditor?.FullValue?.Trim() ?? "";
+            if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase))
+                return abilityPlacementEditor?.SelectedItem as string ?? "";
+            if (tag.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+                return abilityRangeIndicatorEditor?.SelectedItem as string ?? "";
+            if (tag.Equals("cursortype", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = abilityCursorTypeEditor?.SelectedItem as string ?? "";
+                return value.Equals("Standard", StringComparison.OrdinalIgnoreCase) ? "" : value;
+            }
+            if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase))
+                return string.Join(", ", selectedAbilityTargetTypes);
+            if (tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase))
+                return string.Join(", ", selectedAbilityRestrictedTargetTypes);
+            return powerValues.TryGetValue(tag, out var tb) ? tb.Text?.Trim() ?? "" : "";
+        }
+
+        void ClearAbilityPowerOptional(string tag)
+        {
+            if (tag.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
+            {
+                if (abilityRangeIndicatorEditor != null) abilityRangeIndicatorEditor.SelectedItem = null;
+                if (abilityRangeIndicatorRangeEditor != null) abilityRangeIndicatorRangeEditor.Text = "";
+                if (abilityRangeIndicatorWidthEditor != null) abilityRangeIndicatorWidthEditor.Text = "";
+                if (abilityRangeIndicatorSpeedEditor != null) abilityRangeIndicatorSpeedEditor.Text = "";
+                return;
+            }
+            if (tag.Equals("cursortype", StringComparison.OrdinalIgnoreCase))
+            {
+                if (abilityCursorTypeEditor != null) abilityCursorTypeEditor.SelectedItem = "Standard";
+                return;
+            }
+            if (tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+            {
+                abilityIconEditor?.Configure("", GetAssetPathSuggestions("icon", _abilityDrafts.Values.Select(d => d.PowerValues.GetValueOrDefault("icon", ""))), null);
+                return;
+            }
+            if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase))
+            {
+                selectedAbilityTargetTypes.Clear();
+                RenderAbilityTargetChips();
+                return;
+            }
+            if (tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase))
+            {
+                selectedAbilityRestrictedTargetTypes.Clear();
+                RenderAbilityTargetChips();
+                return;
+            }
+            if (powerValues.TryGetValue(tag, out var tb)) tb.Text = "";
+        }
+
+        Control GetAbilityPowerEditor(string tag)
+        {
+            if (tag is "displaynameid" or "rolloverid")
+                return powerDisplayTextBoxes[tag];
+            if (tag.Equals("unitaction", StringComparison.OrdinalIgnoreCase) && abilityUnitActionEditor != null)
+                return abilityUnitActionEditor;
+            if (tag.Equals("icon", StringComparison.OrdinalIgnoreCase) && abilityIconEditor != null)
+                return abilityIconEditor;
+            if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase) && abilityPlacementEditor != null)
+                return abilityPlacementEditor;
+            if (tag.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase) && abilityRangeIndicatorEditor != null)
+                return abilityRangeIndicatorEditor;
+            if (tag.Equals("cursortype", StringComparison.OrdinalIgnoreCase) && abilityCursorTypeEditor != null)
+                return abilityCursorTypeEditor;
+            if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) && abilityTargetTypeEditor != null)
+                return abilityTargetTypeEditor;
+            if (tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) && abilityRestrictedTargetTypeEditor != null)
+                return abilityRestrictedTargetTypeEditor;
+            return powerValues[tag];
+        }
+
+        void AddDescriptionCoreRow(params string[] tags)
+        {
+            var row = new WrapPanel { Orientation = Orientation.Horizontal };
+            foreach (var tag in tags)
+            {
+                var host = powerValueHosts[tag];
+                host.IsVisible = true;
+                row.Children.Add(host);
+            }
+            descriptionCore.Children.Add(row);
+        }
+
+        void RefreshAbilityUnitActionValidity()
+        {
+            if (abilityUnitActionEditor == null) return;
+            var actionName = abilityUnitActionEditor.Text?.Trim() ?? "";
+            var exists = string.IsNullOrWhiteSpace(actionName) ||
+                _protoActionWidgets.Any(state => string.Equals(state.NameAcb.Text?.Trim(), actionName, StringComparison.OrdinalIgnoreCase)) ||
+                ProtoXmlHandler.GetProtoActions(unit).Any(action => string.Equals(action.Name?.Trim(), actionName, StringComparison.OrdinalIgnoreCase));
+            var missing = !_isAbilityDefinitionEditorMode && !exists;
+            if (abilityUnitActionBorder != null)
+            {
+                abilityUnitActionBorder.BorderBrush = missing ? Brush.Parse("#ef5350") : Brush.Parse("#555555");
+                abilityUnitActionBorder.BorderThickness = missing ? new Thickness(2) : new Thickness(1);
+            }
+            if (abilityUnitActionWarning != null)
+                abilityUnitActionWarning.IsVisible = missing;
+        }
+        _refreshAbilityUnitActionValidity = RefreshAbilityUnitActionValidity;
+
+        void RenderDescriptionLayout()
+        {
+            // Field hosts are reused when switching abilities or ability types. Detach them
+            // from their previous row before rebuilding, otherwise Avalonia can throw because
+            // the same control is still parented to a detached row.
+            foreach (var host in powerValueHosts.Values)
+            {
+                if (host.Parent is Panel parentPanel)
+                    parentPanel.Children.Remove(host);
+            }
+
+            descriptionCore.Children.Clear();
+            descriptionOptional.Children.Clear();
+            descriptionButtons.Children.Clear();
+            foreach (var removeButton in powerValueRemoveButtons.Values)
+                removeButton.IsVisible = false;
+
+            var isUnitAction = string.Equals(typeBox.SelectedItem as string, "UnitAction", StringComparison.OrdinalIgnoreCase);
+            var coreTags = isUnitAction ? unitActionCoreOrder : generalEffectCoreOrder;
+            var coreSet = new HashSet<string>(coreTags ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+
+            if (isUnitAction)
+            {
+                AddDescriptionCoreRow("unitaction");
+                AddDescriptionCoreRow("displaynameid", "icon");
+                AddDescriptionCoreRow("rolloverid");
+                AddDescriptionCoreRow("placement");
+                AddDescriptionCoreRow("abstractplacementtargettype", "explicitlyrestrictedplacementtargettype");
+            }
+            else
+            {
+                AddDescriptionCoreRow("displaynameid", "icon");
+                AddDescriptionCoreRow("rolloverid");
+            }
+
+            foreach (var tag in AbilityPowerValueTags.Where(tag => !coreSet.Contains(tag)))
+            {
+                var host = powerValueHosts[tag];
+                var hasValue = !string.IsNullOrWhiteSpace(ReadAbilityPowerValue(tag));
+                if (hasValue && (isUnitAction || _isReadOnly || _isAbilityDefinitionEditorMode))
+                {
+                    host.IsVisible = true;
+                    if (!_isReadOnly && isUnitAction && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
+                        removeButton.IsVisible = true;
+                    descriptionOptional.Children.Add(host);
+                }
+                else if (isUnitAction && openPowerOptionalTags.Contains(tag))
+                {
+                    host.IsVisible = true;
+                    if (!_isReadOnly && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
+                        removeButton.IsVisible = true;
+                    descriptionOptional.Children.Add(host);
+                }
+                else
+                {
+                    host.IsVisible = false;
+                    if (!_isReadOnly && isUnitAction)
+                    {
+                        var button = new Button
+                        {
+                            Content = AbilityFieldLabel(tag),
+                            Background = Brush.Parse("#2b7a0b"),
+                            Margin = new Thickness(0, 0, 8, 4)
+                        };
+                        button.Click += async (_, _) =>
+                        {
+                            var proceed = await CheckStartLocalMod();
+                            if (!proceed) return;
+                            openPowerOptionalTags.Add(tag);
+                            host.IsVisible = true;
+                            RenderDescriptionLayout();
+                            GetAbilityPowerEditor(tag).Focus();
+                            MarkDirty();
+                        };
+                        descriptionButtons.Children.Add(button);
+                    }
+                }
+            }
+
+            if (powerFlagWrap != null)
+            {
+                powerFlagWrap.IsVisible = isUnitAction;
+                var sharedPowerReadOnly = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName)?.SharedPowerReference == true;
+                powerFlagWrap.IsEnabled = !_isReadOnly && !sharedPowerReadOnly;
+            }
+        }
+
+        void CaptureCurrent()
+        {
+            if (_loadingAbilityEditor || string.IsNullOrWhiteSpace(_currentAbilityEditorName)) return;
+            if (!_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var draft)) return;
+            draft.Type = typeBox.SelectedItem as string ?? "UnitAction";
+            foreach (var tag in AbilityGeneralValueTags)
+                draft.GeneralValues[tag] = ReadGeneralValue(tag);
+            draft.GeneralFlags.Clear();
+            foreach (var tag in selectedGeneralFlags)
+                draft.GeneralFlags.Add(tag);
+            foreach (var pair in powerValues)
+                draft.PowerValues[pair.Key] = pair.Value.Text?.Trim() ?? "";
+            draft.PowerValues["unitaction"] = abilityUnitActionEditor?.Text?.Trim() ?? "";
+            draft.PowerValues["icon"] = abilityIconEditor?.FullValue?.Trim() ?? "";
+            draft.PowerValues["placement"] = abilityPlacementEditor?.SelectedItem as string ?? "";
+            draft.PowerValues["rangeindicator"] = abilityRangeIndicatorEditor?.SelectedItem as string ?? "";
+            draft.RangeIndicatorAttributes.Clear();
+            if (!string.IsNullOrWhiteSpace(draft.PowerValues["rangeindicator"]))
+            {
+                var range = abilityRangeIndicatorRangeEditor?.Text?.Trim() ?? "";
+                var width = abilityRangeIndicatorWidthEditor?.Text?.Trim() ?? "";
+                var speed = abilityRangeIndicatorSpeedEditor?.Text?.Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(range)) draft.RangeIndicatorAttributes["range"] = range;
+                if (draft.PowerValues["rangeindicator"].Equals("Arrow", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(width))
+                    draft.RangeIndicatorAttributes["width"] = width;
+                if (draft.PowerValues["rangeindicator"].Equals("Circle", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(speed))
+                    draft.RangeIndicatorAttributes["speed"] = speed;
+            }
+            var cursorType = abilityCursorTypeEditor?.SelectedItem as string ?? "";
+            draft.PowerValues["cursortype"] = cursorType.Equals("Standard", StringComparison.OrdinalIgnoreCase) ? "" : cursorType;
+            draft.PlacementTargetTypes.Clear();
+            draft.PlacementTargetTypes.UnionWith(selectedAbilityTargetTypes);
+            draft.RestrictedPlacementTargetTypes.Clear();
+            draft.RestrictedPlacementTargetTypes.UnionWith(selectedAbilityRestrictedTargetTypes);
+            var preservedUnknownPlacementAttributes = GetUnknownPlacementAttributesFromSource(draft)
+                .ToDictionary(attribute => attribute.Name.LocalName, attribute => attribute.Value, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in draft.PlacementAttributeValues.Where(pair => !AbilityManagedPlacementAttributes.Contains(pair.Key)))
+                preservedUnknownPlacementAttributes[pair.Key] = pair.Value;
+            draft.PlacementAttributes.Clear();
+            draft.PlacementAttributeValues.Clear();
+            if (string.Equals(abilityPlacementEditor?.SelectedItem as string, "Unit", StringComparison.OrdinalIgnoreCase))
+            {
+                var selfTarget = placementAllTarget?.IsChecked == true;
+                var enemyTarget = placementEnemyTarget?.IsChecked == true;
+                var allyTarget = placementAllyTarget?.IsChecked == true;
+                var natureTarget = placementNatureTarget?.IsChecked == true;
+
+                if (!selfTarget && enemyTarget && allyTarget)
+                {
+                    draft.PlacementAttributes.Add("allyOrEnemyNotSelf");
+                    if (natureTarget) draft.PlacementAttributes.Add("allownature");
+                }
+                else if (!selfTarget && !enemyTarget && !allyTarget && natureTarget)
+                {
+                    draft.PlacementAttributes.Add("natureOnly");
+                }
+                else
+                {
+                    if (enemyTarget) draft.PlacementAttributes.Add("enemy");
+                    if (allyTarget) draft.PlacementAttributes.Add(selfTarget ? "includeally" : "ally");
+                    if (natureTarget) draft.PlacementAttributes.Add("allownature");
+                }
+                draft.PlacementAttributes.UnionWith(selectedPlacementFlags);
+            }
+            foreach (var pair in preservedUnknownPlacementAttributes)
+            {
+                draft.PlacementAttributes.Add(pair.Key);
+                draft.PlacementAttributeValues[pair.Key] = pair.Value;
+            }
+            foreach (var pair in powerDisplayTextBoxes)
+                draft.PowerDisplayTexts[pair.Key] = pair.Value.Text?.Trim() ?? "";
+            draft.PowerFlags.Clear();
+            foreach (var pair in powerFlags.Where(p => p.Value.IsChecked == true))
+                draft.PowerFlags.Add(pair.Key);
+            draft.Modified = true;
+        }
+
+        _captureAbilityEditorCurrent = CaptureCurrent;
+        manageAbilitiesButton.Click += async (_, _) =>
+        {
+            CaptureCurrent();
+            await OpenAbilitiesManagerAsync();
+        };
+
+        void UpdateCreateAbilitySaveButton()
+        {
+            if (_isAbilityDefinitionEditorMode || _isReadOnly)
+            {
+                createAbilitySaveButton.IsVisible = false;
+                return;
+            }
+
+            createAbilitySaveButton.IsVisible =
+                _abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft) &&
+                string.IsNullOrWhiteSpace(currentDraft.Name);
+        }
+
+        void RenderAbilityTabs()
+        {
+            abilityTabs.Children.Clear();
+            UpdateCreateAbilitySaveButton();
+            foreach (var pair in _abilityDrafts)
+            {
+                var draftKey = pair.Key;
+                var item = pair.Value;
+                var displayName = string.IsNullOrWhiteSpace(item.Name) ? "New Ability" : item.Name;
+                var button = new Button
+                {
+                    Content = displayName,
+                    Margin = new Thickness(0, 0, 6, 6),
+                    Padding = new Thickness(10, 4),
+                    Background = draftKey.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase) ? Brush.Parse("#28466f") : Brush.Parse("#2b2b2b")
+                };
+                button.Click += async (_, _) => await LoadNamedAbilityAsync(draftKey);
+                abilityTabs.Children.Add(button);
+            }
+            if (!_isReadOnly && _abilityDrafts.Count < 6)
+            {
+                var add = new Button { Content = "Add Ability", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 6, 6) };
+                add.Click += async (_, _) =>
+                {
+                    CaptureCurrent();
+                    var proceed = await CheckStartLocalMod();
+                    if (!proceed) return;
+                    var draftKey = "__new_ability_draft__" + Guid.NewGuid().ToString("N");
+                    var newDraft = new AbilityEditorDraft { Name = "", Type = "UnitAction", Modified = true };
+                    _abilityDrafts[draftKey] = newDraft;
+                    await LoadNamedAbilityAsync(draftKey);
+                    nameBox.Focus();
+                    MarkDirty();
+                };
+                abilityTabs.Children.Add(add);
+            }
+        }
+
+        async Task LoadNamedAbilityAsync(string draftKey)
+        {
+            draftKey = draftKey.Trim();
+            if (string.IsNullOrWhiteSpace(draftKey)) return;
+            var loadVersion = ++abilityLoadVersion;
+            CaptureCurrent();
+            if (!_abilityDrafts.TryGetValue(draftKey, out var draft)) return;
+            _loadingAbilityEditor = true;
+            try
+            {
+                _currentAbilityEditorName = draftKey;
+                UpdateCreateAbilitySaveButton();
+                card.IsVisible = true;
+                nameBox.Text = draft.Name;
+                var hasInternalName = !string.IsNullOrWhiteSpace(draft.Name);
+                abilityDetailsHost.IsVisible = hasInternalName;
+                rechargeChoiceLabel.IsVisible = hasInternalName && !_isAbilityDefinitionEditorMode;
+                rechargeChoice.IsVisible = hasInternalName && !_isAbilityDefinitionEditorMode;
+                removeAbilityButton.IsVisible = !_isReadOnly && !_isAbilityDefinitionEditorMode;
+                typeBox.SelectedItem = new[] { "UnitAction", "GeneralEffect" }.FirstOrDefault(x => x.Equals(draft.Type, StringComparison.OrdinalIgnoreCase)) ?? "UnitAction";
+                var sharedPowerReadOnly = draft.SharedPowerReference;
+                var abilityReadOnly = _isAbilityDefinitionEditorMode ? _abilityDefinitionEditorReadOnly : _isReadOnly;
+                nameBox.IsEnabled = !abilityReadOnly;
+                typeBox.IsEnabled = !abilityReadOnly && !sharedPowerReadOnly;
+                descriptionHost.IsEnabled = !abilityReadOnly && !sharedPowerReadOnly;
+                descriptionHost.Opacity = (abilityReadOnly || sharedPowerReadOnly) ? 0.72 : 1.0;
+                foreach (var removeButton in powerValueRemoveButtons.Values)
+                    removeButton.IsEnabled = !abilityReadOnly && !sharedPowerReadOnly;
+                openGeneralOptionalTags.Clear();
+                foreach (var tag in AbilityGeneralValueTags)
+                {
+                    var value = draft.GeneralValues.GetValueOrDefault(tag, "");
+                    WriteGeneralValue(tag, value);
+                    if (!string.IsNullOrWhiteSpace(value))
+                        openGeneralOptionalTags.Add(tag);
+                }
+                selectedGeneralFlags.Clear();
+                selectedGeneralFlags.UnionWith(draft.GeneralFlags);
+                RenderAbilityFlags();
+                openPowerOptionalTags.Clear();
+                foreach (var pair in powerValues)
+                {
+                    pair.Value.Text = draft.PowerValues.GetValueOrDefault(pair.Key, "");
+                    if (!string.IsNullOrWhiteSpace(pair.Value.Text))
+                        openPowerOptionalTags.Add(pair.Key);
+                }
+                if (abilityRangeIndicatorEditor != null)
+                {
+                    var indicator = draft.PowerValues.GetValueOrDefault("rangeindicator", "");
+                    abilityRangeIndicatorEditor.SelectedItem = new[] { "Circle", "Arrow", "Cone" }
+                        .FirstOrDefault(value => value.Equals(indicator, StringComparison.OrdinalIgnoreCase));
+                    if (abilityRangeIndicatorRangeEditor != null) abilityRangeIndicatorRangeEditor.Text = draft.RangeIndicatorAttributes.GetValueOrDefault("range", "");
+                    if (abilityRangeIndicatorWidthEditor != null) abilityRangeIndicatorWidthEditor.Text = draft.RangeIndicatorAttributes.GetValueOrDefault("width", "");
+                    if (abilityRangeIndicatorSpeedEditor != null) abilityRangeIndicatorSpeedEditor.Text = draft.RangeIndicatorAttributes.GetValueOrDefault("speed", "");
+                    RenderRangeIndicatorOptions();
+                }
+                if (abilityCursorTypeEditor != null)
+                {
+                    var cursor = draft.PowerValues.GetValueOrDefault("cursortype", "");
+                    abilityCursorTypeEditor.SelectedItem = new[] { "Standard", "Heal", "Repair", "AltConvert", "Bolster", "Ankh", "GatherShrine" }
+                        .FirstOrDefault(value => value.Equals(cursor, StringComparison.OrdinalIgnoreCase)) ?? "Standard";
+                }
+                if (abilityUnitActionEditor != null)
+                {
+                    abilityUnitActionEditor.Text = draft.PowerValues.GetValueOrDefault("unitaction", "");
+                    RefreshAbilityUnitActionValidity();
+                }
+                if (abilityPlacementEditor != null)
+                {
+                    var placement = draft.PowerValues.GetValueOrDefault("placement", "");
+                    abilityPlacementEditor.SelectedItem = new[] { "Full", "Unit", "Self", "Skip", "Overlap" }
+                        .FirstOrDefault(value => value.Equals(placement, StringComparison.OrdinalIgnoreCase));
+                }
+                selectedAbilityTargetTypes.Clear();
+                selectedAbilityTargetTypes.UnionWith(draft.PlacementTargetTypes);
+                selectedAbilityRestrictedTargetTypes.Clear();
+                selectedAbilityRestrictedTargetTypes.UnionWith(draft.RestrictedPlacementTargetTypes);
+                if (abilityTargetTypeEditor != null) abilityTargetTypeEditor.Text = "";
+                if (abilityRestrictedTargetTypeEditor != null) abilityRestrictedTargetTypeEditor.Text = "";
+                selectedPlacementFlags.Clear();
+                selectedPlacementFlags.UnionWith(draft.PlacementAttributes.Where(attr => attr is
+                    "allowgroundtarget" or "disallowwhenattackingdisabled" or "disallowwatercast" or "disallowlandcast" or
+                    "allowdeadtarget" or "disallowwatercastradius" or "fullybuiltonly"));
+                var enemyTarget = draft.PlacementAttributes.Contains("enemy") || draft.PlacementAttributes.Contains("allyorenemynotself");
+                var allyTarget = draft.PlacementAttributes.Contains("ally") || draft.PlacementAttributes.Contains("includeally") || draft.PlacementAttributes.Contains("allyorenemynotself");
+                var natureTarget = draft.PlacementAttributes.Contains("natureonly") || draft.PlacementAttributes.Contains("allownature");
+                var explicitlyExcludesSelf = draft.PlacementAttributes.Contains("allyorenemynotself") ||
+                                             draft.PlacementAttributes.Contains("natureonly");
+                if (placementEnemyTarget != null) placementEnemyTarget.IsChecked = enemyTarget;
+                if (placementAllyTarget != null) placementAllyTarget.IsChecked = allyTarget;
+                if (placementNatureTarget != null) placementNatureTarget.IsChecked = natureTarget;
+                if (placementAllTarget != null) placementAllTarget.IsChecked = !explicitlyExcludesSelf;
+                RenderAbilityTargetChips();
+                RenderPlacementOptions();
+                if (abilityIconEditor != null)
+                {
+                    var iconValue = draft.PowerValues.GetValueOrDefault("icon", "");
+                    abilityIconEditor.Configure(iconValue, GetAssetPathSuggestions("icon", _abilityDrafts.Values.Select(d => d.PowerValues.GetValueOrDefault("icon", ""))), null);
+                    if (!string.IsNullOrWhiteSpace(iconValue))
+                        openPowerOptionalTags.Add("icon");
+                }
+                foreach (var pair in powerFlags)
+                {
+                    pair.Value.IsChecked = draft.PowerFlags.Contains(pair.Key);
+                    pair.Value.IsEnabled = !_isReadOnly && !sharedPowerReadOnly;
+                }
+
+                foreach (var tag in new[] { "displaynameid", "rolloverid" })
+                {
+                    var text = draft.PowerDisplayTexts.GetValueOrDefault(tag, "");
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        var stringId = draft.PowerValues.GetValueOrDefault(tag, "");
+                        text = await ResolveDisplayStringAsync(stringId) ?? stringId;
+                        if (loadVersion != abilityLoadVersion)
+                            return;
+                        draft.PowerDisplayTexts[tag] = text ?? "";
+                    }
+                    powerDisplayTextBoxes[tag].Text = text ?? "";
+                }
+
+                var isUnitActionAbility = string.Equals(draft.Type, "UnitAction", StringComparison.OrdinalIgnoreCase);
+                if (string.IsNullOrWhiteSpace(draft.BoundMainRechargeAction) &&
+                    (draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction")))
+                {
+                    draft.BoundMainRechargeAction = isUnitActionAbility
+                        ? draft.PowerValues.GetValueOrDefault("unitaction", "")
+                        : _protoActionWidgets.FirstOrDefault(state => state.SelectedFlagTags.Contains("chargeaction"))?.NameAcb.Text?.Trim() ?? "";
+                    draft.BoundMainActionFlagManaged = false;
+                }
+                if (string.IsNullOrWhiteSpace(draft.BoundAuxRechargeAction) &&
+                    (draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction")))
+                {
+                    draft.BoundAuxRechargeAction = isUnitActionAbility
+                        ? draft.PowerValues.GetValueOrDefault("unitaction", "")
+                        : _protoActionWidgets.FirstOrDefault(state => state.SelectedFlagTags.Contains("auxchargeaction"))?.NameAcb.Text?.Trim() ?? "";
+                    draft.BoundAuxActionFlagManaged = false;
+                }
+                SyncRechargeChoiceFromFlags();
+                RenderGeneralOptionalButtons();
+                RenderRecharge();
+                RenderDescriptionLayout();
+                if (!_isReadOnly && isUnitActionAbility)
+                    SyncUnitActionRechargeBindings();
+            }
+            finally
+            {
+                if (loadVersion == abilityLoadVersion)
+                    _loadingAbilityEditor = false;
+            }
+            if (loadVersion == abilityLoadVersion)
+                RenderAbilityTabs();
+        }
+
+        // The temporary Save button explicitly commits a brand-new ability. Its pointer
+        // press must suppress Ability Name LostFocus so the confirmation dialog is not shown.
+        createAbilitySaveButton.AddHandler(InputElement.PointerPressedEvent, (_, _) =>
+        {
+            _abilityMainSavePointerPending = true;
+        }, RoutingStrategies.Tunnel);
+        createAbilitySaveButton.Click += async (_, _) =>
+        {
+            var requestedName = nameBox.Text?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(requestedName))
+            {
+                _abilityMainSavePointerPending = false;
+                nameBox.Focus();
+                return;
+            }
+
+            try
+            {
+                // This button is the explicit creation action, so do not show the separate
+                // LostFocus creation confirmation.
+                await RenameCurrentAbilityAsync(requestedName);
+                if (!_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var committedDraft) ||
+                    !committedDraft.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                UpdateCreateAbilitySaveButton();
+                Save_Click(createAbilitySaveButton, new RoutedEventArgs());
+            }
+            finally
+            {
+                if (createAbilitySaveButton.IsVisible)
+                    _abilityMainSavePointerPending = false;
+            }
+        };
+
+        // Pressing Remove explicitly cancels the current draft. Do not let the
+        // Ability Name LostFocus handler interpret that click as a create request.
+        removeAbilityButton.AddHandler(InputElement.PointerPressedEvent, (_, _) =>
+        {
+            // Suppress exactly the LostFocus caused by pressing Remove.
+            abilityNameRemovePointerPending = true;
+        }, RoutingStrategies.Tunnel);
+        removeAbilityButton.Click += async (_, _) =>
+        {
+            try
+            {
+                if (_isReadOnly || string.IsNullOrWhiteSpace(_currentAbilityEditorName)) return;
+                var proceed = await CheckStartLocalMod();
+                if (!proceed) return;
+
+                CaptureCurrent();
+                if (!_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var removedDraft)) return;
+                ReleaseAbilityActionBindings(removedDraft);
+                if (!_abilityDrafts.Remove(_currentAbilityEditorName)) return;
+
+                _currentAbilityEditorName = "";
+                RenderAbilityTabs();
+                var nextAbility = _abilityDrafts.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(nextAbility.Key))
+                    await LoadNamedAbilityAsync(nextAbility.Key);
+                else
+                    card.IsVisible = false;
+                MarkDirty();
+            }
+            finally
+            {
+                abilityNameCancelRefocusPending = false;
+            }
+        };
+
+        async Task<bool> ConfirmNewAbilityNameAsync(string requestedName)
+        {
+            var name = requestedName.Trim();
+            if (string.IsNullOrWhiteSpace(name)) return false;
+
+            var alreadyExists = _abilityPowerCatalog.ContainsKey(name) ||
+                                _abilityDrafts.Values.Any(draft =>
+                                    !string.IsNullOrWhiteSpace(draft.Name) &&
+                                    draft.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (alreadyExists) return true;
+            if (abilityNameCreationPromptOpen) return false;
+
+            abilityNameCreationPromptOpen = true;
+            try
+            {
+                var prompt = new Prompt(
+                    PromptType.Confirm,
+                    "Create ability",
+                    $"Create a new ability called '{name}'?",
+                    confirmButtonText: "Save");
+                await prompt.ShowDialog(this);
+                if (prompt.Confirmed) return true;
+
+                abilityNameCancelRefocusPending = true;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    nameBox.Focus();
+                    Dispatcher.UIThread.Post(() => abilityNameCancelRefocusPending = false, DispatcherPriority.Background);
+                }, DispatcherPriority.Input);
+                return false;
+            }
+            finally
+            {
+                abilityNameCreationPromptOpen = false;
+            }
+        }
+
+        async Task RenameCurrentAbilityAsync(string requestedName)
+        {
+            if (_isReadOnly || _loadingAbilityEditor || string.IsNullOrWhiteSpace(_currentAbilityEditorName)) return;
+            var newName = requestedName.Trim();
+            if (string.IsNullOrWhiteSpace(newName) || newName.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase)) return;
+            if (_abilityDrafts.ContainsKey(newName))
+            {
+                _loadingAbilityEditor = true;
+                nameBox.Text = _abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft) ? currentDraft.Name : "";
+                _loadingAbilityEditor = false;
+                return;
+            }
+            var proceed = await CheckStartLocalMod();
+            if (!proceed || !_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var draft)) return;
+            CaptureCurrent();
+            var previousKey = _currentAbilityEditorName;
+            _abilityDrafts.Remove(previousKey);
+            draft.Name = newName;
+
+            if (_isAbilityDefinitionEditorMode)
+            {
+                draft.SharedPowerReference = false;
+                draft.Modified = true;
+                _abilityDrafts[newName] = draft;
+                _currentAbilityEditorName = previousKey;
+                await LoadNamedAbilityAsync(newName);
+                MarkDirty();
+                return;
+            }
+
+            // Choosing another existing shared ability replaces the shared <power> data.
+            // Typing a new custom name instead clones the currently displayed power definition:
+            // keep every Ability Description field, but detach it from the shared catalog so it
+            // becomes editable and will be written as a new powers_mods.xml entry.
+            if (_abilityPowerCatalog.TryGetValue(newName, out var power))
+            {
+                draft.PowerSource = new XElement(power);
+                draft.SharedPowerReference = true;
+                draft.PowerValues.Clear();
+                draft.PlacementTargetTypes.Clear();
+                draft.RestrictedPlacementTargetTypes.Clear();
+                draft.PlacementAttributes.Clear();
+                draft.PlacementAttributeValues.Clear();
+                draft.RangeIndicatorAttributes.Clear();
+                draft.PowerDisplayTexts.Clear();
+                draft.ModifiedPowerDisplayTextTags.Clear();
+                draft.PowerFlags.Clear();
+                LoadAbilityChildren(draft, null, power);
+            }
+            else
+            {
+                draft.PowerSource = null;
+                draft.SharedPowerReference = false;
+                foreach (var tag in new[] { "displaynameid", "rolloverid" })
+                {
+                    if (draft.PowerDisplayTexts.ContainsKey(tag))
+                    {
+                        draft.PowerValues[tag] = "";
+                        draft.ModifiedPowerDisplayTextTags.Add(tag);
+                    }
+                }
+            }
+            draft.Modified = true;
+            _abilityDrafts[newName] = draft;
+            // Do not switch _currentAbilityEditorName before LoadNamedAbilityAsync. That loader
+            // captures the currently displayed ability first; switching the key here would make
+            // the old UI overwrite the freshly loaded shared <power> definition.
+            RegisterAvailableAbilityName(newName);
+            nameBox.ItemsSource = _availableAbilityNames.ToList();
+            await LoadNamedAbilityAsync(newName);
+            MarkDirty();
+        }
+
+        void SyncUnitActionRechargeBindings()
+        {
+            if (!_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft) ||
+                !string.Equals(typeBox.SelectedItem as string, "UnitAction", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var unitActionName = abilityUnitActionEditor?.Text?.Trim() ?? currentDraft.PowerValues.GetValueOrDefault("unitaction", "");
+
+            void SyncOne(bool enabled, bool isAux)
+            {
+                var oldAction = isAux ? currentDraft.BoundAuxRechargeAction : currentDraft.BoundMainRechargeAction;
+                var oldManaged = isAux ? currentDraft.BoundAuxActionFlagManaged : currentDraft.BoundMainActionFlagManaged;
+                var flag = isAux ? "auxchargeaction" : "chargeaction";
+                var desiredAction = enabled ? unitActionName : "";
+                if (string.Equals(oldAction, desiredAction, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (enabled && !string.IsNullOrWhiteSpace(desiredAction))
+                    {
+                        var newlyManaged = SetAbilityLinkedActionFlag(desiredAction, flag, true);
+                        if (newlyManaged)
+                        {
+                            if (isAux) currentDraft.BoundAuxActionFlagManaged = true;
+                            else currentDraft.BoundMainActionFlagManaged = true;
+                        }
+                    }
+                    return;
+                }
+
+                SetAbilityLinkedActionFlag(oldAction, flag, false, currentDraft, oldManaged);
+                var managed = SetAbilityLinkedActionFlag(desiredAction, flag, true);
+                if (isAux)
+                {
+                    currentDraft.BoundAuxRechargeAction = desiredAction;
+                    currentDraft.BoundAuxActionFlagManaged = managed;
+                }
+                else
+                {
+                    currentDraft.BoundMainRechargeAction = desiredAction;
+                    currentDraft.BoundMainActionFlagManaged = managed;
+                }
+            }
+
+            SyncOne(UsesMainAbilityRecharge(), isAux: false);
+            SyncOne(UsesAuxAbilityRecharge(), isAux: true);
+        }
+
+        async void AbilityChanged()
+        {
+            if (_loadingAbilityEditor || _isPopulating) return;
+            var proceed = await CheckStartLocalMod();
+            if (!proceed) return;
+            CaptureCurrent();
+            SyncUnitActionRechargeBindings();
+            MarkDirty();
+        }
+
+        void ApplyRechargeChoiceToFlags()
+        {
+            var choice = rechargeChoice.SelectedItem as string ?? "None";
+            var isGeneralEffect = string.Equals(typeBox.SelectedItem as string, "GeneralEffect", StringComparison.OrdinalIgnoreCase);
+
+            selectedGeneralFlags.Remove("chargetimeasrof");
+            selectedGeneralFlags.Remove("auxchargetimeasrof");
+            selectedGeneralFlags.Remove("bindtochargeaction");
+            selectedGeneralFlags.Remove("bindtoauxchargeaction");
+
+            if (_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft))
+            {
+                if (!choice.Equals("Main Recharge", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(currentDraft.BoundMainRechargeAction))
+                {
+                    var oldAction = currentDraft.BoundMainRechargeAction;
+                    var wasManaged = currentDraft.BoundMainActionFlagManaged;
+                    currentDraft.BoundMainRechargeAction = "";
+                    currentDraft.BoundMainActionFlagManaged = false;
+                    SetAbilityLinkedActionFlag(oldAction, "chargeaction", false, currentDraft, wasManaged);
+                }
+                if (!choice.Equals("Aux recharge", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(currentDraft.BoundAuxRechargeAction))
+                {
+                    var oldAction = currentDraft.BoundAuxRechargeAction;
+                    var wasManaged = currentDraft.BoundAuxActionFlagManaged;
+                    currentDraft.BoundAuxRechargeAction = "";
+                    currentDraft.BoundAuxActionFlagManaged = false;
+                    SetAbilityLinkedActionFlag(oldAction, "auxchargeaction", false, currentDraft, wasManaged);
+                }
+            }
+
+            if (choice.Equals("Main Recharge", StringComparison.OrdinalIgnoreCase))
+                selectedGeneralFlags.Add(isGeneralEffect ? "bindtochargeaction" : "chargetimeasrof");
+            else if (choice.Equals("Aux recharge", StringComparison.OrdinalIgnoreCase))
+                selectedGeneralFlags.Add(isGeneralEffect ? "bindtoauxchargeaction" : "auxchargetimeasrof");
+
+            if (isGeneralEffect && !choice.Equals("None", StringComparison.OrdinalIgnoreCase))
+                selectedGeneralFlags.Remove("alwaysdisabledingrid");
+
+            if (!isGeneralEffect)
+                SyncUnitActionRechargeBindings();
+        }
+
+        async void AbilityTypeChanged()
+        {
+            if (_loadingAbilityEditor || _isPopulating) return;
+            var proceed = await CheckStartLocalMod();
+            if (!proceed) return;
+
+            _loadingAbilityEditor = true;
+            try
+            {
+                ApplyRechargeChoiceToFlags();
+                if (string.Equals(typeBox.SelectedItem as string, "GeneralEffect", StringComparison.OrdinalIgnoreCase))
+                {
+                    // UnitAction-only power data must not leak into a GeneralEffect definition.
+                    foreach (var tag in AbilityPowerValueTags.Where(tag => tag is not "displaynameid" and not "rolloverid" and not "icon"))
+                    {
+                        if (powerValues.TryGetValue(tag, out var valueEditor)) valueEditor.Text = "";
+                    }
+                    if (abilityUnitActionEditor != null) abilityUnitActionEditor.Text = "";
+                    if (abilityPlacementEditor != null) abilityPlacementEditor.SelectedItem = null;
+                    if (abilityRangeIndicatorEditor != null) abilityRangeIndicatorEditor.SelectedItem = null;
+                    if (abilityCursorTypeEditor != null) abilityCursorTypeEditor.SelectedItem = "Standard";
+                    selectedAbilityTargetTypes.Clear();
+                    selectedAbilityRestrictedTargetTypes.Clear();
+                    selectedPlacementFlags.Clear();
+                    openPowerOptionalTags.RemoveWhere(tag => tag is not "displaynameid" and not "rolloverid" and not "icon");
+                    foreach (var cb in powerFlags.Values) cb.IsChecked = false;
+                    if (string.Equals(rechargeChoice.SelectedItem as string, "None", StringComparison.OrdinalIgnoreCase))
+                        selectedGeneralFlags.Add("alwaysdisabledingrid");
+                }
+            }
+            finally
+            {
+                _loadingAbilityEditor = false;
+            }
+
+            RenderAbilityFlags();
+            CaptureCurrent();
+            RenderDescriptionLayout();
+            RenderRecharge();
+            MarkDirty();
+        }
+
+        void RenderAbilityFlags()
+        {
+            flagsWrap.Children.Clear();
+            foreach (var tag in selectedGeneralFlags.OrderBy(AbilityFieldLabel, StringComparer.OrdinalIgnoreCase))
+            {
+                var capturedTag = tag;
+                flagsWrap.Children.Add(CreateChip(AbilityFieldLabel(capturedTag), async () =>
+                {
+                    var proceed = await CheckStartLocalMod();
+                    if (!proceed) return;
+                    if (_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft))
+                    {
+                        if ((capturedTag.Equals("chargetimeasrof", StringComparison.OrdinalIgnoreCase) ||
+                             capturedTag.Equals("bindtochargeaction", StringComparison.OrdinalIgnoreCase)) &&
+                            !string.IsNullOrWhiteSpace(currentDraft.BoundMainRechargeAction))
+                        {
+                            var oldAction = currentDraft.BoundMainRechargeAction;
+                            var wasManaged = currentDraft.BoundMainActionFlagManaged;
+                            currentDraft.BoundMainRechargeAction = "";
+                            currentDraft.BoundMainActionFlagManaged = false;
+                            SetAbilityLinkedActionFlag(oldAction, "chargeaction", false, currentDraft, wasManaged);
+                        }
+                        if ((capturedTag.Equals("auxchargetimeasrof", StringComparison.OrdinalIgnoreCase) ||
+                             capturedTag.Equals("bindtoauxchargeaction", StringComparison.OrdinalIgnoreCase)) &&
+                            !string.IsNullOrWhiteSpace(currentDraft.BoundAuxRechargeAction))
+                        {
+                            var oldAction = currentDraft.BoundAuxRechargeAction;
+                            var wasManaged = currentDraft.BoundAuxActionFlagManaged;
+                            currentDraft.BoundAuxRechargeAction = "";
+                            currentDraft.BoundAuxActionFlagManaged = false;
+                            SetAbilityLinkedActionFlag(oldAction, "auxchargeaction", false, currentDraft, wasManaged);
+                        }
+                    }
+                    selectedGeneralFlags.Remove(capturedTag);
+                    SyncRechargeChoiceFromFlags();
+                    RenderAbilityFlags();
+                    RenderRecharge();
+                    AbilityChanged();
+                }));
+            }
+
+            abilityFlagPicker.ItemsSource = AbilityGeneralFlags
+                .Where(tag => !selectedGeneralFlags.Contains(tag))
+                .OrderBy(AbilityFieldLabel, StringComparer.OrdinalIgnoreCase)
+                .Select(AbilityFieldLabel)
+                .ToList();
+        }
+
+        async void AddSelectedAbilityFlag()
+        {
+            var input = abilityFlagPicker.Text?.Trim() ?? "";
+            var tag = AbilityGeneralFlags.FirstOrDefault(candidate =>
+                !selectedGeneralFlags.Contains(candidate) &&
+                AbilityFieldLabel(candidate).Equals(input, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(tag)) return;
+
+            var proceed = await CheckStartLocalMod();
+            if (!proceed) return;
+            selectedGeneralFlags.Add(tag);
+            abilityFlagPicker.Text = "";
+            SyncRechargeChoiceFromFlags();
+            RenderAbilityFlags();
+            RenderRecharge();
+            AbilityChanged();
+        }
+
+        abilityFlagPicker.SelectionChanged += (_, _) =>
+        {
+            if (abilityFlagPicker.SelectedItem is string selected)
+            {
+                abilityFlagPicker.Text = selected;
+                AddSelectedAbilityFlag();
+            }
+        };
+
+        typeBox.SelectionChanged += (_, _) => AbilityTypeChanged();
+        foreach (var tb in generalValues.Values.Where(tb => tb.IsVisible).Concat(powerValues.Values))
+            tb.TextChanged += (_, _) => AbilityChanged();
+        if (abilityTechEditor != null)
+        {
+            abilityTechEditor.SelectionChanged += (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isReadOnly || abilityTechEditor.SelectedItem is not string selected) return;
+                _loadingAbilityEditor = true;
+                try { abilityTechEditor.Text = selected; }
+                finally { _loadingAbilityEditor = false; }
+                AbilityChanged();
+            };
+            abilityTechEditor.LostFocus += (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isReadOnly) return;
+
+                // Suggestion clicks can move focus before AutoCompleteBox commits
+                // SelectedItem. Defer validation so the clicked technology wins over
+                // the partially typed prefix instead of clearing/flickering the field.
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_loadingAbilityEditor || _isReadOnly) return;
+                    var typed = (abilityTechEditor.SelectedItem as string ?? abilityTechEditor.Text)?.Trim() ?? "";
+                    if (string.IsNullOrWhiteSpace(typed)) return;
+                    var match = GetAvailableTechNames().FirstOrDefault(tech => tech.Equals(typed, StringComparison.OrdinalIgnoreCase));
+                    _loadingAbilityEditor = true;
+                    try
+                    {
+                        abilityTechEditor.Text = string.IsNullOrWhiteSpace(match) ? "" : match;
+                    }
+                    finally { _loadingAbilityEditor = false; }
+                    if (!string.IsNullOrWhiteSpace(match))
+                        AbilityChanged();
+                }, DispatcherPriority.Background);
+            };
+        }
+        if (abilityColumnOverrideEditor != null)
+            abilityColumnOverrideEditor.SelectionChanged += (_, _) => AbilityChanged();
+        if (abilityRangeIndicatorEditor != null)
+            abilityRangeIndicatorEditor.SelectionChanged += (_, _) =>
+            {
+                RenderRangeIndicatorOptions();
+                AbilityChanged();
+            };
+        if (abilityRangeIndicatorRangeEditor != null)
+            abilityRangeIndicatorRangeEditor.TextChanged += (_, _) => AbilityChanged();
+        if (abilityRangeIndicatorWidthEditor != null)
+            abilityRangeIndicatorWidthEditor.TextChanged += (_, _) => AbilityChanged();
+        if (abilityRangeIndicatorSpeedEditor != null)
+            abilityRangeIndicatorSpeedEditor.TextChanged += (_, _) => AbilityChanged();
+        if (abilityCursorTypeEditor != null)
+            abilityCursorTypeEditor.SelectionChanged += (_, _) => AbilityChanged();
+        if (abilityUnitActionEditor != null)
+        {
+            abilityUnitActionEditor.TextChanged += (_, _) =>
+            {
+                RefreshAbilityUnitActionValidity();
+                AbilityChanged();
+            };
+            abilityUnitActionEditor.SelectionChanged += (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isReadOnly || abilityUnitActionEditor.SelectedItem is not string selected) return;
+                _loadingAbilityEditor = true;
+                try { abilityUnitActionEditor.Text = selected; }
+                finally { _loadingAbilityEditor = false; }
+                RefreshAbilityUnitActionValidity();
+                AbilityChanged();
+            };
+            abilityUnitActionEditor.LostFocus += (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isReadOnly) return;
+
+                // AutoCompleteBox can lose focus before its clicked suggestion is committed.
+                // Defer validation so a mouse-selected action wins over the partial text.
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_loadingAbilityEditor || _isReadOnly) return;
+                    var currentDraft = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName);
+                    if (currentDraft?.SharedPowerReference == true)
+                    {
+                        RefreshAbilityUnitActionValidity();
+                        return;
+                    }
+                    var typed = (abilityUnitActionEditor.SelectedItem as string ?? abilityUnitActionEditor.Text)?.Trim() ?? "";
+                    var match = (abilityUnitActionEditor.ItemsSource as IEnumerable<string>)?
+                        .FirstOrDefault(action => action.Equals(typed, StringComparison.OrdinalIgnoreCase));
+                    _loadingAbilityEditor = true;
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(typed) && string.IsNullOrWhiteSpace(match))
+                            abilityUnitActionEditor.Text = "";
+                        else if (!string.IsNullOrWhiteSpace(match))
+                            abilityUnitActionEditor.Text = match;
+                    }
+                    finally { _loadingAbilityEditor = false; }
+                    RefreshAbilityUnitActionValidity();
+                }, DispatcherPriority.Background);
+            };
+        }
+        void AttachAbilityTargetChipPicker(AutoCompleteBox? editor, HashSet<string> values)
+        {
+            if (editor == null) return;
+            async void AddSelection()
+            {
+                if (_loadingAbilityEditor || _isReadOnly || editor.SelectedItem is not string selected || values.Contains(selected)) return;
+                var proceed = await CheckStartLocalMod();
+                if (!proceed) return;
+                values.Add(selected);
+                _loadingAbilityEditor = true;
+                try { editor.Text = ""; editor.SelectedItem = null; }
+                finally { _loadingAbilityEditor = false; }
+                RenderAbilityTargetChips();
+                AbilityChanged();
+            }
+            editor.SelectionChanged += (_, _) => AddSelection();
+        }
+        AttachAbilityTargetChipPicker(abilityTargetTypeEditor, selectedAbilityTargetTypes);
+        AttachAbilityTargetChipPicker(abilityRestrictedTargetTypeEditor, selectedAbilityRestrictedTargetTypes);
+
+        if (abilityPlacementEditor != null)
+            abilityPlacementEditor.SelectionChanged += (_, _) =>
+            {
+                RenderPlacementOptions();
+                AbilityChanged();
+            };
+
+        async void PlacementTargetChanged(CheckBox changed)
+        {
+            if (_loadingAbilityEditor || _isPopulating || _isReadOnly) return;
+            var proceed = await CheckStartLocalMod();
+            if (!proceed) return;
+            _loadingAbilityEditor = true;
+            try
+            {
+                var anyTarget = placementAllTarget?.IsChecked == true ||
+                                placementEnemyTarget?.IsChecked == true ||
+                                placementAllyTarget?.IsChecked == true ||
+                                placementNatureTarget?.IsChecked == true;
+                if (!anyTarget && placementAllTarget != null)
+                    placementAllTarget.IsChecked = true;
+            }
+            finally { _loadingAbilityEditor = false; }
+            AbilityChanged();
+        }
+        if (placementAllTarget != null) placementAllTarget.IsCheckedChanged += (_, _) => PlacementTargetChanged(placementAllTarget);
+        if (placementEnemyTarget != null) placementEnemyTarget.IsCheckedChanged += (_, _) => PlacementTargetChanged(placementEnemyTarget);
+        if (placementAllyTarget != null) placementAllyTarget.IsCheckedChanged += (_, _) => PlacementTargetChanged(placementAllyTarget);
+        if (placementNatureTarget != null) placementNatureTarget.IsCheckedChanged += (_, _) => PlacementTargetChanged(placementNatureTarget);
+
+        if (placementFlagPicker != null)
+        {
+            placementFlagPicker.SelectionChanged += async (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isReadOnly || placementFlagPicker.SelectedItem is not string selected || selectedPlacementFlags.Contains(selected)) return;
+                var proceed = await CheckStartLocalMod();
+                if (!proceed) return;
+                selectedPlacementFlags.Add(selected);
+                _loadingAbilityEditor = true;
+                try { placementFlagPicker.Text = ""; placementFlagPicker.SelectedItem = null; }
+                finally { _loadingAbilityEditor = false; }
+                RenderPlacementOptions();
+                AbilityChanged();
+            };
+        }
+
+        foreach (var pair in powerDisplayTextBoxes)
+        {
+            var tag = pair.Key;
+            pair.Value.TextChanged += (_, _) =>
+            {
+                if (_loadingAbilityEditor || _isPopulating || string.IsNullOrWhiteSpace(_currentAbilityEditorName)) return;
+                if (_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var draft))
+                    draft.ModifiedPowerDisplayTextTags.Add(tag);
+                AbilityChanged();
+            };
+        }
+        foreach (var cb in powerFlags.Values)
+            cb.IsCheckedChanged += (_, _) => AbilityChanged();
+        if (abilityIconEditor != null)
+            abilityIconEditor.FullValueChanged += (_, _) => AbilityChanged();
+
+        rechargeChoice.SelectionChanged += async (_, _) =>
+        {
+            if (_loadingAbilityEditor || _isPopulating) return;
+            var proceed = await CheckStartLocalMod();
+            if (!proceed) return;
+
+            _loadingAbilityEditor = true;
+            try
+            {
+                ApplyRechargeChoiceToFlags();
+            }
+            finally
+            {
+                _loadingAbilityEditor = false;
+            }
+
+            RenderAbilityFlags();
+            CaptureCurrent();
+            RenderRecharge();
+            MarkDirty();
+        };
+
+        // In the standalone Ability Editor, changing the internal name is an ordinary
+        // edit of the current <power>. Do not run the ProtoUnit "create ability" workflow
+        // or re-key/rebuild the draft while the user is typing. The rename is validated and
+        // committed atomically by SaveAbilityDefinitionEditorAsync().
+        nameBox.TextChanged += (_, _) =>
+        {
+            if (!_isAbilityDefinitionEditorMode || _loadingAbilityEditor || _isPopulating || _abilityDefinitionEditorReadOnly)
+                return;
+            if (!_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var definitionDraft))
+                return;
+
+            definitionDraft.Name = nameBox.Text?.Trim() ?? "";
+            definitionDraft.Modified = true;
+            MarkDirty();
+            UpdateXmlPreview(force: true);
+        };
+
+        nameBox.SelectionChanged += async (_, _) =>
+        {
+            if (_isAbilityDefinitionEditorMode)
+                return;
+            if (!_loadingAbilityEditor && nameBox.SelectedItem is string selected)
+                await RenameCurrentAbilityAsync(selected);
+        };
+        nameBox.KeyDown += async (_, e) =>
+        {
+            if (_isAbilityDefinitionEditorMode)
+            {
+                if (e.Key == Key.Enter)
+                    e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Enter && !string.IsNullOrWhiteSpace(nameBox.Text))
+            {
+                var requestedName = nameBox.Text.Trim();
+                if (await ConfirmNewAbilityNameAsync(requestedName))
+                    await RenameCurrentAbilityAsync(requestedName);
+                e.Handled = true;
+            }
+        };
+        nameBox.LostFocus += (_, _) =>
+        {
+            if (_isAbilityDefinitionEditorMode)
+                return;
+            if (abilityNameRemovePointerPending)
+            {
+                abilityNameRemovePointerPending = false;
+                return;
+            }
+            if (_loadingAbilityEditor || abilityNameCreationPromptOpen || abilityNameCancelRefocusPending || _abilityMainSavePointerPending) return;
+
+            // Clicking an AutoCompleteBox suggestion can move focus before SelectionChanged is
+            // delivered. Defer the free-text commit so the clicked suggestion wins over the
+            // partially typed prefix (for example, "bur").
+            Dispatcher.UIThread.Post(async () =>
+            {
+                if (_loadingAbilityEditor || abilityNameCreationPromptOpen || abilityNameCancelRefocusPending || _abilityMainSavePointerPending) return;
+                var requestedName = (nameBox.SelectedItem as string ?? nameBox.Text)?.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(requestedName)) return;
+
+                if (!await ConfirmNewAbilityNameAsync(requestedName))
+                    return;
+                await RenameCurrentAbilityAsync(requestedName);
+            }, DispatcherPriority.Background);
+        };
+
+        async Task<bool> CommitAbilityNameBeforeSaveAsync()
+        {
+            if (_isAbilityDefinitionEditorMode || _isReadOnly) return true;
+            var requestedName = (nameBox.SelectedItem as string ?? nameBox.Text)?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(requestedName)) return true;
+            if (_abilityDrafts.TryGetValue(_currentAbilityEditorName, out var currentDraft) &&
+                currentDraft.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!await ConfirmNewAbilityNameAsync(requestedName))
+                return false;
+            await RenameCurrentAbilityAsync(requestedName);
+            return _abilityDrafts.TryGetValue(_currentAbilityEditorName, out var committedDraft) &&
+                   committedDraft.Name.Equals(requestedName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!_isAbilityDefinitionEditorMode)
+            _commitAbilityEditorNameBeforeSaveAsync = CommitAbilityNameBeforeSaveAsync;
+
+        _currentAbilityEditorName = "";
+        RenderAbilityTabs();
+        var firstAbility = _abilityDrafts.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(firstAbility.Key))
+            _ = LoadNamedAbilityAsync(firstAbility.Key);
+    }
+
+    internal static bool AbilityRangeIndicatorHasRequiredRange(string? indicator, IReadOnlyDictionary<string, string> attributes)
+        => string.IsNullOrWhiteSpace(indicator) ||
+           !string.IsNullOrWhiteSpace(attributes.GetValueOrDefault("range", ""));
+
+    private async Task<bool> EnsureAbilityRangeIndicatorValuesBeforeSaveAsync(AbilityEditorDraft? specificDraft = null)
+    {
+        var drafts = specificDraft != null ? new[] { specificDraft } : _abilityDrafts.Values.ToArray();
+        var invalid = drafts.Where(draft =>
+            !string.IsNullOrWhiteSpace(draft.Name) &&
+            !AbilityRangeIndicatorHasRequiredRange(
+                draft.PowerValues.GetValueOrDefault("rangeindicator", ""),
+                draft.RangeIndicatorAttributes))
+            .ToList();
+
+        var currentMissing = invalid.Any(draft => draft.Name.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase));
+        if (_abilityRangeIndicatorRangeEditorForValidation != null)
+            _abilityRangeIndicatorRangeEditorForValidation.BorderBrush = currentMissing ? Brush.Parse("#d64545") : Brush.Parse("#5a5a5a");
+
+        if (invalid.Count == 0)
+            return true;
+
+        var names = string.Join(", ", invalid.Select(draft => draft.Name).Distinct(StringComparer.OrdinalIgnoreCase));
+        var prompt = new Prompt(PromptType.Error, "Range required",
+            invalid.Count == 1
+                ? $"Range Indicator requires a Range value for '{names}'."
+                : $"Range Indicator requires a Range value for these abilities: {names}.");
+        await prompt.ShowDialog(this);
+        return false;
+    }
+
+    private async Task<bool> EnsureAbilityRechargeValuesBeforeSaveAsync()
+    {
+        if (_isAbilityDefinitionEditorMode || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+            return true;
+
+        var unit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+        if (unit == null)
+            return true;
+
+        var needsMain = _abilityDrafts.Values.Any(draft =>
+            draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction"));
+        var needsAux = _abilityDrafts.Values.Any(draft =>
+            draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction"));
+
+        if (_duplicatedUnitRechargeFallbacks.TryGetValue(_currentUnitName, out var rechargeFallback))
+        {
+            if (needsMain && unit.Element("rechargetime") == null && unit.Element("recharge") == null)
+                foreach (var element in rechargeFallback.Where(e => e.Name.LocalName is "rechargetime" or "recharge" or "rechargeincludetypes" or "rechargeexcludetypes")) unit.Add(new XElement(element));
+            if (needsAux && unit.Element("auxrechargetime") == null && unit.Element("auxrecharge") == null)
+                foreach (var element in rechargeFallback.Where(e => e.Name.LocalName is "auxrechargetime" or "auxrecharge" or "auxrechargeincludetypes" or "auxrechargeexcludetypes")) unit.Add(new XElement(element));
+        }
+
+        var mainValue = unit.Element("rechargetime")?.Value?.Trim() ?? unit.Element("recharge")?.Value?.Trim() ?? "";
+        var auxValue = unit.Element("auxrechargetime")?.Value?.Trim() ?? unit.Element("auxrecharge")?.Value?.Trim() ?? "";
+        var missingMain = needsMain && string.IsNullOrWhiteSpace(mainValue);
+        var missingAux = needsAux && string.IsNullOrWhiteSpace(auxValue);
+        if (_abilityRechargeValueEditors.TryGetValue("recharge", out var mainEditor))
+            mainEditor.BorderBrush = missingMain ? Brush.Parse("#d64545") : Brush.Parse("#5a5a5a");
+        if (_abilityRechargeValueEditors.TryGetValue("auxrecharge", out var auxEditor))
+            auxEditor.BorderBrush = missingAux ? Brush.Parse("#d64545") : Brush.Parse("#5a5a5a");
+
+        if (missingMain || missingAux)
+        {
+            var missing = missingMain && missingAux
+                ? "Main and Aux recharge values are required."
+                : missingMain
+                    ? "A Main Recharge value is required."
+                    : "An Aux Recharge value is required.";
+            var prompt = new Prompt(PromptType.Error, "Recharge value required", missing);
+            await prompt.ShowDialog(this);
+            return false;
+        }
+        return true;
+    }
+
+    private async Task SaveActiveTransformCommandAndUnitAsync()
+    {
+        if (_saveActiveTransformCommandBeforeUnitSaveAsync != null &&
+            !await _saveActiveTransformCommandBeforeUnitSaveAsync())
+        {
+            return;
+        }
+
+        Save_Click(this, new RoutedEventArgs());
+    }
+
+    private void SaveButton_PointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _abilityMainSavePointerPending = true;
+    }
+
     private async void Save_Click(object? sender, RoutedEventArgs e)
     {
+        try
+        {
+            if (_commitAbilityEditorNameBeforeSaveAsync != null && !await _commitAbilityEditorNameBeforeSaveAsync())
+                return;
+        }
+        finally
+        {
+            _abilityMainSavePointerPending = false;
+        }
+
         if (_modXmlDoc == null || _modFilePath == null)
         {
             SaveAs_Click(sender, e);
             return;
         }
 
+        if (_validateTransformAssignmentsBeforeUnitSaveAsync != null && !await _validateTransformAssignmentsBeforeUnitSaveAsync())
+            return;
+
         ApplyCurrentEdits();
+        _captureAbilityEditorCurrent?.Invoke();
         if (!await EnsureUniqueProtoActionNamesBeforeSaveAsync())
+            return;
+        if (!await EnsureAbilityRechargeValuesBeforeSaveAsync())
+            return;
+        if (!await EnsureAbilityRangeIndicatorValuesBeforeSaveAsync())
             return;
 
         InvalidateSuggestionCaches();
@@ -36860,6 +43036,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             SaveCurrentUnitStringValues();
             ProtoXmlHandler.SaveProtoXml(_modXmlDoc, _modFilePath);
+            SaveAbilityDrafts();
+            if (_currentAbilityNameEditor != null)
+                _currentAbilityNameEditor.ItemsSource = _availableAbilityNames.ToList();
             _isDirty = false;
             _fileLabel.Text = _modFilePath;
             _statusMessage.Text = "Saved successfully.";
@@ -36906,8 +43085,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             }
 
+            if (_validateTransformAssignmentsBeforeUnitSaveAsync != null && !await _validateTransformAssignmentsBeforeUnitSaveAsync())
+                return;
+
             ApplyCurrentEdits();
+            _captureAbilityEditorCurrent?.Invoke();
             if (!await EnsureUniqueProtoActionNamesBeforeSaveAsync())
+                return;
+            if (!await EnsureAbilityRechargeValuesBeforeSaveAsync())
+                return;
+            if (!await EnsureAbilityRangeIndicatorValuesBeforeSaveAsync())
                 return;
 
             InvalidateSuggestionCaches(includeTechNames: true);
@@ -36963,9 +43150,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         _unitList.Focus();
     }
 
+    private async void ProtounitCommands_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenProtoUnitCommandsManagerAsync();
+    }
+
     private async void ProtounitTactics_Click(object? sender, RoutedEventArgs e)
     {
         await OpenTacticsManagerAsync();
+    }
+
+    private async void ProtounitAbilities_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenAbilitiesManagerAsync();
     }
 
     private async void Settings_Click(object? sender, RoutedEventArgs e)
@@ -36976,6 +43173,56 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             await LoadProtoDataFromBar();
             RefreshUnitList();
+        }
+    }
+
+    private void DuplicateAbilityAssignmentsForUnit(string sourceUnitName, string newUnitName)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUnitName) || string.IsNullOrWhiteSpace(newUnitName)) return;
+
+        // BuildEditorPanel keeps the current unit's effective ability assignments in
+        // _abilityDrafts (base abilities plus mod overrides). Copy those associations
+        // to the duplicated unit; the shared <power> definitions themselves stay shared.
+        _captureAbilityEditorCurrent?.Invoke();
+        var assignments = _abilityDrafts.Values
+            .Where(draft => !string.IsNullOrWhiteSpace(draft.Name))
+            .Select(draft =>
+            {
+                var source = draft.GeneralSource ?? new XElement("ability", new XText(draft.Name));
+                var children = draft.GeneralValues
+                    .Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
+                    .Select(kv => new XElement(kv.Key, kv.Value))
+                    .Concat(draft.GeneralFlags.Select(flag => new XElement(flag, "1")));
+                var result = ReplaceKnownAbilityChildren(source, AbilityGeneralFlags.Concat(AbilityGeneralValueTags), children);
+                foreach (var text in result.Nodes().OfType<XText>().Where(text => !string.IsNullOrWhiteSpace(text.Value)).ToList())
+                    text.Remove();
+                result.AddFirst(new XText(draft.Name));
+                return result;
+            })
+            .ToList();
+
+        if (assignments.Count == 0) return;
+
+        var path = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
+        if (string.IsNullOrWhiteSpace(path)) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        var doc = LoadAbilityXmlDocumentForUpdate(path, "abilitiesmods");
+
+        if (doc.Root == null) doc.Add(new XElement("abilitiesmods"));
+        var root = doc.Root!;
+        root.Name = "abilitiesmods";
+        foreach (var existing in root.Elements().Where(element => element.Name.LocalName.Equals(newUnitName, StringComparison.OrdinalIgnoreCase)).ToList())
+            existing.Remove();
+
+        var duplicateUnit = new XElement(newUnitName);
+        duplicateUnit.Add(assignments);
+        root.Add(duplicateUnit);
+        SaveAbilityXmlDocument(doc, path);
+        if (!string.IsNullOrWhiteSpace(_modFilePath))
+        {
+            AbilityBindingMetadataStore.ReplaceUnit(_modFilePath, sourceUnitName, BuildCurrentAbilityBindingMetadataRecords());
+            AbilityBindingMetadataStore.CopyUnit(_modFilePath, sourceUnitName, newUnitName);
         }
     }
 
@@ -37023,6 +43270,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (duplicate && _currentUnitName != null)
             {
+                // Clone the live editor state, not only the last-saved proto_mods.xml node.
+                // Recharge/aux-recharge values live on the ProtoUnit and would otherwise be
+                // missing when the source unit had unsaved editor changes.
+                if (!_isReadOnly)
+                    ApplyCurrentEdits();
+
                 if (_isReadOnly && _barXmlRoot != null)
                 {
                     var source = ProtoXmlHandler.GetUnitElement(_barXmlRoot, _currentUnitName);
@@ -37051,6 +43304,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     string.IsNullOrWhiteSpace(sourceDisplay) ? name : sourceDisplay,
                     sourceLong,
                     sourceShort);
+                DuplicateAbilityAssignmentsForUnit(_currentUnitName, name);
+                var duplicatedUnitForRecharge = ProtoXmlHandler.GetUnitElement(_modXmlRoot, name);
+                if (duplicatedUnitForRecharge != null)
+                {
+                    var rechargeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "rechargetime", "recharge", "rechargeincludetypes", "rechargeexcludetypes", "auxrechargetime", "auxrecharge", "auxrechargeincludetypes", "auxrechargeexcludetypes" };
+                    _duplicatedUnitRechargeFallbacks[name] = duplicatedUnitForRecharge.Elements().Where(e => rechargeNames.Contains(e.Name.LocalName)).Select(e => new XElement(e)).ToList();
+                }
             }
             else
             {
@@ -37132,6 +43392,19 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
+        if (_isAbilityDefinitionEditorMode)
+        {
+            if (!_allowAbilityDefinitionEditorClose && _isDirty && !_abilityDefinitionEditorReadOnly)
+            {
+                e.Cancel = true;
+                await RequestCloseAbilityDefinitionEditorAsync();
+                return;
+            }
+
+            base.OnClosing(e);
+            return;
+        }
+
         if (_isTacticsActionEditorMode)
         {
             if (!_allowTacticsEditorClose && HasUnsavedTacticsEditorChanges())

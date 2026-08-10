@@ -165,6 +165,7 @@
                 <Button DockPanel.Dock="Right"
                         Classes="topSave"
                         Content="Save"
+                        PointerPressed="SaveButton_PointerPressed"
                         Click="Save_Click"
                         MinWidth="80"
                         VerticalAlignment="Center" />
@@ -196,7 +197,11 @@
                                             Content="Tactics"
                                             Click="ProtounitTactics_Click" />
                                     <Button Classes="topMenuItem"
-                                            Content="Abilities" />
+                                            Content="Commands"
+                                            Click="ProtounitCommands_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Abilities"
+                                            Click="ProtounitAbilities_Click" />
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
@@ -409,6 +414,11 @@
                             <TabItem Classes="editorTab" Header="Commands">
                                 <ScrollViewer x:Name="_commandsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                                     <StackPanel x:Name="_commandsEditorPanel" Spacing="10" />
+                                </ScrollViewer>
+                            </TabItem>
+                            <TabItem Classes="editorTab" Header="Abilities">
+                                <ScrollViewer x:Name="_abilitiesEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="_abilitiesEditorPanel" Spacing="10" />
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Train/Research">

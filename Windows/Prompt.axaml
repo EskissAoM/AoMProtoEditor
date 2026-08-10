@@ -117,7 +117,7 @@
 					<Button Content="Cancel"
 							Click="CancelButton_Click"
 							IsCancel="True" />
-					<Button Content="Confirm"
+					<Button x:Name="_confirmButton" Content="Confirm"
 							Click="ConfirmButton_Click"
 							Background="#4772b5"
 							IsDefault="True" />

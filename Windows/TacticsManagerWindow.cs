@@ -5,14 +5,13 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using CryBarEditor.Classes;
 
 namespace CryBarEditor.Windows;
 
-internal sealed record TacticsManagerItem(string Name, bool IsBuiltIn, int UsageCount);
+internal sealed record TacticsManagerItem(string Name, bool IsBuiltIn, bool IsModifiedBuiltIn, int UsageCount);
 internal sealed record TacticsRenameOperation(string OldName, string NewName);
 
 internal sealed class TacticsManagerResult
@@ -29,6 +28,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         public string? OriginalName { get; init; }
         public string Name { get; set; } = "";
         public bool IsBuiltIn { get; init; }
+        public bool IsModifiedBuiltIn { get; init; }
         public int UsageCount { get; init; }
     }
 
@@ -36,24 +36,25 @@ internal sealed class TacticsManagerWindow : SimpleWindow
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
     private readonly StackPanel _itemsPanel;
-    private bool _hasUnsavedChanges;
-    private bool _allowClose;
-    private bool _closePromptOpen;
     private readonly Func<Window, string, bool, Task>? _openEditorAsync;
     private readonly Func<string, Task<bool>>? _createTacticsAsync;
     private readonly Func<string, bool, string, Task<bool>>? _duplicateTacticsAsync;
-
-    public TacticsManagerResult? Result { get; private set; }
+    private readonly Func<string, string, Task<bool>>? _renameTacticsAsync;
+    private readonly Func<string, Task<bool>>? _deleteTacticsAsync;
 
     public TacticsManagerWindow(
         IEnumerable<TacticsManagerItem> items,
         Func<Window, string, bool, Task>? openEditorAsync = null,
         Func<string, Task<bool>>? createTacticsAsync = null,
-        Func<string, bool, string, Task<bool>>? duplicateTacticsAsync = null)
+        Func<string, bool, string, Task<bool>>? duplicateTacticsAsync = null,
+        Func<string, string, Task<bool>>? renameTacticsAsync = null,
+        Func<string, Task<bool>>? deleteTacticsAsync = null)
     {
         _openEditorAsync = openEditorAsync;
         _createTacticsAsync = createTacticsAsync;
         _duplicateTacticsAsync = duplicateTacticsAsync;
+        _renameTacticsAsync = renameTacticsAsync;
+        _deleteTacticsAsync = deleteTacticsAsync;
         Title = "Manage Tactics";
         Width = 700;
         Height = 650;
@@ -68,6 +69,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                 OriginalName = item.Name,
                 Name = item.Name,
                 IsBuiltIn = item.IsBuiltIn,
+                IsModifiedBuiltIn = item.IsModifiedBuiltIn,
                 UsageCount = item.UsageCount
             })
             .ToList();
@@ -136,26 +138,15 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
         var footer = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
             Margin = new Thickness(0, 12, 0, 0)
         };
         var hint = new TextBlock
         {
-            Text = "Double-click a custom tactics name to rename it.",
+            Text = "Double-click a custom tactics name to rename it. Changes are saved immediately.",
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center
         };
         footer.Children.Add(hint);
-
-        var cancelButton = new Button { Content = "Cancel", MinWidth = 90, Margin = new Thickness(8, 0, 0, 0) };
-        cancelButton.Click += async (_, _) => await RequestCloseAsync();
-        Grid.SetColumn(cancelButton, 1);
-        footer.Children.Add(cancelButton);
-
-        var saveButton = new Button { Content = "Save", MinWidth = 90, Margin = new Thickness(8, 0, 0, 0) };
-        saveButton.Click += (_, _) => SaveChanges();
-        Grid.SetColumn(saveButton, 2);
-        footer.Children.Add(saveButton);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
 
@@ -202,9 +193,12 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             OriginalName = name,
             Name = name,
             IsBuiltIn = false,
+            IsModifiedBuiltIn = false,
             UsageCount = 0
         });
         RefreshList();
+        if (_openEditorAsync != null)
+            await _openEditorAsync(this, name, false);
     }
 
     private async Task DuplicateTacticsAsync(EditableTacticsItem item)
@@ -229,9 +223,12 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             OriginalName = name,
             Name = name,
             IsBuiltIn = false,
+            IsModifiedBuiltIn = false,
             UsageCount = 0
         });
         RefreshList();
+        if (_openEditorAsync != null)
+            await _openEditorAsync(this, name, false);
     }
 
     private async Task RenameTacticsAsync(EditableTacticsItem item)
@@ -239,7 +236,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         if (item.IsBuiltIn)
             return;
 
-        var prompt = new InputPromptWindow("Rename tactics:", item.Name);
+        var prompt = new InputPromptWindow("Rename tactics:", item.Name, confirmButtonText: "Save");
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
             return;
@@ -253,8 +250,10 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             return;
         }
 
+        if (_renameTacticsAsync == null || !await _renameTacticsAsync(item.Name, newName))
+            return;
+
         item.Name = newName;
-        _hasUnsavedChanges = true;
         RefreshList();
     }
 
@@ -270,8 +269,19 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             return;
         }
 
+        var confirm = new Prompt(
+            PromptType.Confirm,
+            "Remove tactics?",
+            $"Are you sure you want to remove '{item.Name}'?",
+            confirmButtonText: "Save");
+        await confirm.ShowDialog(this);
+        if (!confirm.Confirmed)
+            return;
+
+        if (_deleteTacticsAsync == null || !await _deleteTacticsAsync(item.Name))
+            return;
+
         _items.Remove(item);
-        _hasUnsavedChanges = true;
         RefreshList();
     }
 
@@ -313,7 +323,13 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
             var status = new TextBlock
             {
-                Text = item.IsBuiltIn ? "Data.bar" : item.UsageCount > 0 ? $"Used by {item.UsageCount}" : "Custom",
+                Text = item.IsModifiedBuiltIn
+                    ? "Data.bar (Modified)"
+                    : item.IsBuiltIn
+                        ? "Data.bar"
+                        : item.UsageCount > 0
+                            ? $"Used by {item.UsageCount}"
+                            : "Custom",
                 Foreground = Brushes.Gray,
                 Margin = new Thickness(8, 9),
                 VerticalAlignment = VerticalAlignment.Center
@@ -419,83 +435,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         await window.ShowDialog(this);
     }
 
-    private void SaveChanges()
-    {
-        var result = new TacticsManagerResult();
-        var originalItems = _items.Where(item => item.OriginalName != null).ToList();
 
-        foreach (var item in _items.Where(item => item.OriginalName == null))
-            result.CreatedNames.Add(item.Name);
-
-        foreach (var item in originalItems.Where(item => !item.IsBuiltIn &&
-                                                         !item.Name.Equals(item.OriginalName, StringComparison.Ordinal)))
-        {
-            result.Renames.Add(new TacticsRenameOperation(item.OriginalName!, item.Name));
-        }
-
-        Result = result;
-        _allowClose = true;
-        Close();
-    }
-
-    private async Task RequestCloseAsync()
-    {
-        if (!_hasUnsavedChanges)
-        {
-            _allowClose = true;
-            Close();
-            return;
-        }
-
-        if (_closePromptOpen)
-            return;
-
-        _closePromptOpen = true;
-        try
-        {
-            var prompt = new Prompt(
-                PromptType.Confirm,
-                "Discard tactics changes?",
-                "You have unsaved tactics changes. Close this window without saving them?");
-            await prompt.ShowDialog(this);
-            if (!prompt.Confirmed)
-                return;
-
-            _allowClose = true;
-            Close();
-        }
-        finally
-        {
-            _closePromptOpen = false;
-        }
-    }
-
-    protected override void OnClosing(WindowClosingEventArgs e)
-    {
-        if (!_allowClose && _hasUnsavedChanges)
-        {
-            e.Cancel = true;
-            _ = RequestCloseAsync();
-            return;
-        }
-
-        base.OnClosing(e);
-    }
-
-    public void SetDeletedOriginalNames(IEnumerable<string> allOriginalCustomNames)
-    {
-        if (Result == null)
-            return;
-        var remainingOriginalNames = _items
-            .Where(item => item.OriginalName != null)
-            .Select(item => item.OriginalName!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var originalName in allOriginalCustomNames)
-        {
-            if (!remainingOriginalNames.Contains(originalName))
-                Result.DeletedNames.Add(originalName);
-        }
-    }
 }
 
 internal sealed class TacticsEditorWindow : ProtoEditorWindow

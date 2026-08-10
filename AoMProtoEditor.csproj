@@ -35,6 +35,12 @@
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
+  <!-- Keep the in-repository regression suite inside the AoMProtoEditor folder
+       without compiling its xUnit sources into the desktop application itself. -->
+  <ItemGroup>
+    <Compile Remove="AoMProtoEditor.Tests\**\*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\CryBarEditor\CryBar\CryBar.csproj" />
   </ItemGroup>
