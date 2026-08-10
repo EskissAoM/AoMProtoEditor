@@ -11,7 +11,9 @@ public abstract class SimpleWindow : Window, INotifyPropertyChanged
 {
     protected SimpleWindow()
     {
-        Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://AoMProtoEditor/Assets/editor_icon.png")));
+        string assemblyName = typeof(SimpleWindow).Assembly.GetName().Name
+            ?? throw new InvalidOperationException("The editor assembly has no name.");
+        Icon = new WindowIcon(AssetLoader.Open(new Uri($"avares://{assemblyName}/Assets/editor_icon.png")));
     }
 
     public new event PropertyChangedEventHandler? PropertyChanged;
