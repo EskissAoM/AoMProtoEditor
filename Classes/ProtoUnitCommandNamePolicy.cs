@@ -9,7 +9,7 @@ public static class ProtoUnitCommandNamePolicy
     public static bool IsAvailable(string candidate, IEnumerable<string> existingNames, string? currentName = null)
     {
         var normalized = candidate?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(normalized))
+        if (!InternalNamePolicy.IsValid(normalized))
             return false;
 
         return !existingNames.Any(existing =>

@@ -140,7 +140,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
         };
         footer.Children.Add(new TextBlock
         {
-            Text = "Double-click a custom ability name to rename it. Changes are saved immediately.",
+            Text = "Double-click a custom ability name to rename it.",
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center
         });
@@ -154,19 +154,19 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
     private bool IsValidName(string name, EditableAbilityItem? ignore = null)
     {
         var trimmed = name.Trim();
-        return !string.IsNullOrWhiteSpace(trimmed) &&
+        return InternalNamePolicy.IsValid(trimmed) &&
                !_items.Any(item => !ReferenceEquals(item, ignore) && item.Name.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task AddAbilityAsync()
     {
-        var prompt = new InputPromptWindow("New ability name:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("New ability name:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var name = prompt.InputText.Trim();
         if (!IsValidName(name))
         {
-            await ShowErrorAsync("Invalid ability name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid ability name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         if (_createAbilityAsync != null && !await _createAbilityAsync(name)) return;
@@ -187,13 +187,13 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
 
     private async Task DuplicateAbilityAsync(EditableAbilityItem item)
     {
-        var prompt = new InputPromptWindow("Duplicate ability as:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Duplicate ability as:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var name = prompt.InputText.Trim();
         if (!IsValidName(name))
         {
-            await ShowErrorAsync("Invalid ability name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid ability name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         if (_duplicateAbilityAsync == null || !await _duplicateAbilityAsync(item.Name, item.IsBuiltIn, name)) return;
@@ -215,14 +215,14 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
     private async Task RenameAbilityAsync(EditableAbilityItem item)
     {
         if (item.IsBuiltIn) return;
-        var prompt = new InputPromptWindow("Rename ability:", item.Name, confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Rename ability:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var newName = prompt.InputText.Trim();
         if (newName.Equals(item.Name, StringComparison.OrdinalIgnoreCase)) return;
         if (!IsValidName(newName, item))
         {
-            await ShowErrorAsync("Invalid ability name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid ability name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         var oldName = item.Name;
@@ -381,7 +381,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
 
 internal sealed class AbilityEditorWindow : ProtoEditorWindow
 {
-    public AbilityEditorWindow(IEditorGameDataService gameData) : base(gameData)
+    public AbilityEditorWindow(IEditorGameDataService gameData) : base(gameData, initializeProtoEditor: false)
     {
         Width = 1120;
         Height = 780;

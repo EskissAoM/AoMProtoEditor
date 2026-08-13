@@ -12,6 +12,7 @@ public sealed class ProtoUnitCommandHardeningPass678Tests
 
         Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("OriginalCommand", existing));
         Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("customcommand", existing));
+        Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("Bad.Command", existing));
         Assert.True(ProtoUnitCommandNamePolicy.IsAvailable("NewCommand", existing));
     }
 

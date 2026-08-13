@@ -36,6 +36,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
     private readonly StackPanel _itemsPanel;
+    private readonly TextBlock _footerHint;
     private readonly Func<Window, string, bool, Task>? _openEditorAsync;
     private readonly Func<string, Task<bool>>? _createTacticsAsync;
     private readonly Func<string, bool, string, Task<bool>>? _duplicateTacticsAsync;
@@ -140,13 +141,13 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         {
             Margin = new Thickness(0, 12, 0, 0)
         };
-        var hint = new TextBlock
+        _footerHint = new TextBlock
         {
-            Text = "Double-click a custom tactics name to rename it. Changes are saved immediately.",
+            Text = "",
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center
         };
-        footer.Children.Add(hint);
+        footer.Children.Add(_footerHint);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
 
@@ -164,8 +165,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private bool IsValidName(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-            name.Contains('/') || name.Contains('\\'))
+        if (!InternalNamePolicy.IsValidFileName(name, ".tactics"))
             return false;
 
         return !_items.Any(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -173,7 +173,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task AddTacticsAsync()
     {
-        var prompt = new InputPromptWindow("New tactics name:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("New tactics name:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
             return;
@@ -203,7 +203,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task DuplicateTacticsAsync(EditableTacticsItem item)
     {
-        var prompt = new InputPromptWindow("Duplicate tactics as:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Duplicate tactics as:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
             return;
@@ -236,7 +236,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         if (item.IsBuiltIn)
             return;
 
-        var prompt = new InputPromptWindow("Rename tactics:", item.Name, confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Rename tactics:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
             return;
@@ -293,6 +293,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
+        _footerHint.Text = $"{_items.Count:N0} items: {_items.Count(item => item.IsBuiltIn):N0} original, {_items.Count(item => !item.IsBuiltIn):N0} customs. Double-click a custom tactics name to rename it.";
         _itemsPanel.Children.Clear();
         var filter = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
@@ -441,7 +442,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 internal sealed class TacticsEditorWindow : ProtoEditorWindow
 {
     public TacticsEditorWindow()
-        : base()
+        : base(initializeProtoEditor: false)
     {
     }
 

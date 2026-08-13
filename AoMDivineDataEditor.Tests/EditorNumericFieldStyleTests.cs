@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using AoMDivineDataEditor;
 using AoMDivineDataEditor.Classes;
 using Xunit;
@@ -48,6 +49,15 @@ public sealed class EditorNumericFieldStyleTests
         Assert.Equal(expected, EditorNumericFieldStyle.FormatDisplay(source, minimumFractionDigits: 2));
     }
 
+    [Theory]
+    [InlineData("0", "0.00")]
+    [InlineData("0.5", "0.50")]
+    [InlineData("1", "1.00")]
+    public void ArmorDisplay_KeepsTwoDecimalPlaces(string source, string expected)
+    {
+        Assert.Equal(expected, EditorNumericFieldStyle.FormatDisplay(source, minimumFractionDigits: 2));
+    }
+
     [Fact]
     public void ConfigureNumericTextBox_IsCompact_PreservesLongText_AndFormatsOnLostFocus()
     {
@@ -63,6 +73,45 @@ public sealed class EditorNumericFieldStyleTests
         textBox.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
         Assert.Equal("10.25", textBox.Text);
+    }
+
+    [Fact]
+    public void UnsignedDecimalBehavior_RemovesLettersSignsAndExtraDecimalPoints()
+    {
+        EnsureAvalonia();
+        var textBox = new TextBox();
+        EditorNumericInputBehavior.AttachUnsignedDecimal(textBox);
+
+        textBox.Text = "a-12.3.4z";
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("12.34", textBox.Text);
+    }
+
+    [Fact]
+    public void SignedDecimalBehavior_PreservesOneLeadingMinusAndDecimalPoint()
+    {
+        EnsureAvalonia();
+        var textBox = new TextBox();
+        EditorNumericInputBehavior.AttachSignedDecimal(textBox);
+
+        textBox.Text = "a1-2.3.4z";
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("-12.34", textBox.Text);
+    }
+
+    [Fact]
+    public void IntegerRuleBehavior_RejectsDecimalPasteWithoutTurningItIntoAnotherInteger()
+    {
+        EnsureAvalonia();
+        var textBox = new TextBox { Text = "12" };
+        EditorNumericInputBehavior.AttachRule(textBox, ProtoUnitNumericKind.UnsignedInteger);
+
+        textBox.Text = "12.7";
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("12", textBox.Text);
     }
 
     private static void EnsureAvalonia()

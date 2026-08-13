@@ -44,12 +44,12 @@
         </Style>
         <Style Selector="Button.remove-button">
             <Setter Property="Content" Value="×" />
+            <Setter Property="Margin" Value="2,0,0,0" />
             <Setter Property="Width" Value="28" />
             <Setter Property="Height" Value="28" />
             <Setter Property="MinWidth" Value="28" />
             <Setter Property="MinHeight" Value="28" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="6,0,0,0" />
             <Setter Property="Background" Value="#8b0000" />
             <Setter Property="Foreground" Value="#ffffff" />
             <Setter Property="BorderThickness" Value="0" />
@@ -162,7 +162,8 @@
         <!-- Menu bar / Top toolbar -->
         <Border x:Name="_mainToolbar" DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
             <DockPanel Margin="10,0">
-                <Button DockPanel.Dock="Right"
+                <Button x:Name="_saveButton"
+                        DockPanel.Dock="Right"
                         Classes="topSave"
                         Content="Save"
                         PointerPressed="SaveButton_PointerPressed"
@@ -202,6 +203,15 @@
                                     <Button Classes="topMenuItem"
                                             Content="Abilities"
                                             Click="ProtounitAbilities_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Unit Type"
+                                            Click="ProtounitUnitType_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Icon"
+                                            Click="ProtounitIcon_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Anim File"
+                                            Click="ProtounitAnimFile_Click" />
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
@@ -218,7 +228,14 @@
         </Border>
 
         <!-- Main content -->
-        <Grid x:Name="_mainContentGrid" ColumnDefinitions="260,5,*,5,430">
+        <Grid x:Name="_mainContentGrid">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="210" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="250" MinWidth="28" />
+            </Grid.ColumnDefinitions>
             <!-- Left panel: unit list -->
             <Border x:Name="_unitListPanel" Grid.Column="0" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
                 <DockPanel>
@@ -234,12 +251,12 @@
                     </Grid>
                     
                     <TabStrip DockPanel.Dock="Top" x:Name="_unitTabs" Margin="0,0,0,6" SelectionChanged="UnitTab_SelectionChanged">
-                        <TabStripItem x:Name="_originalTab">Original</TabStripItem>
-                        <TabStripItem x:Name="_modifiedTab">Modified</TabStripItem>
+                        <TabStripItem x:Name="_originalTab" FontSize="14" Padding="8,4">Original</TabStripItem>
+                        <TabStripItem x:Name="_modifiedTab" FontSize="14" Padding="8,4">Modified</TabStripItem>
                     </TabStrip>
                     
                     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-                        <Button Grid.Column="0" Content="+ Add Unit" Click="AddUnit_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button Grid.Column="0" Content="Add" Click="AddUnit_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                         <Button Grid.Column="1" Content="🗑 Delete" Click="DeleteUnit_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                     
@@ -250,7 +267,7 @@
             <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
 
             <!-- Right panel: fixed tools + scrollable editor -->
-            <Border Grid.Column="2" Padding="15">
+            <Border Grid.Column="2" Padding="15,15,0,15">
                 <Grid RowDefinitions="Auto,*,Auto">
                     <Grid Grid.Row="0"
                           ColumnDefinitions="Auto,*,Auto"
@@ -398,32 +415,32 @@
                     <Grid Grid.Row="1" RowDefinitions="Auto,*">
                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
                             <TextBlock Text="Unit :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1" x:Name="_unitNameBox" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
+                            <TextBox Grid.Column="1" x:Name="_unitNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
                         </Grid>
                         <TabControl Grid.Row="1" x:Name="_editorTabs" SelectedIndex="0" SelectionChanged="EditorTab_SelectionChanged">
                             <TabItem Classes="editorTab" Header="Stats">
                                 <ScrollViewer x:Name="_editorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="_statsEditorPanel" Spacing="10" />
+                                    <StackPanel x:Name="_statsEditorPanel" Classes="statsEditor" Spacing="10" Margin="0,0,15,0" />
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Actions">
                                 <ScrollViewer x:Name="_actionsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="_actionsEditorPanel" Spacing="10" />
+                                    <StackPanel x:Name="_actionsEditorPanel" Spacing="10" Margin="0,0,15,0" />
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Commands">
                                 <ScrollViewer x:Name="_commandsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="_commandsEditorPanel" Spacing="10" />
+                                    <StackPanel x:Name="_commandsEditorPanel" Spacing="10" Margin="0,0,15,0" />
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Abilities">
                                 <ScrollViewer x:Name="_abilitiesEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="_abilitiesEditorPanel" Spacing="10" />
+                                    <StackPanel x:Name="_abilitiesEditorPanel" Spacing="10" Margin="0,0,15,0" />
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Train/Research">
                                 <ScrollViewer x:Name="_trainResearchEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="_trainResearchEditorPanel" Spacing="10" />
+                                    <StackPanel x:Name="_trainResearchEditorPanel" Spacing="10" Margin="0,0,15,0" />
                                 </ScrollViewer>
                             </TabItem>
                         </TabControl>
@@ -432,13 +449,34 @@
                 </Grid>
             </Border>
             <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
-            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Padding="12" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
-                <Grid RowDefinitions="Auto,*">
-                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
-                        <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center" />
-                        <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
+            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+                <Grid>
+                    <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
+                        <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
+                            <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
+                        </Grid>
+                        <TextBox Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="12" Background="#101010" Foreground="#d9d9d9" TextChanged="XmlPreviewText_TextChanged" />
                     </Grid>
-                    <TextBox Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="12" Background="#101010" Foreground="#d9d9d9" TextChanged="XmlPreviewText_TextChanged" />
+                    <Button x:Name="_xmlPreviewToggleButton"
+                            Content="&#x25B6;"
+                            Width="20"
+                            Height="24"
+                            MinWidth="20"
+                            MinHeight="24"
+                            FontSize="10"
+                            Padding="0"
+                            Background="#050505"
+                            BorderThickness="0"
+                            CornerRadius="0"
+                            HorizontalContentAlignment="Center"
+                            VerticalContentAlignment="Center"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            Margin="4,8,0,0"
+                            ZIndex="1"
+                            ToolTip.Tip="Collapse XML Preview"
+                            Click="XmlPreviewToggle_Click" />
                 </Grid>
             </Border>
         </Grid>

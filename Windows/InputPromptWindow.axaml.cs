@@ -14,13 +14,30 @@ public partial class InputPromptWindow : SimpleWindow
         InitializeComponent();
     }
 
-    public InputPromptWindow(string message, string defaultValue = "", string confirmButtonText = "OK") : this()
+    public InputPromptWindow(string message, string defaultValue = "", string confirmButtonText = "OK", bool allowWhitespace = true) : this()
     {
         _messageText.Text = message;
         _inputBox.Text = defaultValue;
         _confirmButton.Content = confirmButtonText;
         if (string.Equals(confirmButtonText, "Save", StringComparison.OrdinalIgnoreCase))
             _confirmButton.Background = Brush.Parse("#2b7a0b");
+        if (!allowWhitespace)
+        {
+            var normalizing = false;
+            _inputBox.TextChanged += (_, _) =>
+            {
+                if (normalizing)
+                    return;
+                var text = _inputBox.Text ?? "";
+                var filtered = new string(text.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+                if (string.Equals(text, filtered, StringComparison.Ordinal))
+                    return;
+                normalizing = true;
+                _inputBox.Text = filtered;
+                _inputBox.CaretIndex = filtered.Length;
+                normalizing = false;
+            };
+        }
         Opened += (s, e) => _inputBox.Focus();
     }
 

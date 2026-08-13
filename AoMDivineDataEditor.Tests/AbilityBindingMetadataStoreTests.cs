@@ -81,6 +81,29 @@ public sealed class AbilityBindingMetadataStoreTests : IDisposable
         Assert.Equal(source.AuxOwnsChargeAction, copy.AuxOwnsChargeAction);
     }
 
+    [Fact]
+    public void RenameUnit_MovesBindingProvenanceWithoutLeavingTheOldKey()
+    {
+        var modPath = Path.Combine(Path.GetTempPath(), "AoMTestMod", Guid.NewGuid().ToString("N"));
+        AbilityBindingMetadataStore.ReplaceUnit(modPath, "OldUnit",
+        [
+            new AbilityBindingMetadataRecord
+            {
+                AbilityName = "AbilityA",
+                MainAction = "Attack",
+                MainOwnsChargeAction = true
+            }
+        ]);
+
+        AbilityBindingMetadataStore.RenameUnit(modPath, "OldUnit", "NewUnit");
+
+        Assert.Null(AbilityBindingMetadataStore.Get(modPath, "OldUnit", "AbilityA"));
+        var renamed = AbilityBindingMetadataStore.Get(modPath, "NewUnit", "AbilityA");
+        Assert.NotNull(renamed);
+        Assert.Equal("Attack", renamed!.MainAction);
+        Assert.True(renamed.MainOwnsChargeAction);
+    }
+
     public void Dispose()
     {
         try

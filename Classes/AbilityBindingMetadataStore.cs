@@ -29,6 +29,8 @@ public static class AbilityBindingMetadataStore
 
     private static string MetadataPath => ProtoEditorSettings.GetAppDataPath(MetadataFilename);
 
+    internal static string StoragePath => MetadataPath;
+
     private static string NormalizeModPath(string modPath)
     {
         try { return Path.GetFullPath(modPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
@@ -124,6 +126,28 @@ public static class AbilityBindingMetadataStore
         records.RemoveAll(record => record.ModPath.Equals(normalized, StringComparison.OrdinalIgnoreCase) &&
                                     record.UnitName.Equals(newUnitName, StringComparison.OrdinalIgnoreCase));
         records.AddRange(copies);
+        SaveAll(records);
+    }
+
+    public static void RenameUnit(string? modPath, string oldUnitName, string newUnitName)
+    {
+        if (string.IsNullOrWhiteSpace(modPath) || string.IsNullOrWhiteSpace(oldUnitName) ||
+            string.IsNullOrWhiteSpace(newUnitName) || oldUnitName.Equals(newUnitName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var normalized = NormalizeModPath(modPath);
+        var records = LoadAll();
+        records.RemoveAll(record =>
+            record.ModPath.Equals(normalized, StringComparison.OrdinalIgnoreCase) &&
+            record.UnitName.Equals(newUnitName, StringComparison.OrdinalIgnoreCase));
+        foreach (var record in records.Where(record =>
+                     record.ModPath.Equals(normalized, StringComparison.OrdinalIgnoreCase) &&
+                     record.UnitName.Equals(oldUnitName, StringComparison.OrdinalIgnoreCase)))
+        {
+            record.UnitName = newUnitName;
+        }
         SaveAll(records);
     }
 }

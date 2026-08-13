@@ -175,6 +175,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             ColumnDefinitions = new ColumnDefinitions("7*,5,3*"),
             Background = Brush.Parse("#141414")
         };
+        root.ColumnDefinitions[2].MinWidth = 28;
+        var expandedPreviewWidth = root.ColumnDefinitions[2].Width;
         shell.Children.Add(root);
 
         var scrollPanel = new StackPanel { Spacing = 8 };
@@ -259,6 +261,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         Grid.SetColumn(splitter, 1);
         root.Children.Add(splitter);
 
+        var previewHost = new Grid();
         var previewPanel = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,*"),
@@ -268,7 +271,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         {
             Text = "XML Preview",
             FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 0, 0, 8)
+            Margin = new Thickness(28, 0, 0, 8)
         });
         _xmlPreview = new TextBox
         {
@@ -290,8 +293,45 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         };
         Grid.SetRow(previewBorder, 1);
         previewPanel.Children.Add(previewBorder);
-        Grid.SetColumn(previewPanel, 2);
-        root.Children.Add(previewPanel);
+        previewHost.Children.Add(previewPanel);
+
+        var previewToggle = new Button
+        {
+            Content = "\u25B6",
+            Width = 20,
+            Height = 24,
+            MinWidth = 20,
+            MinHeight = 24,
+            FontSize = 10,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 8, 0, 0),
+            Background = Brush.Parse("#050505"),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            ZIndex = 1
+        };
+        ToolTip.SetTip(previewToggle, "Collapse XML Preview");
+        var isPreviewCollapsed = false;
+        previewToggle.Click += (_, _) =>
+        {
+            isPreviewCollapsed = !isPreviewCollapsed;
+            previewPanel.IsVisible = !isPreviewCollapsed;
+            splitter.IsVisible = !isPreviewCollapsed;
+            root.ColumnDefinitions[1].Width = new GridLength(isPreviewCollapsed ? 0 : 5);
+            root.ColumnDefinitions[2].Width = isPreviewCollapsed
+                ? new GridLength(28)
+                : expandedPreviewWidth;
+            previewToggle.Content = isPreviewCollapsed ? "\u25C0" : "\u25B6";
+            ToolTip.SetTip(previewToggle, isPreviewCollapsed ? "Restore XML Preview" : "Collapse XML Preview");
+        };
+        previewHost.Children.Add(previewToggle);
+
+        Grid.SetColumn(previewHost, 2);
+        root.Children.Add(previewHost);
 
         Content = shell;
         RefreshPreview();
@@ -1384,6 +1424,14 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(captured.Name))
         {
             await new Prompt(PromptType.Error, "Missing name", "A ProtoUnit command must have an internal name.").ShowDialog(this);
+            return;
+        }
+        if (!InternalNamePolicy.IsValidOrUnchangedLegacy(captured.Name, _savedName))
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Invalid command name",
+                "Command names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
             return;
         }
         if (_identityLockedByUsage)

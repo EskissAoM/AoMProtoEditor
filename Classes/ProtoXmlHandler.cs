@@ -195,6 +195,35 @@ public static class ProtoXmlHandler
     public static void RemoveSimpleField(XElement unit, string tag)
         => unit.Elements(tag).Remove();
 
+    public static void SetResourceMapEntries(
+        XElement unit,
+        string elementName,
+        IEnumerable<(string ResourceType, string Value, string DropOffMultiplier)> entries,
+        bool omitZeroValues = false)
+    {
+        unit.Elements(elementName).Remove();
+        foreach (var entry in entries)
+        {
+            var resourceType = entry.ResourceType?.Trim() ?? "";
+            var value = entry.Value?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(resourceType) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (omitZeroValues &&
+                double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+                parsed == 0d)
+            {
+                continue;
+            }
+
+            var element = new XElement(elementName, value);
+            element.SetAttributeValue("resourcetype", resourceType);
+            var multiplier = entry.DropOffMultiplier?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(multiplier))
+                element.SetAttributeValue("dropoffmultiplier", multiplier);
+            unit.Add(element);
+        }
+    }
+
     public static List<ProtoCultureFieldEntry> GetCultureAwareSimpleFields(XElement unit, string tag)
         => unit.Elements(tag)
                .Select(e => new ProtoCultureFieldEntry
@@ -227,12 +256,23 @@ public static class ProtoXmlHandler
                .Where(t => t.Item1.Length > 0)
                .ToList();
 
-    /// <summary>Replace all cost entries with the supplied pairs.</summary>
+    /// <summary>Replace all cost entries with non-zero supplied pairs.</summary>
     public static void SetCostEntries(XElement unit, IEnumerable<(string ResourceType, string Amount)> entries)
     {
         unit.Elements("cost").Remove();
         foreach (var (rt, amount) in entries)
-            unit.Add(new XElement("cost", new XAttribute("resourcetype", rt), amount));
+        {
+            var resourceType = rt?.Trim() ?? "";
+            var value = amount?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(resourceType) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+                parsed == 0d)
+            {
+                continue;
+            }
+            unit.Add(new XElement("cost", new XAttribute("resourcetype", resourceType), value));
+        }
     }
 
     // ─── Armor ───────────────────────────────────────────────────────────────
@@ -244,12 +284,23 @@ public static class ProtoXmlHandler
                .Where(t => t.Item1.Length > 0)
                .ToList();
 
-    /// <summary>Replace all armor entries with the supplied pairs.</summary>
+    /// <summary>Replace all armor entries with the supplied non-zero pairs.</summary>
     public static void SetArmorEntries(XElement unit, IEnumerable<(string ArmorType, string Value)> entries)
     {
         unit.Elements("armor").Remove();
         foreach (var (at, val) in entries)
-            unit.Add(new XElement("armor", new XAttribute("type", at), new XAttribute("value", val)));
+        {
+            var armorType = at?.Trim() ?? "";
+            var value = val?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(armorType) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+                parsed == 0d)
+            {
+                continue;
+            }
+            unit.Add(new XElement("armor", new XAttribute("type", armorType), new XAttribute("value", value)));
+        }
     }
 
     // ─── Unit Types ───────────────────────────────────────────────────────────

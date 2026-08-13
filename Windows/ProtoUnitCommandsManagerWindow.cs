@@ -134,7 +134,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
         };
         footer.Children.Add(new TextBlock
         {
-            Text = "Double-click a custom command name to rename it. Changes are saved immediately.",
+            Text = "Double-click a custom command name to rename it.",
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center
         });
@@ -148,19 +148,19 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
     private bool IsValidName(string name, EditableProtoUnitCommandItem? ignore = null)
     {
         var trimmed = name.Trim();
-        return !string.IsNullOrWhiteSpace(trimmed) &&
+        return InternalNamePolicy.IsValid(trimmed) &&
                !_items.Any(item => !ReferenceEquals(item, ignore) && item.Name.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task AddCommandAsync()
     {
-        var prompt = new InputPromptWindow("New command name:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("New command name:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var name = prompt.InputText.Trim();
         if (!IsValidName(name))
         {
-            await ShowErrorAsync("Invalid command name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid command name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         if (_createCommandAsync != null && !await _createCommandAsync(name)) return;
@@ -181,13 +181,13 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private async Task DuplicateCommandAsync(EditableProtoUnitCommandItem item)
     {
-        var prompt = new InputPromptWindow("Duplicate command as:", confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Duplicate command as:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var name = prompt.InputText.Trim();
         if (!IsValidName(name))
         {
-            await ShowErrorAsync("Invalid command name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid command name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         if (_duplicateCommandAsync == null || !await _duplicateCommandAsync(item.Name, item.IsBuiltIn, name)) return;
@@ -209,14 +209,14 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
     private async Task RenameCommandAsync(EditableProtoUnitCommandItem item)
     {
         if (item.IsBuiltIn) return;
-        var prompt = new InputPromptWindow("Rename command:", item.Name, confirmButtonText: "Save");
+        var prompt = new InputPromptWindow("Rename command:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
         var newName = prompt.InputText.Trim();
         if (newName.Equals(item.Name, StringComparison.OrdinalIgnoreCase)) return;
         if (!IsValidName(newName, item))
         {
-            await ShowErrorAsync("Invalid command name", "The name is empty or already exists.");
+            await ShowErrorAsync("Invalid command name", "Use a unique name containing only letters, digits, '_' or '-'.");
             return;
         }
         var oldName = item.Name;
