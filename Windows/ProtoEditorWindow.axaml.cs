@@ -107,9 +107,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private XElement? _barXmlRoot;
     private BarArchive? _protoDataBarFile;
     private string? _protoDataBarPath;
+    private List<XDocument>? _cachedBaseTechtreeDocuments;
     private XDocument? _modXmlDoc;
     private XElement? _modXmlRoot;
     private string? _modFilePath;
+    private TechnologyEditorView? _technologyView;
     private ProtoBarData? _barData;
     private bool _isDirty;
     private bool _isPopulating;
@@ -2792,6 +2794,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         _protoDataBarFile = null;
         _protoDataBarPath = null;
+        _cachedBaseTechtreeDocuments = null;
         _baseGameIconPaths = [];
         _baseGameAnimFiles = [];
         _baseGameSoundSets = [];
@@ -2966,24 +2969,18 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 foreach (var entry in protoEntries)
                 {
-                    int size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
-                    byte[] decompressed = new byte[size];
-                    int readBytes = entry.ReadDataDecompressed(tempStream, decompressed);
-                    if (readBytes > 0)
+                    var xml = ReadBarXmbXml(entry, tempStream);
+                    if (xml != null)
                     {
-                        var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
-                        if (xml != null)
+                        if (xml.StartsWith("<?xml"))
                         {
-                            if (xml.StartsWith("<?xml"))
+                            int endDecl = xml.IndexOf("?>");
+                            if (endDecl >= 0)
                             {
-                                int endDecl = xml.IndexOf("?>");
-                                if (endDecl >= 0)
-                                {
-                                    xml = xml[(endDecl + 2)..];
-                                }
+                                xml = xml[(endDecl + 2)..];
                             }
-                            xmlParts.Add(xml);
                         }
+                        xmlParts.Add(xml);
                     }
                 }
             }
@@ -3010,6 +3007,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             _statusMessage.Text = $"Failed to load proto data: {ex.Message}";
         }
+    }
+
+    private static string? ReadBarXmbXml(BarArchiveEntry entry, Stream archiveStream)
+    {
+        int size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+        byte[] decompressed = new byte[size];
+        int readBytes = entry.ReadDataDecompressed(archiveStream, decompressed);
+        return readBytes > 0
+            ? XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes))
+            : null;
     }
 
     private Dictionary<string, string> LoadOrBuildGlobalTacticsActionTypes(BarArchive barFile, string barPath)
@@ -5071,31 +5078,38 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> LoadTechNamesFromBar()
     {
-        try
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var doc in GetBaseTechtreeDocumentsFromLoadedBar())
         {
-            var dataBarPath = ResolveDataBarPath();
-            if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
+            foreach (var name in doc.Descendants("tech")
+                .Select(x => (string?)x.Attribute("name"))
+                .Where(x => !string.IsNullOrWhiteSpace(x)))
             {
-                using var stream = File.OpenRead(dataBarPath);
-                var file = new BarArchive(stream);
-                if (file.Load(out _))
-                    return ExtractTechNamesFromBar(file, dataBarPath);
+                names.Add(name!);
             }
         }
-        catch
-        {
-            // Fallback to file-based tech lookup if BAR tech extraction fails.
-        }
 
-        return [];
+        return names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static List<string> ExtractTechNamesFromBar(BarArchive barFile, string barPath)
+    private IReadOnlyList<XDocument> GetBaseTechtreeDocumentsFromLoadedBar()
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_cachedBaseTechtreeDocuments != null)
+            return _cachedBaseTechtreeDocuments;
+
+        if (_protoDataBarFile == null || string.IsNullOrWhiteSpace(_protoDataBarPath) || !File.Exists(_protoDataBarPath))
+            return _cachedBaseTechtreeDocuments = [];
+
+        _cachedBaseTechtreeDocuments = ExtractTechtreeDocumentsFromBar(_protoDataBarFile, _protoDataBarPath);
+        return _cachedBaseTechtreeDocuments;
+    }
+
+    private static List<XDocument> ExtractTechtreeDocumentsFromBar(BarArchive barFile, string barPath)
+    {
+        var documents = new List<XDocument>();
         var entries = barFile.Entries;
         if (entries == null)
-            return [];
+            return documents;
 
         var techtreeEntries = entries
             .Where(e => e.Name.Contains("techtree", StringComparison.OrdinalIgnoreCase)
@@ -5105,33 +5119,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         using var tempStream = File.OpenRead(barPath);
         foreach (var entry in techtreeEntries)
         {
-            int size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
-            byte[] decompressed = new byte[size];
-            int readBytes = entry.ReadDataDecompressed(tempStream, decompressed);
-            if (readBytes <= 0)
-                continue;
-
-            var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
-            if (string.IsNullOrWhiteSpace(xml))
-                continue;
-
             try
             {
-                var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-                foreach (var name in doc.Descendants("tech")
-                    .Select(x => (string?)x.Attribute("name"))
-                    .Where(x => !string.IsNullOrWhiteSpace(x)))
-                {
-                    names.Add(name!);
-                }
+                var xml = ReadBarXmbXml(entry, tempStream);
+                if (!string.IsNullOrWhiteSpace(xml))
+                    documents.Add(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
             }
             catch
             {
-                // Skip malformed techtree entries and keep what we already found.
+                // Skip malformed techtree entries and keep the documents already extracted.
             }
         }
 
-        return names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        return documents;
     }
 
     private void AddCommandSection(string title, string itemLabel, IEnumerable<ProtoCommandEntry> entries, List<string> suggestions, List<CommandRowState> stateStore)
@@ -42273,6 +42273,18 @@ public partial class ProtoEditorWindow : SimpleWindow
         return await _gameData.LookupStringKeyAsync(stringId);
     }
 
+    private Task SaveTechnologyStringValuesAsync(IReadOnlyDictionary<string, string> updates)
+    {
+        if (updates.Count == 0)
+            return Task.CompletedTask;
+
+        var entries = LoadCurrentModStringEntries();
+        foreach (var update in updates)
+            entries[update.Key] = update.Value;
+        SaveCurrentModStringEntries(entries);
+        return Task.CompletedTask;
+    }
+
     private Dictionary<string, string> LoadCurrentModStringEntries(bool requireReadable = false)
     {
         var path = GetCurrentModStringsPath();
@@ -42645,7 +42657,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> PromptUnsavedChangesAsync()
     {
-        if (!_isDirty) return true;
+        if (!_isDirty && !(_technologyView?.IsDirty ?? false)) return true;
 
         var prompt = new Prompt(PromptType.Confirm, "Unsaved Changes", "You have unsaved changes. Do you want to discard them and continue?");
         await prompt.ShowDialog(this);
@@ -42708,6 +42720,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             var path = Path.Combine(localModsDir, picker.PickedItem, "game", "data", "gameplay", "proto_mods.xml");
             if (TryLoadModFile(path))
             {
+                _technologyHost.IsVisible = false;
+                _technologyHost.Content = null;
+                _technologyView = null;
                 _unitTabs.SelectedIndex = 1;
                 RefreshUnitList();
                 ClearEditorPanels();
@@ -42731,6 +42746,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (await EnsureLocalModAsync(forceNew: true))
         {
+            _technologyHost.IsVisible = false;
+            _technologyHost.Content = null;
+            _technologyView = null;
             _unitTabs.SelectedIndex = 1;
             RefreshUnitList();
             ClearEditorPanels();
@@ -46474,6 +46492,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async void Save_Click(object? sender, RoutedEventArgs e)
     {
+        if (_technologyHost.IsVisible && _technologyView != null)
+        {
+            if (_technologyView.Save())
+                _cachedTechNames = null;
+            _abilityMainSavePointerPending = false;
+            return;
+        }
+
         if (_isUnitSaveInProgress)
             return;
 
@@ -46605,7 +46631,26 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ProtounitEditView_Click(object? sender, RoutedEventArgs e)
     {
+        _technologyHost.IsVisible = false;
         _unitList.Focus();
+    }
+
+    private void TechnologyEditView_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_technologyView == null)
+        {
+            LoadCurrentModAssetCatalogs();
+            _technologyView = new TechnologyEditorView(
+                GetBaseTechtreeDocumentsFromLoadedBar(),
+                ResolveBaseGameplayDirectory(),
+                GetCurrentModGameplayFilePath("techtree_mods.xml"),
+                ResolveDisplayStringAsync,
+                SaveTechnologyStringValuesAsync,
+                _baseGameIconPaths.Concat(_customIconPaths));
+            _technologyHost.Content = _technologyView;
+        }
+
+        _technologyHost.IsVisible = true;
     }
 
     private async void ProtounitCommands_Click(object? sender, RoutedEventArgs e)

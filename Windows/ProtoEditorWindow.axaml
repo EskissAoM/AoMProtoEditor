@@ -220,7 +220,20 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button Classes="topNav" Content="Technologies" />
+                    <Button Classes="topNav" Content="Technology">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Spacing="4" Margin="4">
+                                    <Button Classes="topMenuItem"
+                                            Content="Edit / View"
+                                            Click="TechnologyEditView_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Tech Types"
+                                            IsEnabled="False" />
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
                     <Button Classes="topNav" Content="Gods" />
                     <Button Classes="topNav" Content="Settings" Click="Settings_Click" />
                 </StackPanel>
@@ -482,6 +495,7 @@
                             Click="XmlPreviewToggle_Click" />
                 </Grid>
             </Border>
+            <ContentControl x:Name="_technologyHost" Grid.ColumnSpan="5" IsVisible="False" ZIndex="20" />
         </Grid>
     </DockPanel>
         <Border x:Name="_startupLoadingOverlay"
