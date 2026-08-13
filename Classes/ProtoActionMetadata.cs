@@ -471,8 +471,8 @@ public static class ProtoActionMetadataCatalog
             DefaultVisibleTags: ["anim"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase)),
         ["Abduct"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["damage", "maxrange", "rate", "rof"],
-            HiddenByDefaultTags: new HashSet<string>(["damagebonus"], StringComparer.OrdinalIgnoreCase),
+            DefaultVisibleTags: ["damage", "maxrange", "rate", "rof", "modifyduration"],
+            HiddenByDefaultTags: new HashSet<string>(["damagebonus", "onhiteffect"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction", "exclusive"]),
         ["Hunting"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: ["maxrange", "rate", "typedmaxrange"],
@@ -532,7 +532,7 @@ public static class ProtoActionMetadataCatalog
             DefaultFlagTags: ["attackaction"]),
         ["Inline"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: [],
-            HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
+            HiddenByDefaultTags: new HashSet<string>(["rof", "maxrange", "damage", "damagebonus", "onhiteffect"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["isabductdrop"]),
         ["Move"] = new ProtoActionTypeEditorProfile(
             DefaultVisibleTags: [],

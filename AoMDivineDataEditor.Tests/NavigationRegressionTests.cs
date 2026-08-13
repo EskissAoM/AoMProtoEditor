@@ -93,6 +93,22 @@ public sealed class NavigationRegressionTests
     }
 
     [Fact]
+    public void ProtoUnitMenu_ExposesSoundSetManagerUsingTheAnimFileManagerProfile()
+    {
+        var root = FindProjectRoot();
+        var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var managerCode = File.ReadAllText(Path.Combine(root, "Windows", "AnimFileManagerWindow.cs"));
+
+        Assert.Contains(xaml.Descendants(), element =>
+            (string?)element.Attribute("Content") == "Sound Set" &&
+            (string?)element.Attribute("Click") == "ProtounitSoundSet_Click");
+        AssertHandlerCalls(code, "ProtounitSoundSet_Click", "OpenSoundSetManagerAsync");
+        Assert.Contains("XmlAssetManagerProfile.SoundSet", code, StringComparison.Ordinal);
+        Assert.Contains(@"game\\sound", managerCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProtoUnitSave_RestoresThePreviouslySelectedEditorTab()
     {
         var root = FindProjectRoot();

@@ -7,9 +7,9 @@ namespace AoMDivineDataEditor.Windows;
 
 internal sealed class AnimFileViewerWindow : SimpleWindow
 {
-    public AnimFileViewerWindow(string fileName, string xml)
+    public AnimFileViewerWindow(string fileName, string xml, string assetLabel = "Anim File")
     {
-        Title = $"View Anim File - {fileName}";
+        Title = $"View {assetLabel} - {fileName}";
         Width = 1000;
         Height = 720;
         MinWidth = 600;

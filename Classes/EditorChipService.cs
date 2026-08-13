@@ -18,7 +18,8 @@ public static class EditorChipService
             Background = Brush.Parse("#3a5a78"),
             CornerRadius = new CornerRadius(10),
             Padding = new Thickness(8, 4),
-            Margin = new Thickness(2)
+            Margin = new Thickness(2),
+            VerticalAlignment = VerticalAlignment.Center
         };
 
         var stack = new StackPanel { Orientation = Orientation.Horizontal };

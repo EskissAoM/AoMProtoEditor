@@ -268,8 +268,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedMinimapIcons;
     private IReadOnlyList<string> _baseGameIconPaths = [];
     private IReadOnlyList<AnimFileCatalogEntry> _baseGameAnimFiles = [];
+    private IReadOnlyList<AnimFileCatalogEntry> _baseGameSoundSets = [];
     private IReadOnlyList<string> _customIconPaths = [];
     private IReadOnlyList<AnimFileCatalogEntry> _customAnimFiles = [];
+    private IReadOnlyList<AnimFileCatalogEntry> _customSoundSets = [];
     private List<string>? _cachedProtoActionAnimationSuggestions;
     private List<string>? _cachedProtoActionAttachmentPathSuggestions;
     private List<string>? _cachedProtoActionModelAttachmentBoneSuggestions;
@@ -436,9 +438,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         public bool IsLinkedMaulAreaAction { get; set; }
         public bool IsCreatingMaulAreaCompanion { get; set; }
         public ProtoActionWidgetState? MaulAreaCompanion { get; set; }
+        public bool IsLinkedAbductDropAction { get; set; }
+        public bool IsCreatingAbductDropCompanion { get; set; }
+        public ProtoActionWidgetState? AbductDropCompanion { get; set; }
+        public required StackPanel AbductPostCoreOptionsContainer { get; set; }
         public Border? WidgetBorder { get; set; }
         public Button? RemoveButton { get; set; }
         public required Panel Container { get; set; }
+        public required StackPanel BodyContainer { get; set; }
+        public required TextBlock ActiveLabel { get; set; }
+        public required CheckBox ActiveCheckBox { get; set; }
         public required AutoCompleteBox NameAcb { get; set; }
         public required AutoCompleteBox TypeAcb { get; set; }
         public required Grid CoreFieldsGrid { get; set; }
@@ -474,6 +483,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         public List<ProtoActionOnHitEffectRowState> OnHitEffectRows { get; } = [];
         public HashSet<string> ForcedVisibleFieldTags { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> SelectedFlagTags { get; } = new(StringComparer.OrdinalIgnoreCase);
+        // Tracks only flags injected by the editor for a newly selected action type.
+        // XML/user-authored flags are deliberately not included so changing type cannot erase them.
+        public HashSet<string> DefaultInjectedFlagTags { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, CheckBox> CustomFlagControls { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<Control, string[]> CustomFlagSourceControls { get; } = [];
         public Dictionary<Control, string> MirroredSimpleSourceControls { get; } = [];
@@ -560,7 +572,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required AutoCompleteBox ModifyTypeAcb { get; set; }
         public required ComboBox ApplyTypeCb { get; set; }
         public required TextBox ValueTb { get; set; }
-        public required AutoCompleteBox ParamAcb { get; set; }
+        public required ComboBox ParamCb { get; set; }
         public required TextBlock ParamLabel { get; set; }
         public required TextBox ModifyAmountCapTb { get; set; }
     }
@@ -570,7 +582,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required XElement OriginalElement { get; set; }
         public required AutoCompleteBox ModifyTypeAcb { get; set; }
         public required ComboBox ApplyTypeCb { get; set; }
-        public required AutoCompleteBox ParamAcb { get; set; }
+        public required ComboBox ParamCb { get; set; }
         public required TextBox ValueTb { get; set; }
         public required ComboBox ActivationTypeCb { get; set; }
         public required TextBox CooldownTb { get; set; }
@@ -2782,6 +2794,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _protoDataBarPath = null;
         _baseGameIconPaths = [];
         _baseGameAnimFiles = [];
+        _baseGameSoundSets = [];
         ResetBarProtoActionSuggestionData();
 
         var dataBarPath = ResolveDataBarPath();
@@ -2810,6 +2823,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ExtractProtoFromBar(loadedBarFile, dataBarPath);
                 await LoadBaseGameIconCatalogAsync(dataBarPath);
                 await LoadBaseGameAnimFileCatalogAsync(dataBarPath);
+                await LoadBaseGameSoundSetCatalogAsync(dataBarPath);
             }
             catch (Exception ex)
             {
@@ -2837,6 +2851,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             : await AnimFileCatalog.LoadAsync(artDirectory);
     }
 
+    private async Task LoadBaseGameSoundSetCatalogAsync(string? dataBarPath = null)
+    {
+        var archivePath = ResolveSoundArchivePath(dataBarPath ?? ResolveDataBarPath());
+        _baseGameSoundSets = archivePath == null ? [] : await SoundSetCatalog.LoadAsync(archivePath);
+    }
+
     internal static string? ResolveIconArchivePath(string? dataBarPath)
     {
         if (string.IsNullOrWhiteSpace(dataBarPath))
@@ -2859,6 +2879,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             return null;
         var candidate = Path.Combine(gameDirectory, "art");
         return Directory.Exists(candidate) ? candidate : null;
+    }
+
+    internal static string? ResolveSoundArchivePath(string? dataBarPath)
+    {
+        if (string.IsNullOrWhiteSpace(dataBarPath)) return null;
+        var dataDirectory = Path.GetDirectoryName(Path.GetFullPath(dataBarPath));
+        var gameDirectory = dataDirectory == null ? null : Directory.GetParent(dataDirectory)?.FullName;
+        if (gameDirectory == null) return null;
+        var candidate = Path.Combine(gameDirectory, "sound", "Sound.bar");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     private string? ResolveDataBarPath()
@@ -3549,6 +3579,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static Control CreateProtoActionSelectorContent(ProtoActionWidgetState state, string actionName)
     {
+        actionName = string.IsNullOrWhiteSpace(actionName) ? "Unnamed action" : actionName.Trim();
+
         if (!state.IsCurrentTacticsAction)
             return new TextBlock { Text = actionName, VerticalAlignment = VerticalAlignment.Center };
 
@@ -5024,10 +5056,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         return gameDirectory == null ? null : Path.Combine(gameDirectory, "art");
     }
 
+    private string? GetCurrentModSoundDirectory()
+    {
+        var gameDirectory = GetCurrentModGameDirectory();
+        return gameDirectory == null ? null : Path.Combine(gameDirectory, "sound");
+    }
+
     private void LoadCurrentModAssetCatalogs()
     {
         _customIconPaths = CustomAssetCatalog.LoadIconPaths(GetCurrentModIconResourcesDirectory());
         _customAnimFiles = CustomAssetCatalog.LoadAnimFiles(GetCurrentModArtDirectory());
+        _customSoundSets = CustomAssetCatalog.LoadSoundSets(GetCurrentModSoundDirectory());
     }
 
     private List<string> LoadTechNamesFromBar()
@@ -5508,6 +5547,55 @@ public partial class ProtoEditorWindow : SimpleWindow
         "type",
     };
 
+    private static readonly HashSet<string> CompactProtoActionAnimationFieldTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "walkanim",
+        "idleanim",
+        "anim",
+        "typedanim",
+        "landanim",
+        "reloadanim",
+        "wateranim",
+        "sizeclassanim",
+        "chargedmodifyvfx",
+        "projectile",
+    };
+
+    private static void ApplyProtoActionFieldWidth(Control editor, string tag)
+    {
+        const double animationFieldWidth = 200;
+        var isCompactBoneField = tag.Equals("modelattachmentbone", StringComparison.OrdinalIgnoreCase) ||
+                                 tag.Equals("targetattachmentbone", StringComparison.OrdinalIgnoreCase) ||
+                                 tag.Equals("infectionattachmentbone", StringComparison.OrdinalIgnoreCase);
+        var fieldWidth = CompactProtoActionAnimationFieldTags.Contains(tag) ||
+                         tag.Equals("modelattachment", StringComparison.OrdinalIgnoreCase)
+            ? animationFieldWidth
+            : isCompactBoneField
+                ? 100
+                : (double?)null;
+        if (fieldWidth == null)
+            return;
+
+        switch (editor)
+        {
+            case TextBox textBox:
+                textBox.Width = fieldWidth.Value;
+                textBox.MaxWidth = fieldWidth.Value;
+                break;
+            case AutoCompleteBox autoCompleteBox:
+                autoCompleteBox.Width = fieldWidth.Value;
+                autoCompleteBox.MaxWidth = fieldWidth.Value;
+                if (isCompactBoneField)
+                    KeepAutoCompleteTextStartVisible(autoCompleteBox);
+                break;
+            case AssetPathEditor assetPathEditor:
+                assetPathEditor.Width = fieldWidth.Value;
+                assetPathEditor.Editor.Width = fieldWidth.Value;
+                assetPathEditor.Editor.MaxWidth = fieldWidth.Value;
+                break;
+        }
+    }
+
     private static bool IsKnownProtoActionFlagTag(string tag)
         => !string.IsNullOrWhiteSpace(tag) &&
            ProtoActionMetadataCatalog.GetKnownFlagTags().Contains(tag.Trim(), StringComparer.OrdinalIgnoreCase);
@@ -5557,6 +5645,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsAutoConvertActionType(string actionType)
         => actionType.Equals("AutoConvert", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsAttachingActionType(string actionType)
+        => actionType.Equals("Attaching", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsAutoBoostActionType(string actionType)
         => actionType.Equals("AutoBoost", StringComparison.OrdinalIgnoreCase);
 
@@ -5591,6 +5682,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         => IsAssistAttackActionType(actionType) &&
            (tag.Equals("modifymultiplier", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("modifytargetlimit", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsManagedAttachingFieldTag(string actionType, string tag)
+        => IsAttachingActionType(actionType) &&
+           tag.Equals("singleuse", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsReflectAttackActionType(string actionType)
         => actionType.Equals("ReflectAttack", StringComparison.OrdinalIgnoreCase);
@@ -5676,6 +5771,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsMaulActionType(string actionType)
         => actionType.Equals("Maul", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsAbductActionType(string actionType)
+        => actionType.Equals("Abduct", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsTeleportAttackActionType(string actionType)
         => actionType.Equals("TeleportAttack", StringComparison.OrdinalIgnoreCase);
 
@@ -5686,7 +5784,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         => actionType.Equals("Throw", StringComparison.OrdinalIgnoreCase);
 
     private static bool UsesCoreMinRange(string actionType)
-        => IsJumpAttackActionType(actionType) || IsMaulActionType(actionType) || IsTeleportAttackActionType(actionType) || IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType);
+        => IsJumpAttackActionType(actionType) || IsMaulActionType(actionType) || IsAbductActionType(actionType) || IsTeleportAttackActionType(actionType) || IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType);
+
+    private static bool IsManagedCoreMinRangeFieldTag(string actionType, string tag)
+        => UsesCoreMinRange(actionType) &&
+           tag.Equals("minrange", StringComparison.OrdinalIgnoreCase);
 
     private static void ClearProtoActionThrowConfiguration(ProtoActionWidgetState state)
     {
@@ -5704,7 +5806,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!UsesCoreMinRange(actionType) || state.IsLinkedMaulAreaAction)
             return false;
 
-        if (IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType))
+        if (IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType) || IsAbductActionType(actionType))
             return state.ForcedVisibleFieldTags.Contains("minrange") ||
                    !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(action, "minrange"));
 
@@ -5792,6 +5894,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                "minrange", "modifyamount", "rollingdamagefactor", "anim", "walkanim", "idleanim", "impacteffect",
                "throwdistancemax", "throwdistancemin", "throwmaxheight", "throwvelocity", "maxsizeclass"
            }.Contains(tag, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsManagedAbductFieldTag(string actionType, string tag)
+        => IsAbductActionType(actionType) &&
+           new[] { "modifyduration", "splashvfxproto", "walkanim", "idleanim" }
+               .Contains(tag, StringComparer.OrdinalIgnoreCase);
 
     private static bool IsManagedMaulFieldTag(string actionType, string tag)
         => IsMaulActionType(actionType) &&
@@ -6101,6 +6208,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var normalized = tag.Trim();
              if (HardcodedProtoActionFieldTags.Contains(normalized))
                  return;
+             if (IsManagedCoreMinRangeFieldTag(actionType, normalized))
+                 return;
              if (IsManagedModelAttachmentFieldTag(actionType, normalized))
                  return;
              if (IsManagedAbductDamageAreaFieldTag(actionType, normalized))
@@ -6111,6 +6220,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                  return;
              if (IsManagedAssistAttackFieldTag(actionType, normalized))
                  return;
+             if (IsManagedAttachingFieldTag(actionType, normalized))
+                 return;
              if (IsManagedJumpAttackFieldTag(actionType, normalized))
                  return;
              if (IsManagedChainAttackFieldTag(actionType, normalized))
@@ -6118,6 +6229,8 @@ public partial class ProtoEditorWindow : SimpleWindow
              if (IsManagedAoeAttackFieldTag(actionType, normalized))
                  return;
              if (IsManagedLinearAreaAttackFieldTag(actionType, normalized))
+                 return;
+             if (IsManagedAbductFieldTag(actionType, normalized))
                  return;
              if (IsManagedMaulFieldTag(actionType, normalized))
                  return;
@@ -6200,15 +6313,18 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var normalized = tag.Trim();
              if (HardcodedProtoActionFieldTags.Contains(normalized) ||
+                 IsManagedCoreMinRangeFieldTag(actionType, normalized) ||
                  IsManagedModelAttachmentFieldTag(actionType, normalized) ||
                  IsManagedAbductDamageAreaFieldTag(actionType, normalized) ||
                  IsManagedAutoBoostFieldTag(actionType, normalized) ||
                  IsManagedAutoRangedModifyFieldTag(actionType, normalized) ||
                  IsManagedAssistAttackFieldTag(actionType, normalized) ||
+                 IsManagedAttachingFieldTag(actionType, normalized) ||
                  IsManagedJumpAttackFieldTag(actionType, normalized) ||
                  IsManagedChainAttackFieldTag(actionType, normalized) ||
                  IsManagedAoeAttackFieldTag(actionType, normalized) ||
                  IsManagedLinearAreaAttackFieldTag(actionType, normalized) ||
+                 IsManagedAbductFieldTag(actionType, normalized) ||
                  IsManagedMaulFieldTag(actionType, normalized) ||
                  IsManagedTeleportAttackFieldTag(actionType, normalized) ||
                  IsManagedThrowFieldTag(actionType, normalized) ||
@@ -6256,6 +6372,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var normalized = tag?.Trim() ?? "";
             if (string.IsNullOrWhiteSpace(normalized) || HardcodedProtoActionFieldTags.Contains(normalized))
                 continue;
+             if (IsManagedCoreMinRangeFieldTag(actionType, normalized))
+                 continue;
              if (IsManagedModelAttachmentFieldTag(actionType, normalized))
                  continue;
              if (IsManagedAbductDamageAreaFieldTag(actionType, normalized))
@@ -6266,7 +6384,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                  continue;
              if (IsManagedAssistAttackFieldTag(actionType, normalized))
                  continue;
+             if (IsManagedAttachingFieldTag(actionType, normalized))
+                 continue;
              if (IsManagedJumpAttackFieldTag(actionType, normalized))
+                 continue;
+             if (IsManagedAbductFieldTag(actionType, normalized))
                  continue;
              if (IsManagedMaulFieldTag(actionType, normalized))
                  continue;
@@ -6601,6 +6723,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             "icon" => _baseGameIconPaths.Concat(_customIconPaths),
             "animfile" => _baseGameAnimFiles.Concat(_customAnimFiles).Select(entry => entry.Path),
+            "soundsetfile" => _baseGameSoundSets.Concat(_customSoundSets).Select(entry => entry.Path),
             _ => []
         };
         return staticValues.Concat(catalogValues).Concat(barValues).Concat(modValues).Concat(additionalValues ?? []);
@@ -7983,6 +8106,42 @@ public partial class ProtoEditorWindow : SimpleWindow
         return defaults;
     }
 
+    private static readonly HashSet<string> ProtoActionTypesShowingOnHitEffectByDefault = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Attack",
+        "BurstHeal",
+        "Pickup",
+        "Hunting",
+        "AutoBoost",
+        "ChainAttack",
+        "AoEAttack",
+        "AssistAttack",
+        "LinearAreaAttack",
+        "AreaRestrict",
+        "Lure",
+        "JumpAttack",
+        "BuckAttack",
+        "Maul",
+        "TeleportAttack",
+        "Gore",
+        "Throw",
+        "TrapThrow",
+        "ReflectAttack",
+        "WaterTornado",
+        "DrainResurrection",
+    };
+
+    private static bool ShouldShowProtoActionOnHitEffectByDefault(string actionType)
+        => ProtoActionTypesShowingOnHitEffectByDefault.Contains(actionType);
+
+    private static bool IsDeferredComplexProtoActionAttributeAvailableFromPicker(string actionType, string tag)
+    {
+        if (!tag.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return !ShouldShowProtoActionOnHitEffectByDefault(actionType);
+    }
+
     private List<(string Tag, string Label)> GetAvailableProtoActionAttributePickerOptions(ProtoActionWidgetState state)
     {
         var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? "");
@@ -7999,6 +8158,7 @@ public partial class ProtoEditorWindow : SimpleWindow
               .Where(x => !IsKnownProtoActionFlagTag(x.Tag))
               .Where(x => !IsManagedModelAttachmentFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedAbductDamageAreaFieldTag(actionType, x.Tag))
+              .Where(x => !IsManagedAbductFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedStackControlFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedBolsterStructuredFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedChargedFieldTag(actionType, x.Tag))
@@ -8006,11 +8166,21 @@ public partial class ProtoEditorWindow : SimpleWindow
               .Where(x => !IsManagedReleaseSkyLanternFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedIdleStatBonusFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedDistanceModifyFieldTag(actionType, x.Tag))
+              .Where(x => !IsManagedCoreMinRangeFieldTag(actionType, x.Tag))
               .Where(x => !x.Tag.Equals("modifyunittype", StringComparison.OrdinalIgnoreCase))
               .Where(x => !usedTags.Contains(x.Tag))
             .OrderBy(x => x.Label, StringComparer.OrdinalIgnoreCase)
             .Select(x => (x.Tag, x.Label))
             .ToList();
+
+        var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
+        var hasOnHitEffect = GetProtoActionOnHitEffectElements(effectiveAction).Count > 0 || state.OnHitEffectRows.Count > 0;
+        if (!hasOnHitEffect &&
+            !usedTags.Contains("onhiteffect") &&
+            IsDeferredComplexProtoActionAttributeAvailableFromPicker(actionType, "onhiteffect"))
+        {
+            options.Add(("onhiteffect", ProtoActionMetadataCatalog.GetFieldDefinition("onhiteffect").Label));
+        }
 
         var currentModifyType = state.AdditionalFieldControls.TryGetValue("modifytype", out var modifyTypeControl)
             ? ProtoConstants.GetModifyTypeValue(ReadTextLikeControlValue(modifyTypeControl))
@@ -8055,7 +8225,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static string GetProtoActionFieldLabel(string actionType, string tag, string defaultLabel)
         => IsBolsterActionType(actionType) && tag.Equals("modifyamount", StringComparison.OrdinalIgnoreCase)
-            ? "Max Number Targets"
+            ? "Max stacks on target"
             : IsAssistAttackActionType(actionType) && tag.Equals("modifymultiplier", StringComparison.OrdinalIgnoreCase)
                 ? "Lifesteal"
                 : IsAssistAttackActionType(actionType) && tag.Equals("modifytargetlimit", StringComparison.OrdinalIgnoreCase)
@@ -8076,7 +8246,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         RenderAutoBoostModeControls(state, effectiveAction, actionType);
         RenderJumpAttackOptions(state, actionType);
         RenderBuckAttackOptions(state, effectiveAction, actionType);
-        EnsureJumpAttackCoreLayout(state, effectiveAction, actionType);
 
         var showRof = ShouldShowProtoActionHardcodedField(state, effectiveAction, actionType, "rof");
         var showMaxRange = !state.IsLinkedMaulAreaAction &&
@@ -8094,6 +8263,20 @@ public partial class ProtoEditorWindow : SimpleWindow
         state.MaxRangeLabel.IsVisible = showMaxRange;
         state.MaxRangeTb.IsVisible = showMaxRange;
 
+        var showCoreMinRange = ShouldShowCoreMinRange(state, effectiveAction, actionType);
+        if (showMaxRange && !showRof && !showCoreMinRange)
+        {
+            state.CoreFieldsGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 80, Auto");
+            Grid.SetColumn(state.MaxRangeLabel, 0);
+            Grid.SetColumn(state.MaxRangeTb, 1);
+        }
+        state.MaxRangeLabel.Margin = new Thickness(
+            showMaxRange && !showRof && !showCoreMinRange ? 0 : 18,
+            0,
+            10,
+            0);
+        EnsureJumpAttackCoreLayout(state, effectiveAction, actionType);
+
         // AreaMutate shares the AutoRanged targeting editor, but Keep Alive belongs with its range.
         foreach (var existingKeepAlive in state.CoreFieldsGrid.Children
                      .OfType<Control>()
@@ -8104,9 +8287,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (IsAreaMutateActionType(actionType))
         {
-            state.CoreFieldsGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 80, Auto, 80, Auto");
-            Grid.SetColumn(state.MaxRangeLabel, 2);
-            Grid.SetColumn(state.MaxRangeTb, 3);
+            var maxRangeOnly = showMaxRange && !showRof && !showCoreMinRange;
+            state.CoreFieldsGrid.ColumnDefinitions = maxRangeOnly
+                ? new ColumnDefinitions("Auto, 80, Auto")
+                : new ColumnDefinitions("Auto, 80, Auto, 80, Auto");
+            Grid.SetColumn(state.MaxRangeLabel, maxRangeOnly ? 0 : 2);
+            Grid.SetColumn(state.MaxRangeTb, maxRangeOnly ? 1 : 3);
             var keepAliveCheckBox = new CheckBox
             {
                 Tag = "areamutate.keepalive",
@@ -8126,8 +8312,43 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             state.CustomFlagControls["keepalive"] = keepAliveCheckBox;
             RegisterProtoActionFlagSourceControl(state, keepAliveCheckBox, "keepalive");
-            Grid.SetColumn(keepAliveCheckBox, 4);
+            Grid.SetColumn(keepAliveCheckBox, maxRangeOnly ? 2 : 4);
             state.CoreFieldsGrid.Children.Add(keepAliveCheckBox);
+        }
+
+        foreach (var existingSingleUse in state.CoreFieldsGrid.Children
+                     .OfType<Control>()
+                     .Where(control => string.Equals(control.Tag as string, "attaching.singleuse", StringComparison.Ordinal))
+                     .ToList())
+        {
+            state.CoreFieldsGrid.Children.Remove(existingSingleUse);
+        }
+        if (IsAttachingActionType(actionType) && showMaxRange)
+        {
+            var singleUseCheckBox = new CheckBox
+            {
+                Tag = "attaching.singleuse",
+                Content = "Single Use",
+                IsChecked = state.SelectedFlagTags.Contains("singleuse"),
+                IsEnabled = !_isReadOnly,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0)
+            };
+            singleUseCheckBox.IsCheckedChanged += async (_, _) =>
+            {
+                if (_isPopulating || !await CheckStartLocalMod()) return;
+                if (singleUseCheckBox.IsChecked == true) state.SelectedFlagTags.Add("singleuse");
+                else state.SelectedFlagTags.Remove("singleuse");
+                RenderProtoActionFlags(state);
+                MarkDirty();
+            };
+            state.CustomFlagControls["singleuse"] = singleUseCheckBox;
+            RegisterProtoActionFlagSourceControl(state, singleUseCheckBox, "singleuse");
+            var singleUseColumn = Grid.GetColumn(state.MaxRangeTb) + 1;
+            while (state.CoreFieldsGrid.ColumnDefinitions.Count <= singleUseColumn)
+                state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+            Grid.SetColumn(singleUseCheckBox, singleUseColumn);
+            state.CoreFieldsGrid.Children.Add(singleUseCheckBox);
         }
 
         var selfOnlyAutoBoost = IsAutoBoostActionType(actionType) &&
@@ -8288,7 +8509,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void EnsureJumpAttackCoreLayout(ProtoActionWidgetState state, ProtoAction effectiveAction, string actionType)
     {
-        var usesAttackLikeRangeLayout = IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType);
+        var usesAttackLikeRangeLayout = IsAttackActionType(actionType) || IsChainAttackActionType(actionType) || IsAoeAttackActionType(actionType) || IsLinearAreaAttackActionType(actionType) || IsAbductActionType(actionType);
         foreach (var existingAttackMinRangeButton in state.CoreFieldsGrid.Children
                      .OfType<Control>()
                      .Where(control => string.Equals(control.Tag as string, "attack.minrange.button", StringComparison.Ordinal) ||
@@ -8305,11 +8526,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.JumpAttackMinRangeTb.IsVisible = false;
                 if (state.JumpAttackMinRangeLabel != null)
                     state.JumpAttackMinRangeLabel.IsVisible = false;
-                state.CoreFieldsGrid.ColumnDefinitions = usesAttackLikeRangeLayout
-                    ? new ColumnDefinitions("Auto, 80, Auto, Auto, 80")
-                    : new ColumnDefinitions("Auto, 80, Auto, 80");
-                Grid.SetColumn(state.MaxRangeLabel, usesAttackLikeRangeLayout ? 3 : 2);
-                Grid.SetColumn(state.MaxRangeTb, usesAttackLikeRangeLayout ? 4 : 3);
+                var showRof = state.RofLabel.IsVisible;
+                state.CoreFieldsGrid.ColumnDefinitions = showRof
+                    ? usesAttackLikeRangeLayout
+                        ? new ColumnDefinitions("Auto, 80, Auto, Auto, 80")
+                        : new ColumnDefinitions("Auto, 80, Auto, 80")
+                    : usesAttackLikeRangeLayout
+                        ? new ColumnDefinitions("Auto, 80, Auto")
+                        : new ColumnDefinitions("Auto, 80");
+                Grid.SetColumn(state.MaxRangeLabel, showRof ? (usesAttackLikeRangeLayout ? 3 : 2) : 0);
+                Grid.SetColumn(state.MaxRangeTb, showRof ? (usesAttackLikeRangeLayout ? 4 : 3) : 1);
                 var supportsAttackCombatRanges = !IsAttackActionType(actionType) ||
                                                  state.SelectedFlagTags.Contains("handlogic") ||
                                                  state.SelectedFlagTags.Contains("rangedlogic");
@@ -8531,8 +8757,16 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void RefreshProtoActionMetadataPanels(ProtoActionWidgetState state)
     {
-        EnsureProtoActionDefaultFlags(state);
-        var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? "");
+        var selectedType = GetExactProtoActionTypeMatch(state.TypeAcb.Text);
+        var hasSelectedType = !string.IsNullOrWhiteSpace(selectedType);
+        state.BodyContainer.IsVisible = hasSelectedType;
+        state.ActiveLabel.IsVisible = hasSelectedType;
+        state.ActiveCheckBox.IsVisible = hasSelectedType;
+        EnsureProtoActionDefaultFlags(state, selectedType ?? "");
+        if (!hasSelectedType)
+            return;
+
+        var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", selectedType!);
         ReorderProtoActionSectionContainers(state, actionType);
         var currentSimpleValues = state.AdditionalFieldControls.ToDictionary(
             kvp => kvp.Key,
@@ -8561,6 +8795,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         RenderProtoActionFullChargedFields(state, currentFullChargedElements);
         RenderProtoActionStructuredFields(state, currentStructuredValues);
         ArrangeRampageLayout(state, actionType);
+        RenderAbductPostCoreFields(state, currentSimpleValues, actionType);
+        RenderAbductPostRateAnimationFields(state, currentSimpleValues, actionType);
         RenderTeleportAttackPostRateFields(state, currentSimpleValues, actionType);
         IReadOnlyList<string>? newOnHitEffectTypes = null;
         string? defaultOnHitEffectType = null;
@@ -8581,24 +8817,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 defaultOnHitEffectType = "SelfModify";
             }
         }
-        if (actionType.Equals("AreaStealth", StringComparison.OrdinalIgnoreCase) ||
-            IsLikeBonusActionType(actionType) ||
-            IsRampageActionType(actionType) ||
-            IsConditionalShieldActionType(actionType) ||
-            IsAutoRangedModifyActionType(actionType) ||
-            IsAreaMutateActionType(actionType) ||
-            IsAutoRangedAttachActionType(actionType) ||
-            IsAssistAttackActionType(actionType) ||
-            IsSpawnAssistActionType(actionType) ||
-            IsChargedModifyActionType(actionType))
-        {
-            state.OnHitEffectsContainer.Children.Clear();
-            state.OnHitEffectRows.Clear();
-        }
-        else
-        {
-            RenderProtoActionOnHitEffects(state, currentOnHitEffectEntries, newOnHitEffectTypes, defaultOnHitEffectType);
-        }
+        RenderProtoActionOnHitEffects(state, currentOnHitEffectEntries, newOnHitEffectTypes, defaultOnHitEffectType);
+        var hasOnHitEffects = (currentOnHitEffectEntries?.Count ?? 0) > 0 ||
+                              GetProtoActionOnHitEffectElements(CreateEffectiveProtoActionSnapshot(state)).Count > 0;
+        state.OnHitEffectsContainer.IsVisible = ShouldShowProtoActionOnHitEffectByDefault(actionType) ||
+                                                state.ForcedVisibleFieldTags.Contains("onhiteffect") ||
+                                                hasOnHitEffects;
         RenderProtoActionFlags(state);
         RenderProtoActionOptionalFields(state, currentSimpleValues, currentStructuredValues);
         MoveLikeBonusAttachmentRowsBelowRate(state, actionType);
@@ -8636,6 +8860,202 @@ public partial class ProtoEditorWindow : SimpleWindow
             state.AdditionalFieldsContainer.Children.Remove(button);
             state.StructuredFieldsContainer.Children.Add(button);
         }
+    }
+
+    private void RenderAbductPostCoreFields(
+        ProtoActionWidgetState state,
+        IReadOnlyDictionary<string, string> currentValues,
+        string actionType)
+    {
+        state.AbductPostCoreOptionsContainer.Children.Clear();
+        state.AbductPostCoreOptionsContainer.IsVisible = IsAbductActionType(actionType);
+        if (!IsAbductActionType(actionType))
+            return;
+
+        var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
+        var duration = currentValues.TryGetValue("modifyduration", out var currentDuration)
+            ? currentDuration
+            : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modifyduration");
+        var splashVfxProto = currentValues.TryGetValue("splashvfxproto", out var currentSplash)
+            ? currentSplash
+            : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "splashvfxproto");
+        var showSplashVfxProto = state.ForcedVisibleFieldTags.Contains("splashvfxproto") ||
+                                 !string.IsNullOrWhiteSpace(splashVfxProto);
+
+        var row = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+
+        var durationEditor = new TextBox
+        {
+            Text = duration,
+            IsEnabled = !_isReadOnly,
+            Width = 110
+        };
+        AttachProtoActionDecimalBehavior(durationEditor);
+        durationEditor.TextChanged += async (_, _) =>
+        {
+            if (!_isPopulating && await CheckStartLocalMod())
+                MarkDirty();
+        };
+        state.AdditionalFieldControls["modifyduration"] = durationEditor;
+        row.Children.Add(CreateLabeledFieldGroup("Duration (ms):", durationEditor));
+
+        if (showSplashVfxProto)
+        {
+            var splashEditor = new AutoCompleteBox
+            {
+                Text = splashVfxProto,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                IsEnabled = !_isReadOnly,
+                Width = 200
+            };
+            ConfigureStrictSuggestionAutoComplete(splashEditor, GetAvailableTrainUnitNames(), splashVfxProto);
+            splashEditor.TextChanged += async (_, _) =>
+            {
+                if (!_isPopulating && await CheckStartLocalMod())
+                    MarkDirty();
+            };
+            state.AdditionalFieldControls["splashvfxproto"] = splashEditor;
+            var splashGroup = CreateLabeledFieldGroup("Splash VFX Proto:", splashEditor);
+            splashGroup.Margin = new Thickness(14, 0, 0, 0);
+            row.Children.Add(splashGroup);
+
+            if (!_isReadOnly)
+            {
+                var removeButton = new Button
+                {
+                    Classes = { "remove-button" },
+                    Margin = new Thickness(5, 0, 0, 0)
+                };
+                removeButton.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.ForcedVisibleFieldTags.Remove("splashvfxproto");
+                    splashEditor.Text = "";
+                    state.AdditionalFieldControls.Remove("splashvfxproto");
+                    ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "splashvfxproto", "");
+                    RefreshProtoActionMetadataPanels(state);
+                    MarkDirty();
+                };
+                row.Children.Add(removeButton);
+            }
+        }
+        else if (!_isReadOnly)
+        {
+            var addSplashButton = new Button
+            {
+                Content = "Splash VFX Proto",
+                Background = Brush.Parse("#2b7a0b"),
+                Margin = new Thickness(14, 0, 0, 0)
+            };
+            addSplashButton.Click += async (_, _) =>
+            {
+                if (!await CheckStartLocalMod())
+                    return;
+                state.ForcedVisibleFieldTags.Add("splashvfxproto");
+                RefreshProtoActionMetadataPanels(state);
+                MarkDirty();
+            };
+            row.Children.Add(addSplashButton);
+        }
+
+        state.AbductPostCoreOptionsContainer.Children.Add(row);
+    }
+
+    private void RenderAbductPostRateAnimationFields(
+        ProtoActionWidgetState state,
+        IReadOnlyDictionary<string, string> currentValues,
+        string actionType)
+    {
+        if (!IsAbductActionType(actionType))
+            return;
+
+        var effectiveAction = CreateEffectiveProtoActionSnapshot(state);
+        var row = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+
+        void AddAnimationField(string tag, string buttonLabel, string fieldLabel)
+        {
+            var value = currentValues.TryGetValue(tag, out var editedValue)
+                ? editedValue
+                : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag);
+            var visible = state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(value);
+
+            if (!visible)
+            {
+                if (_isReadOnly)
+                    return;
+                var addButton = new Button
+                {
+                    Content = buttonLabel,
+                    Background = Brush.Parse("#2b7a0b"),
+                    Margin = new Thickness(row.Children.Count == 0 ? 0 : 8, 0, 0, 0)
+                };
+                addButton.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.ForcedVisibleFieldTags.Add(tag);
+                    RefreshProtoActionMetadataPanels(state);
+                    MarkDirty();
+                };
+                row.Children.Add(addButton);
+                return;
+            }
+
+            var editor = new AutoCompleteBox
+            {
+                Text = value,
+                ItemsSource = GetAvailableProtoActionAnimationNames(),
+                FilterMode = AutoCompleteFilterMode.Contains,
+                IsEnabled = !_isReadOnly
+            };
+            EditorTextFieldStyle.ConfigureSelector(editor);
+            ApplyProtoActionFieldWidth(editor, tag);
+            EnableDropdownAutoComplete(editor);
+            editor.TextChanged += async (_, _) =>
+            {
+                if (!_isPopulating && await CheckStartLocalMod())
+                    MarkDirty();
+            };
+            state.AdditionalFieldControls[tag] = editor;
+            var group = CreateLabeledFieldGroup(fieldLabel + ":", editor);
+            group.Margin = new Thickness(row.Children.Count == 0 ? 0 : 14, 0, 0, 0);
+            row.Children.Add(group);
+
+            if (!_isReadOnly)
+            {
+                var removeButton = new Button
+                {
+                    Classes = { "remove-button" },
+                    Margin = new Thickness(5, 0, 0, 0)
+                };
+                removeButton.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.ForcedVisibleFieldTags.Remove(tag);
+                    editor.Text = "";
+                    state.AdditionalFieldControls.Remove(tag);
+                    ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
+                    RefreshProtoActionMetadataPanels(state);
+                    MarkDirty();
+                };
+                row.Children.Add(removeButton);
+            }
+        }
+
+        AddAnimationField("walkanim", "Walk anim", "Walk anim");
+        AddAnimationField("idleanim", "Idle anim", "Idle anim");
+        if (row.Children.Count > 0)
+            state.StructuredFieldsContainer.Children.Add(row);
     }
 
     private void RenderTeleportAttackPostRateFields(
@@ -8702,8 +9122,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ReorderProtoActionSectionContainers(ProtoActionWidgetState state, string actionType)
     {
-        if (state.Container is not Panel container)
-            return;
+        var container = state.BodyContainer;
 
         var allSections = new Control[]
         {
@@ -8771,11 +9190,15 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         foreach (var section in allSections)
             container.Children.Remove(section);
+        container.Children.Remove(state.AbductPostCoreOptionsContainer);
 
         var insertIndex = container.Children.IndexOf(state.CoreFieldsGrid);
         if (insertIndex < 0)
             insertIndex = container.Children.Count - 1;
         insertIndex++;
+
+        if (IsAbductActionType(actionType))
+            container.Children.Insert(insertIndex++, state.AbductPostCoreOptionsContainer);
 
         foreach (var section in orderedSections)
             container.Children.Insert(insertIndex++, section);
@@ -8830,17 +9253,39 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void EnsureProtoActionDefaultFlags(ProtoActionWidgetState state)
+    private void EnsureProtoActionDefaultFlags(ProtoActionWidgetState state, string actionType)
     {
-        var actionType = ResolveProtoActionType(state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? "");
-        var editorProfile = ProtoActionMetadataCatalog.GetEditorProfile(actionType);
-        if (editorProfile.DefaultFlagTags == null || editorProfile.DefaultFlagTags.Count == 0)
-            return;
+        actionType = actionType.Trim();
+        if (state.IsNewCustomAction &&
+            !string.Equals(state.DefaultFlagsInitializedForType, actionType, StringComparison.OrdinalIgnoreCase))
+        {
+            // A new action may be previewed through several types before the user settles on one.
+            // Remove only defaults that this editor injected for the previous previewed type.
+            foreach (var flagTag in state.DefaultInjectedFlagTags.ToList())
+            {
+                state.SelectedFlagTags.Remove(flagTag);
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, flagTag, "");
+            }
+            state.DefaultInjectedFlagTags.Clear();
+        }
 
+        if (string.IsNullOrWhiteSpace(actionType))
+        {
+            state.DefaultFlagsInitializedForType = "";
+            return;
+        }
+
+        var editorProfile = ProtoActionMetadataCatalog.GetEditorProfile(actionType);
         if (string.Equals(state.DefaultFlagsInitializedForType, actionType, StringComparison.OrdinalIgnoreCase))
             return;
 
         if (!state.IsNewCustomAction)
+        {
+            state.DefaultFlagsInitializedForType = actionType;
+            return;
+        }
+
+        if (editorProfile.DefaultFlagTags == null || editorProfile.DefaultFlagTags.Count == 0)
         {
             state.DefaultFlagsInitializedForType = actionType;
             return;
@@ -8854,6 +9299,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 continue;
 
             state.SelectedFlagTags.Add(flagTag);
+            state.DefaultInjectedFlagTags.Add(flagTag);
             ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, flagTag, "1");
         }
 
@@ -8883,6 +9329,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly
             };
             EditorTextFieldStyle.ConfigureSelector(animationEditor);
+            ApplyProtoActionFieldWidth(animationEditor, "anim");
             EnableDropdownAutoComplete(animationEditor);
             animationEditor.TextChanged += async (_, _) =>
             {
@@ -8937,6 +9384,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                           (!(tag.Equals("anim", StringComparison.OrdinalIgnoreCase) ||
                              tag.Equals("maxsizeclass", StringComparison.OrdinalIgnoreCase)) ||
                            !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag))))
+            .Where(tag => !IsManagedAbductFieldTag(actionType, tag))
             .Where(tag => !(showOptionalModelAttachmentFields &&
                             OptionalModelAttachmentTags.Contains(tag, StringComparer.OrdinalIgnoreCase)))
             .Where(tag => !(hasDamageAreaData &&
@@ -9006,7 +9454,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsDistanceModifyActionType(actionType) ||
             IsChainAttackActionType(actionType) ||
             IsAoeAttackActionType(actionType) ||
-            IsLinearAreaAttackActionType(actionType);
+            IsLinearAreaAttackActionType(actionType) ||
+            IsAbductActionType(actionType);
 
         if (primaryFieldTags.Count == 0 && _isReadOnly && !hasManagedCustomLayout && !IsAssistAttackActionType(actionType) && !IsAttackActionType(actionType))
             return;
@@ -9121,6 +9570,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (AssetPathFieldTags.Contains(tag))
                 editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
+            ApplyProtoActionFieldWidth(editor, tag);
 
             if (!AssetPathFieldTags.Contains(tag) && editor is TextBox additionalTb)
             {
@@ -9226,6 +9676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (await CheckStartLocalMod())
                         MarkDirty();
                 };
+                ApplyProtoActionFieldWidth(editor, tag);
                 state.AdditionalFieldControls[tag] = editor;
                 return editor;
             }
@@ -9278,6 +9729,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 0, editorColumn == 1 ? 12 : 0, 0)
                 };
                 EditorTextFieldStyle.ConfigureSelector(editor);
+                ApplyProtoActionFieldWidth(editor, tag);
                 EnableDropdownAutoComplete(editor);
                 editor.TextChanged += async (_, _) =>
                 {
@@ -9425,6 +9877,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             (coreParent ?? state.Container).Children.Remove(existingAssistNote);
         }
+        foreach (var existingAssistOptions in (coreParent ?? state.Container).Children
+                     .OfType<Control>()
+                     .Where(control => string.Equals(control.Tag as string, "assistattack.options", StringComparison.Ordinal))
+                     .ToList())
+        {
+            (coreParent ?? state.Container).Children.Remove(existingAssistOptions);
+        }
         if (IsAssistAttackActionType(actionType))
         {
             var note = new TextBlock
@@ -9446,17 +9905,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 state.CoreFieldsGrid.Children.Remove(existingOption);
             }
-            state.CoreFieldsGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 80, Auto, 80");
-            Grid.SetColumn(state.MaxRangeLabel, 2);
-            Grid.SetColumn(state.MaxRangeTb, 3);
-            var nextColumn = 4;
+
+            // Keep the shared range row untouched: when ROF and Min Range are absent,
+            // its generic layout places Max Range in the first available position.
+            // Assist-specific values belong together on the following row.
+            var optionsRow = new WrapPanel
+            {
+                Tag = "assistattack.options",
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 2, 0, 4)
+            };
             void AddAssistOption(string tag, string label)
             {
                 var rawValue = currentValues.TryGetValue(tag, out var editedValue)
                     ? editedValue
                     : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag);
                 var visible = state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(rawValue);
-                state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
                 if (!visible)
                 {
                     var addButton = new Button
@@ -9464,7 +9928,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Tag = "assistattack.option." + tag,
                         Content = label,
                         Background = Brush.Parse("#2b7a0b"),
-                        Margin = new Thickness(14, 0, 0, 0)
+                        Margin = new Thickness(optionsRow.Children.Count == 0 ? 0 : 8, 0, 0, 0)
                     };
                     addButton.Click += async (_, _) =>
                     {
@@ -9473,31 +9937,32 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     };
-                    Grid.SetColumn(addButton, nextColumn++);
-                    state.CoreFieldsGrid.Children.Add(addButton);
+                    optionsRow.Children.Add(addButton);
                     return;
                 }
 
+                var fieldGroup = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 0,
+                    Margin = new Thickness(optionsRow.Children.Count == 0 ? 0 : 8, 0, 0, 0)
+                };
                 var labelControl = new TextBlock
                 {
                     Tag = "assistattack.option." + tag,
                     Text = label + ":",
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(14, 0, 8, 0)
+                    Margin = new Thickness(0, 0, 8, 0)
                 };
-                Grid.SetColumn(labelControl, nextColumn++);
-                state.CoreFieldsGrid.Children.Add(labelControl);
-                state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(90)));
+                fieldGroup.Children.Add(labelControl);
                 var editor = new TextBox { Tag = "assistattack.option." + tag, Text = rawValue, IsEnabled = !_isReadOnly, Width = 90 };
                 AttachProtoActionDecimalBehavior(editor);
                 editor.TextChanged += async (_, _) => { if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
                 state.AdditionalFieldControls[tag] = editor;
-                Grid.SetColumn(editor, nextColumn++);
-                state.CoreFieldsGrid.Children.Add(editor);
+                fieldGroup.Children.Add(editor);
                 if (!_isReadOnly)
                 {
-                    state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-                    var removeButton = new Button { Tag = "assistattack.option." + tag, Classes = { "remove-button" }, Margin = new Thickness(5, 0, 0, 0) };
+                    var removeButton = new Button { Tag = "assistattack.option." + tag, Classes = { "remove-button" }, Margin = new Thickness(2, 0, 0, 0) };
                     removeButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -9508,12 +9973,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     };
-                    Grid.SetColumn(removeButton, nextColumn++);
-                    state.CoreFieldsGrid.Children.Add(removeButton);
+                    fieldGroup.Children.Add(removeButton);
                 }
+                optionsRow.Children.Add(fieldGroup);
             }
             AddAssistOption("modifytargetlimit", "Max Targets");
             AddAssistOption("modifymultiplier", "Lifesteal");
+            noteParent.Children.Insert(Math.Min(noteParent.Children.Count, coreIndex + 2), optionsRow);
         }
         else if (IsSpawnAssistActionType(actionType))
         {
@@ -9528,7 +9994,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Text = projectileValue,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 IsEnabled = !_isReadOnly,
-                Width = 220
+                Width = 200
             };
             ConfigureStrictSuggestionAutoComplete(projectileEditor, GetAvailableTrainUnitNames(), projectileValue);
             projectileEditor.TextChanged += async (_, _) => { if (!_isPopulating && await CheckStartLocalMod()) MarkDirty(); };
@@ -9840,7 +10306,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Text = projectileValue,
                     FilterMode = AutoCompleteFilterMode.Contains,
                     IsEnabled = !_isReadOnly,
-                    Width = 220
+                    Width = 200
                 };
                 ConfigureStrictSuggestionAutoComplete(projectileEditor, GetAvailableTrainUnitNames(), projectileValue);
                 projectileEditor.TextChanged += async (_, _) =>
@@ -10053,7 +10519,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     }, flagSource, tacticsFlagValue);
-                    flagChip.Margin = new Thickness(4, 0, 0, 0);
                     ballisticFlagsRow.Children.Add(flagChip);
                 }
                 state.AdditionalFieldsContainer.Children.Add(ballisticFlagsRow);
@@ -10434,6 +10899,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (AssetPathFieldTags.Contains(tag))
                     editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
+                ApplyProtoActionFieldWidth(editor, tag);
 
                 if (_isReadOnly && IsDevoteMinorActionType(actionType))
                 {
@@ -10749,7 +11215,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Text = value,
                             FilterMode = AutoCompleteFilterMode.Contains,
                             IsEnabled = !_isReadOnly,
-                            Width = 220
+                            Width = 200
                         };
                         ConfigureStrictSuggestionAutoComplete(projectileEditor, GetAvailableTrainUnitNames(), value);
                         editor = projectileEditor;
@@ -11210,9 +11676,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                         var modelAttachmentBoneEditor = CreateSimpleEditor("modelattachmentbone");
                         if (modelAttachmentBoneEditor is AutoCompleteBox modelAttachmentBoneAcb)
-                            modelAttachmentBoneAcb.Width = 140;
+                            modelAttachmentBoneAcb.Width = 100;
                         attachmentRow.Children.Add(CreateLabeledFieldGroup(
-                            "Model Attachment Bone:",
+                            "Bone:",
                             modelAttachmentBoneEditor));
 
                         if (!_isReadOnly)
@@ -11676,7 +12142,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var targetAttachmentVisible = state.ForcedVisibleFieldTags.Contains("targetattachment") || !string.IsNullOrWhiteSpace(GetValue("targetattachment")) || !string.IsNullOrWhiteSpace(GetValue("targetattachmentbone"));
                 if (targetAttachmentVisible)
                 {
-                    var targetAttachmentRow = CreateCompactRow(("targetattachment", "Target Attachment"), ("targetattachmentbone", "Target Attachment Bone"));
+                    var targetAttachmentRow = CreateCompactRow(("targetattachment", "Target Attachment"), ("targetattachmentbone", "Bone"));
                     if (!_isReadOnly)
                     {
                         var remove = new Button { Classes = { "remove-button" } };
@@ -11960,8 +12426,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 damageTypePanel.Children.Add(new TextBlock { Text = "Damage Type:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 8, 4) });
-                var damageTypeEditor = CreateSimpleEditor("modifydamagetype");
-                if (damageTypeEditor is AutoCompleteBox damageTypeAcb) damageTypeAcb.Width = 140;
+                var damageTypeEditor = new ComboBox { Width = 140, IsEnabled = !_isReadOnly };
+                RefreshProtoActionDamageTypeCombo(damageTypeEditor, modifyTypeAcb.Text, GetAutoRangedValue("modifydamagetype"));
+                damageTypeEditor.SelectionChanged += async (_, _) =>
+                {
+                    if (!_isPopulating && await CheckStartLocalMod())
+                        MarkDirty();
+                };
+                state.AdditionalFieldControls["modifydamagetype"] = damageTypeEditor;
                 damageTypePanel.Children.Add(damageTypeEditor);
                 modifyTypeRow.Children.Add(damageTypePanel);
 
@@ -12091,6 +12563,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 void RefreshAutoRangedModifyTypeFields()
                 {
                     var type = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "");
+                    RefreshProtoActionDamageTypeCombo(damageTypeEditor, type);
                     damageTypePanel.IsVisible = type is "ArmorSpecific" or "DamageSpecific";
                     damageTargetTypePanel.IsVisible = type.Equals("DamageByTargetType", StringComparison.OrdinalIgnoreCase);
                 }
@@ -12451,7 +12924,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             MarkDirty();
                             CommitChipAdditionAndRefreshXmlPreview();
                         }, source, tacticsValue);
-                        chip.Margin = new Thickness(4, 0, 0, 0);
                         row.Children.Add(chip);
                     }
                     async Task AddSelectedValueAsync()
@@ -12500,7 +12972,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             () => { },
                             isInherited ? ProtoActionValueSource.TacticsInherited : ProtoActionValueSource.ProtoOnly,
                             isInherited ? value : "");
-                        chip.Margin = new Thickness(2, 0, 0, 0);
                         row.Children.Add(chip);
                     }
                     return row;
@@ -12553,20 +13024,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 else if (forbiddenUnitTypes.Count > 0)
                     state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("forbidabstracttype", "Forbid Unit Type", forbiddenUnitTypes));
 
-                void AddOptionalProtoUnitList(string tag, string label)
+                WrapPanel? AddOptionalProtoUnitList(string tag, string label, WrapPanel closedButtonHost)
                 {
                     var values = GetAutoRangedList(tag);
                     if (_isReadOnly)
                     {
                         if (values.Count > 0)
                             state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow(tag, label, values));
-                        return;
+                        return null;
                     }
 
                     if (values.Count > 0 || state.ForcedVisibleFieldTags.Contains(tag))
                     {
-                        state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedListRow(tag, label, autoRangedProtoUnitSuggestions, values));
-                        return;
+                        var openRow = CreateAutoRangedListRow(tag, label, autoRangedProtoUnitSuggestions, values);
+                        state.AdditionalFieldsContainer.Children.Add(openRow);
+                        return openRow;
                     }
 
                     var addButton = new Button { Content = label, Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 2) };
@@ -12577,11 +13049,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     };
-                    state.AdditionalFieldsContainer.Children.Add(addButton);
+                    closedButtonHost.Children.Add(addButton);
+                    return null;
                 }
+                var protoUnitOptionButtons = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                state.AdditionalFieldsContainer.Children.Add(protoUnitOptionButtons);
+                WrapPanel? targetProtoUnitRow = null;
                 if (!IsAreaMutateActionType(actionType))
-                    AddOptionalProtoUnitList("modifyprotoid", "Target Proto Unit");
-                AddOptionalProtoUnitList("forbidunittype", "Forbid Proto Unit");
+                    targetProtoUnitRow = AddOptionalProtoUnitList("modifyprotoid", "Target Proto Unit", protoUnitOptionButtons);
+                AddOptionalProtoUnitList("forbidunittype", "Forbid Proto Unit", targetProtoUnitRow ?? protoUnitOptionButtons);
+                if (protoUnitOptionButtons.Children.Count == 0)
+                    state.AdditionalFieldsContainer.Children.Remove(protoUnitOptionButtons);
 
                 var targetFlagOptions = new[]
                 {
@@ -12632,7 +13110,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             MarkDirty();
                             CommitChipAdditionAndRefreshXmlPreview();
                         }, flagSource, tacticsFlagValue);
-                        targetFlagChip.Margin = new Thickness(4, 0, 0, 0);
                         targetFlagsRow.Children.Add(targetFlagChip);
                     }
                     targetFlagPicker.SelectionChanged += async (_, _) =>
@@ -12788,7 +13265,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     infectionSection.Children.Add(infectionValuesRow);
                     var infectionAttachmentRow = new WrapPanel { Orientation = Orientation.Horizontal };
                     AddAutoRangedLabeledField(infectionAttachmentRow, "infectionattachment", "Attachment", 300);
-                    AddAutoRangedLabeledField(infectionAttachmentRow, "infectionattachmentbone", "Attachment Bone", 140);
+                    AddAutoRangedLabeledField(infectionAttachmentRow, "infectionattachmentbone", "Bone", 100);
                     AddAutoRangedFlagCheckBox(infectionAttachmentRow, "modifyselfifinfection", "Include Source");
                     AddAutoRangedFlagCheckBox(infectionAttachmentRow, "modifyattachonce", "Attach Once");
                     infectionSection.Children.Add(infectionAttachmentRow);
@@ -12991,8 +13468,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var row = new Grid
                     {
                         ColumnDefinitions = !_isReadOnly
-                            ? new ColumnDefinitions("180, *, 180, 150, 32")
-                            : new ColumnDefinitions("180, *, 180, 150"),
+                            ? new ColumnDefinitions("180, 200, Auto, 100, 32")
+                            : new ColumnDefinitions("180, 200, Auto, 100"),
                         Margin = new Thickness(0, 2, 0, 2)
                     };
                     row.Children.Add(new TextBlock { Text = attachmentLabel + ":", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
@@ -13028,8 +13505,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.AdditionalFieldsContainer.Children.Add(row);
                 }
 
-                RenderOptionalAttachmentPair("modelattachment", "Model Attachment", "modelattachmentbone", "Model Attachment Bone", "Add Model Attachment");
-                RenderOptionalAttachmentPair("targetattachment", "Target Attachment", "targetattachmentbone", "Target Attachment Bone", "Add Target Attachment");
+                RenderOptionalAttachmentPair("modelattachment", "Model Attachment", "modelattachmentbone", "Bone", "Add Model Attachment");
+                RenderOptionalAttachmentPair("targetattachment", "Target Attachment", "targetattachmentbone", "Bone", "Add Target Attachment");
             }
             else if (IsHealActionType(actionType))
             {
@@ -14529,28 +15006,81 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var rateEntries = GetProtoActionStructuredFieldEntriesForEditor(effectiveAction, actionType, "rate");
                 state.StructuredFieldRows["rate"] = [];
                 var rateSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 6) };
-                var ratesContainer = new StackPanel { Spacing = 4 };
+                var ratesContainer = new WrapPanel { Orientation = Orientation.Horizontal };
                 rateSection.Children.Add(new TextBlock
                 {
                     Text = "Rate",
                     FontWeight = FontWeight.Bold
                 });
                 rateSection.Children.Add(ratesContainer);
+                var refreshingRateChoices = false;
+                Button? addAutoGatherRateButton = null;
+
+                void RefreshAutoGatherResourceChoices()
+                {
+                    if (refreshingRateChoices)
+                        return;
+
+                    refreshingRateChoices = true;
+                    try
+                    {
+                        foreach (var row in state.StructuredFieldRows["rate"])
+                        {
+                            if (!row.AttributeEditors.TryGetValue("type", out var control) || control is not ComboBox combo)
+                                continue;
+
+                            var current = combo.SelectedItem?.ToString() ?? "";
+                            var usedByOtherRows = state.StructuredFieldRows["rate"]
+                                .Where(other => !ReferenceEquals(other, row))
+                                .Select(other => other.AttributeEditors.TryGetValue("type", out var otherControl) && otherControl is ComboBox otherCombo
+                                    ? otherCombo.SelectedItem?.ToString() ?? ""
+                                    : "")
+                                .Where(value => !string.IsNullOrWhiteSpace(value))
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            var choices = ProtoConstants.KnownResourceTypes
+                                .Where(resource => resource.Equals(current, StringComparison.OrdinalIgnoreCase) || !usedByOtherRows.Contains(resource))
+                                .ToList();
+                            combo.ItemsSource = choices;
+                            combo.SelectedItem = choices.FirstOrDefault(resource => resource.Equals(current, StringComparison.OrdinalIgnoreCase));
+                        }
+
+                        if (addAutoGatherRateButton != null)
+                        {
+                            var usedResources = state.StructuredFieldRows["rate"]
+                                .Select(row => row.AttributeEditors.TryGetValue("type", out var control) && control is ComboBox combo
+                                    ? combo.SelectedItem?.ToString() ?? ""
+                                    : "")
+                                .Where(value => !string.IsNullOrWhiteSpace(value))
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            addAutoGatherRateButton.IsVisible = ProtoConstants.KnownResourceTypes.Any(resource => !usedResources.Contains(resource));
+                        }
+                    }
+                    finally
+                    {
+                        refreshingRateChoices = false;
+                    }
+                }
 
                 void AddAutoGatherRateRow(ProtoActionStructuredFieldEntry? initialEntry = null)
                 {
-                    var rowPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                    var typeAcb = new AutoCompleteBox
+                    var rowPanel = new StackPanel
                     {
-                        Text = initialEntry?.Attributes.TryGetValue("type", out var typeValue) == true ? typeValue : "",
-                        Width = 140,
-                        FilterMode = AutoCompleteFilterMode.Contains,
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 4,
+                        Margin = new Thickness(0, 0, 8, 4)
+                    };
+                    var initialResourceType = initialEntry?.Attributes.TryGetValue("type", out var typeValue) == true ? typeValue : "";
+                    var typeCombo = new ComboBox
+                    {
+                        Width = 110,
                         ItemsSource = ProtoConstants.KnownResourceTypes,
+                        SelectedItem = ProtoConstants.KnownResourceTypes.FirstOrDefault(resource =>
+                            resource.Equals(initialResourceType, StringComparison.OrdinalIgnoreCase)),
                         IsEnabled = !_isReadOnly
                     };
-                    EnableDropdownAutoComplete(typeAcb);
-                    typeAcb.TextChanged += async (_, _) =>
+                    typeCombo.SelectionChanged += async (_, _) =>
                     {
+                        RefreshAutoGatherResourceChoices();
                         if (_isPopulating)
                             return;
 
@@ -14562,7 +15092,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var valueTb = new TextBox
                     {
                         Text = initialEntry?.Value ?? "1.0",
-                        Width = 100,
+                        Width = 80,
                         IsEnabled = !_isReadOnly
                     };
                     AttachProtoActionDecimalBehavior(valueTb);
@@ -14582,11 +15112,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RowPanel = rowPanel,
                         ValueTb = valueTb
                     };
-                    rowState.AttributeEditors["type"] = typeAcb;
+                    rowState.AttributeEditors["type"] = typeCombo;
                     state.StructuredFieldRows["rate"].Add(rowState);
 
                     rowPanel.Children.Add(new TextBlock { Text = "Resource:", VerticalAlignment = VerticalAlignment.Center });
-                    rowPanel.Children.Add(typeAcb);
+                    rowPanel.Children.Add(typeCombo);
                     rowPanel.Children.Add(valueTb);
 
                     if (!_isReadOnly)
@@ -14602,12 +15132,18 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                             ratesContainer.Children.Remove(rowPanel);
                             state.StructuredFieldRows["rate"].Remove(rowState);
+                            RefreshAutoGatherResourceChoices();
                             MarkDirty();
                         };
                         rowPanel.Children.Add(removeButton);
                     }
 
+                    if (addAutoGatherRateButton != null)
+                        ratesContainer.Children.Remove(addAutoGatherRateButton);
                     ratesContainer.Children.Add(rowPanel);
+                    if (addAutoGatherRateButton != null)
+                        ratesContainer.Children.Add(addAutoGatherRateButton);
+                    RefreshAutoGatherResourceChoices();
                 }
 
                 if (rateEntries.Count == 0 && !_isReadOnly)
@@ -14620,13 +15156,15 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var addRateButton = new Button
+                    addAutoGatherRateButton = new Button
                     {
-                        Content = "+ Add Rate",
+                        Content = "Add Rate",
                         Background = Brush.Parse("#2b7a0b"),
-                        HorizontalAlignment = HorizontalAlignment.Left
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        Margin = new Thickness(0, 0, 0, 4)
                     };
-                    addRateButton.Click += async (_, _) =>
+                    addAutoGatherRateButton.Click += async (_, _) =>
                     {
                         var proceed = await CheckStartLocalMod();
                         if (!proceed)
@@ -14635,7 +15173,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         AddAutoGatherRateRow();
                         MarkDirty();
                     };
-                    rateSection.Children.Add(addRateButton);
+                    ratesContainer.Children.Add(addAutoGatherRateButton);
+                    RefreshAutoGatherResourceChoices();
                 }
 
                 state.AdditionalFieldsContainer.Children.Add(rateSection);
@@ -14643,7 +15182,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var optionalFlagsPanel = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
                 optionalFlagsPanel.Children.Add(new TextBlock
                 {
-                    Text = "Optional Flags",
+                    Text = "Additional Properties",
                     FontWeight = FontWeight.Bold
                 });
                 var optionalFlagsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
@@ -14680,7 +15219,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
 
                 optionalFlagsRow.Children.Add(CreateAutoGatherFlagCheckBox("addresourcestoinventory", "Add Resources To Inventory"));
-                optionalFlagsRow.Children.Add(CreateAutoGatherFlagCheckBox("autogatherscalebygatherrate", "Auto Gather Scale By Gather Rate"));
+                optionalFlagsRow.Children.Add(CreateAutoGatherFlagCheckBox("autogatherscalebygatherrate", "Scale by gather rate"));
                 optionalFlagsRow.Children.Add(CreateAutoGatherFlagCheckBox("donotautogatherifgathered", "Do Not Auto Gather If Gathered"));
                 state.AdditionalFieldsContainer.Children.Add(optionalFlagsPanel);
 
@@ -14693,7 +15232,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : GetProtoActionNestedUnitTypeValues(effectiveAction, "donotautogatherunlessgatheringtypes");
                 state.StructuredFieldRows["donotautogatherunlessgatheringtypes"] = [];
                 var showGatheringTypes = gatheringTypes.Count > 0 || state.ForcedVisibleFieldTags.Contains("donotautogatherunlessgatheringtypes");
-                if (showGatheringTypes || !_isReadOnly)
+                if (showGatheringTypes)
                 {
                     var gatheringTypesSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 6) };
                     gatheringTypesSection.Children.Add(new TextBlock
@@ -14701,91 +15240,115 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Text = "Do Not Auto Gather Unless Gathering Types",
                         FontWeight = FontWeight.Bold
                     });
-                    var gatheringTypesContainer = new StackPanel { Spacing = 4 };
-                    gatheringTypesSection.Children.Add(gatheringTypesContainer);
-
-                    void AddGatheringTypeRow(string initialValue = "")
+                    var selectorRow = new WrapPanel { Orientation = Orientation.Horizontal };
+                    selectorRow.Children.Add(new TextBlock
                     {
-                        var rowPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                        var typeAcb = new AutoCompleteBox
-                        {
-                            Text = initialValue,
-                            Width = 180,
-                            FilterMode = AutoCompleteFilterMode.Contains,
-                            ItemsSource = GetAvailableBuildLimitTargets(),
-                            IsEnabled = !_isReadOnly
-                        };
-                        EnableDropdownAutoComplete(typeAcb);
-                        typeAcb.TextChanged += async (_, _) =>
-                        {
-                            if (_isPopulating)
-                                return;
+                        Text = "Unit Type:",
+                        FontWeight = FontWeight.SemiBold,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(0, 0, 8, 0)
+                    });
+                    gatheringTypesSection.Children.Add(selectorRow);
+                    var gatheringTypeChips = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                    var gatheringTypeSuggestions = GetAvailableBuildLimitTargets();
 
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                                MarkDirty();
-                        };
+                    void AddGatheringTypeChip(string value)
+                    {
+                        var normalizedValue = value?.Trim() ?? "";
+                        if (string.IsNullOrWhiteSpace(normalizedValue) ||
+                            state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Any(row =>
+                                ReadTextLikeControlValue(row.ValueTb).Equals(normalizedValue, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            return;
+                        }
 
+                        var valueControl = new AutoCompleteBox { Text = normalizedValue };
+                        ConfigureStrictSuggestionAutoComplete(valueControl, gatheringTypeSuggestions, normalizedValue);
                         var rowState = new ProtoActionStructuredFieldRowState
                         {
                             Tag = "donotautogatherunlessgatheringtypes",
-                            RowPanel = rowPanel,
-                            ValueTb = typeAcb
+                            RowPanel = gatheringTypeChips,
+                            ValueTb = valueControl,
+                            IncludeInSerialization = true
                         };
                         state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Add(rowState);
-
-                        rowPanel.Children.Add(new TextBlock { Text = "Unit Type:", VerticalAlignment = VerticalAlignment.Center });
-                        rowPanel.Children.Add(typeAcb);
-
-                        if (!_isReadOnly)
+                        var tacticsValues = TryGetCurrentUnitTacticsAction(state.NameAcb.Text?.Trim() ?? "", out var tacticsAction)
+                            ? GetProtoActionNestedUnitTypeValues(tacticsAction, "donotautogatherunlessgatheringtypes")
+                            : [];
+                        var isInherited = tacticsValues.Contains(normalizedValue, StringComparer.OrdinalIgnoreCase);
+                        Border? chip = null;
+                        chip = CreateChip(normalizedValue, async () =>
                         {
-                            var removeButton = new Button
+                            if (!await CheckStartLocalMod())
+                                return;
+                            if (isInherited)
                             {
-                                Classes = { "remove-button" } };
-                            removeButton.Click += async (_, _) =>
-                            {
-                                var proceed = await CheckStartLocalMod();
-                                if (!proceed)
-                                    return;
+                                await new Prompt(PromptType.Error, "Inherited Attribute",
+                                    $"Unit Type '{normalizedValue}' is defined by the linked tactics file and cannot be deleted from the protoaction.")
+                                    .ShowDialog(this);
+                                return;
+                            }
 
-                                gatheringTypesContainer.Children.Remove(rowPanel);
-                                state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Remove(rowState);
-                                if (state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Count == 0)
-                                    state.ForcedVisibleFieldTags.Remove("donotautogatherunlessgatheringtypes");
-                                MarkDirty();
+                            state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Remove(rowState);
+                            if (chip != null)
+                                gatheringTypeChips.Children.Remove(chip);
+                            if (state.StructuredFieldRows["donotautogatherunlessgatheringtypes"].Count == 0)
+                            {
+                                state.ForcedVisibleFieldTags.Remove("donotautogatherunlessgatheringtypes");
                                 RefreshProtoActionMetadataPanels(state);
-                            };
-                            rowPanel.Children.Add(removeButton);
-                        }
-
-                        gatheringTypesContainer.Children.Add(rowPanel);
+                            }
+                            MarkDirty();
+                            CommitChipAdditionAndRefreshXmlPreview();
+                        }, isInherited ? ProtoActionValueSource.TacticsInherited : ProtoActionValueSource.ProtoOnly,
+                            isInherited ? normalizedValue : "");
+                        gatheringTypeChips.Children.Add(chip);
                     }
-
-                    foreach (var gatheringType in gatheringTypes)
-                        AddGatheringTypeRow(gatheringType);
 
                     if (!_isReadOnly)
                     {
-                        var addTypeButton = new Button
+                        var picker = new AutoCompleteBox
                         {
-                            Content = "+ Add Gathering Type",
-                            Background = Brush.Parse("#2b7a0b"),
+                            FilterMode = AutoCompleteFilterMode.Contains,
+                            MinWidth = 120,
+                            MaxWidth = 200,
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
-                        addTypeButton.Click += async (_, _) =>
+                        ConfigureStrictSuggestionAutoComplete(picker, gatheringTypeSuggestions, "");
+                        picker.SelectionChanged += async (_, _) =>
                         {
-                            var proceed = await CheckStartLocalMod();
-                            if (!proceed)
+                            if (_isPopulating || picker.SelectedItem is not string selectedValue || !await CheckStartLocalMod())
                                 return;
-
-                            state.ForcedVisibleFieldTags.Add("donotautogatherunlessgatheringtypes");
-                            AddGatheringTypeRow();
+                            AddGatheringTypeChip(selectedValue);
+                            picker.Text = "";
                             MarkDirty();
+                            CommitChipAdditionAndRefreshXmlPreview();
                         };
-                        gatheringTypesSection.Children.Add(addTypeButton);
+                        selectorRow.Children.Add(picker);
                     }
 
+                    foreach (var gatheringType in gatheringTypes)
+                        AddGatheringTypeChip(gatheringType);
+                    gatheringTypesSection.Children.Add(gatheringTypeChips);
+
                     state.AdditionalFieldsContainer.Children.Add(gatheringTypesSection);
+                }
+                else if (!_isReadOnly)
+                {
+                    var addGatheringTypesButton = new Button
+                    {
+                        Content = "Do Not Auto Gather Unless Gathering Types",
+                        Background = Brush.Parse("#2b7a0b"),
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 2, 0, 6)
+                    };
+                    addGatheringTypesButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        state.ForcedVisibleFieldTags.Add("donotautogatherunlessgatheringtypes");
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    state.AdditionalFieldsContainer.Children.Add(addGatheringTypesButton);
                 }
 
                 var modifyRow = new WrapPanel
@@ -14859,9 +15422,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 }
 
-                AddAutoGatherOptionalCell("modifybase", "Modify Base");
-                AddAutoGatherOptionalCell("modifymultiplier", "Modify Multiplier");
-                AddAutoGatherOptionalCell("modifyratecap", "Modify Rate Cap");
+                foreach (var option in new[]
+                         {
+                             (Tag: "modifybase", Label: "Modify Base"),
+                             (Tag: "modifymultiplier", Label: "Modify Multiplier"),
+                             (Tag: "modifyratecap", Label: "Modify Rate Cap")
+                         }
+                         .OrderByDescending(option => ShouldShowAutoGatherOptionalField(option.Tag)))
+                {
+                    AddAutoGatherOptionalCell(option.Tag, option.Label);
+                }
                 if (modifyRow.Children.Count > 0)
                     state.AdditionalFieldsContainer.Children.Add(modifyRow);
             }
@@ -17178,7 +17748,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.MaxRangeLabel.IsVisible = false;
                 state.MaxRangeTb.IsVisible = false;
 
-                var animEditor = CreateSimpleEditor("anim");
                 var maxRangeMirror = new TextBox
                 {
                     Text = currentValues.TryGetValue("maxrange", out var currentMaxRangeValue)
@@ -17199,55 +17768,57 @@ public partial class ProtoEditorWindow : SimpleWindow
                         MarkDirty();
                 };
 
-                var topRow = new Grid
+                var maxRangeRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("120, *, 120, 110"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                topRow.Children.Add(new TextBlock
+                maxRangeRow.Children.Add(CreateLabeledFieldGroup("Max Range:", maxRangeMirror));
+                state.AdditionalFieldsContainer.Children.Add(maxRangeRow);
+
+                var damageAreaEditor = CreateSimpleEditor("damagearea");
+                var durationEditor = CreateSimpleEditor("modifyduration");
+                if (damageAreaEditor is TextBox damageAreaTb)
+                    damageAreaTb.Width = 110;
+                else if (damageAreaEditor is AutoCompleteBox damageAreaAcb)
+                    damageAreaAcb.Width = 110;
+                if (durationEditor is TextBox durationTb)
+                    durationTb.Width = 110;
+                else if (durationEditor is AutoCompleteBox durationAcb)
+                    durationAcb.Width = 110;
+
+                var damageDurationRow = new WrapPanel
                 {
-                    Text = "Animation:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                Grid.SetColumn(animEditor, 1);
-                topRow.Children.Add(animEditor);
-                var maxRangeLabel = new TextBlock
-                {
-                    Text = "Max Range:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 2, 0, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                Grid.SetColumn(maxRangeLabel, 2);
-                topRow.Children.Add(maxRangeLabel);
-                Grid.SetColumn(maxRangeMirror, 3);
-                topRow.Children.Add(maxRangeMirror);
-                state.AdditionalFieldsContainer.Children.Add(topRow);
+                damageDurationRow.Children.Add(CreateLabeledFieldGroup("Damage Area:", damageAreaEditor));
+                damageDurationRow.Children.Add(CreateLabeledFieldGroup("Duration (ms):", durationEditor));
+                state.AdditionalFieldsContainer.Children.Add(damageDurationRow);
 
                 var rateEntries = GetProtoActionStructuredFieldEntriesForEditor(effectiveAction, actionType, "rate");
                 state.StructuredFieldRows["rate"] = [];
 
-                var rateSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
+                var rateSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 6) };
+                rateSection.Children.Add(new TextBlock { Text = "Rate:", FontWeight = FontWeight.SemiBold });
                 var rateContainer = new StackPanel { Spacing = 4 };
                 rateSection.Children.Add(rateContainer);
 
                 void AddAreaRestrictRateRow(ProtoActionStructuredFieldEntry? initialRateEntry = null)
                 {
-                    var rateEntry = initialRateEntry ?? new ProtoActionStructuredFieldEntry();
-                    var rowGrid = new Grid
+                    var rateEntry = initialRateEntry ?? new ProtoActionStructuredFieldEntry { Value = "1.0" };
+                    var rowPanel = new StackPanel
                     {
-                        ColumnDefinitions = !_isReadOnly
-                            ? new ColumnDefinitions("70, 180, 60, 110, 32")
-                            : new ColumnDefinitions("70, 180, 60, 110"),
-                        Margin = new Thickness(0, 2, 0, 2),
-                        HorizontalAlignment = HorizontalAlignment.Left
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 6
                     };
 
                     var rateTypeAcb = new AutoCompleteBox
                     {
                         Text = rateEntry.Attributes.TryGetValue("type", out var currentRateType) ? currentRateType : "",
-                        Width = 180,
+                        Width = 150,
                         FilterMode = AutoCompleteFilterMode.Contains,
                         ItemsSource = GetAvailableBuildLimitTargets(),
                         IsEnabled = !_isReadOnly
@@ -17255,15 +17826,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                     EnableDropdownAutoComplete(rateTypeAcb);
                     var rateValueTb = new TextBox
                     {
-                        Text = rateEntry.Value ?? "",
-                        Width = 110,
+                        Text = string.IsNullOrWhiteSpace(rateEntry.Value) ? "1.0" : rateEntry.Value,
+                        Width = 100,
                         IsEnabled = !_isReadOnly
                     };
                     AttachProtoActionDecimalBehavior(rateValueTb);
                     var rateRowState = new ProtoActionStructuredFieldRowState
                     {
                         Tag = "rate",
-                        RowPanel = rowGrid,
+                        RowPanel = rowPanel,
                         ValueTb = rateValueTb
                     };
                     rateRowState.AttributeEditors["type"] = rateTypeAcb;
@@ -17286,36 +17857,38 @@ public partial class ProtoEditorWindow : SimpleWindow
                             MarkDirty();
                     };
 
-                    rowGrid.Children.Add(new TextBlock { Text = "Rate:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-                    Grid.SetColumn(rateTypeAcb, 1);
-                    rowGrid.Children.Add(rateTypeAcb);
-                    Grid.SetColumn(rateValueTb, 3);
-                    rowGrid.Children.Add(rateValueTb);
+                    rowPanel.Children.Add(new TextBlock { Text = "Type:", VerticalAlignment = VerticalAlignment.Center });
+                    rowPanel.Children.Add(rateTypeAcb);
+                    rowPanel.Children.Add(rateValueTb);
 
                     if (!_isReadOnly)
                     {
                         var removeButton = new Button
                         {
                             Classes = { "remove-button" },
-                            Margin = new Thickness(8, 0, 0, 0) };
+                            Margin = new Thickness(8, 0, 0, 0),
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
                         removeButton.Click += async (_, _) =>
                         {
                             var proceed = await CheckStartLocalMod();
                             if (!proceed)
                                 return;
-                            rateContainer.Children.Remove(rowGrid);
+                            rateContainer.Children.Remove(rowPanel);
                             state.StructuredFieldRows["rate"].Remove(rateRowState);
                             MarkDirty();
                         };
-                        Grid.SetColumn(removeButton, 4);
-                        rowGrid.Children.Add(removeButton);
+                        rowPanel.Children.Add(removeButton);
                     }
 
-                    rateContainer.Children.Add(rowGrid);
+                    rateContainer.Children.Add(rowPanel);
                 }
 
                 if (rateEntries.Count == 0)
-                    AddAreaRestrictRateRow();
+                {
+                    if (!_isReadOnly)
+                        AddAreaRestrictRateRow();
+                }
                 else
                 {
                     foreach (var rateEntry in rateEntries)
@@ -17342,42 +17915,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 state.AdditionalFieldsContainer.Children.Add(rateSection);
 
-                var damageAreaEditor = CreateSimpleEditor("damagearea");
-                var durationEditor = CreateSimpleEditor("modifyduration");
-                if (damageAreaEditor is TextBox damageAreaTb)
-                    damageAreaTb.Width = 110;
-                else if (damageAreaEditor is AutoCompleteBox damageAreaAcb)
-                    damageAreaAcb.Width = 110;
-                if (durationEditor is TextBox durationTb)
-                    durationTb.Width = 110;
-                else if (durationEditor is AutoCompleteBox durationAcb)
-                    durationAcb.Width = 110;
-
-                var middleRow = new Grid
-                {
-                    ColumnDefinitions = new ColumnDefinitions("120, 110, 120, 110"),
-                    Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Left
-                };
-                middleRow.Children.Add(new TextBlock
-                {
-                    Text = "Damage Area:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                Grid.SetColumn(damageAreaEditor, 1);
-                middleRow.Children.Add(damageAreaEditor);
-                var durationLabel = new TextBlock
-                {
-                    Text = "Duration (ms):",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(12, 4, 10, 4)
-                };
-                Grid.SetColumn(durationLabel, 2);
-                middleRow.Children.Add(durationLabel);
-                Grid.SetColumn(durationEditor, 3);
-                middleRow.Children.Add(durationEditor);
-                state.AdditionalFieldsContainer.Children.Add(middleRow);
+                var animEditor = CreateSimpleEditor("anim");
+                ApplyProtoActionFieldWidth(animEditor, "anim");
 
                 var chargedRawValue = currentValues.TryGetValue("charged", out var currentChargedValue)
                     ? currentChargedValue
@@ -17390,6 +17929,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 EditorTextFieldStyle.ConfigureSelector(chargedEditor);
+                ApplyProtoActionFieldWidth(chargedEditor, "chargedmodifyvfx");
                 EnableDropdownAutoComplete(chargedEditor);
                 chargedEditor.TextChanged += async (_, _) =>
                 {
@@ -17401,21 +17941,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 state.AdditionalFieldControls["charged"] = chargedEditor;
 
-                var chargedRow = new Grid
+                var visualRow = new WrapPanel
                 {
-                    ColumnDefinitions = new ColumnDefinitions("120, *"),
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                chargedRow.Children.Add(new TextBlock
-                {
-                    Text = "VFX:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 10, 4)
-                });
-                Grid.SetColumn(chargedEditor, 1);
-                chargedRow.Children.Add(chargedEditor);
-                state.AdditionalFieldsContainer.Children.Add(chargedRow);
+                visualRow.Children.Add(CreateLabeledFieldGroup("Animation:", animEditor));
+                visualRow.Children.Add(CreateLabeledFieldGroup("VFX:", chargedEditor));
+                state.AdditionalFieldsContainer.Children.Add(visualRow);
             }
             else if (IsGatherActionType(actionType))
             {
@@ -18443,7 +18977,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     state.AdditionalFieldsContainer.Children.Add(addModifyBaseButton);
                 }
             }
-            else
+            else if (IsBolsterActionType(actionType))
             {
                 state.CoreFieldsGrid.IsVisible = false;
                 state.MaxRangeLabel.IsVisible = false;
@@ -18471,40 +19005,85 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 };
 
-                var row1 = new Grid
+                var maxRangeRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                maxRangeRow.Children.Add(new TextBlock
                 {
-                    ColumnDefinitions = new ColumnDefinitions("180, *, 180, *"),
-                    Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
-                };
-                var row1LeftLabel = new TextBlock { Text = "Max Number Targets:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-                row1.Children.Add(row1LeftLabel);
-                var modifyAmountEditor = CreateSimpleEditor("modifyamount");
-                Grid.SetColumn(modifyAmountEditor, 1);
-                row1.Children.Add(modifyAmountEditor);
-                var row1RightLabel = new TextBlock { Text = "Max Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-                Grid.SetColumn(row1RightLabel, 2);
-                row1.Children.Add(row1RightLabel);
-                Grid.SetColumn(maxRangeMirror, 3);
-                row1.Children.Add(maxRangeMirror);
-                state.AdditionalFieldsContainer.Children.Add(row1);
+                    Text = "Max Range:",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 4, 10, 4)
+                });
+                maxRangeMirror.Width = 100;
+                maxRangeRow.Children.Add(maxRangeMirror);
+                state.AdditionalFieldsContainer.Children.Add(maxRangeRow);
 
-                var row2 = new Grid
+                var modifyAmountValue = currentValues.TryGetValue("modifyamount", out var editedModifyAmount)
+                    ? editedModifyAmount
+                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modifyamount");
+                var showModifyAmount = state.ForcedVisibleFieldTags.Contains("modifyamount") || !string.IsNullOrWhiteSpace(modifyAmountValue);
+                if (showModifyAmount)
                 {
-                    ColumnDefinitions = new ColumnDefinitions("180, *, 180, *"),
+                    var modifyAmountRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                    modifyAmountRow.Children.Add(new TextBlock
+                    {
+                        Text = "Max stacks on target:",
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(0, 4, 10, 4)
+                    });
+                    var modifyAmountEditor = CreateSimpleEditor("modifyamount");
+                    if (modifyAmountEditor is TextBox modifyAmountTextBox)
+                    {
+                        modifyAmountTextBox.Width = 90;
+                        AttachProtoActionIntegerBehavior(modifyAmountTextBox);
+                    }
+                    modifyAmountRow.Children.Add(modifyAmountEditor);
+                    if (!_isReadOnly)
+                    {
+                        var removeModifyAmount = new Button { Classes = { "remove-button" } };
+                        removeModifyAmount.Click += async (_, _) =>
+                        {
+                            if (!await CheckStartLocalMod())
+                                return;
+                            state.ForcedVisibleFieldTags.Remove("modifyamount");
+                            state.AdditionalFieldControls.Remove("modifyamount");
+                            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "modifyamount", "");
+                            MarkDirty();
+                            RefreshProtoActionMetadataPanels(state);
+                        };
+                        modifyAmountRow.Children.Add(removeModifyAmount);
+                    }
+                    state.AdditionalFieldsContainer.Children.Add(modifyAmountRow);
+                }
+                else if (!_isReadOnly)
+                {
+                    var addModifyAmount = new Button
+                    {
+                        Content = "Max stacks on target",
+                        Background = Brush.Parse("#2b7a0b"),
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 2, 0, 2)
+                    };
+                    addModifyAmount.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod())
+                            return;
+                        state.ForcedVisibleFieldTags.Add("modifyamount");
+                        MarkDirty();
+                        RefreshProtoActionMetadataPanels(state);
+                    };
+                    state.AdditionalFieldsContainer.Children.Add(addModifyAmount);
+                }
+
+                var row2 = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
                     Margin = new Thickness(0, 2, 0, 2),
-                    HorizontalAlignment = HorizontalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Left
                 };
-                var row2LeftLabel = new TextBlock { Text = "Animation:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-                row2.Children.Add(row2LeftLabel);
-                Grid.SetColumn(animEditor, 1);
-                row2.Children.Add(animEditor);
-                var row2RightLabel = new TextBlock { Text = "Projectile:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-                Grid.SetColumn(row2RightLabel, 2);
-                row2.Children.Add(row2RightLabel);
+                ApplyProtoActionFieldWidth(animEditor, "anim");
+                row2.Children.Add(CreateLabeledFieldGroup("Animation:", animEditor, new Thickness(0, 0, 16, 4)));
                 var projectileEditor = CreateSimpleEditor("projectile");
-                Grid.SetColumn(projectileEditor, 3);
-                row2.Children.Add(projectileEditor);
+                ApplyProtoActionFieldWidth(projectileEditor, "projectile");
+                row2.Children.Add(CreateLabeledFieldGroup("Projectile:", projectileEditor, new Thickness(0, 0, 0, 4)));
                 state.AdditionalFieldsContainer.Children.Add(row2);
 
                 var rateDefinition = ProtoActionMetadataCatalog.GetFieldDefinition("rate");
@@ -18710,15 +19289,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         state.CustomFlagControls.Clear();
         if (IsAutoConvertActionType(actionType))
         {
-            var convertPanel = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 2) };
+            var convertPanel = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 2) };
             convertPanel.Children.Add(new TextBlock
             {
-                Text = "Can Convert Unit From",
-                FontWeight = FontWeight.SemiBold
+                Text = "Can be converted by:",
+                FontWeight = FontWeight.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0)
             });
 
-            var checkboxRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-            convertPanel.Children.Add(checkboxRow);
+            var checkboxRow = convertPanel;
 
             CheckBox CreateConvertCheckBox(string label, bool isChecked, bool isEnabled = true)
                 => new()
@@ -18914,6 +19494,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (AssetPathFieldTags.Contains(tag))
                     editor = CreateAssetPathEditor(tag, valueOverride, GetProtoActionValueSuggestions(tag) ?? []);
+                ApplyProtoActionFieldWidth(editor, tag);
 
                 if (!AssetPathFieldTags.Contains(tag) && editor is TextBox textEditor)
                 {
@@ -18955,7 +19536,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Margin = new Thickness(0, 2, 0, 2),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-            var modelAttachmentEditor = CreateAttachmentEditor("modelattachment", modelAttachmentValue);
+            var modelAttachmentEditor = CreateAttachmentEditor("modelattachment", modelAttachmentValue, 200);
             modelAttachmentRow.Children.Add(CreateLabeledFieldGroup(
                 "Model Attachment:",
                 modelAttachmentEditor));
@@ -18965,10 +19546,62 @@ public partial class ProtoEditorWindow : SimpleWindow
                 currentValues.TryGetValue("modelattachmentbone", out var currentBone)
                     ? currentBone
                     : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modelattachmentbone"));
-            var modelAttachmentBoneEditor = CreateAttachmentEditor("modelattachmentbone", modelAttachmentBoneValue, 140);
+            var modelAttachmentBoneEditor = CreateAttachmentEditor("modelattachmentbone", modelAttachmentBoneValue, 100);
             modelAttachmentRow.Children.Add(CreateLabeledFieldGroup(
-                "Model Attachment Bone:",
+                "Bone:",
                 modelAttachmentBoneEditor));
+
+            var modelAttachmentTimerValue = GetProtoActionDefaultSimpleValue(
+                "modelattachmenttimer",
+                currentValues.TryGetValue("modelattachmenttimer", out var currentTimer)
+                    ? currentTimer
+                    : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modelattachmenttimer"));
+            var attachmentProfile = ProtoActionMetadataCatalog.GetEditorProfile(actionType);
+            var showTimer = !string.IsNullOrWhiteSpace(modelAttachmentTimerValue) ||
+                            attachmentProfile.DefaultVisibleTags.Contains("modelattachmenttimer", StringComparer.OrdinalIgnoreCase) ||
+                            state.ForcedVisibleFieldTags.Contains("modelattachmenttimer");
+            if (showTimer)
+            {
+                var timerEditor = CreateAttachmentEditor("modelattachmenttimer", modelAttachmentTimerValue, 90);
+                modelAttachmentRow.Children.Add(CreateLabeledFieldGroup("Timer (ms):", timerEditor));
+                if (!_isReadOnly)
+                {
+                    var removeTimerButton = new Button
+                    {
+                        Classes = { "remove-button" },
+                        Margin = new Thickness(2, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    removeTimerButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        state.ForcedVisibleFieldTags.Remove("modelattachmenttimer");
+                        state.AdditionalFieldControls.Remove("modelattachmenttimer");
+                        ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "modelattachmenttimer", "");
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    modelAttachmentRow.Children.Add(removeTimerButton);
+                }
+            }
+            else if (!_isReadOnly)
+            {
+                var addTimerButton = new Button
+                {
+                    Content = "Timer",
+                    Background = Brush.Parse("#2b7a0b"),
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                addTimerButton.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod()) return;
+                    state.ForcedVisibleFieldTags.Add("modelattachmenttimer");
+                    RefreshProtoActionMetadataPanels(state);
+                    MarkDirty();
+                };
+                modelAttachmentRow.Children.Add(addTimerButton);
+            }
 
             if (!_isReadOnly)
             {
@@ -18999,7 +19632,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var removeButton = new Button
                 {
                     Classes = { "remove-button" },
-                    Margin = new Thickness(0, 0, 0, 6),
+                    Margin = new Thickness(2, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 removeButton.Click += async (_, _) => await RemoveOptionalModelAttachmentAsync();
@@ -19007,58 +19640,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             state.AdditionalFieldsContainer.Children.Add(modelAttachmentRow);
-
-              if (!IsLikeBonusActionType(actionType) && !IsAutoRangedModifyActionType(actionType))
-              {
-              var modelAttachmentTimerValue = GetProtoActionDefaultSimpleValue(
-                  "modelattachmenttimer",
-                  currentValues.TryGetValue("modelattachmenttimer", out var currentTimer)
-                      ? currentTimer
-                      : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modelattachmenttimer"));
-              var attachmentProfile = ProtoActionMetadataCatalog.GetEditorProfile(actionType);
-              var showTimer = !string.IsNullOrWhiteSpace(modelAttachmentTimerValue) ||
-                              attachmentProfile.DefaultVisibleTags.Contains("modelattachmenttimer", StringComparer.OrdinalIgnoreCase) ||
-                              state.ForcedVisibleFieldTags.Contains("modelattachmenttimer");
-              if (showTimer)
-              {
-                  var timerRow = new Grid
-                  {
-                      ColumnDefinitions = new ColumnDefinitions("180, 120"),
-                      Margin = new Thickness(0, 2, 0, 2),
-                      HorizontalAlignment = HorizontalAlignment.Left
-                  };
-                  timerRow.Children.Add(new TextBlock
-                  {
-                      Text = "Model Attachment Timer (ms):",
-                      VerticalAlignment = VerticalAlignment.Center,
-                      Margin = new Thickness(0, 4, 10, 4)
-                  });
-                  var modelAttachmentTimerEditor = CreateAttachmentEditor("modelattachmenttimer", modelAttachmentTimerValue, 120);
-                  Grid.SetColumn(modelAttachmentTimerEditor, 1);
-                  timerRow.Children.Add(modelAttachmentTimerEditor);
-                  state.AdditionalFieldsContainer.Children.Add(timerRow);
-              }
-              else if (!_isReadOnly)
-              {
-                  var addTimerButton = new Button
-                  {
-                      Content = "Model Attachment Timer",
-                      Background = Brush.Parse("#2b7a0b"),
-                      HorizontalAlignment = HorizontalAlignment.Left
-                  };
-                  addTimerButton.Click += async (_, _) =>
-                  {
-                      var proceed = await CheckStartLocalMod();
-                      if (!proceed)
-                          return;
-
-                      state.ForcedVisibleFieldTags.Add("modelattachmenttimer");
-                      RefreshProtoActionMetadataPanels(state);
-                      MarkDirty();
-                  };
-                  state.AdditionalFieldsContainer.Children.Add(addTimerButton);
-              }
-              }
           }
 
         if (!_isReadOnly && SupportsOptionalModelAttachmentActionType(actionType) && !showOptionalModelAttachmentFields)
@@ -19915,6 +20496,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
                 EditorTextFieldStyle.ConfigureSelector(animAcb);
+                ApplyProtoActionFieldWidth(animAcb, "anim");
                 WireAutoCompleteBox(animAcb, animationSuggestions);
 
                 var empowerAreaTb = new TextBox
@@ -20451,18 +21033,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             Grid.SetColumn(paramLabel, 4);
             rowGrid.Children.Add(paramLabel);
 
-            var paramAcb = new AutoCompleteBox
+            var paramCb = new ComboBox
             {
-                Text = ProtoConstants.KnownDamageTypes.FirstOrDefault(x => x.Equals(param, StringComparison.OrdinalIgnoreCase)) ?? param,
-                FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = ProtoConstants.KnownDamageTypes,
                 IsEnabled = !_isReadOnly,
                 Width = 90
             };
-            EnableDropdownAutoComplete(paramAcb);
-            paramAcb.TextChanged += async (_, _) => await HandleChangedAsync();
-            Grid.SetColumn(paramAcb, 5);
-            rowGrid.Children.Add(paramAcb);
+            paramCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
+            Grid.SetColumn(paramCb, 5);
+            rowGrid.Children.Add(paramCb);
 
             var valueLabel = new TextBlock
             {
@@ -20478,7 +21056,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Text = value,
                 IsEnabled = !_isReadOnly
             };
-            AttachProtoActionDecimalBehavior(valueTb);
+            AttachProtoActionDecimalBehavior(valueTb, () => true);
             valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
             Grid.SetColumn(valueTb, 7);
             rowGrid.Children.Add(valueTb);
@@ -20491,11 +21069,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void RefreshParamVisibility()
             {
-                var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
+                var modifyTypeValue = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "");
+                var visible = modifyTypeValue is "DamageSpecific" or "ArmorSpecific";
+                RefreshProtoActionDamageTypeCombo(paramCb, modifyTypeValue, param);
                 paramLabel.IsVisible = visible;
-                paramAcb.IsVisible = visible;
+                paramCb.IsVisible = visible;
                 if (!visible)
-                    paramAcb.Text = "";
+                    paramCb.SelectedItem = null;
             }
 
             modifyTypeAcb.TextChanged += (_, _) => RefreshParamVisibility();
@@ -20507,7 +21087,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ModifyTypeAcb = modifyTypeAcb,
                 ApplyTypeCb = applyTypeCb,
                 ValueTb = valueTb,
-                ParamAcb = paramAcb,
+                ParamCb = paramCb,
                 ParamLabel = paramLabel,
                 ModifyAmountCapTb = capTb
             };
@@ -20553,7 +21133,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var addButton = new Button
             {
-                Content = "+ Charged Modifier",
+                Content = "Charged Modifier",
                 Background = Brush.Parse("#2b7a0b"),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
@@ -20728,16 +21308,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             paramGroup.Children.Add(paramLabel);
             var paramValue = (string?)chargedModify?.Attribute("param") ?? "";
-            var paramAcb = new AutoCompleteBox
+            var paramCb = new ComboBox
             {
-                Text = ProtoConstants.KnownDamageTypes.FirstOrDefault(x => x.Equals(paramValue, StringComparison.OrdinalIgnoreCase)) ?? paramValue,
-                FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = ProtoConstants.KnownDamageTypes,
                 IsEnabled = !_isReadOnly,
                 Width = 100
             };
-            EnableDropdownAutoComplete(paramAcb);
-            paramGroup.Children.Add(paramAcb);
+            RefreshProtoActionDamageTypeCombo(paramCb, modifyTypeAcb.Text, paramValue);
+            paramGroup.Children.Add(paramCb);
             modifierRow.Children.Add(paramGroup);
 
             var valueGroup = new StackPanel
@@ -21040,7 +21617,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void RefreshParamVisibility()
             {
-                var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
+                var modifyTypeValue = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "");
+                var visible = modifyTypeValue is "DamageSpecific" or "ArmorSpecific";
+                RefreshProtoActionDamageTypeCombo(paramCb, modifyTypeValue, paramValue);
                 paramGroup.IsVisible = visible;
             }
 
@@ -21050,7 +21629,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 await HandleChangedAsync();
             };
             applyTypeCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
-            paramAcb.TextChanged += async (_, _) => await HandleChangedAsync();
+            paramCb.SelectionChanged += async (_, _) => await HandleChangedAsync();
             valueTb.TextChanged += async (_, _) => await HandleChangedAsync();
             activationTypeCb.SelectionChanged += async (_, _) =>
             {
@@ -21075,7 +21654,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 OriginalElement = originalElement,
                 ModifyTypeAcb = modifyTypeAcb,
                 ApplyTypeCb = applyTypeCb,
-                ParamAcb = paramAcb,
+                ParamCb = paramCb,
                 ValueTb = valueTb,
                 ActivationTypeCb = activationTypeCb,
                 CooldownTb = cooldownTb,
@@ -24073,7 +24652,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 : tag.Equals("modifyprotoid", StringComparison.OrdinalIgnoreCase) ? "Target Proto Unit"
                 : tag.Equals("forbidunittype", StringComparison.OrdinalIgnoreCase) ? "Forbid Proto Unit"
                 : definition.Label;
-            section.Children.Add(new TextBlock { Text = label + ":", FontWeight = FontWeight.SemiBold });
+            var selectorRow = new WrapPanel { Orientation = Orientation.Horizontal };
+            selectorRow.Children.Add(new TextBlock
+            {
+                Text = label + ":",
+                FontWeight = FontWeight.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            });
+            section.Children.Add(selectorRow);
             var chips = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
             state.StructuredFieldRows[tag] = [];
             var suggestions = GetStandardTargetListSuggestions(tag);
@@ -24150,7 +24737,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     picker.Text = "";
                     MarkDirty();
                 };
-                section.Children.Add(picker);
+                selectorRow.Children.Add(picker);
             }
 
             foreach (var entry in entries)
@@ -24268,6 +24855,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             IsEnabled = !_isReadOnly
                         }
                 };
+                ApplyProtoActionFieldWidth(rowState.ValueTb, tag);
                 if (rowState.ValueTb is TextBox valueTextBox)
                     AttachProtoActionDecimalBehavior(valueTextBox);
                 else if (rowState.ValueTb is AutoCompleteBox valueAutoCompleteBox)
@@ -24658,12 +25246,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(actionType) && state.SelectedFlagTags.Count == 0)
             return;
 
-        state.FlagsContainer.Children.Add(new TextBlock
+        var flagsHeaderRow = new WrapPanel
         {
-            Text = "Flags",
-            FontWeight = FontWeight.Bold,
+            Orientation = Orientation.Horizontal,
             Margin = new Thickness(0, 6, 0, 2)
+        };
+        flagsHeaderRow.Children.Add(new TextBlock
+        {
+            Text = "Flags:",
+            FontWeight = FontWeight.Bold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0)
         });
+        state.FlagsContainer.Children.Add(flagsHeaderRow);
 
         var flagsWrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 4) };
         state.FlagsContainer.Children.Add(flagsWrap);
@@ -24735,6 +25330,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed)
                     {
                         state.SelectedFlagTags.Remove(tag);
+                        state.DefaultInjectedFlagTags.Remove(tag);
                         SyncFlagCheckboxesFromFlags();
                         MarkDirty();
                         RefreshFlagsDisplay();
@@ -24762,7 +25358,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_isReadOnly)
             return;
 
-        var addFlagGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto"), Margin = new Thickness(0, 4, 0, 4) };
         var acbAdd = new AutoCompleteBox
         {
             FilterMode = AutoCompleteFilterMode.Contains,
@@ -24776,8 +25371,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         };
         protoActionFlagPicker = acbAdd;
         EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
-        Grid.SetColumn(acbAdd, 0);
-        addFlagGrid.Children.Add(acbAdd);
+        flagsHeaderRow.Children.Add(acbAdd);
 
         async void PerformAddFlag()
         {
@@ -24799,6 +25393,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (proceed)
             {
                 state.SelectedFlagTags.Add(tag);
+                // From this point the flag is an explicit user choice, even if it was
+                // also a default of a type previewed earlier.
+                state.DefaultInjectedFlagTags.Remove(tag);
                 SyncFlagCheckboxesFromFlags();
                 acbAdd.Text = "";
                 MarkDirty();
@@ -24823,7 +25420,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PerformAddFlag();
             }
         };
-        state.FlagsContainer.Children.Insert(state.FlagsContainer.Children.IndexOf(flagsWrap), addFlagGrid);
     }
 
     private void RenderProtoActionOptionalFields(
@@ -25008,6 +25604,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     EditorTextFieldStyle.ConfigureSelector(editorAcb);
                 EnableDropdownAutoComplete(editorAcb);
             }
+
+            ApplyProtoActionFieldWidth(editor, tag);
 
             if (AssetPathFieldTags.Contains(tag))
                 editor = CreateAssetPathEditor(tag, value, GetProtoActionValueSuggestions(tag) ?? []);
@@ -25458,7 +26056,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (modifyTypeValue is "DamageSpecific" or "ArmorSpecific")
             {
-                var param = ProtoConstants.KnownDamageTypes.FirstOrDefault(x => x.Equals(row.ParamAcb.Text?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)) ?? "";
+                var paramValue = row.ParamCb.SelectedItem?.ToString() ?? "";
+                var param = ProtoConstants.KnownDamageTypes.FirstOrDefault(x => x.Equals(paramValue, StringComparison.OrdinalIgnoreCase)) ?? "";
                 if (!string.IsNullOrWhiteSpace(param))
                     chargedModify.SetAttributeValue("param", param);
             }
@@ -25510,7 +26109,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var modifyType = ProtoConstants.GetModifyTypeValue(row.ModifyTypeAcb.Text?.Trim() ?? "");
             var applyType = row.ApplyTypeCb.SelectedItem as string ?? "Multiply";
-            var param = row.ParamAcb.Text?.Trim() ?? "";
+            var param = row.ParamCb.SelectedItem?.ToString()?.Trim() ?? "";
             var value = row.ValueTb.Text?.Trim() ?? "";
             var activationType = row.ActivationTypeCb.SelectedItem as string ?? "";
             var cooldown = row.CooldownTb.Text?.Trim() ?? "";
@@ -25851,6 +26450,37 @@ public partial class ProtoEditorWindow : SimpleWindow
             autoCompleteBox.Text = filtered;
             normalizing = false;
         };
+    }
+
+    private static void AttachProtoActionIntegerBehavior(TextBox textBox, Func<bool>? allowNegative = null)
+    {
+        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+        textBox.TextChanged += (_, _) =>
+        {
+            var text = textBox.Text ?? "";
+            var canBeNegative = allowNegative?.Invoke() == true;
+            var filtered = new string(text.Where(ch => char.IsDigit(ch) || (canBeNegative && ch == '-')).ToArray());
+            if (filtered.Count(ch => ch == '-') > 1 || (filtered.Contains('-') && !filtered.StartsWith('-')))
+                filtered = (filtered.StartsWith('-') ? "-" : "") + filtered.Replace("-", "", StringComparison.Ordinal);
+            if (!string.Equals(text, filtered, StringComparison.Ordinal))
+                textBox.Text = filtered;
+        };
+    }
+
+    private static IReadOnlyList<string> GetProtoActionSpecificDamageTypes(string? modifyType)
+        => ProtoConstants.GetModifyTypeValue(modifyType?.Trim() ?? "") switch
+        {
+            "ArmorSpecific" => ["Hack", "Pierce", "Crush"],
+            "DamageSpecific" => ["Hack", "Pierce", "Crush", "Divine"],
+            _ => []
+        };
+
+    private static void RefreshProtoActionDamageTypeCombo(ComboBox comboBox, string? modifyType, string? preferredValue = null)
+    {
+        var choices = GetProtoActionSpecificDamageTypes(modifyType);
+        var current = comboBox.SelectedItem?.ToString() ?? preferredValue?.Trim() ?? "";
+        comboBox.ItemsSource = choices;
+        comboBox.SelectedItem = choices.FirstOrDefault(choice => choice.Equals(current, StringComparison.OrdinalIgnoreCase));
     }
 
     private void UpdateProtoActionTypeEditor(AutoCompleteBox typeAcb, string actionName)
@@ -27669,6 +28299,25 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private static void KeepAutoCompleteTextStartVisible(AutoCompleteBox autoCompleteBox)
+    {
+        void ResetTextViewport()
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+                if (textEditor == null) return;
+                textEditor.SelectionStart = 0;
+                textEditor.SelectionEnd = 0;
+                textEditor.CaretIndex = 0;
+            }, DispatcherPriority.Background);
+        }
+
+        autoCompleteBox.AttachedToVisualTree += (_, _) => ResetTextViewport();
+        autoCompleteBox.SelectionChanged += (_, _) => ResetTextViewport();
+        autoCompleteBox.LostFocus += (_, _) => ResetTextViewport();
+    }
+
     private async Task OpenIconManagerAsync()
     {
         if (!string.IsNullOrWhiteSpace(_currentUnitName)) ApplyCurrentEdits();
@@ -27762,6 +28411,57 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private async Task OpenSoundSetManagerAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_currentUnitName)) ApplyCurrentEdits();
+        if (_baseGameSoundSets.Count == 0)
+            await LoadBaseGameSoundSetCatalogAsync();
+        LoadCurrentModAssetCatalogs();
+        var customCountBefore = _customSoundSets.Count;
+
+        if (_baseGameSoundSets.Count == 0 && _customSoundSets.Count == 0)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Sound sets unavailable",
+                "No sound-set XML files could be read from Sound.bar. Check the Data.bar path in Settings.").ShowDialog(this);
+            return;
+        }
+
+        var soundArchivePath = ResolveSoundArchivePath(ResolveDataBarPath());
+        var customSoundDirectory = GetCurrentModSoundDirectory();
+        if (soundArchivePath == null && _customSoundSets.Count == 0) return;
+        var managerItems = _baseGameSoundSets.Concat(_customSoundSets)
+            .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.IsCustom).First())
+            .ToList();
+        if (customSoundDirectory != null) Directory.CreateDirectory(customSoundDirectory);
+        var assetMoved = false;
+        var manager = new AnimFileManagerWindow(
+            managerItems,
+            soundSet => soundSet.IsCustom
+                ? AnimFileCatalog.LoadCustomXmlAsync(customSoundDirectory, soundSet.Path)
+                : soundArchivePath == null
+                    ? Task.FromResult<string?>(null)
+                    : SoundSetCatalog.LoadXmlAsync(soundArchivePath, soundSet),
+            customSoundDirectory,
+            async (item, destination) =>
+            {
+                var moved = await MoveCustomSoundSetAsync(item, destination);
+                assetMoved |= moved;
+                return moved;
+            },
+            XmlAssetManagerProfile.SoundSet);
+        await manager.ShowDialog(this);
+        LoadCurrentModAssetCatalogs();
+        if ((_customSoundSets.Count != customCountBefore || assetMoved) && !string.IsNullOrWhiteSpace(_currentUnitName))
+        {
+            var tabIndex = _editorTabs.SelectedIndex;
+            BuildEditorPanel(_currentUnitName, resetScroll: false);
+            if (tabIndex >= 0) _editorTabs.SelectedIndex = tabIndex;
+        }
+    }
+
     private async Task<bool> MoveCustomIconAsync(IconManagerItem item, AssetDestination destination)
     {
         var resourcesDirectory = GetCurrentModIconResourcesDirectory();
@@ -27779,6 +28479,15 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!TryResolveExistingAsset(artDirectory, item.Path, ".xml", "", out var sourcePath))
             return await ShowAssetMoveErrorAsync("Anim File unavailable", "The custom animation file could not be found inside this mod.");
         return await MoveCustomAssetAsync(sourcePath, item.Path, destination, "animfile", "animation file");
+    }
+
+    private async Task<bool> MoveCustomSoundSetAsync(AnimFileCatalogEntry item, AssetDestination destination)
+    {
+        var soundDirectory = GetCurrentModSoundDirectory();
+        if (soundDirectory == null) return false;
+        if (!TryResolveExistingAsset(soundDirectory, item.Path, ".xml", "", out var sourcePath))
+            return await ShowAssetMoveErrorAsync("Sound Set unavailable", "The custom sound set could not be found inside this mod.");
+        return await MoveCustomAssetAsync(sourcePath, item.Path, destination, "soundsetfile", "sound set");
     }
 
     private static bool TryResolveExistingAsset(
@@ -27826,9 +28535,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             ? "No ProtoUnit currently references this asset."
             : $"{impact.ReferenceCount} reference(s) in {impact.UnitNames.Count} ProtoUnit(s) will be updated:\n" +
               string.Join(", ", impact.UnitNames.Take(12)) + (impact.UnitNames.Count > 12 ? ", …" : "");
+        var moveTitle = elementName.ToLowerInvariant() switch
+        {
+            "icon" => "Rename/Move Icon",
+            "soundsetfile" => "Rename/Move Sound Set",
+            _ => "Rename/Move Anim File"
+        };
         var confirmation = new Prompt(
             PromptType.Confirm,
-            elementName.Equals("icon", StringComparison.OrdinalIgnoreCase) ? "Rename/Move Icon" : "Rename/Move Anim File",
+            moveTitle,
             $"{oldXmlValue}\n→ {destination.XmlValue}\n\n{units}\n\nThe file move and reference updates will be saved together.",
             confirmButtonText: "Save");
         await confirmation.ShowDialog(this);
@@ -30988,7 +31703,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             .ToList(),
                         SelectedItem = SupportedCultureLabels.FirstOrDefault(x => x.Equals(cultureLabel, StringComparison.OrdinalIgnoreCase)) ?? cultureLabel,
                         IsEnabled = !_isReadOnly,
-                        Width = 100,
+                        Width = 80,
                         Margin = new Thickness(0, 4, 8, 4)
                     };
                     cultureCb.SelectionChanged += async (s, e) =>
@@ -37943,7 +38658,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _fieldControls["tactics"] = tacticsControl;
         if (!_isTacticsActionEditorMode)
+        {
+            AddSectionHeader("Tactics");
             _activeEditorPanel.Children.Add(tacticsGrid);
+        }
 
         var committedTacticsName = initialTactics.Trim();
         var committedTacticsActions = CloneProtoActionMap(LoadProtoActionsForTactics(committedTacticsName));
@@ -38063,9 +38781,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             actionSelectorPanel.Children.Clear();
             foreach (var actionState in _protoActionWidgets)
             {
-                var actionName = actionState.NameAcb.Text?.Trim();
-                if (string.IsNullOrWhiteSpace(actionName))
-                    actionName = "Unnamed Action";
+                var actionName = actionState.NameAcb.Text?.Trim() ?? "";
 
                 var actionButton = new Button
                 {
@@ -38114,13 +38830,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             ProtoAction pa,
             bool isNewCustomAction = false,
             bool isLinkedMaulAreaAction = false,
+            bool isLinkedAbductDropAction = false,
             bool isTacticsOnlyAction = false)
         {
             var widget = CreateProtoActionWidget(pa, () =>
             {
                 MarkDirty();
                 RefreshActionSelector();
-            }, isNewCustomAction, isLinkedMaulAreaAction, EnsureMaulCompanionForAction, isTacticsOnlyAction);
+            }, isNewCustomAction, isLinkedMaulAreaAction, isLinkedAbductDropAction, EnsureLinkedCompanionsForAction, isTacticsOnlyAction);
             actionDetailsPanel.Children.Add(widget);
             var state = _protoActionWidgets[^1];
             state.NameAcb.TextChanged += (_, _) => RefreshActionSelector();
@@ -38189,6 +38906,70 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
+        void LinkAbductDropAction(ProtoActionWidgetState primary, ProtoActionWidgetState companion)
+        {
+            primary.AbductDropCompanion = companion;
+            companion.IsLinkedAbductDropAction = true;
+            companion.NameAcb.Text = "AbductDrop";
+            companion.NameAcb.IsEnabled = false;
+            companion.TypeAcb.Text = "Inline";
+            companion.TypeAcb.IsEnabled = false;
+            companion.SelectedFlagTags.Add("isabductdrop");
+            ProtoXmlHandler.SetProtoActionSimpleFieldValue(companion.Model, "isabductdrop", "1");
+            if (companion.RemoveButton != null)
+                companion.RemoveButton.IsVisible = false;
+            RefreshProtoActionMetadataPanels(companion);
+        }
+
+        void EnsureAbductDropCompanionForAction(ProtoActionWidgetState primary)
+        {
+            var actionType = ResolveProtoActionType(primary.NameAcb.Text?.Trim() ?? "", primary.TypeAcb.Text?.Trim() ?? "");
+            if (!IsAbductActionType(actionType) || primary.IsLinkedAbductDropAction)
+                return;
+
+            if (primary.AbductDropCompanion != null || primary.IsCreatingAbductDropCompanion)
+                return;
+
+            primary.IsCreatingAbductDropCompanion = true;
+            try
+            {
+                var companionAction = new ProtoAction
+                {
+                    Name = "AbductDrop",
+                    Type = "Inline"
+                };
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(companionAction, "isabductdrop", "1");
+                var companion = AddProtoActionWidget(companionAction, isNewCustomAction: true, isLinkedAbductDropAction: true);
+                var primaryIndex = _protoActionWidgets.IndexOf(primary);
+                if (primaryIndex >= 0)
+                {
+                    _protoActionWidgets.Remove(companion);
+                    _protoActionWidgets.Insert(primaryIndex + 1, companion);
+                }
+                if (primary.WidgetBorder?.Parent is Panel panel && companion.WidgetBorder != null)
+                {
+                    var primaryWidgetIndex = panel.Children.IndexOf(primary.WidgetBorder);
+                    if (primaryWidgetIndex >= 0)
+                    {
+                        panel.Children.Remove(companion.WidgetBorder);
+                        panel.Children.Insert(primaryWidgetIndex + 1, companion.WidgetBorder);
+                    }
+                }
+                LinkAbductDropAction(primary, companion);
+                RefreshActionSelector();
+            }
+            finally
+            {
+                primary.IsCreatingAbductDropCompanion = false;
+            }
+        }
+
+        void EnsureLinkedCompanionsForAction(ProtoActionWidgetState primary)
+        {
+            EnsureMaulCompanionForAction(primary);
+            EnsureAbductDropCompanionForAction(primary);
+        }
+
         foreach (var action in actions)
         {
             // A persisted override of a tactics-only action intentionally omits <type>.
@@ -38236,6 +39017,24 @@ public partial class ProtoEditorWindow : SimpleWindow
                 LinkMaulAreaAction(primary, companion);
         }
 
+        // Existing Abduct pairs are loaded as-is and use the same shared action editor
+        // in both the ProtoUnit Actions tab and the standalone Tactics Manager.
+        foreach (var primary in _protoActionWidgets.Where(state =>
+                     !state.IsLinkedAbductDropAction &&
+                     IsAbductActionType(ResolveProtoActionType(
+                         state.NameAcb.Text?.Trim() ?? "", state.TypeAcb.Text?.Trim() ?? ""))).ToList())
+        {
+            var companion = _protoActionWidgets.FirstOrDefault(candidate =>
+                !ReferenceEquals(candidate, primary) &&
+                candidate.NameAcb.Text?.Trim().Equals("AbductDrop", StringComparison.OrdinalIgnoreCase) == true &&
+                ResolveProtoActionType(candidate.NameAcb.Text?.Trim() ?? "", candidate.TypeAcb.Text?.Trim() ?? "")
+                    .Equals("Inline", StringComparison.OrdinalIgnoreCase) &&
+                (candidate.SelectedFlagTags.Contains("isabductdrop") ||
+                 IsProtoActionFlagEnabledValue(ProtoXmlHandler.GetProtoActionSimpleFieldValue(candidate.Model, "isabductdrop"))));
+            if (companion != null)
+                LinkAbductDropAction(primary, companion);
+        }
+
         RefreshActionSelector();
 
         if (!_isReadOnly && !_isTacticsActionEditorMode)
@@ -38249,7 +39048,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var btnAddAction = new Button
             {
-                Content = _isTacticsActionEditorMode ? "+ Add Action" : "+ Add Proto Action",
+                Content = _isTacticsActionEditorMode ? "+ Add Action" : "Add Proto Action",
                 Background = Brush.Parse("#2b7a0b"),
                 Margin = new Thickness(0)
             };
@@ -38350,6 +39149,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         Action onRemove,
         bool isNewCustomAction = false,
         bool isLinkedMaulAreaAction = false,
+        bool isLinkedAbductDropAction = false,
         Action<ProtoActionWidgetState>? onActionTypeChanged = null,
         bool isTacticsOnlyAction = false)
     {
@@ -38375,6 +39175,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             LastChildFill = false
         };
         mainStack.Children.Add(header);
+
+        var bodyStack = new StackPanel { Spacing = 8 };
+        mainStack.Children.Add(bodyStack);
 
         var nameLabel = new TextBlock { Text = "Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
         DockPanel.SetDock(nameLabel, Dock.Left);
@@ -38448,7 +39251,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             HasTacticsOnlyOverrides = initialTacticsAction != null &&
                                        HasActualTacticsOverride(pa, initialTacticsAction),
             IsLinkedMaulAreaAction = isLinkedMaulAreaAction,
+            IsLinkedAbductDropAction = isLinkedAbductDropAction,
             Container = mainStack,
+            BodyContainer = bodyStack,
+            ActiveLabel = activeLabel,
+            ActiveCheckBox = activeCheckBox,
             NameAcb = nameAcb,
             TypeAcb = typeAcb,
             CoreFieldsGrid = null!,
@@ -38460,6 +39267,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             JumpAttackOptionsContainer = new StackPanel { Spacing = 2 },
             BuckAttackOptionsContainer = new StackPanel { Spacing = 2 },
             LinearAreaAttackOptionsContainer = new StackPanel { Spacing = 2 },
+            AbductPostCoreOptionsContainer = new StackPanel { Spacing = 2 },
             AdditionalFieldsContainer = new StackPanel { Spacing = 4 },
             StructuredFieldsContainer = new StackPanel { Spacing = 4 },
             OnHitEffectsContainer = new StackPanel { Spacing = 4 },
@@ -38471,7 +39279,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             RampageLayoutContainer = new StackPanel { Spacing = 4 }
         };
         state.WidgetBorder = border;
-        if (state.IsLinkedMaulAreaAction || state.IsTacticsOnlyAction)
+        if (state.IsLinkedMaulAreaAction || state.IsLinkedAbductDropAction || state.IsTacticsOnlyAction)
         {
             nameAcb.IsEnabled = false;
             typeAcb.IsEnabled = false;
@@ -38549,6 +39357,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                         _protoActionWidgets.Remove(state.MaulAreaCompanion);
                         if (state.MaulAreaCompanion.WidgetBorder?.Parent is Panel companionPanel)
                             companionPanel.Children.Remove(state.MaulAreaCompanion.WidgetBorder);
+                    }
+                    if (state.AbductDropCompanion != null)
+                    {
+                        _protoActionWidgets.Remove(state.AbductDropCompanion);
+                        if (state.AbductDropCompanion.WidgetBorder?.Parent is Panel abductCompanionPanel)
+                            abductCompanionPanel.Children.Remove(state.AbductDropCompanion.WidgetBorder);
                     }
                     _protoActionWidgets.Remove(state);
                     onRemove();
@@ -38667,13 +39481,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         };
 
-        mainStack.Children.Add(state.AutoBoostModeContainer);
-        mainStack.Children.Add(state.JumpAttackOptionsContainer);
-        mainStack.Children.Add(state.BuckAttackOptionsContainer);
+        bodyStack.Children.Add(state.AutoBoostModeContainer);
+        bodyStack.Children.Add(state.JumpAttackOptionsContainer);
+        bodyStack.Children.Add(state.BuckAttackOptionsContainer);
 
         var showInitialCoreMinRange = UsesCoreMinRange(resolvedType) &&
                                       !isLinkedMaulAreaAction &&
-                                      (IsAttackActionType(resolvedType) || IsChainAttackActionType(resolvedType) || IsAoeAttackActionType(resolvedType) || IsLinearAreaAttackActionType(resolvedType)
+                                      !isLinkedAbductDropAction &&
+                                      (IsAttackActionType(resolvedType) || IsChainAttackActionType(resolvedType) || IsAoeAttackActionType(resolvedType) || IsLinearAreaAttackActionType(resolvedType) || IsAbductActionType(resolvedType)
                                           ? state.ForcedVisibleFieldTags.Contains("minrange") || !string.IsNullOrWhiteSpace(
                                               ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "minrange"))
                                           : isNewCustomAction || !string.IsNullOrWhiteSpace(
@@ -38686,8 +39501,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             Margin = new Thickness(0, 4, 0, 4)
         };
         state.CoreFieldsGrid = fieldsGrid;
-        mainStack.Children.Add(fieldsGrid);
-        mainStack.Children.Add(state.LinearAreaAttackOptionsContainer);
+        bodyStack.Children.Add(fieldsGrid);
+        bodyStack.Children.Add(state.AbductPostCoreOptionsContainer);
+        bodyStack.Children.Add(state.LinearAreaAttackOptionsContainer);
 
         var rofLabel = new TextBlock { Text = "Rate of Fire:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
         state.RofLabel = rofLabel;
@@ -38760,7 +39576,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         fieldsGrid.Children.Add(mrTb);
         state.MaxRangeTb = mrTb;
 
-        mainStack.Children.Add(state.DamageSectionContainer);
+        bodyStack.Children.Add(state.DamageSectionContainer);
 
         var dmgLabel = new TextBlock
         {
@@ -38962,12 +39778,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         EnsureAddDamageButton();
 
         if (!IsAutoRangedModifyActionType(resolvedType))
-            mainStack.Children.Add(state.BonusSectionContainer);
-        mainStack.Children.Add(state.AdditionalFieldsContainer);
-        mainStack.Children.Add(state.StructuredFieldsContainer);
-        mainStack.Children.Add(state.OnHitEffectsContainer);
-        mainStack.Children.Add(state.FlagsContainer);
-        mainStack.Children.Add(state.OptionalFieldsContainer);
+            bodyStack.Children.Add(state.BonusSectionContainer);
+        bodyStack.Children.Add(state.AdditionalFieldsContainer);
+        bodyStack.Children.Add(state.StructuredFieldsContainer);
+        bodyStack.Children.Add(state.OnHitEffectsContainer);
+        bodyStack.Children.Add(state.FlagsContainer);
+        bodyStack.Children.Add(state.OptionalFieldsContainer);
 
         if (!IsAutoRangedModifyActionType(resolvedType))
         {
@@ -40769,21 +41585,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     tacticsAction?.MaxRange ?? "",
                     pw.Model.MaxRange);
 
-            if (attackUsesCombatRanges && UsesCoreMinRange(currentActionType) && !pw.IsLinkedMaulAreaAction && pw.JumpAttackMinRangeTb != null)
-            {
-                var currentMinRange = pw.JumpAttackMinRangeTb.Text?.Trim() ?? "";
-                var tacticsMinRange = tacticsAction != null
-                    ? ProtoXmlHandler.GetProtoActionSimpleFieldValue(tacticsAction, "minrange")
-                    : "";
-                var originalMinRange = ProtoXmlHandler.GetProtoActionSimpleFieldValue(pw.Model, "minrange");
-                ProtoXmlHandler.SetProtoActionSimpleFieldValue(
-                    pa,
-                    "minrange",
-                    ResolveProtoOverrideValue(currentMinRange, tacticsMinRange, originalMinRange));
-            }
-
             if (IsMaulActionType(currentActionType))
                 ProtoXmlHandler.SetProtoActionSimpleFieldValue(pa, "areaprotoaction", "AreaAttack");
+            if (pw.IsLinkedAbductDropAction)
+            {
+                pa.Name = "AbductDrop";
+                pa.Type = "Inline";
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(pa, "isabductdrop", "1");
+            }
 
             if (IsAttackActionType(currentActionType) &&
                 GetAttackMode(pw).Equals("Birth Attack", StringComparison.OrdinalIgnoreCase))
@@ -40948,6 +41757,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var originalProtoValue = ProtoXmlHandler.GetProtoActionSimpleFieldValue(pw.Model, kvp.Key);
                 var protoValue = ResolveProtoOverrideValue(currentValue, tacticsValue, originalProtoValue);
                 ProtoXmlHandler.SetProtoActionSimpleFieldValue(pa, kvp.Key, protoValue);
+            }
+
+            // Core Min Range uses the same <minrange> backing attribute as the generic
+            // additional-field editor. Apply it after generic additional fields so a stale
+            // duplicate control can never overwrite the visible core value.
+            if (attackUsesCombatRanges && UsesCoreMinRange(currentActionType) && !pw.IsLinkedMaulAreaAction && !pw.IsLinkedAbductDropAction && pw.JumpAttackMinRangeTb != null)
+            {
+                var currentMinRange = pw.JumpAttackMinRangeTb.Text?.Trim() ?? "";
+                var tacticsMinRange = tacticsAction != null
+                    ? ProtoXmlHandler.GetProtoActionSimpleFieldValue(tacticsAction, "minrange")
+                    : "";
+                var originalMinRange = ProtoXmlHandler.GetProtoActionSimpleFieldValue(pw.Model, "minrange");
+                ProtoXmlHandler.SetProtoActionSimpleFieldValue(
+                    pa,
+                    "minrange",
+                    ResolveProtoOverrideValue(currentMinRange, tacticsMinRange, originalMinRange));
             }
 
             if (IsAttackActionType(currentActionType) &&
@@ -41318,6 +42143,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ?? throw new InvalidOperationException("The new mod game directory could not be resolved.");
             Directory.CreateDirectory(Path.Combine(gameDirectory, "ui_myth", "resources"));
             Directory.CreateDirectory(Path.Combine(gameDirectory, "art"));
+            Directory.CreateDirectory(Path.Combine(gameDirectory, "sound"));
             var xmlPath = Path.Combine(modDir, "proto_mods.xml");
 
             if (!File.Exists(xmlPath))
@@ -45810,6 +46636,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async void ProtounitAnimFile_Click(object? sender, RoutedEventArgs e)
     {
         await OpenAnimFileManagerAsync();
+    }
+
+    private async void ProtounitSoundSet_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenSoundSetManagerAsync();
     }
 
     private async void Settings_Click(object? sender, RoutedEventArgs e)

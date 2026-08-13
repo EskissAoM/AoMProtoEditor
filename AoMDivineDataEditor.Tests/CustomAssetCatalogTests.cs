@@ -42,6 +42,20 @@ public sealed class CustomAssetCatalogTests
     }
 
     [Fact]
+    public void LoadSoundSets_UsesTheSameRecursiveLooseXmlRules()
+    {
+        using var directory = new TemporaryDirectory();
+        var nested = Path.Combine(directory.Path, "custom", "units");
+        Directory.CreateDirectory(nested);
+        File.WriteAllText(Path.Combine(nested, "voice.xml"), "<soundset />");
+
+        var item = Assert.Single(CustomAssetCatalog.LoadSoundSets(directory.Path));
+
+        Assert.Equal("custom\\units\\voice.xml", item.Path);
+        Assert.True(item.IsCustom);
+    }
+
+    [Fact]
     public async Task LoadCustomXmlAsync_ReadsOnlyXmlInsideConfiguredArtRoot()
     {
         using var directory = new TemporaryDirectory();

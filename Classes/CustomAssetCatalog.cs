@@ -29,15 +29,21 @@ public static class CustomAssetCatalog
     }
 
     public static IReadOnlyList<AnimFileCatalogEntry> LoadAnimFiles(string? artDirectory)
+        => LoadXmlAssets(artDirectory);
+
+    public static IReadOnlyList<AnimFileCatalogEntry> LoadSoundSets(string? soundDirectory)
+        => LoadXmlAssets(soundDirectory);
+
+    private static IReadOnlyList<AnimFileCatalogEntry> LoadXmlAssets(string? rootDirectory)
     {
-        if (string.IsNullOrWhiteSpace(artDirectory) || !Directory.Exists(artDirectory))
+        if (string.IsNullOrWhiteSpace(rootDirectory) || !Directory.Exists(rootDirectory))
             return [];
 
         try
         {
-            return Directory.EnumerateFiles(artDirectory, "*", SearchOption.AllDirectories)
+            return Directory.EnumerateFiles(rootDirectory, "*", SearchOption.AllDirectories)
                 .Where(path => Path.GetExtension(path).Equals(".xml", StringComparison.OrdinalIgnoreCase))
-                .Select(path => Path.GetRelativePath(artDirectory, path).Replace('/', '\\'))
+                .Select(path => Path.GetRelativePath(rootDirectory, path).Replace('/', '\\'))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .Select(path => new AnimFileCatalogEntry(path, "Custom", IsCustom: true))

@@ -9,6 +9,25 @@ using AoMDivineDataEditor.Controls;
 
 namespace AoMDivineDataEditor.Windows;
 
+internal sealed record XmlAssetManagerProfile(
+    string WindowTitle,
+    string SearchLabel,
+    string ItemLabel,
+    string ItemPlural,
+    string ViewerLabel,
+    string RootDisplay,
+    string MoveTitle,
+    string DuplicateTitle,
+    string UnavailableTitle)
+{
+    public static XmlAssetManagerProfile AnimFile { get; } = new(
+        "Manage Anim Files", "Anim Files", "animation file", "animation files", "Anim File",
+        "game\\art", "Rename/Move Anim File", "Duplicate Anim File", "Animation file unavailable");
+    public static XmlAssetManagerProfile SoundSet { get; } = new(
+        "Manage Sound Sets", "Sound Sets", "sound set", "sound sets", "Sound Set",
+        "game\\sound", "Rename/Move Sound Set", "Duplicate Sound Set", "Sound set unavailable");
+}
+
 internal sealed class AnimFileManagerWindow : SimpleWindow
 {
     private readonly List<AnimFileCatalogEntry> _items;
@@ -19,6 +38,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
     private readonly Func<AnimFileCatalogEntry, Task<string?>> _loadXmlAsync;
     private readonly string? _customArtDirectory;
     private readonly Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? _moveAsync;
+    private readonly XmlAssetManagerProfile _profile;
     private readonly DispatcherTimer _searchDebounceTimer = new()
     {
         Interval = TimeSpan.FromMilliseconds(200)
@@ -28,8 +48,10 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         IEnumerable<AnimFileCatalogEntry> animFiles,
         Func<AnimFileCatalogEntry, Task<string?>> loadXmlAsync,
         string? customArtDirectory,
-        Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? moveAsync = null)
+        Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? moveAsync = null,
+        XmlAssetManagerProfile? profile = null)
     {
+        _profile = profile ?? XmlAssetManagerProfile.AnimFile;
         _loadXmlAsync = loadXmlAsync ?? throw new ArgumentNullException(nameof(loadXmlAsync));
         _customArtDirectory = customArtDirectory;
         _moveAsync = moveAsync;
@@ -40,7 +62,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             .ThenBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        Title = "Manage Anim Files";
+        Title = _profile.WindowTitle;
         Width = 700;
         Height = 650;
         MinWidth = 520;
@@ -50,11 +72,11 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         Foreground = Brush.Parse("#d9d9d9");
 
         var shell = new ManagerListShell(
-            "Search Anim Files (type at least 3 characters)...",
+            $"Search {_profile.SearchLabel} (type at least 3 characters)...",
             ["All", "Original", "Custom"],
             "",
             addEnabled: false,
-            disabledAddToolTip: "Adding custom animation files is not available yet.");
+            disabledAddToolTip: $"Adding custom {_profile.ItemPlural} is not available yet.");
         _searchBox = shell.SearchBox;
         _filterComboBox = shell.FilterComboBox;
         _itemsPanel = shell.ItemsPanel;
@@ -79,7 +101,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
-        _footerText.Text = $"{_items.Count:N0} items: {_items.Count(item => !item.IsCustom):N0} original, {_items.Count(item => item.IsCustom):N0} customs. Double-click a custom animation file name to rename or move it.";
+        _footerText.Text = $"{_items.Count:N0} items: {_items.Count(item => !item.IsCustom):N0} original, {_items.Count(item => item.IsCustom):N0} customs. Double-click a custom {_profile.ItemLabel} name to rename or move it.";
         _itemsPanel.Children.Clear();
         var search = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
@@ -87,7 +109,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         {
             _itemsPanel.Children.Add(new TextBlock
             {
-                Text = "Type at least 3 characters to display animation files.",
+                Text = $"Type at least 3 characters to display {_profile.ItemPlural}.",
                 Foreground = Brushes.Gray,
                 Margin = new Thickness(10, 9)
             });
@@ -137,7 +159,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
                         return;
                     await OpenMoveDialogAsync(item);
                 };
-                ToolTip.SetTip(row, "Double-click to rename or move this custom animation file");
+                ToolTip.SetTip(row, $"Double-click to rename or move this custom {_profile.ItemLabel}");
             }
             _itemsPanel.Children.Add(row);
         }
@@ -146,7 +168,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
     private async Task OpenMoveDialogAsync(AnimFileCatalogEntry item)
     {
         var dialog = new AssetDestinationWindow(
-            "Rename/Move Anim File", _customArtDirectory!, "game\\art", "", ".xml",
+            _profile.MoveTitle, _customArtDirectory!, _profile.RootDisplay, "", ".xml",
             Path.GetFileNameWithoutExtension(item.Path), Path.GetDirectoryName(item.Path) ?? "", confirmButtonText: "Save");
         await dialog.ShowDialog(this);
         if (dialog.Destination is not { } destination || !await _moveAsync!(item, destination)) return;
@@ -182,8 +204,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
-        button.IsEnabled = !string.IsNullOrWhiteSpace(_customArtDirectory);
-        ToolTip.SetTip(button, "View animation XML");
+        ToolTip.SetTip(button, $"View {_profile.ItemLabel} XML");
         button.Click += async (_, _) => await OpenViewerAsync(item, button);
         return button;
     }
@@ -198,14 +219,15 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             {
                 await new Prompt(
                     PromptType.Error,
-                    "Animation file unavailable",
+                    _profile.UnavailableTitle,
                     $"{GetFileName(item.Path)} could not be read from {item.ArchiveName}.").ShowDialog(this);
                 return;
             }
 
             var viewer = new AnimFileViewerWindow(
                 GetFileName(item.Path),
-                XmlPreviewFormatter.Beautify(xml));
+                XmlPreviewFormatter.Beautify(xml),
+                _profile.ViewerLabel);
             await viewer.ShowDialog(this);
         }
         finally
@@ -251,7 +273,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
-        ToolTip.SetTip(button, "Duplicate animation file into this mod");
+        ToolTip.SetTip(button, $"Duplicate {_profile.ItemLabel} into this mod");
         button.Click += async (_, _) => await DuplicateAsync(item, button);
         return button;
     }
@@ -264,9 +286,9 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         {
             var xml = await _loadXmlAsync(item);
             if (string.IsNullOrWhiteSpace(xml))
-            { await new Prompt(PromptType.Error, "Animation file unavailable", $"{GetFileName(item.Path)} could not be read.").ShowDialog(this); return; }
+            { await new Prompt(PromptType.Error, _profile.UnavailableTitle, $"{GetFileName(item.Path)} could not be read.").ShowDialog(this); return; }
             var defaultName = Path.GetFileNameWithoutExtension(GetFileName(item.Path)) + "_copy";
-            var dialog = new AssetDestinationWindow("Duplicate Anim File", _customArtDirectory, "game\\art", "", ".xml", defaultName);
+            var dialog = new AssetDestinationWindow(_profile.DuplicateTitle, _customArtDirectory, _profile.RootDisplay, "", ".xml", defaultName);
             await dialog.ShowDialog(this);
             if (dialog.Destination is not { } destination) return;
             Directory.CreateDirectory(Path.GetDirectoryName(destination.AbsolutePath)!);

@@ -212,6 +212,9 @@
                                     <Button Classes="topMenuItem"
                                             Content="Anim File"
                                             Click="ProtounitAnimFile_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Sound Set"
+                                            Click="ProtounitSoundSet_Click" />
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
