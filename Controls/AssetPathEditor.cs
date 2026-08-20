@@ -92,6 +92,7 @@ public sealed class AssetPathEditor : Grid
         FullValueChanged?.Invoke(this, EventArgs.Empty);
         if (_changed != null) await _changed(next);
     }
+
     private void BeginEdit()
     {
         _editing = true; CompactPresenter.IsVisible = false; Editor.IsVisible = true;

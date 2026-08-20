@@ -70,7 +70,7 @@ public sealed class AbductActionPolishRegressionTests
     {
         var source = ReadProtoEditorSource();
 
-        Assert.Contains("IsLinearAreaAttackActionType(actionType) || IsAbductActionType(actionType);", source, StringComparison.Ordinal);
+        Assert.Contains("IsLinearAreaAttackActionType(actionType) || IsAbductActionType(actionType)", source, StringComparison.Ordinal);
         Assert.Contains("Content = \"Min Range\"", source, StringComparison.Ordinal);
     }
 
