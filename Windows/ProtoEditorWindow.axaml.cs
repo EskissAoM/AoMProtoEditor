@@ -5099,6 +5099,132 @@ public partial class ProtoEditorWindow : SimpleWindow
         return names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    private IReadOnlyList<string> GetTechnologyProtoUnitNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in new[] { _barXmlRoot, _modXmlRoot }.Where(root => root != null))
+        {
+            foreach (var name in root!.Descendants("unit")
+                .Select(unit => (string?)unit.Attribute("name"))
+                .Where(name => !string.IsNullOrWhiteSpace(name)))
+            {
+                names.Add(name!);
+            }
+        }
+
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetTechnologyPrerequisiteUnitNames()
+    {
+        var names = new HashSet<string>(GetKnownUnitTypeNames(), StringComparer.OrdinalIgnoreCase);
+        names.UnionWith(GetTechnologyProtoUnitNames());
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetTechnologyPrerequisiteMajorGodNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_protoDataBarFile?.Entries != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
+        {
+            using var stream = File.OpenRead(_protoDataBarPath);
+            foreach (var entry in _protoDataBarFile.Entries.Where(entry =>
+                         entry.Name.Contains("major_gods", StringComparison.OrdinalIgnoreCase) &&
+                         entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var xml = ReadBarXmbXml(entry, stream);
+                    if (string.IsNullOrWhiteSpace(xml)) continue;
+                    var document = XDocument.Parse(xml);
+                    foreach (var name in document.Descendants("name").Select(element => element.Value.Trim()).Where(value => value.Length > 0))
+                        names.Add(name);
+                }
+                catch
+                {
+                    // Keep names already found if one BAR entry is malformed.
+                }
+            }
+        }
+
+        var modPath = GetCurrentModGameplayFilePath("major_gods_mods.xml");
+        if (File.Exists(modPath))
+        {
+            try
+            {
+                var modDocument = XDocument.Load(modPath);
+                foreach (var name in modDocument.Descendants("name").Select(element => element.Value.Trim()).Where(value => value.Length > 0))
+                    names.Add(name);
+            }
+            catch
+            {
+                // A malformed optional mod file should not prevent opening technologies.
+            }
+        }
+
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetTechnologyTechTypeNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_protoDataBarFile?.Entries != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
+        {
+            using var stream = File.OpenRead(_protoDataBarPath);
+            foreach (var entry in _protoDataBarFile.Entries.Where(entry =>
+                         entry.Name.Contains("tech_types", StringComparison.OrdinalIgnoreCase) &&
+                         entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var xml = ReadBarXmbXml(entry, stream);
+                    if (string.IsNullOrWhiteSpace(xml)) continue;
+                    AddTechTypeNames(XDocument.Parse(xml), names);
+                }
+                catch
+                {
+                    // Keep names already found if one BAR entry is malformed.
+                }
+            }
+        }
+
+        var modPath = GetCurrentModGameplayFilePath("tech_types_mods.xml");
+        if (File.Exists(modPath))
+        {
+            try { AddTechTypeNames(XDocument.Load(modPath), names); }
+            catch
+            {
+                // A malformed optional mod file should not prevent opening technologies.
+            }
+        }
+
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static void AddTechTypeNames(XDocument document, ISet<string> names)
+    {
+        foreach (var element in document.Descendants())
+        {
+            var localName = element.Name.LocalName;
+            if (!localName.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
+                !localName.Equals("type", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var named = ((string?)element.Attribute("name"))?.Trim();
+            if (!string.IsNullOrWhiteSpace(named))
+            {
+                names.Add(named);
+                continue;
+            }
+
+            if (!element.HasElements)
+            {
+                var value = element.Value.Trim();
+                if (value.Length > 0) names.Add(value);
+            }
+        }
+    }
+
     private IReadOnlyList<XDocument> GetBaseTechtreeDocumentsFromLoadedBar()
     {
         if (_cachedBaseTechtreeDocuments != null)
@@ -44145,12 +44271,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         return await _gameData.LookupStringKeyAsync(stringId);
     }
 
-    private Task SaveTechnologyStringValuesAsync(IReadOnlyDictionary<string, string> updates)
+    private Task SaveTechnologyStringValuesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        IReadOnlyCollection<string> removals)
     {
-        if (updates.Count == 0)
+        if (updates.Count == 0 && removals.Count == 0)
             return Task.CompletedTask;
 
-        var entries = LoadCurrentModStringEntries();
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
+        foreach (var removal in removals)
+            entries.Remove(removal);
         foreach (var update in updates)
             entries[update.Key] = update.Value;
         SaveCurrentModStringEntries(entries);
@@ -48518,7 +48648,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GetCurrentModGameplayFilePath("techtree_mods.xml"),
                 ResolveDisplayStringAsync,
                 SaveTechnologyStringValuesAsync,
-                _baseGameIconPaths.Concat(_customIconPaths));
+                _baseGameIconPaths.Concat(_customIconPaths),
+                GetTechnologyPrerequisiteUnitNames(),
+                GetTechnologyProtoUnitNames(),
+                SupportedCultureLabels,
+                GetTechnologyPrerequisiteMajorGodNames(),
+                GetTechnologyTechTypeNames());
             _technologyHost.Content = _technologyView;
         }
 

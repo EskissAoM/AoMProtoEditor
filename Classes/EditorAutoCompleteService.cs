@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -104,6 +105,8 @@ public static class EditorAutoCompleteService
         bool allowEmpty = true,
         bool commitEmptyAsValid = false,
         bool deferSelectionCommit = false,
+        bool selectAllOnFirstClick = true,
+        bool keepStartVisibleAfterCommit = false,
         Action<string>? valueCommitted = null)
     {
         var suggestionList = suggestions
@@ -126,7 +129,28 @@ public static class EditorAutoCompleteService
         }
 
         autoCompleteBox.ItemsSource = suggestionList;
-        EnableDropdown(autoCompleteBox, isBusy);
+        EnableDropdown(autoCompleteBox, isBusy, selectAllOnFirstClick);
+
+        void KeepStartVisible()
+        {
+            if (!keepStartVisibleAfterCommit)
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+                if (textEditor != null)
+                {
+                    textEditor.SelectionStart = 0;
+                    textEditor.SelectionEnd = 0;
+                    textEditor.CaretIndex = 0;
+                }
+
+                var scrollViewer = autoCompleteBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+                if (scrollViewer != null)
+                    scrollViewer.Offset = new Vector(0, scrollViewer.Offset.Y);
+            }, DispatcherPriority.Background);
+        }
 
         string lastValidValue = suggestionList.FirstOrDefault(x => x.Equals(normalizedInitial, StringComparison.OrdinalIgnoreCase))
             ?? (preserveUnknownInitialValue ? normalizedInitial : string.Empty);
@@ -142,6 +166,7 @@ public static class EditorAutoCompleteService
             {
                 autoCompleteBox.Text = selectedValue;
                 valueCommitted?.Invoke(selectedValue);
+                KeepStartVisible();
                 return;
             }
 
@@ -153,6 +178,7 @@ public static class EditorAutoCompleteService
                     if (!string.Equals(autoCompleteBox.Text, selectedValue, StringComparison.Ordinal))
                         autoCompleteBox.Text = selectedValue;
                     valueCommitted?.Invoke(selectedValue);
+                    KeepStartVisible();
                 }
                 finally
                 {
@@ -196,6 +222,7 @@ public static class EditorAutoCompleteService
                     autoCompleteBox.Text = match;
                     lastValidValue = match;
                     valueCommitted?.Invoke(match);
+                    KeepStartVisible();
                     return;
                 }
 

@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using AoMDivineDataEditor.Windows;
 using Xunit;
 
 namespace AoMDivineDataEditor.Tests;
@@ -79,7 +80,8 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("GetCurrentModGameplayFilePath(\"techtree_mods.xml\")", mainCode, StringComparison.Ordinal);
         Assert.Contains("LoadOptions.PreserveWhitespace", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(source)", techCode, StringComparison.Ordinal);
-        Assert.DoesNotContain("RemoveNodes", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("_currentTech.RemoveNodes", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("tech.RemoveNodes", techCode, StringComparison.Ordinal);
     }
 
 
@@ -91,7 +93,9 @@ public sealed class TechnologyPhase1RegressionTests
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
         var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("ColumnDefinitions=\"210,5,7*,5,3*\"", techXaml, StringComparison.Ordinal);
+        Assert.Contains("<ColumnDefinition Width=\"210\"/>", techXaml, StringComparison.Ordinal);
+        Assert.Contains("<ColumnDefinition Width=\"4*\"/>", techXaml, StringComparison.Ordinal);
+        Assert.Contains("<ColumnDefinition Width=\"1*\" MinWidth=\"250\"/>", techXaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_xmlPreviewToggleButton\"", techXaml, StringComparison.Ordinal);
         Assert.Contains("EditorChipService.CreateBlueChip", techCode, StringComparison.Ordinal);
         Assert.Contains("ProtoConstants.KnownResourceTypes", techCode, StringComparison.Ordinal);
@@ -122,8 +126,8 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("ColumnDefinitions = new ColumnDefinitions(\"150,*\")", techCode, StringComparison.Ordinal);
         Assert.Contains("EditorTextFieldStyle.ConfigureTextBox", techCode, StringComparison.Ordinal);
         Assert.Contains("EditorNumericFieldStyle.ConfigureNumericTextBox", techCode, StringComparison.Ordinal);
-        Assert.Contains("AddDisplayNameAndOrderHintRowAsync", techCode, StringComparison.Ordinal);
-        Assert.Contains("CreateNumericTextBox(orderHintAttribute.Value, 50)", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddPrimaryTechnologyRowAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateNumericTextBox(tech.Attribute(\"orderhint\")?.Value ?? \"\", 50)", techCode, StringComparison.Ordinal);
         Assert.Contains("box.MinHeight = 54", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSectionHeader(\"Properties\")", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSectionHeader(\"Costs\")", techCode, StringComparison.Ordinal);
@@ -131,7 +135,401 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("_propertiesPanel.IsEnabled = canEdit", techCode, StringComparison.Ordinal);
         Assert.Contains("_xmlPreview.Opacity = canEdit ? 1.0 : 0.55", techCode, StringComparison.Ordinal);
         Assert.Contains("SaveOptions.DisableFormatting", techCode, StringComparison.Ordinal);
-        Assert.Contains("LoadOptions.None).ToString()", techCode, StringComparison.Ordinal);
+        Assert.Contains("XElement.Parse(_current.ToString(SaveOptions.DisableFormatting), LoadOptions.None)", techCode, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TechnologyEditor_UsesRequestedCorePropertyOrderAndSpecialDevotionCostEditor()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        var displayIndex = techCode.IndexOf("AddPrimaryTechnologyRowAsync(tech, displayName)", StringComparison.Ordinal);
+        var rolloverIndex = techCode.IndexOf("AddStringBackedPropertyRowAsync(\"Rollover text\"", StringComparison.Ordinal);
+        var advancedIndex = techCode.IndexOf("AddStringBackedPropertyRowAsync(\"Advanced rollover\"", StringComparison.Ordinal);
+        var iconIndex = techCode.IndexOf("AddIconEditor(icon)", StringComparison.Ordinal);
+        var statusIndex = techCode.IndexOf("AddStatusEditor(status)", StringComparison.Ordinal);
+        var researchIndex = techCode.IndexOf("AddResearchPointsEditor(tech, researchPoints, devotionCost)", StringComparison.Ordinal);
+
+        Assert.True(displayIndex < rolloverIndex && rolloverIndex < advancedIndex && advancedIndex < iconIndex);
+        Assert.True(iconIndex < statusIndex && statusIndex < researchIndex);
+        Assert.Contains("if (devotionCost != null)\n            AddDevotionCostEditor(devotionCost);", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("Text = \"Type\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("Text = \"Order hint\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("typeSelector.Width = 200", techCode, StringComparison.Ordinal);
+        Assert.Contains("Text = \"Number\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitNumericKind.UnsignedInteger", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"Livestock\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"LogicalTypeValidCosmicGuardSacrifice\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"Villager\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"WarriorPriest\"", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_ChipSelectorsReuseSharedOpenOnClickBehaviorAndCompactWidth()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("picker.Width = 200", techCode, StringComparison.Ordinal);
+        Assert.Contains("picker.MaxWidth = 200", techCode, StringComparison.Ordinal);
+        Assert.Contains("EditorAutoCompleteService.EnableDropdown(picker, () => _loadingUi, selectAllOnFirstClick: false)", techCode, StringComparison.Ordinal);
+        Assert.True(
+            techCode.IndexOf("content.Children.Add(picker)", StringComparison.Ordinal) <
+            techCode.IndexOf("content.Children.Add(chips)", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("RheiasGiftCopy", "displaynameid", "STR_TECH_RHEIAS_GIFT_COPY_NAME")]
+    [InlineData("RheiasGiftCopy", "rollovertextid", "STR_TECH_RHEIAS_GIFT_COPY_LR")]
+    [InlineData("RheiasGiftCopy", "advancedrollovertextoverrideid", "STR_TECH_RHEIAS_GIFT_COPY_OVERRIDE")]
+    public void TechnologyEditor_GeneratesTechnologySpecificStringIds(string name, string tag, string expected)
+    {
+        Assert.Equal(expected, TechnologyEditorView.BuildTechnologyStringId(name, tag));
+    }
+
+    [Fact]
+    public void TechnologyEditor_AddFlowMatchesProtoUnitDuplicateOrBlankChoice()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("Do you want to DUPLICATE the selected technology", techCode, StringComparison.Ordinal);
+        Assert.Contains("Cancel to create a blank technology instead", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(source)", techCode, StringComparison.Ordinal);
+        Assert.Contains("RegenerateDuplicatedTechnologyStringsAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(\"displaynameid\", displayId)", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(\"rollovertextid\", rolloverId)", techCode, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TechnologyEditor_PolishesOptionalFieldsCopyStringsAndCustomDefaults()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("\"techage\" => \"Tech Age\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Type\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Order hint\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Devotion cost\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Other attributes\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("ResolveTechnologyStringValueAsync(oldId)", techCode, StringComparison.Ordinal);
+        Assert.Contains("_pendingStringUpdates.TryGetValue(stringId", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(\"icon\", \"\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(\"status\", \"UNOBTAINABLE\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XElement(\"researchpoints\", \"0\")", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_FiltersExistingChipsAndDeletesTechnologyStringsOnSave()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("RefreshPickerItems()", techCode, StringComparison.Ordinal);
+        Assert.Contains("knownValues.Where(value => !present.Contains(value))", techCode, StringComparison.Ordinal);
+        Assert.Contains("PromptType.Confirm, \"Delete Technology\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("_pendingStringRemovals.Add(stringId)", techCode, StringComparison.Ordinal);
+        Assert.Contains("_saveStringsAsync(_pendingStringUpdates, _pendingStringRemovals)", techCode, StringComparison.Ordinal);
+        Assert.Contains("foreach (var removal in removals)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("entries.Remove(removal)", mainCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_SavesTechtreeModsWithoutDeclarationUsingSharedIndentedWriter()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modTechtreePath)", techCode, StringComparison.Ordinal);
+        Assert.Contains("OmitXmlDeclaration = true", mainCode, StringComparison.Ordinal);
+        Assert.Contains("IndentChars = \"\\t\"", mainCode, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TechnologyEditor_ExposesStructuredPrerequisiteEditors()
+    {
+        var root = FindProjectRoot();
+        var xaml = XDocument.Load(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        var tabs = xaml.Descendants().Where(e => e.Name.LocalName == "TabItem").Select(e => (string?)e.Attribute("Header")).ToList();
+        Assert.Equal(new[] { "Properties", "Prereqs", "Effects" }, tabs);
+        Assert.Contains(xaml.Descendants(), e => (string?)e.Attribute(XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "_prereqsPanel");
+        Assert.Contains("Text = \"──── Prerequisites ────\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("PrerequisiteTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"TechStatus\", \"SpecificAge\", \"TypeCount\", \"Culture\", \"Civilization\", \"KBStat\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyAges", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOperatorCombo(prereq)", techCode, StringComparison.Ordinal);
+        Assert.Contains("OperatorToSymbol", techCode, StringComparison.Ordinal);
+        Assert.Contains("_prereqUnitNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("_majorGodNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("KbStatsUsingResourceParameter", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownResourceTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyPrerequisiteUnitNames()", mainCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyPrerequisiteMajorGodNames()", mainCode, StringComparison.Ordinal);
+        Assert.Contains("major_gods_mods.xml", mainCode, StringComparison.Ordinal);
+        Assert.Contains("_prereqsPanel.IsEnabled = canEdit", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_TechAgeIsACompactDropdownAndOptionalPropertiesCanBeRemoved()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("\"ArchaicAge\", \"ClassicalAge\", \"HeroicAge\", \"MythicAge\", \"WonderAge\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("private void AddTechAgeEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width = 150", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateRemoveButton", techCode, StringComparison.Ordinal);
+        Assert.Contains("RemoveOptionalElement", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_PrerequisitePolishUsesCompactSelectorsSharedRemoveStyleAndStableAutocomplete()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("CreateInlineLabel(\"Unit\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("prereq.Value.Trim(),\n            150,", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("CreateStrictPrereqSelector(options, entry.Value.Trim(), 150", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddPrerequisiteButton(tech);", techCode, StringComparison.Ordinal);
+        Assert.Contains("if (prereqs.Count == 0 && !IsModifiedTab)", techCode, StringComparison.Ordinal);
+        Assert.Contains("Classes = { \"remove-button\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("Margin = new Thickness(2, 0, 0, 0)", techCode, StringComparison.Ordinal);
+
+        var strictSelectorStart = techCode.IndexOf("private AutoCompleteBox CreateStrictPrereqSelector", StringComparison.Ordinal);
+        var operatorStart = techCode.IndexOf("private ComboBox CreateOperatorCombo", strictSelectorStart, StringComparison.Ordinal);
+        var strictSelectorCode = techCode[strictSelectorStart..operatorStart];
+        Assert.Contains("EditorAutoCompleteService.ConfigureStrict", strictSelectorCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("EditorAutoCompleteService.EnableDropdown(selector", strictSelectorCode, StringComparison.Ordinal);
+        var prereqStart = techCode.IndexOf("private void AddPrereqEditor", StringComparison.Ordinal);
+        var prereqEnd = techCode.IndexOf("private void AddEffectsHeader", prereqStart, StringComparison.Ordinal);
+        var prereqCode = techCode[prereqStart..prereqEnd];
+        Assert.DoesNotContain("Text = \"Type\"", prereqCode, StringComparison.Ordinal);
+        Assert.Contains("new XAttribute(\"kbStat\", \"\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("deferSelectionCommit: true", techCode, StringComparison.Ordinal);
+        Assert.Contains("primaryLabel.VerticalAlignment = VerticalAlignment.Top", techCode, StringComparison.Ordinal);
+        Assert.Contains("selector.Width = width;", techCode, StringComparison.Ordinal);
+        Assert.Contains("selector.MaxWidth = width;", techCode, StringComparison.Ordinal);
+        Assert.Contains("ItemsSource = ProtoConstants.KnownResourceTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width = 100,", techCode, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth = 100,", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_RenamesCustomTechStringsAndStructuresEffectHeaderSelectors()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var techXaml = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
+        var autoCompleteCode = File.ReadAllText(Path.Combine(root, "Classes", "EditorAutoCompleteService.cs"));
+
+        Assert.Contains("LostFocus=\"TechNameBox_LostFocus\"", techXaml, StringComparison.Ordinal);
+        Assert.Contains("CommitPendingTechnologyNameAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("BuildTechnologyStringId(newName, tag)", techCode, StringComparison.Ordinal);
+        Assert.Contains("_pendingStringRemovals.Add(oldId)", techCode, StringComparison.Ordinal);
+        Assert.Contains("_pendingStringUpdates[newId] = text", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("Text = \"──── Effects ────\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyEffectTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyDataEffectSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateStrictEffectSelector", techCode, StringComparison.Ordinal);
+        Assert.Contains("if (currentType.Equals(\"Data\", StringComparison.OrdinalIgnoreCase))", techCode, StringComparison.Ordinal);
+        Assert.Contains("Text = effect.ToString(SaveOptions.DisableFormatting)", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("bool selectAllOnFirstClick = true", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("EnableDropdown(autoCompleteBox, isBusy, selectAllOnFirstClick)", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("selectAllOnFirstClick: false", techCode, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TechnologyEditor_EffectMetadataTooltipStringsAndPreviewRestoreFollowSharedRules()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var autoCompleteCode = File.ReadAllText(Path.Combine(root, "Classes", "EditorAutoCompleteService.cs"));
+
+        Assert.Contains("keepStartVisibleAfterCommit: true", techCode, StringComparison.Ordinal);
+        Assert.Contains("scrollViewer.Offset = new Vector(0, scrollViewer.Offset.Y)", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Hide tooltip\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("SetCaseInsensitiveAttribute(effect, \"hideTooltip\", \"\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Delay\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Tooltip override\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("BuildNextEffectTooltipStringId", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width = 380", techCode, StringComparison.Ordinal);
+        Assert.Contains("RegenerateEffectTooltipStringsAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("_mainGrid.ColumnDefinitions[2].Width = new GridLength(4, GridUnitType.Star)", techCode, StringComparison.Ordinal);
+        Assert.Contains("_mainGrid.ColumnDefinitions[4].MinWidth = 250", techCode, StringComparison.Ordinal);
+        Assert.Contains("_mainGrid.ColumnDefinitions[4].Width = new GridLength(1, GridUnitType.Star)", techCode, StringComparison.Ordinal);
+        Assert.Contains("EditorNumericInputBehavior.AttachRule(delayBox, ProtoUnitNumericKind.UnsignedFloat)", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("Text = \"Tooltip override\",\n                Width = 150", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_ValueTextKeepsUsesValueTextFlagInSync()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("EnsureTechnologyFlag(tech, \"UsesValueText\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("RemoveTechnologyFlag(technology, \"UsesValueText\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("tag.Equals(\"valuetext\", StringComparison.OrdinalIgnoreCase)", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_OrdersTechTypesBeforeFlagsAndStructuresFirstNonDataEffects()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("NormalizeTechnologyChildOrder", techCode, StringComparison.Ordinal);
+        Assert.Contains("properties.Concat(techTypes).Concat(flags).Concat(prereqs).Concat(effects)", techCode, StringComparison.Ordinal);
+        Assert.Contains("if (IsModifiedTab || hideTooltipAttribute != null)", techCode, StringComparison.Ordinal);
+        Assert.Contains("StructuredTechnologyEffectTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSetNameEffectEditorAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTextOutputEffectEditorAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSetAgeEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTechStatusEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSharedLosEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddModifyProtoUnitEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTransformUnitEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddResourceExchangeEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("BuildTechnologyEffectStringId", techCode, StringComparison.Ordinal);
+        Assert.Contains("OUTPUTALL", techCode, StringComparison.Ordinal);
+        Assert.Contains("NormalizeTechnologyStringToken", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetCaseInsensitiveAttribute(effect, \"tech\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetCaseInsensitiveAttribute(effect, \"proto\")", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_ValidatesResearchAndCostsAndStructuresSecondNonDataEffectBatch()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedFloat);", techCode, StringComparison.Ordinal);
+        Assert.Contains("EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);", techCode, StringComparison.Ordinal);
+        Assert.Contains("value.Equals(currentType, StringComparison.OrdinalIgnoreCase)", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSetOnBuildingDeathTechEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSimpleEffectValueEditor(effect, content, \"Console command\", 200)", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddCreatePowerEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTextOutputEffectEditorAsync(effect, content, allIsIntrinsic: false)", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddRandomTechEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTextEffectOutputEditorAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("EditorChipService.CreateBlueChip", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width = 380", techCode, StringComparison.Ordinal);
+        Assert.Contains("AcceptsReturn = true", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateInlineLabel(\"Tech\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("Set status to", techCode, StringComparison.Ordinal);
+        Assert.Contains("SELFMSG", techCode, StringComparison.Ordinal);
+        Assert.Contains("PLAYERMSG", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_EffectCreationResetAndThirdNonDataBatchFollowRequestedRules()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("container.Add(new XElement(\"effect\"))", techCode, StringComparison.Ordinal);
+        Assert.Contains("ResetEffectForType(effect, value)", techCode, StringComparison.Ordinal);
+        Assert.Contains("effect.RemoveAttributes()", techCode, StringComparison.Ordinal);
+        Assert.Contains("effect.RemoveNodes()", techCode, StringComparison.Ordinal);
+        Assert.Contains("effect.SetAttributeValue(\"status\", \"obtainable\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("effect.SetAttributeValue(\"status\", \"active\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyProtoUnitNames()", windowCode, StringComparison.Ordinal);
+        Assert.Contains("_protoUnitNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddResourceInventoryExchangeEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddTrickleByResourceEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddResourceExchange2EffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddReplaceUnitEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Keep alive\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("srcResource2", techCode, StringComparison.Ordinal);
+        Assert.Contains("toResource2", techCode, StringComparison.Ordinal);
+        Assert.Contains("multiplier2", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_UsesSharedTechTypeCatalogAndStructuresFourthNonDataBatch()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("GetTechnologyTechTypeNames()", windowCode, StringComparison.Ordinal);
+        Assert.Contains("entry.Name.Contains(\"tech_types\"", windowCode, StringComparison.Ordinal);
+        Assert.Contains("GetCurrentModGameplayFilePath(\"tech_types_mods.xml\")", windowCode, StringComparison.Ordinal);
+        Assert.Contains("_techTypeNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddForbidTechEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSetOnTechResearchedTechEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddUiAlertEffectEditorAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Forbid\", \"Unforbid\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Activates\", \"Disable\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Self\", \"Ally\", \"Enemy\", \"All\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddUiAlertEffectEditorAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("SELFMSG", techCode, StringComparison.Ordinal);
+        Assert.Contains("PLAYERMSG", techCode, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Include player name\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateLabeledEffectSegment(\"Duration (ms)\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("var row = new WrapPanel", techCode, StringComparison.Ordinal);
+        Assert.Contains("newHpSpacer", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_CreateUnitEffectUsesStructuredPatternAndGeneratorControls()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains("\"CreateUnit\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddCreateUnitEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateLabeledEffectSegment(\"Creates\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitNumericKind.PositiveInteger", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetCaseInsensitiveAttribute(effect, \"generator\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateCreateUnitPresenceCheckBox(effect, \"allgenerators\", \"All generators\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateCreateUnitPresenceCheckBox(effect, \"mute\", \"Mute\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Queue\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("SetCaseInsensitiveAttribute(effect, \"queue\", \"false\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateCreateUnitPresenceCheckBox(effect, \"ignorerally\", \"Ignore Rally\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Simple\", \"Leaving\", \"Scatter\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddOptionalPatternFloat", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateOptionalPropertyButton(\"Offset\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitNumericKind.SignedFloat", techCode, StringComparison.Ordinal);
+    }
+
+
+    [Fact]
+    public void TechnologyEditor_EffectTypeAndWrappingPolishUsesRequestedRules()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var techXaml = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
+        var windowXaml = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+
+        Assert.DoesNotContain("\"ShowWorldView\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("}, 180);", techCode, StringComparison.Ordinal);
+        Assert.Contains("new XAttribute(\"type\", \"Leaving\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Simple\", \"Leaving\", \"Scatter\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("var patternRow = new WrapPanel", techCode, StringComparison.Ordinal);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml")), StringComparison.Ordinal);
+        Assert.Contains("UIALERT_SELFMSG", techCode, StringComparison.Ordinal);
+        Assert.Contains("UIALERT_PLAYERMSG", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width=\"4*\"", techXaml, StringComparison.Ordinal);
+        Assert.Contains("Width=\"1*\" MinWidth=\"250\"", techXaml, StringComparison.Ordinal);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", techXaml, StringComparison.Ordinal);
+        Assert.Contains("Width=\"1440\" Height=\"900\"", windowXaml, StringComparison.Ordinal);
+        Assert.Contains("content.Children.Add(firstRow);", techCode, StringComparison.Ordinal);
+        Assert.Contains("content.Children.Add(patternRow);", techCode, StringComparison.Ordinal);
     }
 
     private static string FindProjectRoot()
