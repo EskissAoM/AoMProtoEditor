@@ -59,6 +59,6 @@ public sealed class ProtoUnitActionsPolishRegressionTests
             "..", "..", "..", "..",
             "Windows",
             "ProtoEditorWindow.axaml.cs"));
-        return File.ReadAllText(path);
+        return File.ReadAllText(path).ReplaceLineEndings("\n");
     }
 }

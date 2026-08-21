@@ -120,6 +120,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private bool _isTacticsActionEditorMode;
     private bool _tacticsActionEditorReadOnly;
     private bool _allowTacticsEditorClose;
+    private bool _allowCloseAfterDiscard;
     private bool _tacticsEditorClosePromptOpen;
     private string? _tacticsEditorName;
     private XDocument? _tacticsEditorDocument;
@@ -5109,6 +5110,25 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .Where(name => !string.IsNullOrWhiteSpace(name)))
             {
                 names.Add(name!);
+            }
+        }
+
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetTechnologyProtoActionNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in new[] { _barXmlRoot, _modXmlRoot }.Where(root => root != null))
+        {
+            foreach (var name in root!.Descendants()
+                .Where(element => element.Name.LocalName.Equals("protoaction", StringComparison.OrdinalIgnoreCase))
+                .Elements()
+                .Where(element => element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))
+                .Select(element => element.Value.Trim())
+                .Where(value => value.Length > 0))
+            {
+                names.Add(name);
             }
         }
 
@@ -48631,8 +48651,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void ProtounitEditView_Click(object? sender, RoutedEventArgs e)
+    private async void ProtounitEditView_Click(object? sender, RoutedEventArgs e)
     {
+        if (_technologyHost.IsVisible && (_technologyView?.IsDirty ?? false))
+        {
+            var proceed = await PromptUnsavedChangesAsync();
+            if (!proceed) return;
+        }
+
         _technologyHost.IsVisible = false;
         _unitList.Focus();
     }
@@ -48653,7 +48679,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GetTechnologyProtoUnitNames(),
                 SupportedCultureLabels,
                 GetTechnologyPrerequisiteMajorGodNames(),
-                GetTechnologyTechTypeNames());
+                GetTechnologyTechTypeNames(),
+                GetTechnologyProtoActionNames());
             _technologyHost.Content = _technologyView;
         }
 
@@ -48935,6 +48962,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
+        if (_allowCloseAfterDiscard)
+        {
+            base.OnClosing(e);
+            return;
+        }
+
         if (_isAbilityDefinitionEditorMode)
         {
             if (!_allowAbilityDefinitionEditorClose && _isDirty && !_abilityDefinitionEditorReadOnly)
@@ -48961,13 +48994,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
-        if (_isDirty)
+        if (_isDirty || (_technologyView?.IsDirty ?? false))
         {
             e.Cancel = true;
             var proceed = await PromptUnsavedChangesAsync();
             if (proceed)
             {
-                _isDirty = false;
+                _allowCloseAfterDiscard = true;
                 Close();
             }
         }

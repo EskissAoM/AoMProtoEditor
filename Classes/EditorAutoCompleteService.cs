@@ -107,13 +107,16 @@ public static class EditorAutoCompleteService
         bool deferSelectionCommit = false,
         bool selectAllOnFirstClick = true,
         bool keepStartVisibleAfterCommit = false,
+        bool preserveSuggestionOrder = false,
         Action<string>? valueCommitted = null)
     {
-        var suggestionList = suggestions
+        var suggestionQuery = suggestions
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var suggestionList = (preserveSuggestionOrder
+                ? suggestionQuery
+                : suggestionQuery.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         var normalizedInitial = initialValue?.Trim() ?? string.Empty;
@@ -122,9 +125,10 @@ public static class EditorAutoCompleteService
             !suggestionList.Any(x => x.Equals(normalizedInitial, StringComparison.OrdinalIgnoreCase)))
         {
             suggestionList.Add(normalizedInitial);
-            suggestionList = suggestionList
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            var distinctSuggestions = suggestionList.Distinct(StringComparer.OrdinalIgnoreCase);
+            suggestionList = (preserveSuggestionOrder
+                    ? distinctSuggestions
+                    : distinctSuggestions.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 .ToList();
         }
 

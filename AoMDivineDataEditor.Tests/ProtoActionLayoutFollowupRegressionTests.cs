@@ -72,5 +72,6 @@ public sealed class ProtoActionLayoutFollowupRegressionTests
 
     private static string ReadProtoEditorSource()
         => File.ReadAllText(Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "Windows", "ProtoEditorWindow.axaml.cs")));
+            AppContext.BaseDirectory, "..", "..", "..", "..", "Windows", "ProtoEditorWindow.axaml.cs")))
+            .ReplaceLineEndings("\n");
 }

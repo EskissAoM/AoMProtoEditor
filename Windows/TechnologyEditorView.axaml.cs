@@ -4,6 +4,7 @@ using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -67,6 +68,75 @@ public partial class TechnologyEditorView : UserControl
         "AddTrickleByResource", "ResourceExchange2", "ReplaceUnit", "ForbidTech", "SetOnTechResearchedTech", "UIAlert", "CreateUnit"
     };
 
+    private static readonly HashSet<string> SimpleUnitAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AdditionalScale", "AutoBuildRate", "AuxRechargeTime", "BuildingWorkRate", "BuildLimit",
+        "BuildPoints", "DisplayedRange", "DropoffHeal", "GathererLimit", "GodPowerBlockRadius",
+        "Hitpoints", "InitialResource", "LOS", "MaximumContained", "MaximumVelocity",
+        "ObstructionRadiusX", "ObstructionRadiusZ", "OnDeathCombatXP", "PopulationCapAddition",
+        "PopulationCount", "RechargeTime", "ResearchRate", "ShieldPoints", "StealthDetectionRadius",
+        "TrainingRate", "TrainPoints", "UnitRegenCombatMultiplier", "UnitRegenRate", "WanderDistance"
+    };
+
+    private static readonly HashSet<string> ActionUnitAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Accuracy", "DamageArea", "DisplayedNumberProjectiles", "FullCapacityMultiplier",
+        "MaximumRange", "ModifyDuration", "ModifyRate", "ModifyRateCap", "ModifyStackLimit",
+        "NumberBounces", "NumberProjectiles", "RateOfFire", "TargetedSpeedMultiplier", "Trackrating", "DamageCap"
+    };
+
+    private static readonly HashSet<string> DamageTypeActionDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Damage"
+    };
+
+    private static readonly HashSet<string> ArmorTypeActionDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ArmorVulnerability"
+    };
+
+    private static readonly HashSet<string> DamageTypeNoActionDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "DamageForAllHandLogicActions", "DamageForAllRangedLogicActions"
+    };
+
+    private static readonly HashSet<string> DamageBonusDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "DamageBonus", "Damagebonus"
+    };
+
+    private static readonly HashSet<string> ResourceAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CarryCapacity", "InventoryAmount", "CostBuildingTechs", "ResourceReturn", "ResourceReturnRate",
+        "CostBuildingAll", "CostBuildingUnits", "KillReward"
+    };
+
+    private static readonly HashSet<string> ActionAddAttachingUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ActionAddAttachingUnit"
+    };
+
+    private static readonly HashSet<string> AddAttackTypeDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AddAttackType"
+    };
+
+    private static readonly HashSet<string> AddDependentUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AddDependentUnit"
+    };
+
+    private static readonly HashSet<string> EnableDisableUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AuxRechargeInit", "RechargeInit", "RespawnTrainActive", "VeterancyEnable",
+        "EnableDodge", "EnableSharedBuildLimit"
+    };
+
+    private static readonly HashSet<string> EnableDisableActionUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "HomingBallistics"
+    };
+
     private static readonly string[] TechnologyDataEffectSubtypes =
     [
         "Accuracy", "ActionAddAttachingUnit", "ActionEnable", "AddAttackType", "AddDependentUnit", "AddGoal",
@@ -74,7 +144,7 @@ public partial class TechnologyEditorView : UserControl
         "AuxRechargeTime", "BountyResourceEarningMultiplier", "BountyResourceEarningReward", "BuffIconOverride",
         "BuildingChainActive", "BuildingChainEffect", "BuildingChainResourceFactor", "BuildingWorkRate", "BuildLimit",
         "BuildPoints", "CarryCapacity", "ChargedModifyAdjust", "CombatXP", "CommandAdd", "CommandRemove", "Cost",
-        "cost", "CostBuildingTechs", "Damage", "DamageArea", "Damagebonus", "DamageBonus", "DamageByCost",
+        "cost", "CostBuildingTechs", "Damage", "DamageArea", "DamageBonus", "DamageByCost",
         "DamageFlags", "DamageShading", "DisplayedNumberProjectiles", "DisplayedRange", "DoubleEffect", "DropoffHeal",
         "EmpowerModify", "Enable", "Flag", "FullCapacityMultiplier", "GathererLimit", "GodPower",
         "GodPowerBlockRadius", "GodPowerCost", "GodPowerCostFactor", "GodPowerROF", "GodPowerROFFactor",
@@ -94,21 +164,21 @@ public partial class TechnologyEditorView : UserControl
         "Trackrating", "TrainingRate", "TrainPoints", "TributePenalty", "UnitRegenCombatMultiplier",
         "UnitRegenRate", "VeterancyEnable", "WanderDistance", "WorkRate", "WorkRateSpecific", "ActionAdd",
         "AddContainedType", "AddGoalRewardExclusion", "AddNotContainedType", "AddSharedBuildLimitUnitType",
-        "AddTrain", "AddVeterancyExcludeType", "AddVeterancyIncludeType", "AnimationRate", "Armor",
-        "ArmorSpecific", "AutoAttackType", "AutoGatherBonus", "AuxRechargeInit", "AuxRechargeType",
+        "AddTrain", "AddVeterancyExcludeType", "AddVeterancyIncludeType", "AnimationRate",
+        "AutoAttackType", "AutoGatherBonus", "AuxRechargeInit", "AuxRechargeType",
         "BlockTrainCount", "BoostRadius", "ContainedHitpointBonus", "ContainedHitpointBonusUnitType",
         "CostBuildingAll", "CostBuildingUnits", "DamageCap", "DamageForAllHandLogicActions",
         "DamageForAllRangedLogicActions", "DeadTransform", "DeadTransformBuildLimit", "DodgeChance", "EmpowerArea",
         "EmpowerEnable", "EnableDodge", "EnableSharedBuildLimit", "FakeConversion", "FreeBuildPoints",
         "FreeBuildRate", "FreeRepair", "GarrisonBonusDamage", "GatherRateMultiplier", "GatherResourceOverride",
-        "InitialVeterancyRank", "InstantBallistics", "InvestmentAmount", "InvestmentCap", "InvestmentEnable",
+        "InitialVeterancyRank", "InstantBallistics",
         "KillReward", "MarketReset", "MaximumResourceTrickleRate", "MaxResource", "MinimumRange",
         "MinimumResourceTrickleRate", "MovementType", "PartisanUnit", "PerfectAccuracy", "PlacementRulesOverride",
         "PopulationLimit", "ProtoActionFlag", "ResourceByKBQuery", "ResourceByUnitCount", "ResourceIfTechActive",
         "ResourceReturnRateTotalCost", "RevealLOS", "Scale", "SendRandomCard", "SetCivilization", "SetGoalActive",
-        "SetNextResearchFree", "SetProtoMaxArmor", "SetVeterancyRankActive", "SharedBuildLimitUnit", "Snare",
+        "SetNextResearchFree", "SetVeterancyRankActive", "SharedBuildLimitUnit", "Snare",
         "SpeedModifier", "SquareAura", "StackControl", "TacticEnable", "TechCostAbsolute", "TimeShiftingAdd",
-        "TradeRouteBonus", "TradeRouteBonusTeam", "TurnRate", "UnitRegenRateLimit",
+        "TurnRate", "UnitRegenRateLimit",
         "UnitShieldRegenDamageTimeout", "UnitShieldRegenIdleTimeout", "UnitShieldRegenRate",
         "UnitShieldRegenRateLimit", "UpdateVisual", "UpgradeLevel", "VeterancyBonus", "VeterancyRankAdd",
         "VolleyMode", "WorkRateAll", "Yield", "YieldSpecific"
@@ -149,6 +219,7 @@ public partial class TechnologyEditorView : UserControl
     private readonly IReadOnlyList<string> _cultureNames = [];
     private readonly IReadOnlyList<string> _majorGodNames = [];
     private readonly IReadOnlyList<string> _techTypeNames = [];
+    private readonly IReadOnlyList<string> _protoActionNames = [];
     private readonly Dictionary<string, XElement> _original = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, XElement> _modified = new(StringComparer.OrdinalIgnoreCase);
     private XDocument _modDocument = new(new XElement("techtreemods"));
@@ -176,7 +247,8 @@ public partial class TechnologyEditorView : UserControl
         IEnumerable<string>? protoUnitNames = null,
         IEnumerable<string>? cultureNames = null,
         IEnumerable<string>? majorGodNames = null,
-        IEnumerable<string>? techTypeNames = null)
+        IEnumerable<string>? techTypeNames = null,
+        IEnumerable<string>? protoActionNames = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
@@ -190,6 +262,7 @@ public partial class TechnologyEditorView : UserControl
         _cultureNames = cultureNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _majorGodNames = majorGodNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _techTypeNames = techTypeNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        _protoActionNames = protoActionNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _techTabs.SelectedIndex = 0;
         LoadAll();
         RefreshList();
@@ -436,7 +509,7 @@ public partial class TechnologyEditorView : UserControl
             {
                 Text = text,
                 IsEnabled = IsModifiedTab,
-                Margin = new Thickness(0, 4, 12, 4)
+                Margin = new Thickness(0, 4, 8, 4)
             });
             displayBox.TextChanged += (_, _) =>
             {
@@ -678,7 +751,7 @@ public partial class TechnologyEditorView : UserControl
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedTab,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 4, 12, 4)
+            Margin = new Thickness(0, 4, 8, 4)
         });
         typeSelector.Width = 200;
         typeSelector.MaxWidth = 200;
@@ -736,7 +809,7 @@ public partial class TechnologyEditorView : UserControl
         });
         if (multiline)
         {
-            box.MinHeight = 54;
+            box.MinHeight = 32;
             box.AcceptsReturn = true;
             box.TextWrapping = TextWrapping.Wrap;
         }
@@ -883,7 +956,7 @@ public partial class TechnologyEditorView : UserControl
             {
                 Text = resource,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 10, 4)
+                Margin = new Thickness(0, 4, 8, 4)
             };
             Grid.SetColumn(label, index * 2);
             grid.Children.Add(label);
@@ -891,7 +964,7 @@ public partial class TechnologyEditorView : UserControl
             costs.TryGetValue(resource, out var existing);
             var box = CreateNumericTextBox(existing?.Value ?? "0");
             EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
-            box.Margin = new Thickness(0, 4, index < ProtoConstants.KnownResourceTypes.Length - 1 ? 16 : 0, 4);
+            box.Margin = new Thickness(0, 4, index < ProtoConstants.KnownResourceTypes.Length - 1 ? 8 : 0, 4);
             Grid.SetColumn(box, index * 2 + 1);
             box.TextChanged += (_, _) =>
             {
@@ -1211,8 +1284,10 @@ public partial class TechnologyEditorView : UserControl
             Padding = new Thickness(10, 8),
             Margin = new Thickness(0, 0, 0, 6)
         };
+        var shell = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var content = new StackPanel { Spacing = 6 };
-        border.Child = content;
+        shell.Children.Add(content);
+        border.Child = shell;
 
         var firstRow = new WrapPanel { Orientation = Orientation.Horizontal };
 
@@ -1225,7 +1300,7 @@ public partial class TechnologyEditorView : UserControl
             Width = 150,
             MaxWidth = 150,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 4, 12, 4)
+            Margin = new Thickness(0, 4, 8, 4)
         };
         typeCombo.SelectionChanged += (_, _) =>
         {
@@ -1241,17 +1316,17 @@ public partial class TechnologyEditorView : UserControl
 
         if (IsModifiedTab)
         {
-            if (firstRow.Children.LastOrDefault() is Control lastField)
-            {
-                var margin = lastField.Margin;
-                lastField.Margin = new Thickness(margin.Left, margin.Top, 0, margin.Bottom);
-            }
-            firstRow.Children.Add(CreateRemoveButton(() =>
+            var removePrereq = CreateRemoveButton(() =>
             {
                 var parent = prereq.Parent;
                 prereq.Remove();
                 if (parent != null && !parent.Elements().Any()) parent.Remove();
-            }));
+            });
+            removePrereq.HorizontalAlignment = HorizontalAlignment.Right;
+            removePrereq.VerticalAlignment = VerticalAlignment.Top;
+            removePrereq.Margin = new Thickness(8, 0, 0, 0);
+            Grid.SetColumn(removePrereq, 1);
+            shell.Children.Add(removePrereq);
         }
 
         content.Children.Insert(0, firstRow);
@@ -1289,7 +1364,7 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateStrictPrereqSelector(
             _original.Keys.Concat(_modified.Keys),
             prereq.Value.Trim(),
-            150,
+            200,
             value =>
             {
                 prereq.Value = value;
@@ -1780,13 +1855,15 @@ public partial class TechnologyEditorView : UserControl
         if (currentType.Equals("Data", StringComparison.OrdinalIgnoreCase))
         {
             var currentSubtype = ((string?)effect.Attribute("subtype") ?? "").Trim();
-            var subtypeSelector = CreateStrictEffectSelector(TechnologyDataEffectSubtypes, currentSubtype, value =>
+            var displayedSubtype = currentSubtype.Equals("Damagebonus", StringComparison.OrdinalIgnoreCase) ? "DamageBonus" : currentSubtype;
+            var subtypeSelector = CreateStrictEffectSelector(TechnologyDataEffectSubtypes, displayedSubtype, value =>
             {
-                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "subtype");
-                else SetCaseInsensitiveAttribute(effect, "subtype", value);
+                if (value.Equals(currentSubtype, StringComparison.OrdinalIgnoreCase)) return;
+                ResetDataEffectForSubtype(effect, value);
                 MarkDirty();
                 UpdatePreview();
-            });
+                _ = BuildEditorAsync();
+            }, 180);
             subtypeSelector.Margin = new Thickness(8, 4, 0, 4);
             selectorRow.Children.Add(subtypeSelector);
         }
@@ -1800,7 +1877,7 @@ public partial class TechnologyEditorView : UserControl
                 IsChecked = hideTooltipAttribute != null,
                 IsEnabled = IsModifiedTab,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(10, 4, 8, 4)
+                Margin = new Thickness(8, 4, 8, 4)
             };
             hideTooltip.IsCheckedChanged += (_, _) =>
             {
@@ -1868,7 +1945,7 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(headerGrid);
 
         if (tooltipIdAttribute != null)
-            await AddEffectStringAttributeRowAsync(content, effect, tooltipIdAttribute, "Tooltip override", 380, removable: true);
+            await AddEffectStringAttributeRowAsync(content, effect, tooltipIdAttribute, "Tooltip override", 380, removable: true, multiline: true);
 
         var structured = await AddStructuredEffectBodyAsync(effect, content, currentType);
         if (!structured)
@@ -1879,6 +1956,72 @@ public partial class TechnologyEditorView : UserControl
 
     private async Task<bool> AddStructuredEffectBodyAsync(XElement effect, StackPanel content, string currentType)
     {
+        if (currentType.Equals("Data", StringComparison.OrdinalIgnoreCase))
+        {
+            var subtype = GetCaseInsensitiveAttribute(effect, "subtype")?.Value ?? "";
+            if (SimpleUnitAmountDataSubtypes.Contains(subtype))
+            {
+                AddSimpleUnitAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (ActionUnitAmountDataSubtypes.Contains(subtype))
+            {
+                AddActionUnitAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (DamageTypeActionDataSubtypes.Contains(subtype))
+            {
+                AddTypedDamageDataEffectEditor(effect, content, "Damage type", "damagetype", includeAction: true, includeDivine: true);
+                return true;
+            }
+            if (ArmorTypeActionDataSubtypes.Contains(subtype))
+            {
+                AddTypedDamageDataEffectEditor(effect, content, "Armor type", "armortype", includeAction: false, includeDivine: false);
+                return true;
+            }
+            if (DamageTypeNoActionDataSubtypes.Contains(subtype))
+            {
+                AddTypedDamageDataEffectEditor(effect, content, "Damage type", "damagetype", includeAction: false, includeDivine: true);
+                return true;
+            }
+            if (DamageBonusDataSubtypes.Contains(subtype))
+            {
+                AddDamageBonusDataEffectEditor(effect, content);
+                return true;
+            }
+            if (ResourceAmountDataSubtypes.Contains(subtype))
+            {
+                AddResourceAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (ActionAddAttachingUnitDataSubtypes.Contains(subtype))
+            {
+                AddActionAddAttachingUnitDataEffectEditor(effect, content);
+                return true;
+            }
+            if (AddAttackTypeDataSubtypes.Contains(subtype))
+            {
+                AddAddAttackTypeDataEffectEditor(effect, content);
+                return true;
+            }
+            if (AddDependentUnitDataSubtypes.Contains(subtype))
+            {
+                AddAddDependentUnitDataEffectEditor(effect, content);
+                return true;
+            }
+            if (EnableDisableUnitDataSubtypes.Contains(subtype))
+            {
+                AddEnableDisableUnitDataEffectEditor(effect, content, includeAction: false);
+                return true;
+            }
+            if (EnableDisableActionUnitDataSubtypes.Contains(subtype))
+            {
+                AddEnableDisableUnitDataEffectEditor(effect, content, includeAction: true);
+                return true;
+            }
+            return false;
+        }
+
         if (!StructuredTechnologyEffectTypes.Contains(currentType)) return false;
 
         switch (currentType.ToLowerInvariant())
@@ -1959,6 +2102,478 @@ public partial class TechnologyEditorView : UserControl
         return true;
     }
 
+    private void AddSimpleUnitAmountDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddActionUnitAmountDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddTypedDamageDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        string typeLabel,
+        string attributeName,
+        bool includeAction,
+        bool includeDivine)
+    {
+        EnsureDefaultDataRelativity(effect);
+        if (includeAction) EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        if (includeAction)
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        }
+        AddDataRelativityAndAmountEditors(effect, row);
+
+        var options = includeDivine
+            ? new[] { "All", "Hack", "Pierce", "Crush", "Divine" }
+            : new[] { "All", "Hack", "Pierce", "Crush" };
+        var current = GetCaseInsensitiveAttribute(effect, attributeName)?.Value.Trim() ?? "All";
+        var typeCombo = new ComboBox
+        {
+            ItemsSource = options,
+            SelectedItem = options.FirstOrDefault(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "All",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 4, 8, 4)
+        };
+        typeCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || typeCombo.SelectedItem is not string selected) return;
+            if (selected.Equals("All", StringComparison.OrdinalIgnoreCase)) RemoveCaseInsensitiveAttribute(effect, attributeName);
+            else SetCaseInsensitiveAttribute(effect, attributeName, selected);
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment(typeLabel, typeCombo, leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddDamageBonusDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect);
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+
+        row.Children.Add(CreateLabeledEffectSegment("Bonus against", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+                MarkDirty();
+                UpdatePreview();
+            },
+            180), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddResourceAmountDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddActionAddAttachingUnitDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataAction(effect);
+        EnsureFixedDataAttribute(effect, "relativity", "Absolute");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+        EnsureFixedDataAttribute(effect, "targetunittype", "Unit");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        var actionLabel = CreateInlineLabel("Action");
+        actionLabel.Margin = new Thickness(8, 4, 8, 4);
+        row.Children.Add(actionLabel);
+        row.Children.Add(CreateDataActionSelector(effect));
+        row.Children.Add(CreateLabeledEffectSegment("Attach", CreateStrictEffectSelector(
+            _protoUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value => SetCaseInsensitiveAttribute(effect, "unittype", value),
+            180), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("To", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "targetunittype")?.Value.Trim() ?? "Unit",
+            value => SetCaseInsensitiveAttribute(effect, "targetunittype", value),
+            180), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Amount", CreateSignedFloatEffectBox(effect, "amount", 70, "1"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddAddAttackTypeDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureFixedDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Tactic", CreateFreeTextEffectAttributeBox(effect, "tactic", 100), leftSpacing: 8));
+
+        var current = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() ?? "1";
+        var toggle = new ComboBox
+        {
+            ItemsSource = new[] { "Enable attack", "Disable attack" },
+            SelectedItem = current == "0" ? "Disable attack" : "Enable attack",
+            IsEnabled = IsModifiedTab,
+            Width = 135,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        toggle.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || toggle.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable attack" ? "0" : "1");
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            MarkDirty(); UpdatePreview();
+        };
+        row.Children.Add(toggle);
+        row.Children.Add(CreateLabeledEffectSegment("Unit type", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value => SetCaseInsensitiveAttribute(effect, "unittype", value),
+            180), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddAddDependentUnitDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureFixedDataAttribute(effect, "relativity", "Absolute");
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Dependent", CreateStrictEffectSelector(
+            _protoUnitNames,
+            GetCaseInsensitiveAttribute(effect, "proto")?.Value.Trim() ?? "",
+            value => SetCaseInsensitiveAttribute(effect, "proto", value),
+            180), leftSpacing: 8));
+
+        var currentRelativity = GetCaseInsensitiveAttribute(effect, "relativity")?.Value ?? "Absolute";
+        var relativity = new ComboBox
+        {
+            ItemsSource = new[] { "Add", "Set to" },
+            SelectedItem = currentRelativity.Equals("Assign", StringComparison.OrdinalIgnoreCase) ? "Set to" : "Add",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        relativity.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || relativity.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "relativity", selected == "Set to" ? "Assign" : "Absolute");
+            MarkDirty(); UpdatePreview();
+        };
+        row.Children.Add(relativity);
+        row.Children.Add(CreateLabeledEffectSegment("Amount", CreateSignedFloatEffectBox(effect, "amount", 70, "0"), leftSpacing: 8));
+        foreach (var axis in new[] { "x", "y", "z" })
+            row.Children.Add(CreateLabeledEffectSegment(axis.ToUpperInvariant(), CreateSignedFloatEffectBox(effect, axis, 60, "0"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void EnsureFixedDataAttribute(XElement effect, string attributeName, string defaultValue)
+    {
+        if (!IsModifiedTab || GetCaseInsensitiveAttribute(effect, attributeName) != null) return;
+        SetCaseInsensitiveAttribute(effect, attributeName, defaultValue);
+        MarkDirty(); UpdatePreview();
+    }
+
+    private TextBox CreateSignedFloatEffectBox(XElement effect, string attributeName, double width, string defaultValue)
+    {
+        var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
+        var box = CreateNumericTextBox(FormatNumericForDisplay(attribute?.Value ?? defaultValue), width);
+        EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.SignedFloat);
+        box.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? defaultValue);
+            MarkDirty(); UpdatePreview();
+        };
+        return box;
+    }
+
+    private TextBox CreateFreeTextEffectAttributeBox(XElement effect, string attributeName, double width)
+    {
+        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
+        {
+            Text = GetCaseInsensitiveAttribute(effect, attributeName)?.Value ?? "",
+            IsEnabled = IsModifiedTab,
+            Width = width,
+            MaxWidth = width,
+            Margin = new Thickness(0, 4, 0, 4)
+        });
+        box.Width = box.MaxWidth = width;
+        box.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            if (string.IsNullOrWhiteSpace(box.Text)) RemoveCaseInsensitiveAttribute(effect, attributeName);
+            else SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? "");
+            MarkDirty(); UpdatePreview();
+        };
+        return box;
+    }
+
+    private void AddEnableDisableUnitDataEffectEditor(XElement effect, StackPanel content, bool includeAction)
+    {
+        EnsureDefaultEnableDisableDataState(effect);
+        if (includeAction) EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        if (includeAction)
+        {
+            var actionLabel = CreateInlineLabel("Action");
+            actionLabel.Margin = new Thickness(8, 4, 8, 4);
+            row.Children.Add(actionLabel);
+            row.Children.Add(CreateDataActionSelector(effect));
+        }
+
+        var currentAmount = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() ?? "1";
+        var stateCombo = new ComboBox
+        {
+            ItemsSource = new[] { "Enable", "Disable" },
+            SelectedItem = currentAmount == "0" ? "Disable" : "Enable",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        stateCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || stateCombo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(stateCombo);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void EnsureDefaultEnableDisableDataState(XElement effect)
+    {
+        if (!IsModifiedTab) return;
+        var changed = false;
+        if (GetCaseInsensitiveAttribute(effect, "amount") == null)
+        {
+            SetCaseInsensitiveAttribute(effect, "amount", "1");
+            changed = true;
+        }
+        if (!string.Equals(GetCaseInsensitiveAttribute(effect, "relativity")?.Value, "Assign", StringComparison.OrdinalIgnoreCase))
+        {
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            changed = true;
+        }
+        if (changed)
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+    }
+
+    private void AddDataTargetEditor(XElement effect, WrapPanel row)
+    {
+        row.Children.Add(CreateInlineLabel("Unit"));
+        var target = effect.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        row.Children.Add(CreateStrictEffectSelector(_prereqUnitNames, target?.Value.Trim() ?? "", value =>
+        {
+            var currentTarget = EnsureDataTarget(effect);
+            currentTarget.Value = value;
+            MarkDirty();
+            UpdatePreview();
+        }, 200));
+    }
+
+    private void AddDataIgnoreNatureEditor(XElement effect, WrapPanel row)
+    {
+        var target = effect.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        var ignoreNature = new CheckBox
+        {
+            Content = "Ignore Nature",
+            IsChecked = target?.Attributes().Any(a => a.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase)) == true,
+            IsEnabled = IsModifiedTab,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        ignoreNature.IsCheckedChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            var currentTarget = EnsureDataTarget(effect);
+            if (ignoreNature.IsChecked == true) SetCaseInsensitiveAttribute(currentTarget, "ignoreNature", "");
+            else RemoveCaseInsensitiveAttribute(currentTarget, "ignoreNature");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(ignoreNature);
+    }
+
+    private XElement EnsureDataTarget(XElement effect)
+    {
+        var target = effect.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        if (target != null)
+        {
+            if (target.Attribute("type") == null) target.SetAttributeValue("type", "ProtoUnit");
+            return target;
+        }
+
+        target = new XElement("target", new XAttribute("type", "ProtoUnit"));
+        effect.Add(target);
+        return target;
+    }
+
+    private void AddDataRelativityAndAmountEditors(XElement effect, WrapPanel row)
+    {
+        var currentRelativity = GetCaseInsensitiveAttribute(effect, "relativity")?.Value ?? "BasePercent";
+        var relativityCombo = new ComboBox
+        {
+            ItemsSource = new[] { "Add", "Multiply", "Multiply base", "Set to" },
+            SelectedItem = RelativityToDisplay(currentRelativity),
+            IsEnabled = IsModifiedTab,
+            Width = 132,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        relativityCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || relativityCombo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "relativity", DisplayToRelativity(selected));
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(relativityCombo);
+
+        var amount = CreateNumericTextBox(FormatNumericForDisplay(GetCaseInsensitiveAttribute(effect, "amount")?.Value ?? "0"), 80);
+        EditorNumericInputBehavior.AttachRule(amount, ProtoUnitNumericKind.SignedFloat);
+        amount.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            SetCaseInsensitiveAttribute(effect, "amount", amount.Text ?? "0");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment("Amount", amount));
+    }
+
+    private void ResetDataEffectForSubtype(XElement effect, string subtype)
+    {
+        var metadata = effect.Attributes()
+            .Where(a => a.Name.LocalName.Equals("hideTooltip", StringComparison.OrdinalIgnoreCase)
+                     || a.Name.LocalName.Equals("delay", StringComparison.OrdinalIgnoreCase)
+                     || a.Name.LocalName.Equals("tooltipID", StringComparison.OrdinalIgnoreCase))
+            .Select(a => new XAttribute(a))
+            .ToList();
+
+        effect.RemoveAttributes();
+        effect.RemoveNodes();
+        effect.SetAttributeValue("type", "Data");
+        if (!string.IsNullOrWhiteSpace(subtype))
+            effect.SetAttributeValue("subtype", subtype);
+        foreach (var attribute in metadata)
+            effect.Add(attribute);
+    }
+
+    private void EnsureDefaultDataRelativity(XElement effect)
+    {
+        if (!IsModifiedTab || GetCaseInsensitiveAttribute(effect, "relativity") != null) return;
+        SetCaseInsensitiveAttribute(effect, "relativity", "BasePercent");
+        MarkDirty();
+        UpdatePreview();
+    }
+
+    private void EnsureDefaultDataAction(XElement effect)
+    {
+        if (!IsModifiedTab) return;
+        if (GetCaseInsensitiveAttribute(effect, "action") != null || GetCaseInsensitiveAttribute(effect, "allactions") != null) return;
+        SetCaseInsensitiveAttribute(effect, "allactions", "1");
+        MarkDirty();
+        UpdatePreview();
+    }
+
+    private AutoCompleteBox CreateDataActionSelector(XElement effect)
+    {
+        var actionAttribute = GetCaseInsensitiveAttribute(effect, "action")?.Value.Trim() ?? "";
+        var allActions = GetCaseInsensitiveAttribute(effect, "allactions")?.Value.Trim();
+        var current = string.IsNullOrWhiteSpace(actionAttribute) && !string.Equals(allActions, "0", StringComparison.OrdinalIgnoreCase)
+            ? "All"
+            : actionAttribute;
+        var suggestions = new[] { "All" }
+            .Concat(_protoActionNames.Where(value => !value.Equals("All", StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var selector = CreateStrictEffectSelector(suggestions, current, value =>
+        {
+            if (value.Equals("All", StringComparison.OrdinalIgnoreCase))
+            {
+                RemoveCaseInsensitiveAttribute(effect, "action");
+                SetCaseInsensitiveAttribute(effect, "allactions", "1");
+            }
+            else
+            {
+                RemoveCaseInsensitiveAttribute(effect, "allactions");
+                SetCaseInsensitiveAttribute(effect, "action", value);
+            }
+            MarkDirty();
+            UpdatePreview();
+        }, 165, preserveSuggestionOrder: true);
+        selector.ItemTemplate = new FuncDataTemplate<string>((item, _) => new TextBlock
+        {
+            Text = item ?? "",
+            FontWeight = string.Equals(item, "All", StringComparison.OrdinalIgnoreCase) ? FontWeight.Bold : FontWeight.Normal
+        });
+        return selector;
+    }
+
+    private static string RelativityToDisplay(string relativity)
+        => relativity.ToLowerInvariant() switch
+        {
+            "percent" => "Multiply",
+            "basepercent" => "Multiply base",
+            "assign" => "Set to",
+            _ => "Add"
+        };
+
+    private static string DisplayToRelativity(string display)
+        => display switch
+        {
+            "Multiply" => "Percent",
+            "Multiply base" => "BasePercent",
+            "Set to" => "Assign",
+            _ => "Absolute"
+        };
+
     private async Task AddSetNameEffectEditorAsync(XElement effect, StackPanel content)
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
@@ -1981,11 +2596,11 @@ public partial class TechnologyEditorView : UserControl
         {
             var kind = targetKindCombo.SelectedItem?.ToString() ?? targetKind;
             _ = HandleSetNameTargetChangedAsync(effect, kind, value);
-        }, 150);
+        }, targetKind == "Tech" ? 200 : 150);
         row.Children.Add(targetSelector);
 
         var newNameLabel = CreateInlineLabel("New name");
-        newNameLabel.Margin = new Thickness(12, 4, 8, 4);
+        newNameLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(newNameLabel);
         var newNameAttribute = GetCaseInsensitiveAttribute(effect, "newName");
         if (newNameAttribute != null)
@@ -2026,16 +2641,16 @@ public partial class TechnologyEditorView : UserControl
         if (reqTech == null && IsModifiedTab)
         {
             var addReq = CreateOptionalPropertyButton("Tech Req");
-            addReq.Margin = new Thickness(12, 4, 8, 4);
+            addReq.Margin = new Thickness(8, 4, 8, 4);
             addReq.Click += (_, _) => { SetCaseInsensitiveAttribute(effect, "reqTech", ""); MarkDirty(); _ = BuildEditorAsync(); };
             row.Children.Add(addReq);
         }
         else if (reqTech != null)
         {
             var reqLabel = CreateInlineLabel("Tech Req");
-            reqLabel.Margin = new Thickness(12, 4, 8, 4);
+            reqLabel.Margin = new Thickness(8, 4, 8, 4);
             row.Children.Add(reqLabel);
-            row.Children.Add(CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), reqTech.Value, value => SetCaseInsensitiveAttribute(effect, "reqTech", value), 150));
+            row.Children.Add(CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), reqTech.Value, value => SetCaseInsensitiveAttribute(effect, "reqTech", value), 200));
             if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "reqTech")));
         }
 
@@ -2144,10 +2759,10 @@ public partial class TechnologyEditorView : UserControl
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(CreateInlineLabel("Tech"));
-        row.Children.Add(CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), effect.Value.Trim(), value => { effect.Value = value; MarkDirty(); UpdatePreview(); }, 150));
+        row.Children.Add(CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), effect.Value.Trim(), value => { effect.Value = value; MarkDirty(); UpdatePreview(); }, 200));
 
         var statusLabel = CreateInlineLabel("Set status to");
-        statusLabel.Margin = new Thickness(12, 4, 8, 4);
+        statusLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(statusLabel);
         var currentStatus = GetCaseInsensitiveAttribute(effect, "status")?.Value ?? "obtainable";
         var statusCombo = new ComboBox { ItemsSource = new[] { "Obtainable", "Active", "Unobtainable" }, SelectedItem = ToDisplayStatus(currentStatus), Width = 130, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 8, 4) };
@@ -2158,14 +2773,14 @@ public partial class TechnologyEditorView : UserControl
         if (majorGod == null && IsModifiedTab)
         {
             var button = CreateOptionalPropertyButton("Show in UI if major god is");
-            button.Margin = new Thickness(12, 4, 8, 4);
+            button.Margin = new Thickness(8, 4, 8, 4);
             button.Click += (_, _) => { SetCaseInsensitiveAttribute(effect, "uiShowIfMajorGod", ""); MarkDirty(); _ = BuildEditorAsync(); };
             row.Children.Add(button);
         }
         else if (majorGod != null)
         {
             var majorGodLabel = CreateInlineLabel("Show in UI if major god is");
-            majorGodLabel.Margin = new Thickness(12, 4, 8, 4);
+            majorGodLabel.Margin = new Thickness(8, 4, 8, 4);
             row.Children.Add(majorGodLabel);
             row.Children.Add(CreateStrictEffectSelector(_majorGodNames, majorGod.Value, value => SetCaseInsensitiveAttribute(effect, "uiShowIfMajorGod", value), 150));
             if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "uiShowIfMajorGod")));
@@ -2206,7 +2821,7 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateInlineLabel("Transform from"));
         row.Children.Add(CreateStrictEffectSelector(_protoUnitNames, GetCaseInsensitiveAttribute(effect, "fromProtoID")?.Value ?? "", value => SetCaseInsensitiveAttribute(effect, "fromProtoID", value), 150));
         var toLabel = CreateInlineLabel("to");
-        toLabel.Margin = new Thickness(12, 4, 8, 4);
+        toLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(toLabel);
         row.Children.Add(CreateStrictEffectSelector(_protoUnitNames, GetCaseInsensitiveAttribute(effect, "toProtoID")?.Value ?? "", value => SetCaseInsensitiveAttribute(effect, "toProtoID", value), 150));
         var queued = new CheckBox { Content = "Include queued", IsChecked = GetCaseInsensitiveAttribute(effect, "includeQueued")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = IsModifiedTab, Margin = new Thickness(8, 4, 0, 4) };
@@ -2223,10 +2838,10 @@ public partial class TechnologyEditorView : UserControl
             _original.Keys.Concat(_modified.Keys),
             effect.Value.Trim(),
             value => { effect.Value = value; MarkDirty(); UpdatePreview(); },
-            150));
+            200));
 
         var amountLabel = CreateInlineLabel("Amount");
-        amountLabel.Margin = new Thickness(12, 4, 8, 4);
+        amountLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(amountLabel);
         var amount = GetCaseInsensitiveAttribute(effect, "amount");
         var amountBox = CreateNumericTextBox(FormatNumericForDisplay(amount?.Value ?? "0"), 70);
@@ -2240,7 +2855,7 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(amountBox);
 
         var amount2Label = CreateInlineLabel("Amount 2");
-        amount2Label.Margin = new Thickness(12, 4, 8, 4);
+        amount2Label.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(amount2Label);
         var amount2 = GetCaseInsensitiveAttribute(effect, "amount2");
         var amount2Box = CreateNumericTextBox(FormatNumericForDisplay(amount2?.Value ?? "0"), 70);
@@ -2295,7 +2910,7 @@ public partial class TechnologyEditorView : UserControl
         };
         firstRow.Children.Add(selectBox);
         var setToLabel = CreateInlineLabel("Set to");
-        setToLabel.Margin = new Thickness(12, 4, 8, 4);
+        setToLabel.Margin = new Thickness(8, 4, 8, 4);
         firstRow.Children.Add(setToLabel);
         var currentStatus = GetCaseInsensitiveAttribute(effect, "status")?.Value ?? "active";
         var statusCombo = new ComboBox
@@ -2435,7 +3050,7 @@ public partial class TechnologyEditorView : UserControl
             _original.Keys.Concat(_modified.Keys),
             effect.Value.Trim(),
             value => { effect.Value = value; MarkDirty(); UpdatePreview(); },
-            150)));
+            200)));
 
         var amount = GetCaseInsensitiveAttribute(effect, "amount")?.Value ?? "1";
         var mode = new ComboBox
@@ -2485,7 +3100,7 @@ public partial class TechnologyEditorView : UserControl
             _original.Keys.Concat(_modified.Keys),
             effect.Value.Trim(),
             value => { effect.Value = value; MarkDirty(); UpdatePreview(); },
-            150)));
+            200)));
         content.Children.Add(row);
     }
 
@@ -2567,7 +3182,7 @@ public partial class TechnologyEditorView : UserControl
             _prereqUnitNames,
             GetCaseInsensitiveAttribute(effect, "generator")?.Value ?? "",
             value => SetCaseInsensitiveAttribute(effect, "generator", value),
-            150), leftSpacing: 12));
+            150), leftSpacing: 8));
 
         firstRow.Children.Add(CreateCreateUnitPresenceCheckBox(effect, "allgenerators", "All generators", "true"));
         firstRow.Children.Add(CreateCreateUnitPresenceCheckBox(effect, "mute", "Mute", ""));
@@ -2782,7 +3397,7 @@ public partial class TechnologyEditorView : UserControl
             row.Children.Add(source2Segment);
         }
 
-        row.Children.Add(CreateLabeledEffectSegment("Min Source value", CreateUnsignedFloatEffectBox(effect, "minSrcValue", 70, "0"), leftSpacing: 12));
+        row.Children.Add(CreateLabeledEffectSegment("Min Source value", CreateUnsignedFloatEffectBox(effect, "minSrcValue", 70, "0"), leftSpacing: 8));
         row.Children.Add(CreateLabeledEffectSegment("Max", CreateUnsignedFloatEffectBox(effect, "maxSrcValue", 70, "0")));
         content.Children.Add(row);
     }
@@ -2811,7 +3426,7 @@ public partial class TechnologyEditorView : UserControl
             GetCaseInsensitiveAttribute(effect, "toProtoID")?.Value ?? "",
             value => SetCaseInsensitiveAttribute(effect, "toProtoID", value),
             150),
-            leftSpacing: 12));
+            leftSpacing: 8));
         content.Children.Add(row);
     }
 
@@ -2820,7 +3435,7 @@ public partial class TechnologyEditorView : UserControl
         var segment = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Margin = new Thickness(leftSpacing, 0, 8, 0)
+            Margin = new Thickness(leftSpacing > 0 ? 8 : 0, 0, 0, 0)
         };
         segment.Children.Add(CreateInlineLabel(label));
         segment.Children.Add(control);
@@ -2918,23 +3533,32 @@ public partial class TechnologyEditorView : UserControl
         if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, attributeName)));
     }
 
-    private async Task AddEffectStringAttributeRowAsync(StackPanel content, XElement effect, XAttribute attribute, string label, double width, bool removable)
+    private async Task AddEffectStringAttributeRowAsync(StackPanel content, XElement effect, XAttribute attribute, string label, double width, bool removable, bool multiline = false)
     {
         var id = attribute.Value.Trim();
         var text = await ResolveTechnologyStringValueAsync(id);
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(CreateInlineLabel(label));
-        var box = CreateEffectStringTextBox(attribute, text, width);
-        row.Children.Add(box);
+        var box = CreateEffectStringTextBox(attribute, text, width, multiline);
+        row.Children.Add(CreateLabeledEffectSegment(label, box));
         if (removable && IsModifiedTab)
             row.Children.Add(CreateRemoveButton(() => { RemoveCaseInsensitiveAttribute(effect, attribute.Name.LocalName); QueueStringForRemoval(id); }));
         content.Children.Add(row);
     }
 
-    private TextBox CreateEffectStringTextBox(XAttribute attribute, string text, double width)
+    private TextBox CreateEffectStringTextBox(XAttribute attribute, string text, double width, bool multiline = false)
     {
         var id = attribute.Value.Trim();
-        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox { Text = text, IsEnabled = IsModifiedTab, Width = width, MaxWidth = width, Margin = new Thickness(0, 4, 0, 4) });
+        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
+        {
+            Text = text,
+            IsEnabled = IsModifiedTab,
+            Width = width,
+            MaxWidth = width,
+            MinHeight = 32,
+            AcceptsReturn = multiline,
+            TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            Margin = new Thickness(0, 4, 0, 4)
+        });
         box.Width = box.MaxWidth = width;
         box.TextChanged += (_, _) => { if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(id)) return; _pendingStringRemovals.Remove(id); _pendingStringUpdates[id] = box.Text ?? ""; MarkDirty(); };
         return box;
@@ -2965,11 +3589,16 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(box);
     }
 
-    private AutoCompleteBox CreateStrictEffectSelector(IEnumerable<string> suggestions, string value, Action<string> commit, double width = 150)
+    private AutoCompleteBox CreateStrictEffectSelector(
+        IEnumerable<string> suggestions,
+        string value,
+        Action<string> commit,
+        double width = 150,
+        bool preserveSuggestionOrder = false)
     {
         var selector = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox { Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedTab, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 4) });
         selector.Width = selector.MaxWidth = width;
-        EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: false, keepStartVisibleAfterCommit: true, valueCommitted: v => { if (_loadingUi || !IsModifiedTab) return; commit(v); MarkDirty(); UpdatePreview(); });
+        EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: false, keepStartVisibleAfterCommit: true, preserveSuggestionOrder: preserveSuggestionOrder, valueCommitted: v => { if (_loadingUi || !IsModifiedTab) return; commit(v); MarkDirty(); UpdatePreview(); });
         return selector;
     }
 
@@ -3465,8 +4094,33 @@ public partial class TechnologyEditorView : UserControl
         ToolTip.SetTip(_xmlPreviewToggleButton, _isXmlPreviewCollapsed ? "Restore XML Preview" : "Collapse XML Preview");
     }
 
+    private static void NormalizeEffectAttributeOrder(XElement effect)
+    {
+        var attributes = effect.Attributes().ToList();
+        if (attributes.Count < 2) return;
+
+        static bool IsNamed(XAttribute attribute, string name)
+            => attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase);
+
+        var type = attributes.Where(a => IsNamed(a, "type"));
+        var subtype = attributes.Where(a => IsNamed(a, "subtype"));
+        var amount = attributes.Where(a => IsNamed(a, "amount"));
+        var relativity = attributes.Where(a => IsNamed(a, "relativity"));
+        var metadata = attributes.Where(a => IsNamed(a, "hideTooltip") || IsNamed(a, "delay") || IsNamed(a, "tooltipID"));
+        var subtypeSpecific = attributes.Where(a => !IsNamed(a, "type") && !IsNamed(a, "subtype") &&
+                                                     !IsNamed(a, "amount") && !IsNamed(a, "relativity") &&
+                                                     !IsNamed(a, "hideTooltip") && !IsNamed(a, "delay") && !IsNamed(a, "tooltipID"));
+        var ordered = type.Concat(subtype).Concat(subtypeSpecific).Concat(amount).Concat(relativity).Concat(metadata).ToList();
+        if (attributes.SequenceEqual(ordered)) return;
+        foreach (var attribute in ordered) attribute.Remove();
+        foreach (var attribute in ordered) effect.Add(attribute);
+    }
+
     private static void NormalizeTechnologyChildOrder(XElement tech)
     {
+        foreach (var effect in tech.Descendants().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
+            NormalizeEffectAttributeOrder(effect);
+
         var children = tech.Elements().ToList();
         if (children.Count < 2) return;
         var properties = children.Where(e => !e.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase)
