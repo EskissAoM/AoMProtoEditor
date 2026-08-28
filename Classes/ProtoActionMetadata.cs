@@ -54,6 +54,10 @@ public static class ProtoActionMetadataCatalog
     {
         "onhiteffect",
         "revealarearadius",
+        "empowerdata",
+        "enemyempowerdata",
+        "natureempowerdata",
+        "stackcontrol",
     };
 
     private static readonly Dictionary<string, int> DisplayPriority = new(StringComparer.OrdinalIgnoreCase)
@@ -90,7 +94,7 @@ public static class ProtoActionMetadataCatalog
     {
         ["name"] = new("name", "Name", ProtoActionFieldEditorKind.Text),
         ["type"] = new("type", "Type", ProtoActionFieldEditorKind.Text),
-        ["displaynameid"] = new("displaynameid", "Display Name ID", ProtoActionFieldEditorKind.Text),
+        ["displaynameid"] = new("displaynameid", "Display Name Override", ProtoActionFieldEditorKind.Text),
         ["anim"] = new("anim", "Animation", ProtoActionFieldEditorKind.Text),
         ["idleanim"] = new("idleanim", "Idle Animation", ProtoActionFieldEditorKind.Text),
         ["walkanim"] = new("walkanim", "Walk Animation", ProtoActionFieldEditorKind.Text),
@@ -100,7 +104,6 @@ public static class ProtoActionMetadataCatalog
         ["rof"] = new("rof", "Rate of Fire", ProtoActionFieldEditorKind.Number),
         ["maxrange"] = new("maxrange", "Max Range", ProtoActionFieldEditorKind.Number),
         ["minrange"] = new("minrange", "Min Range", ProtoActionFieldEditorKind.Number),
-        ["minworkrate"] = new("minworkrate", "Min Work Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
         ["typedmaxrange"] = new("typedmaxrange", "Typed Max Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
         ["typedminrange"] = new("typedminrange", "Typed Min Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
         ["rate"] = new("rate", "Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type", "resource", "yield", "overrideResource", "inventoryRate"]),
@@ -139,7 +142,7 @@ public static class ProtoActionMetadataCatalog
         ["modifyduration"] = new("modifyduration", "Modify Duration (ms)", ProtoActionFieldEditorKind.Number),
         ["modifyexponent"] = new("modifyexponent", "Modify Exponent", ProtoActionFieldEditorKind.Number),
         ["modifyself"] = new("modifyself", "Modify Self", ProtoActionFieldEditorKind.Toggle),
-        ["modifyabstracttype"] = new("modifyabstracttype", "Modify Type", ProtoActionFieldEditorKind.StructuredList, true),
+        ["modifyabstracttype"] = new("modifyabstracttype", "Modify Abstract Type", ProtoActionFieldEditorKind.StructuredList, true),
         ["modifyunittype"] = new("modifyunittype", "Modify Unit Type", ProtoActionFieldEditorKind.StructuredList, true),
         ["modifyprotoid"] = new("modifyprotoid", "Modify Proto ID", ProtoActionFieldEditorKind.StructuredList, true),
         ["modifytargetlimit"] = new("modifytargetlimit", "Modify Target Limit", ProtoActionFieldEditorKind.Number),
@@ -194,7 +197,11 @@ public static class ProtoActionMetadataCatalog
         ["infectionrange"] = new("infectionrange", "Infection Range", ProtoActionFieldEditorKind.Number),
         ["infectionattachment"] = new("infectionattachment", "Infection Attachment", ProtoActionFieldEditorKind.Text),
         ["infectionattachmentbone"] = new("infectionattachmentbone", "Infection Attachment Bone", ProtoActionFieldEditorKind.Text),
-        ["scalebycontainedunittype"] = new("scalebycontainedunittype", "Scale By Contained Unit Type", ProtoActionFieldEditorKind.Text),
+        ["scalebycontainedunittype"] = new("scalebycontainedunittype", "Scale By Contained Unit Type", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
+        ["empowerdata"] = new("empowerdata", "Empower Data", ProtoActionFieldEditorKind.StructuredList),
+        ["enemyempowerdata"] = new("enemyempowerdata", "Enemy Empower Data", ProtoActionFieldEditorKind.StructuredList),
+        ["natureempowerdata"] = new("natureempowerdata", "Nature Empower Data", ProtoActionFieldEditorKind.StructuredList),
+        ["stackcontrol"] = new("stackcontrol", "Stack Control", ProtoActionFieldEditorKind.StructuredList),
         ["attachprotounit"] = new("attachprotounit", "Attach Proto Unit", ProtoActionFieldEditorKind.Text),
         ["castpower"] = new("castpower", "Cast Power", ProtoActionFieldEditorKind.Text),
         ["castpowertargettype"] = new("castpowertargettype", "Cast Power Target Type", ProtoActionFieldEditorKind.Text),
@@ -204,7 +211,7 @@ public static class ProtoActionMetadataCatalog
         ["gatheringmultiplier"] = new("gatheringmultiplier", "Gathering Multiplier", ProtoActionFieldEditorKind.Number),
         ["maintainworkratemultiplier"] = new("maintainworkratemultiplier", "Maintain Work Rate Multiplier", ProtoActionFieldEditorKind.Number),
         ["autocastdistance"] = new("autocastdistance", "Auto Cast Distance", ProtoActionFieldEditorKind.Number),
-        ["donotautogatherunlessgatheringtypes"] = new("donotautogatherunlessgatheringtypes", "Do Not Auto Gather Unless Gathering Types", ProtoActionFieldEditorKind.Text),
+        ["donotautogatherunlessgatheringtypes"] = new("donotautogatherunlessgatheringtypes", "Do Not Auto Gather Unless Gathering Types", ProtoActionFieldEditorKind.StructuredList, true),
         ["maintaintrainpoints"] = new("maintaintrainpoints", "Maintain Train Points", ProtoActionFieldEditorKind.Number),
         ["maintainallowoverpopcap"] = new("maintainallowoverpopcap", "Maintain Allow Over Pop Cap", ProtoActionFieldEditorKind.Toggle),
         ["stunduration"] = new("stunduration", "Stun Duration", ProtoActionFieldEditorKind.Number),
@@ -389,7 +396,6 @@ public static class ProtoActionMetadataCatalog
         "transformskipplacementpush",
         "triggerafteridle",
         "volleymode",
-        "unintentionaldamagemultiplier",
         "workonabductedunits",
         "workonchaosunits",
         "workonfrozenunits",
@@ -485,7 +491,7 @@ public static class ProtoActionMetadataCatalog
             HiddenByDefaultTags: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["attackaction", "nevercontrolaction"]),
         ["Gather"] = new ProtoActionTypeEditorProfile(
-            DefaultVisibleTags: ["dropsitegathering", "anim", "maxrange", "rate", "typedanim", "typedmaxrange"],
+            DefaultVisibleTags: ["dropsitegathering", "maxrange", "rate", "typedanim", "typedmaxrange"],
             HiddenByDefaultTags: new HashSet<string>(["rof", "damage", "damagebonus"], StringComparer.OrdinalIgnoreCase),
             DefaultFlagTags: ["dropsitegathering"]),
         ["Attaching"] = new ProtoActionTypeEditorProfile(

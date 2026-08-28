@@ -14,7 +14,7 @@ public sealed class AbductActionPolishRegressionTests
         Assert.Contains("IsAbductActionType(actionType)", source, StringComparison.Ordinal);
         Assert.Contains("CreateLabeledFieldGroup(\"Duration (ms):\", durationEditor)", source, StringComparison.Ordinal);
         Assert.Contains("Content = \"Splash VFX Proto\"", source, StringComparison.Ordinal);
-        Assert.Contains("ConfigureStrictSuggestionAutoComplete(splashEditor, GetAvailableTrainUnitNames(), splashVfxProto);", source, StringComparison.Ordinal);
+        Assert.Contains("ConfigureUnitAnimationAutoComplete(splashEditor);", source, StringComparison.Ordinal);
         Assert.Contains("AddAnimationField(\"walkanim\", \"Walk anim\", \"Walk anim\");", source, StringComparison.Ordinal);
         Assert.Contains("AddAnimationField(\"idleanim\", \"Idle anim\", \"Idle anim\");", source, StringComparison.Ordinal);
     }
@@ -37,7 +37,7 @@ public sealed class AbductActionPolishRegressionTests
     {
         var source = ReadProtoEditorSource();
 
-        Assert.Contains("? GetTacticsEditorActions()", source, StringComparison.Ordinal);
+        Assert.Contains("_protoActionHostAdapter.LoadActions(unit)", source, StringComparison.Ordinal);
         Assert.Contains("EnsureLinkedCompanionsForAction", source, StringComparison.Ordinal);
         Assert.Contains("EnsureAbductDropCompanionForAction(primary);", source, StringComparison.Ordinal);
         Assert.Contains("standalone Tactics Manager", source, StringComparison.Ordinal);
@@ -109,7 +109,7 @@ public sealed class AbductActionPolishRegressionTests
     {
         var source = ReadProtoEditorSource();
 
-        Assert.Contains("_isTacticsActionEditorMode ? \"+ Add Action\" : \"Add Proto Action\"", source, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Add Proto Action\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("\"+ Add Proto Action\"", source, StringComparison.Ordinal);
     }
 

@@ -547,7 +547,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("AddActionUnitAmountDataEffectEditor(effect, content)", techCode, StringComparison.Ordinal);
         Assert.Contains("ItemsSource = new[] { \"Add\", \"Multiply\", \"Multiply base\", \"Set to\" }", techCode, StringComparison.Ordinal);
         Assert.Contains("Width = 132", techCode, StringComparison.Ordinal);
-        Assert.Contains("Content = \"Ignore Nature\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Not Nature\"", techCode, StringComparison.Ordinal);
         Assert.Contains("SetCaseInsensitiveAttribute(currentTarget, \"ignoreNature\", \"\")", techCode, StringComparison.Ordinal);
         Assert.Contains("CreateDataActionSelector", techCode, StringComparison.Ordinal);
         Assert.Contains("new[] { \"All\" }", techCode, StringComparison.Ordinal);
@@ -597,6 +597,39 @@ public sealed class TechnologyPhase1RegressionTests
     }
 
     [Fact]
+    public void TechnologyEditor_DataRound6StructuresCommandDamageFlagsShadingAndChargedModifyEffects()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var constantsCode = File.ReadAllText(Path.Combine(root, "Classes", "ProtoConstants.cs"));
+
+        Assert.Contains("ChargedModifyAdjustDataSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddChargedModifyAdjustDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownModifyTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("CommandDataSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddCommandDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Unit\", \"Tech\", \"Command\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("_protoUnitCommandNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetAvailableCommandNames());", windowCode, StringComparison.Ordinal);
+        Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"row\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"column\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddDamageByCostDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateResourceCombo(effect, \"resource\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddDamageFlagsDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("KnownDamageAreaTargetFlags", constantsCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownDamageAreaTargetFlags", techCode, StringComparison.Ordinal);
+        Assert.Contains("EnsureExactDataAttribute(effect, \"amount\", \"1\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("EnsureExactDataAttribute(effect, \"relativity\", \"Assign\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddDamageShadingDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownShadingTypeDisplayNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.GetShadingTypeXmlValue(selected)", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitNumericKind.ClampZeroToOne", techCode, StringComparison.Ordinal);
+        Assert.Contains("EnsureExactDataAttribute(effect, \"relativity\", \"Percent\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateLabeledEffectSegment(\"Interval (ms)\"", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TechnologyEditor_CloseAfterDiscardBypassesRepeatedDirtyPrompt()
     {
         var root = FindProjectRoot();
@@ -620,6 +653,77 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.DoesNotContain("leftSpacing: 16", techCode, StringComparison.Ordinal);
         Assert.DoesNotContain("new Thickness(12, 4, 8, 4)", techCode, StringComparison.Ordinal);
         Assert.DoesNotContain("new Thickness(16, 4, 8, 4)", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_DataRound7StructuresFlagsLifespanMinWorkRateAndReplacement()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var constantsCode = File.ReadAllText(Path.Combine(root, "Classes", "ProtoConstants.cs"));
+
+        Assert.Contains("Content = \"Not Nature\"", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content = \"Ignore Nature\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("Width = 110", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Enable\", \"Flag\", \"FullCapacityMultiplier\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitFlagDataSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"ProtoUnitFlag\", \"Flag\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownFlags", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoActionFlagDataSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoActionMetadataCatalog.GetKnownFlagTags()", techCode, StringComparison.Ordinal);
+        Assert.Contains("Update lifespan as percent", techCode, StringComparison.Ordinal);
+        Assert.Contains("updateLifespanAsPercent", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddMinWorkRateDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Unit\", \"Resource\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateResourceValueCombo(effect, \"unittype\")", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddModifyReplacementDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownReplacementTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("public static readonly string[] KnownReplacementTypes", constantsCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("private static readonly string[] KnownReplacementTypes", windowCode, StringComparison.Ordinal);
+        Assert.Contains("Math.Clamp(parsed, 0d, 1d)", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_DataRound8StructuresSpawnDamageProjectileRechargeSelfDestructSetUnitTypeAndWorkRate()
+    {
+        var root = FindProjectRoot();
+        var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var constantsCode = File.ReadAllText(Path.Combine(root, "Classes", "ProtoConstants.cs"));
+
+        Assert.Contains("CreateLabeledEffectSegment(\"Type\", CreateStrictEffectSelector(", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownReplacementTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("            150), leftSpacing: 8));", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("ModifySpawnDataSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddModifySpawnDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddOptionalEffectAttribute(row, effect, \"Chance\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddOptionalEffectAttribute(row, effect, \"Lifespan\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("new[] { \"Default\", \"TerrainOnly\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownSpawnTypes", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("AddOnDamageModifyDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("currentModifyType is \"DamageSpecific\" or \"ArmorSpecific\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateRequiredDataTypeCombo", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownDamageTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownArmorTypes", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("AddProjectileDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddRechargeTypeDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("(new[] { \"Time\" }).Concat(ProtoConstants.KnownRechargeTypes)", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSelfDestructProtoActionDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"protoaction\"", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddSetUnitTypeDataEffectEditor", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownUnitTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("\"MinWorkRate\", \"WorkRate\"", techCode, StringComparison.Ordinal);
+
+        Assert.Contains("public static readonly string[] KnownSpawnTypes", constantsCode, StringComparison.Ordinal);
+        Assert.Contains("public static readonly string[] KnownRechargeTypes", constantsCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("private static readonly string[] KnownSpawnTypes", windowCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("private static readonly string[] KnownRechargeTypes", windowCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownSpawnTypes", windowCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoConstants.KnownRechargeTypes", windowCode, StringComparison.Ordinal);
     }
 
     private static string FindProjectRoot()

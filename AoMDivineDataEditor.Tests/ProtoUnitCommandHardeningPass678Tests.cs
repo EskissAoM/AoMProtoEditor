@@ -69,6 +69,20 @@ public sealed class ProtoUnitCommandHardeningPass678Tests
     }
 
     [Fact]
+    public void UniqueTransformAssignment_IsShownAsAnImmediateManagedStatsReference()
+    {
+        var root = FindProjectRoot();
+        var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("[\"transformcommand\"] = \"Transform Command\"", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("RefreshTransformCommandStatsReference", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("SyncManagedProtoActionStatsEditor(\"transformcommand\", uniqueCommandName);", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("tag.Equals(\"transformcommand\", StringComparison.OrdinalIgnoreCase)", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("This reference is managed automatically by the unique Transform command.", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("!x.Equals(\"transformcommand\", StringComparison.OrdinalIgnoreCase)", protoEditor, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CommandStringCleanupFailures_AreReportedInsteadOfSilentlyIgnored()
     {
         var root = FindProjectRoot();

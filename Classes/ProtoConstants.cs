@@ -52,6 +52,24 @@ public static class ProtoConstants
     ];
 
     public static readonly string[] KnownResourceTypes = ["Food", "Wood", "Gold", "Favor"];
+    public static readonly string[] KnownDamageAreaTargetFlags = ["Enemy", "Nature", "Ally", "Self"];
+    public static readonly string[] KnownShadingTypes = ["bronze", "stone", "frost", "burning", "gold", "clay", "sand", "cocoon", "undead", "blood"];
+    public static readonly string[] KnownShadingTypeDisplayNames = KnownShadingTypes
+        .Select(value => char.ToUpperInvariant(value[0]) + value[1..])
+        .ToArray();
+
+    public static string GetShadingTypeDisplayName(string? value)
+        => KnownShadingTypeDisplayNames.FirstOrDefault(candidate => candidate.Equals(value?.Trim(), StringComparison.OrdinalIgnoreCase))
+           ?? value?.Trim()
+           ?? "";
+
+    public static string GetShadingTypeXmlValue(string? value)
+        => KnownShadingTypes.FirstOrDefault(candidate => candidate.Equals(value?.Trim(), StringComparison.OrdinalIgnoreCase))
+           ?? value?.Trim()
+           ?? "";
+    public static readonly string[] KnownReplacementTypes = ["dead", "killed", "birth", "build", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
+    public static readonly string[] KnownSpawnTypes = ["dead", "killed", "birth", "build", "mutate", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
+    public static readonly string[] KnownRechargeTypes = ["Kills", "Damage", "Attacks", "resourceDropoff"];
     public static readonly string[] KnownArmorTypes    = ["Hack", "Pierce", "Crush"];
     public static readonly string[] KnownDamageTypes   = ["Hack", "Pierce", "Crush", "Divine"];
     public static readonly string[] KnownModifyTypes =

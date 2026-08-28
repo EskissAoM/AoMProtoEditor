@@ -36,7 +36,7 @@ public static class EditorAutoCompleteService
             selectedAllForCurrentFocus = true;
             Dispatcher.UIThread.Post(() =>
             {
-                if (!autoCompleteBox.IsEnabled)
+                if (Busy() || !autoCompleteBox.IsEnabled)
                     return;
 
                 var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
@@ -142,6 +142,9 @@ public static class EditorAutoCompleteService
 
             Dispatcher.UIThread.Post(() =>
             {
+                if (isBusy?.Invoke() == true)
+                    return;
+
                 var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
                 if (textEditor != null)
                 {
@@ -179,6 +182,9 @@ public static class EditorAutoCompleteService
             {
                 try
                 {
+                    if (isBusy?.Invoke() == true)
+                        return;
+
                     if (!string.Equals(autoCompleteBox.Text, selectedValue, StringComparison.Ordinal))
                         autoCompleteBox.Text = selectedValue;
                     valueCommitted?.Invoke(selectedValue);

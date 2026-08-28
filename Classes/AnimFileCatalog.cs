@@ -81,6 +81,32 @@ public static class AnimFileCatalog
         }
     }
 
+    /// <summary>
+    /// Resolves both archive-relative paths and the short file references used by
+    /// a number of stock ProtoUnits. A short name is accepted only when it is
+    /// unambiguous within the supplied catalog.
+    /// </summary>
+    internal static AnimFileCatalogEntry? ResolveReference(
+        IEnumerable<AnimFileCatalogEntry> entries,
+        string? reference)
+    {
+        var normalized = reference?.Trim().Replace('/', '\\') ?? "";
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        var catalog = entries as IReadOnlyList<AnimFileCatalogEntry> ?? entries.ToList();
+        var exact = catalog.FirstOrDefault(entry =>
+            entry.Path.Replace('/', '\\').Equals(normalized, StringComparison.OrdinalIgnoreCase));
+        if (exact != null || normalized.Contains('\\'))
+            return exact;
+
+        var fileMatches = catalog
+            .Where(entry => GetFileName(entry.Path).Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return fileMatches.Count == 1 ? fileMatches[0] : null;
+    }
+
     internal static bool ShouldScanArchive(string archivePath)
         => !ExcludedArchiveNames.Contains(System.IO.Path.GetFileName(archivePath));
 

@@ -161,10 +161,11 @@ public sealed class NavigationRegressionTests
     }
 
     [Fact]
-    public void OtherSpecificAutocomplete_KeepsContainsFilteringAndDoesNotInterceptPopupScrolling()
+    public void OtherSpecificAutocomplete_UsesSharedAnchoredPopupScrolling()
     {
         var root = FindProjectRoot();
         var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var autoCompleteCode = File.ReadAllText(Path.Combine(root, "Classes", "EditorAutoCompleteService.cs"));
 
         var helper = Regex.Match(code,
             @"AutoCompleteBox CreateOtherSuggestionBox\(.*?(?=\n\s*AutoCompleteBox CreateValidatedOtherSuggestionBox)",
@@ -173,12 +174,9 @@ public sealed class NavigationRegressionTests
         Assert.True(helper.Success, "Could not find the Other Specific autocomplete helper.");
         Assert.Contains("FilterMode = AutoCompleteFilterMode.Contains", helper.Value, StringComparison.Ordinal);
         Assert.Contains("selectAllOnFirstClick: false", helper.Value, StringComparison.Ordinal);
-        Assert.Contains("PointerWheelChangedEvent", helper.Value, StringComparison.Ordinal);
-        Assert.Contains("sourceIsInsideEditor", helper.Value, StringComparison.Ordinal);
-        Assert.Contains("GetVisualAncestors()", helper.Value, StringComparison.Ordinal);
-        Assert.Contains("args.Handled = true", helper.Value, StringComparison.Ordinal);
-        Assert.DoesNotContain("acb.IsDropDownOpen = false", helper.Value, StringComparison.Ordinal);
-        Assert.DoesNotContain("ScrollChanged +=", helper.Value, StringComparison.Ordinal);
+        Assert.Contains("FreezeEditorScrollWhileDropDownIsOpen(acb, _editorScroll);", helper.Value, StringComparison.Ordinal);
+        Assert.Contains("autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("KeepDropDownAnchoredDuringOwnerScroll", autoCompleteCode, StringComparison.Ordinal);
     }
 
     private static void AssertHandlerCalls(string code, string handler, string target)
