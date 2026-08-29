@@ -31,6 +31,12 @@ namespace AoMDivineDataEditor.Windows;
 
 public partial class ProtoEditorWindow : SimpleWindow
 {
+    private enum EditorEntityKind
+    {
+        Units,
+        Technologies
+    }
+
     private enum NewCustomUnitKind
     {
         Unit,
@@ -133,6 +139,14 @@ public partial class ProtoEditorWindow : SimpleWindow
     private ProtoActionWidgetState? _activeProtoActionRenderState;
     private string? _currentUnitName;
     private bool _isReadOnly;
+    private EditorEntityKind _activeEntityKind = EditorEntityKind.Units;
+    private readonly ObservableCollection<TabStripItem> _documentTabItems = [];
+    private readonly List<EditorDocumentTabState> _openDocumentTabs = [];
+    private EditorDocumentTabState? _mainDocumentTab;
+    private EditorDocumentTabState? _activeDocumentTab;
+    private bool _suppressDocumentTabSelection;
+    private bool _documentTabActivationInProgress;
+    private bool _entitySourceChangeInProgress;
     private IProtoActionEditorHostAdapter _protoActionHostAdapter = new ProtoUnitActionEditorHostAdapter();
     private bool _allowCloseAfterDiscard;
     private TacticsActionEditorSession? _tacticsEditorSession;
@@ -154,6 +168,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     private Func<Task<bool>>? _commitAbilityEditorNameBeforeSaveAsync;
     private bool _abilityMainSavePointerPending;
     private readonly Dictionary<string, TextBox> _abilityRechargeValueEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ComboBox> _abilityRechargeModeEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CheckBox> _abilityRechargeStartChargedEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ComboBox> _statsRechargeModeEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextBox> _statsRechargeValueEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CheckBox> _statsRechargeStartChargedEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Button> _statsRechargeRemoveButtons = new(StringComparer.OrdinalIgnoreCase);
+    private bool _syncingSharedRechargeEditors;
     private TextBox? _abilityRangeIndicatorRangeEditorForValidation;
 
     private enum OptionalBoolean
@@ -219,17 +240,23 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> _allCurrentNames = [];
     private readonly ObservableCollectionExtended<UnitListItem> _filteredUnitNames = [];
-    private readonly ObservableCollectionExtended<string> _categoryFilterItems = [];
-    private readonly List<string> _categories = [];
-    private readonly Dictionary<string, string> _unitCategories = new(StringComparer.OrdinalIgnoreCase);
-    private string? _categoriesModPath;
 
-    private sealed class UnitListItem(string? unitName, string displayName, bool isCategoryHeader = false)
+    private sealed class UnitListItem(string? unitName, string displayName)
     {
         public string? UnitName { get; } = unitName;
         public string DisplayName { get; } = displayName;
-        public bool IsCategoryHeader { get; } = isCategoryHeader;
         public override string ToString() => DisplayName;
+    }
+
+    private sealed class EditorDocumentTabState
+    {
+        public bool IsMain { get; init; }
+        public EditorEntityKind EntityKind { get; set; } = EditorEntityKind.Units;
+        public bool IsModified { get; set; }
+        public string? EntityName { get; set; }
+        public XElement? SavedElement { get; set; }
+        public required TabStripItem TabItem { get; init; }
+        public required TextBlock TitleText { get; init; }
     }
 
     private readonly Dictionary<string, Control> _fieldControls = new(StringComparer.OrdinalIgnoreCase);
@@ -243,6 +270,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly HashSet<string> _pendingUnitStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _pendingUnitRenames = new(StringComparer.OrdinalIgnoreCase);
     private bool _unitSelectionChangeInProgress;
+    private Task _unitSelectionChangeTask = Task.CompletedTask;
+    private string? _lastEntityPointerPressName;
+    private EditorEntityKind _lastEntityPointerPressKind;
+    private bool _lastEntityPointerPressIsModified;
+    private ulong _lastEntityPointerPressTimestamp;
+    private const int EntitySecondClickWindowMilliseconds = 500;
     private bool _isUnitSaveInProgress;
     private readonly Dictionary<string, TextBox> _costControls = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBox> _armorControls = new(StringComparer.OrdinalIgnoreCase);
@@ -260,6 +293,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private HashSet<string>? _currentFlags;
     private HashSet<string>? _currentContains;
     private HashSet<string>? _currentNotContains;
+    private CheckBox? _containEjectCommandCheckBox;
+    private Action<ProtoCommandEntry>? _addUnitCommandRow;
+    private Action<string>? _removeUnitCommandRows;
+    private bool _syncingContainEjectCommand;
+    private bool _containRemovedDuringEdit;
     private HashSet<string>? _currentSharedSelectionUnitTypes;
     private HashSet<string>? _currentRechargeIncludeTypes;
     private HashSet<string>? _currentRechargeExcludeTypes;
@@ -838,10 +876,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         InitializePageSearch();
         InitializeXmlPreview();
         InitializeEditorTabs();
+        InitializeDocumentTabs();
 
         _unitList.ItemsSource = _filteredUnitNames;
-        _categoryFilter.ItemsSource = _categoryFilterItems;
-        RefreshCategoryFilterItems();
+        // Detect the second click from raw pointer timestamps. Unit editor loading can
+        // delay higher-level tap gestures, while technology loading is nearly instant.
+        // Handling both categories here gives them identical double-click behavior.
+        _unitList.AddHandler(
+            InputElement.PointerPressedEvent,
+            UnitList_PointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
 
         if (initializeProtoEditor)
         {
@@ -2210,6 +2255,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void ConfigureTacticsActionEditorChrome(bool isBuiltIn)
     {
         _expandedXmlPreviewWidth = new GridLength(3, GridUnitType.Star);
+        _documentTabsHost.IsVisible = false;
         _unitListPanel.IsVisible = false;
         _unitListSplitter.IsVisible = false;
         _previewSplitter.IsVisible = true;
@@ -2268,6 +2314,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void ConfigureAbilityDefinitionEditorChrome(bool isBuiltIn)
     {
         _expandedXmlPreviewWidth = new GridLength(3, GridUnitType.Star);
+        _documentTabsHost.IsVisible = false;
         _unitListPanel.IsVisible = false;
         _unitListSplitter.IsVisible = false;
         _previewSplitter.IsVisible = true;
@@ -2770,12 +2817,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             await ShowStartupLoadingAsync("Loading unit list...");
             await EnsureInitialModSelectionAsync();
             RefreshUnitList();
-
-            if (_barData != null)
-            {
-                await ShowStartupLoadingAsync("Preparing first unit...");
-                await PreloadInitialVisibleUnitAsync();
-            }
+            ShowEmptyDocumentState(EditorEntityKind.Units);
         }
         finally
         {
@@ -2793,32 +2835,6 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void HideStartupLoading()
     {
         _startupLoadingOverlay.IsVisible = false;
-    }
-
-    private async Task PreloadInitialVisibleUnitAsync()
-    {
-        var selectedName = (_unitList.SelectedItem as UnitListItem)?.UnitName;
-        var initialUnitName = !string.IsNullOrWhiteSpace(selectedName) &&
-                              _filteredUnitNames.Any(item => string.Equals(item.UnitName, selectedName, StringComparison.OrdinalIgnoreCase))
-            ? selectedName
-            : _filteredUnitNames.FirstOrDefault(item => item.UnitName != null)?.UnitName;
-
-        if (string.IsNullOrWhiteSpace(initialUnitName))
-            return;
-
-        var initialItem = _filteredUnitNames.FirstOrDefault(item => string.Equals(item.UnitName, initialUnitName, StringComparison.OrdinalIgnoreCase));
-        if (initialItem == null)
-            return;
-        _unitList.ScrollIntoView(initialItem);
-        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Render);
-
-        if (!string.Equals((_unitList.SelectedItem as UnitListItem)?.UnitName, initialUnitName, StringComparison.OrdinalIgnoreCase))
-        {
-            _unitList.SelectedItem = initialItem;
-            return;
-        }
-
-        BuildEditorPanel(initialUnitName);
     }
 
     private async Task EnsureInitialModSelectionAsync()
@@ -3138,14 +3154,509 @@ public partial class ProtoEditorWindow : SimpleWindow
         _pendingUnitRenameRemovedStringIds.Clear();
     }
 
+    private void InitializeDocumentTabs()
+    {
+        _documentTabs.ItemsSource = _documentTabItems;
+        _mainDocumentTab = CreateDocumentTab(isMain: true, EditorEntityKind.Units, isModified: false, entityName: null);
+        _openDocumentTabs.Add(_mainDocumentTab);
+        _documentTabItems.Add(_mainDocumentTab.TabItem);
+        _activeDocumentTab = _mainDocumentTab;
+        _documentTabs.SelectedItem = _mainDocumentTab.TabItem;
+        RefreshDocumentTabHeaders();
+    }
+
+    private EditorDocumentTabState CreateDocumentTab(
+        bool isMain,
+        EditorEntityKind entityKind,
+        bool isModified,
+        string? entityName)
+    {
+        var title = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            FontSize = 13,
+            MaxWidth = 170
+        };
+        var header = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        header.Children.Add(title);
+
+        var item = new TabStripItem { Classes = { "documentTab" }, Content = header };
+        var state = new EditorDocumentTabState
+        {
+            IsMain = isMain,
+            EntityKind = entityKind,
+            IsModified = isModified,
+            EntityName = entityName,
+            TabItem = item,
+            TitleText = title
+        };
+
+        if (!isMain)
+        {
+            var closeButton = new Button
+            {
+                Content = "×",
+                Padding = new Thickness(4, 0),
+                MinWidth = 20,
+                MinHeight = 20,
+                Background = Brushes.Transparent
+            };
+            ToolTip.SetTip(closeButton, "Close tab");
+            closeButton.Click += async (_, eventArgs) =>
+            {
+                eventArgs.Handled = true;
+                await CloseDocumentTabAsync(state);
+            };
+            header.Children.Add(closeButton);
+        }
+
+        return state;
+    }
+
+    private void RefreshDocumentTabHeaders()
+    {
+        foreach (var tab in _openDocumentTabs)
+        {
+            var kind = tab.EntityKind == EditorEntityKind.Units ? "Unit" : "Tech";
+            var source = tab.IsModified ? "Custom" : "Original";
+            var target = string.IsNullOrWhiteSpace(tab.EntityName)
+                ? tab.IsMain ? "Main" : kind
+                : $"{kind}: {tab.EntityName} ({source})";
+            var isDirty = IsDocumentTabDirty(tab);
+            tab.TitleText.Text = isDirty ? target + " *" : target;
+            var tooltip = string.IsNullOrWhiteSpace(tab.EntityName)
+                ? "Main editor tab"
+                : target + (tab.IsMain ? "\nMain editor tab" : "");
+            if (isDirty)
+                tooltip += "\nPending save — close this tab to cancel its changes.";
+            ToolTip.SetTip(tab.TabItem, tooltip);
+        }
+    }
+
+    private bool IsDocumentTabDirty(EditorDocumentTabState tab)
+    {
+        if (!tab.IsModified || string.IsNullOrWhiteSpace(tab.EntityName))
+            return false;
+
+        return tab.EntityKind == EditorEntityKind.Units
+            ? _dirtyUnitNames.Contains(tab.EntityName)
+            : _technologyView?.IsTechnologyDirty(tab.EntityName) == true;
+    }
+
+    private static HashSet<string> CollectUnitOwnedStringIds(string unitName, XElement? unit)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in StringBackedFieldTags)
+        {
+            var existingId = unit == null ? null : ProtoXmlHandler.GetSimpleField(unit, tag);
+            if (!string.IsNullOrWhiteSpace(existingId))
+                ids.Add(existingId);
+            ids.Add(BuildStringIdForUnit(unitName, GetStringSuffixForField(tag)));
+        }
+        return ids;
+    }
+
+    private void DiscardUnitDocumentChanges(EditorDocumentTabState tab)
+    {
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(tab.EntityName))
+            return;
+
+        var currentName = tab.EntityName;
+        var savedElement = tab.SavedElement == null ? null : new XElement(tab.SavedElement);
+        var savedName = savedElement?.Attribute("name")?.Value?.Trim();
+        if (string.IsNullOrWhiteSpace(savedName))
+            savedName = currentName;
+
+        var currentElement = ProtoXmlHandler.GetUnitElement(_modXmlRoot, currentName);
+        var affectedStringIds = CollectUnitOwnedStringIds(currentName, currentElement);
+        affectedStringIds.UnionWith(CollectUnitOwnedStringIds(savedName, savedElement));
+
+        if (currentElement != null)
+        {
+            if (savedElement != null)
+                currentElement.ReplaceWith(savedElement);
+            else
+                currentElement.Remove();
+        }
+        else if (savedElement != null)
+        {
+            _modXmlRoot.Add(savedElement);
+        }
+
+        _dirtyUnitNames.Remove(currentName);
+        _dirtyUnitNames.Remove(savedName);
+        _unitAbilityDrafts.Remove(currentName);
+        _unitAbilityDrafts.Remove(savedName);
+        _duplicatedUnitRechargeFallbacks.Remove(currentName);
+        _duplicatedUnitRechargeFallbacks.Remove(savedName);
+
+        foreach (var rename in _pendingUnitRenames.Where(entry =>
+                     entry.Key.Equals(savedName, StringComparison.OrdinalIgnoreCase) ||
+                     entry.Value.Equals(currentName, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            _pendingUnitRenames.Remove(rename.Key);
+        }
+
+        foreach (var id in affectedStringIds)
+        {
+            if (IsUnitStringIdOwnedByAnotherDirtyDocument(id, currentName, savedName))
+                continue;
+            _pendingUnitStringUpdates.Remove(id);
+            _pendingUnitStringRemovals.Remove(id);
+            _pendingUnitRenameRemovedStringIds.Remove(id);
+        }
+
+        _isDirty = _dirtyUnitNames.Count > 0;
+        InvalidateSuggestionCaches();
+    }
+
+    private bool IsUnitStringIdOwnedByAnotherDirtyDocument(
+        string stringId,
+        string discardedName,
+        string restoredName)
+    {
+        if (_modXmlRoot == null)
+            return false;
+
+        foreach (var dirtyName in _dirtyUnitNames)
+        {
+            if (dirtyName.Equals(discardedName, StringComparison.OrdinalIgnoreCase) ||
+                dirtyName.Equals(restoredName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var unit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, dirtyName);
+            if (CollectUnitOwnedStringIds(dirtyName, unit).Contains(stringId))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void SetMainDocumentTarget(EditorEntityKind entityKind, bool isModified, string? entityName)
+    {
+        if (_mainDocumentTab == null)
+            return;
+
+        _mainDocumentTab.EntityKind = entityKind;
+        _mainDocumentTab.IsModified = isModified;
+        _mainDocumentTab.EntityName = entityName;
+        _mainDocumentTab.SavedElement = !isModified || string.IsNullOrWhiteSpace(entityName)
+            ? null
+            : entityKind == EditorEntityKind.Units
+                ? LoadSavedUnitElement(entityName)
+                : _technologyView?.LoadSavedTechnologyElement(entityName);
+        SelectDocumentTabWithoutActivation(_mainDocumentTab);
+        _activeDocumentTab = _mainDocumentTab;
+        if (string.IsNullOrWhiteSpace(entityName))
+            ShowEmptyDocumentState(entityKind);
+        else
+            _emptyDocumentOverlay.IsVisible = false;
+        RefreshDocumentTabHeaders();
+    }
+
+    private void ShowEmptyDocumentState(EditorEntityKind entityKind)
+    {
+        _emptyDocumentMessage.Text = entityKind == EditorEntityKind.Technologies
+            ? "Click on a technology to start"
+            : "Click on a unit to start";
+        _emptyDocumentOverlay.IsVisible = true;
+
+        _suppressUnitListSelectionChange = true;
+        try
+        {
+            _unitList.SelectedItem = null;
+        }
+        finally
+        {
+            _suppressUnitListSelectionChange = false;
+        }
+
+        if (entityKind == EditorEntityKind.Technologies)
+        {
+            _technologyView?.SelectTechnology(null);
+        }
+        else
+        {
+            _currentUnitName = null;
+            ClearEditorPanels();
+            _xmlPreviewText.Text = "";
+        }
+    }
+
+    private void RenameOpenDocumentTabs(EditorEntityKind entityKind, string oldName, string newName)
+    {
+        foreach (var tab in _openDocumentTabs.Where(tab =>
+                     tab.EntityKind == entityKind &&
+                     tab.IsModified &&
+                     string.Equals(tab.EntityName, oldName, StringComparison.OrdinalIgnoreCase)))
+        {
+            tab.EntityName = newName;
+        }
+        RefreshDocumentTabHeaders();
+    }
+
+    private void RemoveDeletedDocumentTabs(EditorEntityKind entityKind, string entityName)
+    {
+        foreach (var tab in _openDocumentTabs.Where(tab =>
+                     !tab.IsMain &&
+                     tab.EntityKind == entityKind &&
+                     string.Equals(tab.EntityName, entityName, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            _openDocumentTabs.Remove(tab);
+            _documentTabItems.Remove(tab.TabItem);
+        }
+
+        if (_mainDocumentTab?.EntityKind == entityKind &&
+            string.Equals(_mainDocumentTab.EntityName, entityName, StringComparison.OrdinalIgnoreCase))
+        {
+            _mainDocumentTab.EntityName = null;
+        }
+        _activeDocumentTab = _mainDocumentTab;
+        if (_mainDocumentTab != null)
+            SelectDocumentTabWithoutActivation(_mainDocumentTab);
+        RefreshDocumentTabHeaders();
+    }
+
+    private void SelectDocumentTabWithoutActivation(EditorDocumentTabState tab)
+    {
+        _suppressDocumentTabSelection = true;
+        try
+        {
+            _documentTabs.SelectedItem = tab.TabItem;
+        }
+        finally
+        {
+            _suppressDocumentTabSelection = false;
+        }
+    }
+
+    private EditorDocumentTabState? FindPinnedDocumentTab(
+        EditorEntityKind entityKind,
+        bool isModified,
+        string entityName)
+        => _openDocumentTabs.FirstOrDefault(tab =>
+            !tab.IsMain &&
+            tab.EntityKind == entityKind &&
+            tab.IsModified == isModified &&
+            string.Equals(tab.EntityName, entityName, StringComparison.OrdinalIgnoreCase));
+
+    private XElement? LoadSavedUnitElement(string unitName)
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath) || !File.Exists(_modFilePath))
+            return null;
+
+        var savedName = _pendingUnitRenames.FirstOrDefault(entry =>
+            entry.Value.Equals(unitName, StringComparison.OrdinalIgnoreCase)).Key;
+        if (string.IsNullOrWhiteSpace(savedName))
+            savedName = unitName;
+
+        try
+        {
+            var (_, root) = ProtoXmlHandler.ParseProtoXml(_modFilePath);
+            var unit = ProtoXmlHandler.GetUnitElement(root, savedName);
+            return unit == null ? null : new XElement(unit);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task OpenPinnedDocumentTabAsync(string entityName)
+    {
+        var isModified = _unitTabs.SelectedIndex == 1;
+        var existing = FindPinnedDocumentTab(_activeEntityKind, isModified, entityName);
+        if (existing != null)
+        {
+            _documentTabs.SelectedItem = existing.TabItem;
+            return;
+        }
+
+        var tab = CreateDocumentTab(false, _activeEntityKind, isModified, entityName);
+        if (isModified)
+        {
+            tab.SavedElement = _activeEntityKind == EditorEntityKind.Units
+                ? LoadSavedUnitElement(entityName)
+                : _technologyView?.LoadSavedTechnologyElement(entityName);
+        }
+
+        if (_mainDocumentTab?.EntityKind == _activeEntityKind &&
+            _mainDocumentTab.IsModified == isModified &&
+            string.Equals(_mainDocumentTab.EntityName, entityName, StringComparison.OrdinalIgnoreCase))
+        {
+            _mainDocumentTab.EntityName = null;
+        }
+        _openDocumentTabs.Add(tab);
+        _documentTabItems.Add(tab.TabItem);
+        RefreshDocumentTabHeaders();
+        _documentTabs.SelectedItem = tab.TabItem;
+        await Task.CompletedTask;
+    }
+
+    private async Task CloseDocumentTabAsync(EditorDocumentTabState tab)
+    {
+        if (tab.IsMain)
+            return;
+
+        if (ReferenceEquals(_activeDocumentTab, tab) &&
+            tab.EntityKind == EditorEntityKind.Technologies &&
+            _technologyView != null &&
+            !await _technologyView.CommitCurrentTechnologyAsync())
+            return;
+
+        if (IsDocumentTabDirty(tab))
+        {
+            var prompt = new Prompt(
+                PromptType.Confirm,
+                "Unsaved tab",
+                $"'{tab.EntityName}' has unsaved changes. Discard those changes and close this tab?",
+                confirmButtonText: "Discard & close");
+            await prompt.ShowDialog(this);
+            if (!prompt.Confirmed)
+                return;
+
+            if (tab.EntityKind == EditorEntityKind.Units)
+                DiscardUnitDocumentChanges(tab);
+            else if (_technologyView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
+                _technologyView.DiscardTechnologyChanges(tab.EntityName, tab.SavedElement);
+        }
+
+        var wasActive = ReferenceEquals(_activeDocumentTab, tab);
+        _openDocumentTabs.Remove(tab);
+        _documentTabItems.Remove(tab.TabItem);
+        if (wasActive && _mainDocumentTab != null)
+        {
+            _documentTabs.SelectedItem = _mainDocumentTab.TabItem;
+        }
+        RefreshDocumentTabHeaders();
+    }
+
+    private async void DocumentTabs_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_documentTabs is null || _suppressDocumentTabSelection)
+            return;
+        if (_documentTabActivationInProgress)
+        {
+            if (_activeDocumentTab != null)
+                SelectDocumentTabWithoutActivation(_activeDocumentTab);
+            return;
+        }
+        if (_documentTabs.SelectedItem is not TabStripItem selectedItem)
+            return;
+
+        var target = _openDocumentTabs.FirstOrDefault(tab => ReferenceEquals(tab.TabItem, selectedItem));
+        if (target == null || ReferenceEquals(target, _activeDocumentTab))
+            return;
+
+        await ActivateDocumentTabAsync(target);
+    }
+
+    private async Task ActivateDocumentTabAsync(EditorDocumentTabState target)
+    {
+        if (_documentTabActivationInProgress)
+            return;
+
+        var previous = _activeDocumentTab;
+        _documentTabActivationInProgress = true;
+        var tabsWereEnabled = _documentTabs.IsEnabled;
+        var saveWasEnabled = _saveButton.IsEnabled;
+        _documentTabs.IsEnabled = false;
+        _saveButton.IsEnabled = false;
+        try
+        {
+            if (_activeEntityKind == EditorEntityKind.Units && !await CaptureCurrentUnitDraftAsync())
+            {
+                if (previous != null)
+                    SelectDocumentTabWithoutActivation(previous);
+                return;
+            }
+            if (_activeEntityKind == EditorEntityKind.Technologies &&
+                _technologyView != null &&
+                !await _technologyView.CommitCurrentTechnologyAsync())
+            {
+                if (previous != null)
+                    SelectDocumentTabWithoutActivation(previous);
+                return;
+            }
+
+            _activeDocumentTab = target;
+            if (string.IsNullOrWhiteSpace(target.EntityName))
+            {
+                ApplyEntityKindUi(target.EntityKind);
+                RefreshUnitList();
+                ShowEmptyDocumentState(target.EntityKind);
+                return;
+            }
+
+            _emptyDocumentOverlay.IsVisible = false;
+            ApplyEntityKindUi(target.EntityKind);
+            _unitTabs.SelectedIndex = target.IsModified ? 1 : 0;
+            if (target.EntityKind == EditorEntityKind.Technologies)
+                _technologyView?.SetModifiedMode(target.IsModified);
+            RefreshUnitList();
+
+            _suppressUnitListSelectionChange = true;
+            try
+            {
+                _unitList.SelectedItem = _filteredUnitNames.FirstOrDefault(item =>
+                    string.Equals(item.UnitName, target.EntityName, StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                _suppressUnitListSelectionChange = false;
+            }
+
+            if (target.EntityKind == EditorEntityKind.Technologies)
+                _technologyView?.SelectTechnology(target.EntityName);
+            else
+                BuildEditorPanel(target.EntityName);
+        }
+        catch (Exception ex)
+        {
+            if (previous != null)
+                SelectDocumentTabWithoutActivation(previous);
+            await new Prompt(
+                PromptType.Error,
+                "Unable to switch tab",
+                $"The document could not be activated:\n{ex.Message}").ShowDialog(this);
+        }
+        finally
+        {
+            _documentTabActivationInProgress = false;
+            _documentTabs.IsEnabled = tabsWereEnabled;
+            _saveButton.IsEnabled = saveWasEnabled;
+            RefreshDocumentTabHeaders();
+        }
+    }
+
     private void RefreshUnitList()
     {
-        if (_barData == null) return;
+        // TabStrip raises its initial SelectionChanged while InitializeComponent
+        // is still assigning named controls. The shared browser is not ready yet.
+        if (_unitTabs is null)
+            return;
 
         var names = new List<string>();
         int selectedIndex = _unitTabs.SelectedIndex;
 
-        if (selectedIndex == 1) // Modified
+        if (_activeEntityKind == EditorEntityKind.Technologies)
+        {
+            if (_technologyView == null)
+                return;
+
+            names.AddRange(_technologyView.GetTechnologyNames(modified: selectedIndex == 1));
+        }
+        else if (_barData == null)
+        {
+            return;
+        }
+        else if (selectedIndex == 1) // Modified units
         {
             if (_modXmlRoot != null)
             {
@@ -3164,6 +3675,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _allCurrentNames = names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         FilterUnitList();
+        RestoreEntityBrowserSelection();
     }
 
     private void FilterUnitList()
@@ -3175,26 +3687,27 @@ public partial class ProtoEditorWindow : SimpleWindow
             ? _allCurrentNames
             : _allCurrentNames.Where(name => GetDisplayedUnitName(name).Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        bool showCategories = _unitTabs.SelectedIndex == 1;
-        if (showCategories)
-        {
-            var selectedCategory = _categoryFilter.SelectedItem as string ?? "All categories";
-            var grouped = selectedCategory == "All categories"
-                ? names.GroupBy(GetCategoryForUnit, StringComparer.OrdinalIgnoreCase)
-                : names.Where(name => string.Equals(GetCategoryForUnit(name), selectedCategory, StringComparison.OrdinalIgnoreCase))
-                    .GroupBy(GetCategoryForUnit, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var group in grouped.OrderBy(group => group.Key == "Uncategorized" ? "" : group.Key, StringComparer.OrdinalIgnoreCase))
-            {
-                _filteredUnitNames.Add(new UnitListItem(null, $"-- {group.Key} --", isCategoryHeader: true));
-                _filteredUnitNames.AddItems(group
-                    .OrderBy(GetDisplayedUnitName, StringComparer.OrdinalIgnoreCase)
-                    .Select(name => new UnitListItem(name, GetDisplayedUnitName(name))));
-            }
-            return;
-        }
-
         _filteredUnitNames.AddItems(names.Select(name => new UnitListItem(name, GetDisplayedUnitName(name))));
+    }
+
+    private void RestoreEntityBrowserSelection()
+    {
+        var selectedName = _activeEntityKind == EditorEntityKind.Technologies
+            ? _technologyView?.CurrentTechnologyName
+            : _currentUnitName;
+        if (string.IsNullOrWhiteSpace(selectedName))
+            return;
+
+        _suppressUnitListSelectionChange = true;
+        try
+        {
+            _unitList.SelectedItem = _filteredUnitNames.FirstOrDefault(item =>
+                string.Equals(item.UnitName, selectedName, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _suppressUnitListSelectionChange = false;
+        }
     }
 
     private string GetDisplayedUnitName(string unitName)
@@ -3211,189 +3724,449 @@ public partial class ProtoEditorWindow : SimpleWindow
         return unitName;
     }
 
-    private const string AllCategoriesFilter = "All categories";
-    private const string UncategorizedCategory = "Uncategorized";
-
-    private string GetCategoryForUnit(string unitName)
-    {
-        return _unitCategories.TryGetValue(unitName, out var category) &&
-               _categories.Contains(category, StringComparer.OrdinalIgnoreCase)
-            ? category
-            : UncategorizedCategory;
-    }
-
-    private void RefreshCategoryFilterItems()
-    {
-        var previousSelection = _categoryFilter.SelectedItem as string ?? AllCategoriesFilter;
-        _categoryFilterItems.Clear();
-        _categoryFilterItems.Add(AllCategoriesFilter);
-        _categoryFilterItems.Add(UncategorizedCategory);
-        _categoryFilterItems.AddItems(_categories.OrderBy(category => category, StringComparer.OrdinalIgnoreCase));
-
-        _categoryFilter.SelectedItem = _categoryFilterItems.FirstOrDefault(category =>
-            string.Equals(category, previousSelection, StringComparison.OrdinalIgnoreCase))
-            ?? AllCategoriesFilter;
-    }
-
-    private void LoadCategoriesForCurrentMod()
-    {
-        _categories.Clear();
-        _unitCategories.Clear();
-        _categoriesModPath = null;
-
-        if (string.IsNullOrWhiteSpace(_modFilePath))
-        {
-            RefreshCategoryFilterItems();
-            return;
-        }
-
-        var modPath = Path.GetFullPath(_modFilePath);
-        var settings = ProtoEditorSettings.LoadSettings();
-        if (settings.CategoriesByModPath?.TryGetValue(modPath, out var categoryData) == true)
-        {
-            _categories.AddRange(categoryData.Categories
-                .Select(category => category.Trim())
-                .Where(category => !string.IsNullOrWhiteSpace(category) &&
-                                   !string.Equals(category, AllCategoriesFilter, StringComparison.OrdinalIgnoreCase) &&
-                                   !string.Equals(category, UncategorizedCategory, StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase));
-
-            foreach (var assignment in categoryData.UnitCategories)
-            {
-                if (_categories.Contains(assignment.Value, StringComparer.OrdinalIgnoreCase))
-                    _unitCategories[assignment.Key] = assignment.Value;
-            }
-        }
-
-        _categoriesModPath = modPath;
-        RefreshCategoryFilterItems();
-    }
-
-    private void SaveCategoriesForCurrentMod()
-    {
-        if (string.IsNullOrWhiteSpace(_categoriesModPath))
-            return;
-
-        var settings = ProtoEditorSettings.LoadSettings();
-        settings.CategoriesByModPath ??= new Dictionary<string, ProtoEditorCategoryData>(StringComparer.OrdinalIgnoreCase);
-        settings.CategoriesByModPath[_categoriesModPath] = new ProtoEditorCategoryData
-        {
-            Categories = _categories.OrderBy(category => category, StringComparer.OrdinalIgnoreCase).ToList(),
-            UnitCategories = new Dictionary<string, string>(_unitCategories, StringComparer.OrdinalIgnoreCase)
-        };
-        ProtoEditorSettings.SaveSettings(settings);
-    }
-
-    private void MoveUnitCategoryAssignment(string oldName, string newName)
-    {
-        if (_unitCategories.Remove(oldName, out var category))
-        {
-            _unitCategories[newName] = category;
-            SaveCategoriesForCurrentMod();
-        }
-    }
-
-    private async void CreateCategory_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_modXmlRoot == null)
-            return;
-
-        var prompt = new InputPromptWindow("Enter a category name:");
-        await prompt.ShowDialog(this);
-        var category = prompt.InputText?.Trim();
-        if (string.IsNullOrWhiteSpace(category))
-            return;
-
-        if (string.Equals(category, AllCategoriesFilter, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(category, UncategorizedCategory, StringComparison.OrdinalIgnoreCase) ||
-            _categories.Contains(category, StringComparer.OrdinalIgnoreCase))
-        {
-            await new Prompt(PromptType.Error, "Category", $"'{category}' cannot be used because it already exists or is reserved.").ShowDialog(this);
-            return;
-        }
-
-        _categories.Add(category);
-        SaveCategoriesForCurrentMod();
-        RefreshCategoryFilterItems();
-        _categoryFilter.SelectedItem = category;
-        FilterUnitList();
-    }
-
-    private async void AssignCategory_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_unitList.SelectedItem is not UnitListItem { UnitName: { } unitName })
-        {
-            await new Prompt(PromptType.Error, "Select Unit", "Select a modified unit before assigning a category.").ShowDialog(this);
-            return;
-        }
-
-        var choices = new[] { UncategorizedCategory }
-            .Concat(_categories.OrderBy(category => category, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-        var currentCategory = GetCategoryForUnit(unitName);
-        var picker = new PickerWindow("Assign Category", choices, choices.FindIndex(category =>
-            string.Equals(category, currentCategory, StringComparison.OrdinalIgnoreCase)));
-        await picker.ShowDialog(this);
-        if (string.IsNullOrWhiteSpace(picker.PickedItem))
-            return;
-
-        if (string.Equals(picker.PickedItem, UncategorizedCategory, StringComparison.OrdinalIgnoreCase))
-            _unitCategories.Remove(unitName);
-        else
-            _unitCategories[unitName] = picker.PickedItem;
-
-        SaveCategoriesForCurrentMod();
-        RefreshUnitList();
-        _unitList.SelectedItem = _filteredUnitNames.FirstOrDefault(item =>
-            string.Equals(item.UnitName, unitName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private async void DeleteCategory_Click(object? sender, RoutedEventArgs e)
-    {
-        var category = _categoryFilter.SelectedItem as string;
-        if (string.IsNullOrWhiteSpace(category) ||
-            string.Equals(category, AllCategoriesFilter, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(category, UncategorizedCategory, StringComparison.OrdinalIgnoreCase))
-        {
-            await new Prompt(PromptType.Error, "Category", "Choose a custom category to delete.").ShowDialog(this);
-            return;
-        }
-
-        var confirm = new Prompt(PromptType.Confirm, "Delete Category", $"Delete '{category}'? Its units will become uncategorized.");
-        await confirm.ShowDialog(this);
-        if (!confirm.Confirmed)
-            return;
-
-        _categories.RemoveAll(item => string.Equals(item, category, StringComparison.OrdinalIgnoreCase));
-        foreach (var unitName in _unitCategories
-                     .Where(pair => string.Equals(pair.Value, category, StringComparison.OrdinalIgnoreCase))
-                     .Select(pair => pair.Key)
-                     .ToList())
-        {
-            _unitCategories.Remove(unitName);
-        }
-
-        SaveCategoriesForCurrentMod();
-        RefreshCategoryFilterItems();
-        RefreshUnitList();
-    }
-
-    private void CategoryFilter_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        FilterUnitList();
-    }
-
     private void SearchBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
         FilterUnitList();
+        RestoreEntityBrowserSelection();
     }
 
-    private void UnitTab_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private async void UnitsEntity_Click(object? sender, RoutedEventArgs e)
     {
-        // Avalonia can raise the initial selection event while XAML is still
-        // assigning named controls, so the category toolbar is not available yet.
-        if (_categoryControls != null)
-            _categoryControls.IsVisible = _unitTabs.SelectedIndex == 1;
+        await ShowEntityKindAsync(EditorEntityKind.Units);
+    }
+
+    private async void TechsEntity_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowEntityKindAsync(EditorEntityKind.Technologies);
+    }
+
+    private async Task ShowEntityKindAsync(EditorEntityKind entityKind)
+    {
+        if (_activeEntityKind == entityKind)
+            return;
+
+        if (!await ConfirmMainDocumentReplacementAsync(
+                entityKind,
+                _unitTabs.SelectedIndex == 1,
+                incomingName: null))
+            return;
+
+        if (_activeEntityKind == EditorEntityKind.Units && !await CaptureCurrentUnitDraftAsync())
+            return;
+        if (_activeEntityKind == EditorEntityKind.Technologies &&
+            _technologyView != null &&
+            !await _technologyView.CommitCurrentTechnologyAsync())
+            return;
+
+        ApplyEntityKindUi(entityKind);
+        var showTechnologies = entityKind == EditorEntityKind.Technologies;
+        SetMainDocumentTarget(entityKind, _unitTabs.SelectedIndex == 1, entityName: null);
+        RefreshUnitList();
+
+        if (!showTechnologies)
+            _unitList.Focus();
+    }
+
+    private void ApplyEntityKindUi(EditorEntityKind entityKind)
+    {
+        _activeEntityKind = entityKind;
+        var showTechnologies = entityKind == EditorEntityKind.Technologies;
+        if (showTechnologies)
+        {
+            EnsureTechnologyView();
+            _technologyView!.SetModifiedMode(_unitTabs.SelectedIndex == 1);
+        }
+
+        _technologyHost.IsVisible = showTechnologies;
+        _entityListHeading.Text = showTechnologies ? "Technologies" : "Units";
+        _unitsEntityButton.Classes.Set("active", !showTechnologies);
+        _techsEntityButton.Classes.Set("active", showTechnologies);
+        _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1;
+    }
+
+    private void ResetEntityBrowserToUnits()
+    {
+        _activeEntityKind = EditorEntityKind.Units;
+        _technologyHost.IsVisible = false;
+        _technologyHost.Content = null;
+        _technologyView = null;
+        _entityListHeading.Text = "Units";
+        _unitsEntityButton.Classes.Set("active", true);
+        _techsEntityButton.Classes.Set("active", false);
+        _entityDeleteButton.IsEnabled = false;
+        ResetDocumentTabs();
+    }
+
+    private void ResetDocumentTabs()
+    {
+        if (_mainDocumentTab == null)
+            return;
+
+        foreach (var tab in _openDocumentTabs.Where(tab => !tab.IsMain).ToList())
+        {
+            _openDocumentTabs.Remove(tab);
+            _documentTabItems.Remove(tab.TabItem);
+        }
+        _mainDocumentTab.EntityKind = EditorEntityKind.Units;
+        _mainDocumentTab.IsModified = false;
+        _mainDocumentTab.EntityName = null;
+        _activeDocumentTab = _mainDocumentTab;
+        SelectDocumentTabWithoutActivation(_mainDocumentTab);
+        RefreshDocumentTabHeaders();
+    }
+
+    private void RefreshSavedDocumentSnapshots(EditorEntityKind entityKind)
+    {
+        foreach (var tab in _openDocumentTabs.Where(tab =>
+                     tab.IsModified && tab.EntityKind == entityKind &&
+                     !string.IsNullOrWhiteSpace(tab.EntityName)))
+        {
+            tab.SavedElement = entityKind == EditorEntityKind.Units
+                ? LoadSavedUnitElement(tab.EntityName!)
+                : _technologyView?.LoadSavedTechnologyElement(tab.EntityName!);
+        }
+    }
+
+    private void EnsureTechnologyView()
+    {
+        if (_technologyView != null)
+            return;
+
+        LoadCurrentModAssetCatalogs();
+        _technologyView = new TechnologyEditorView(
+            GetBaseTechtreeDocumentsFromLoadedBar(),
+            ResolveBaseGameplayDirectory(),
+            GetCurrentModGameplayFilePath("techtree_mods.xml"),
+            ResolveDisplayStringAsync,
+            SaveTechnologyStringValuesAsync,
+            _baseGameIconPaths.Concat(_customIconPaths),
+            GetTechnologyPrerequisiteUnitNames(),
+            GetTechnologyProtoUnitNames(),
+            SupportedCultureLabels,
+            GetTechnologyPrerequisiteMajorGodNames(),
+            GetTechnologyTechTypeNames(),
+            GetTechnologyProtoActionNames(),
+            GetAvailableCommandNames());
+        _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
+        _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
+        _technologyHost.Content = _technologyView;
+    }
+
+    private void TechnologyView_BrowserStateChanged(object? sender, EventArgs e)
+    {
+        if (_activeEntityKind != EditorEntityKind.Technologies || _technologyView == null)
+            return;
+
+        _unitTabs.SelectedIndex = _technologyView.IsModifiedMode ? 1 : 0;
+        if (_activeDocumentTab?.EntityKind == EditorEntityKind.Technologies &&
+            !string.IsNullOrWhiteSpace(_technologyView.CurrentTechnologyName))
+        {
+            var previousName = _activeDocumentTab.EntityName;
+            var currentName = _technologyView.CurrentTechnologyName!;
+            var changedDocument = !string.IsNullOrWhiteSpace(previousName) &&
+                                  !string.Equals(previousName, currentName, StringComparison.OrdinalIgnoreCase);
+            var wasRenamed = changedDocument &&
+                             _technologyView.IsModifiedMode &&
+                             !_technologyView.GetTechnologyNames(modified: true)
+                                 .Contains(previousName!, StringComparer.OrdinalIgnoreCase);
+            if (wasRenamed)
+            {
+                RenameOpenDocumentTabs(
+                    EditorEntityKind.Technologies,
+                    previousName!,
+                    currentName);
+            }
+            else if (changedDocument && _activeDocumentTab.IsMain == false)
+            {
+                // Add/Copy selects the newly created technology. That is navigation,
+                // not a rename of the pinned source document.
+                SetMainDocumentTarget(
+                    EditorEntityKind.Technologies,
+                    _technologyView.IsModifiedMode,
+                    currentName);
+            }
+            _activeDocumentTab.IsModified = _technologyView.IsModifiedMode;
+            _activeDocumentTab.EntityName = currentName;
+        }
+        RefreshUnitList();
+        RefreshDocumentTabHeaders();
+    }
+
+    private void TechnologyView_DirtyStateChanged(object? sender, EventArgs e)
+        => RefreshDocumentTabHeaders();
+
+    private async void EntityAdd_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_activeEntityKind == EditorEntityKind.Units)
+        {
+            await AddUnitAsync(duplicateSelected: false);
+            return;
+        }
+
+        if (_technologyView == null)
+            return;
+        await _technologyView.AddTechnologyAsync();
+        _unitTabs.SelectedIndex = _technologyView.IsModifiedMode ? 1 : 0;
+        RefreshUnitList();
+    }
+
+    private async void EntityDelete_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_activeEntityKind == EditorEntityKind.Units)
+        {
+            await DeleteSelectedUnitAsync();
+            return;
+        }
+
+        await DeleteSelectedTechnologyAsync();
+    }
+
+    private async Task DeleteSelectedTechnologyAsync()
+    {
+        if (_technologyView == null || _unitTabs.SelectedIndex != 1)
+            return;
+        var deletedTechnologyName = (_unitList.SelectedItem as UnitListItem)?.UnitName;
+        await _technologyView.DeleteTechnologyAsync();
+        if (!string.IsNullOrWhiteSpace(deletedTechnologyName) &&
+            !_technologyView.GetTechnologyNames(modified: true).Contains(deletedTechnologyName, StringComparer.OrdinalIgnoreCase))
+        {
+            RemoveDeletedDocumentTabs(EditorEntityKind.Technologies, deletedTechnologyName);
+        }
+        RefreshUnitList();
+    }
+
+    private async void UnitList_PointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_unitList).Properties.IsLeftButtonPressed ||
+            e.Source is not Visual sourceVisual)
+            return;
+
+        var container = sourceVisual.FindAncestorOfType<ListBoxItem>(includeSelf: true);
+        var item = container?.Content as UnitListItem ?? container?.DataContext as UnitListItem;
+        if (item?.UnitName is not { } entityName)
+            return;
+
+        // Selection is owned here so the first-click load and the second-click
+        // promotion to a pinned tab are serialized deterministically.
+        e.Handled = true;
+        var entityKind = _activeEntityKind;
+        var isModified = _unitTabs.SelectedIndex == 1;
+        var elapsed = e.Timestamp >= _lastEntityPointerPressTimestamp
+            ? e.Timestamp - _lastEntityPointerPressTimestamp
+            : ulong.MaxValue;
+        var isSecondClick =
+            elapsed <= EntitySecondClickWindowMilliseconds &&
+            _lastEntityPointerPressKind == entityKind &&
+            _lastEntityPointerPressIsModified == isModified &&
+            string.Equals(_lastEntityPointerPressName, entityName, StringComparison.OrdinalIgnoreCase);
+
+        if (isSecondClick)
+        {
+            _lastEntityPointerPressName = null;
+            _lastEntityPointerPressTimestamp = 0;
+            await _unitSelectionChangeTask;
+            await OpenPinnedDocumentTabAsync(entityName);
+            return;
+        }
+
+        _lastEntityPointerPressName = entityName;
+        _lastEntityPointerPressKind = entityKind;
+        _lastEntityPointerPressIsModified = isModified;
+        _lastEntityPointerPressTimestamp = e.Timestamp;
+
+        // Highlight and start resolving Main immediately. If a second click was
+        // already generated while a heavy Unit build blocked the UI thread, its
+        // raw timestamp still falls inside the window and it will promote this
+        // document after this selection task completes.
+        _suppressUnitListSelectionChange = true;
+        try
+        {
+            _unitList.SelectedItem = item;
+        }
+        finally
+        {
+            _suppressUnitListSelectionChange = false;
+        }
+
+        await RunUnitListSelectionChangeAsync();
+    }
+
+    private UnitListItem? GetContextEntityItem(ContextRequestedEventArgs e)
+    {
+        Visual? source = e.Source as Visual;
+        if (e.TryGetPosition(_unitList, out var position))
+            source = _unitList.InputHitTest(position) as Visual ?? source;
+
+        var container = source?.FindAncestorOfType<ListBoxItem>(includeSelf: true);
+        return container?.Content as UnitListItem
+               ?? container?.DataContext as UnitListItem
+               ?? _unitList.SelectedItem as UnitListItem;
+    }
+
+    private async Task<bool> ActivateContextEntityAsync(
+        EditorEntityKind entityKind,
+        bool isModified,
+        string entityName)
+    {
+        if (_activeEntityKind != entityKind || (_unitTabs.SelectedIndex == 1) != isModified)
+            return false;
+
+        var item = _filteredUnitNames.FirstOrDefault(candidate =>
+            string.Equals(candidate.UnitName, entityName, StringComparison.OrdinalIgnoreCase));
+        if (item == null)
+            return false;
+
+        _suppressUnitListSelectionChange = true;
+        try
+        {
+            _unitList.SelectedItem = item;
+        }
+        finally
+        {
+            _suppressUnitListSelectionChange = false;
+        }
+
+        var pinned = FindPinnedDocumentTab(entityKind, isModified, entityName);
+        if (pinned != null && !ReferenceEquals(pinned, _activeDocumentTab))
+        {
+            SelectDocumentTabWithoutActivation(pinned);
+            await ActivateDocumentTabAsync(pinned);
+        }
+        else if (pinned == null)
+        {
+            await RunUnitListSelectionChangeAsync();
+        }
+
+        return _activeDocumentTab?.EntityKind == entityKind &&
+               _activeDocumentTab.IsModified == isModified &&
+               string.Equals(_activeDocumentTab.EntityName, entityName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void UnitList_ContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (GetContextEntityItem(e) is not { UnitName: { } entityName })
+            return;
+
+        var entityKind = _activeEntityKind;
+        var isModified = _unitTabs.SelectedIndex == 1;
+
+        var menu = new ContextMenu();
+        var openItem = new MenuItem { Header = "Open in new tab" };
+        openItem.Click += async (_, _) => await OpenPinnedDocumentTabAsync(entityName);
+        menu.Items.Add(openItem);
+
+        var copyItem = new MenuItem { Header = "Copy" };
+        copyItem.Click += async (_, _) =>
+        {
+            if (!await ActivateContextEntityAsync(entityKind, isModified, entityName))
+                return;
+
+            if (entityKind == EditorEntityKind.Units)
+                await AddUnitAsync(duplicateSelected: true);
+            else if (_technologyView != null)
+                await _technologyView.AddTechnologyAsync(duplicateSelected: true);
+        };
+        menu.Items.Add(copyItem);
+
+        var deleteItem = new MenuItem
+        {
+            Header = "Delete",
+            Foreground = Brushes.OrangeRed,
+            IsEnabled = isModified
+        };
+        deleteItem.Click += async (_, _) =>
+        {
+            if (!await ActivateContextEntityAsync(entityKind, isModified, entityName))
+                return;
+
+            if (entityKind == EditorEntityKind.Units)
+            {
+                await DeleteSelectedUnitAsync();
+            }
+            else
+            {
+                await DeleteSelectedTechnologyAsync();
+            }
+        };
+        menu.Items.Add(deleteItem);
+
+        menu.Open(_unitList);
+        e.Handled = true;
+    }
+
+    private async void UnitTab_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_unitTabs is null)
+            return;
+
+        if (_entitySourceChangeInProgress)
+        {
+            if (_activeDocumentTab != null)
+                _unitTabs.SelectedIndex = _activeDocumentTab.IsModified ? 1 : 0;
+            return;
+        }
+
+        var selectedModified = _unitTabs.SelectedIndex == 1;
+        if (_documentTabActivationInProgress)
+        {
+            ApplyEntitySourceUi(selectedModified);
+            return;
+        }
+
+        var tabsWereEnabled = _unitTabs.IsEnabled;
+        _entitySourceChangeInProgress = true;
+        _unitTabs.IsEnabled = false;
+        try
+        {
+            if (_activeDocumentTab != null && _activeDocumentTab.IsModified != selectedModified)
+            {
+                var previousTab = _activeDocumentTab;
+                if (!await ConfirmMainDocumentReplacementAsync(
+                        _activeEntityKind,
+                        selectedModified,
+                        incomingName: null))
+                {
+                    _unitTabs.SelectedIndex = previousTab.IsModified ? 1 : 0;
+                    return;
+                }
+
+                var canLeave = _activeEntityKind == EditorEntityKind.Units
+                    ? await CaptureCurrentUnitDraftAsync()
+                    : _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync();
+                if (!canLeave)
+                {
+                    _unitTabs.SelectedIndex = previousTab.IsModified ? 1 : 0;
+                    return;
+                }
+
+                SetMainDocumentTarget(_activeEntityKind, selectedModified, entityName: null);
+                ShowEmptyDocumentState(_activeEntityKind);
+            }
+
+            ApplyEntitySourceUi(selectedModified);
+        }
+        catch (Exception ex)
+        {
+            if (_activeDocumentTab != null)
+                _unitTabs.SelectedIndex = _activeDocumentTab.IsModified ? 1 : 0;
+            await new Prompt(
+                PromptType.Error,
+                "Unable to switch source",
+                $"The entity source could not be changed:\n{ex.Message}").ShowDialog(this);
+        }
+        finally
+        {
+            _unitTabs.IsEnabled = tabsWereEnabled;
+            _entitySourceChangeInProgress = false;
+        }
+    }
+
+    private void ApplyEntitySourceUi(bool selectedModified)
+    {
+        if (_activeEntityKind == EditorEntityKind.Technologies)
+            _technologyView?.SetModifiedMode(selectedModified);
+        if (_entityDeleteButton != null)
+            _entityDeleteButton.IsEnabled = selectedModified;
         RefreshUnitList();
     }
 
@@ -3402,10 +4175,65 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_suppressUnitListSelectionChange || _unitSelectionChangeInProgress)
             return;
 
+        await RunUnitListSelectionChangeAsync();
+    }
+
+    private async Task RunUnitListSelectionChangeAsync()
+    {
+        if (_unitSelectionChangeInProgress)
+            return;
+
+        var selectionTask = HandleUnitListSelectionChangedAsync();
+        _unitSelectionChangeTask = selectionTask;
+        try
+        {
+            await selectionTask;
+        }
+        finally
+        {
+            if (ReferenceEquals(_unitSelectionChangeTask, selectionTask))
+                _unitSelectionChangeTask = Task.CompletedTask;
+        }
+    }
+
+    private async Task HandleUnitListSelectionChangedAsync()
+    {
         if (_unitList.SelectedItem is UnitListItem { UnitName: { } selectedName })
         {
-            if (selectedName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase))
+            if (!await ConfirmMainDocumentReplacementAsync(
+                    _activeEntityKind,
+                    _unitTabs.SelectedIndex == 1,
+                    selectedName))
+            {
+                RestoreEntityBrowserSelection();
                 return;
+            }
+
+            var pinned = FindPinnedDocumentTab(_activeEntityKind, _unitTabs.SelectedIndex == 1, selectedName);
+            if (pinned != null)
+            {
+                if (!ReferenceEquals(pinned, _activeDocumentTab))
+                    _documentTabs.SelectedItem = pinned.TabItem;
+                return;
+            }
+
+            if (_activeEntityKind == EditorEntityKind.Technologies)
+            {
+                if (_technologyView != null && !await _technologyView.CommitCurrentTechnologyAsync())
+                {
+                    RestoreEntityBrowserSelection();
+                    return;
+                }
+                SetMainDocumentTarget(EditorEntityKind.Technologies, _unitTabs.SelectedIndex == 1, selectedName);
+                _technologyView?.SelectTechnology(selectedName);
+                return;
+            }
+
+            if (selectedName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase))
+            {
+                SetMainDocumentTarget(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
+                return;
+            }
 
             var previousName = _currentUnitName;
             _unitSelectionChangeInProgress = true;
@@ -3427,17 +4255,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             try
             {
-                _suppressUnitListSelectionChange = true;
-                try
-                {
-                    RefreshUnitList();
-                    _unitList.SelectedItem = _filteredUnitNames.FirstOrDefault(item =>
-                        string.Equals(item.UnitName, selectedName, StringComparison.OrdinalIgnoreCase));
-                }
-                finally
-                {
-                    _suppressUnitListSelectionChange = false;
-                }
+                SetMainDocumentTarget(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
+                // Keep the existing item container and scroll offset stable. The
+                // browser is refreshed by add/delete/rename/filter operations;
+                // selecting an unchanged name does not require rebuilding it.
                 BuildEditorPanel(selectedName);
             }
             finally
@@ -3445,6 +4266,55 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _unitSelectionChangeInProgress = false;
             }
         }
+    }
+
+    private async Task<bool> ConfirmMainDocumentReplacementAsync(
+        EditorEntityKind incomingKind,
+        bool incomingModified,
+        string? incomingName)
+    {
+        var main = _activeDocumentTab;
+        if (main?.IsMain != true || string.IsNullOrWhiteSpace(main.EntityName))
+            return true;
+        if (main.EntityKind == incomingKind &&
+            main.IsModified == incomingModified &&
+            !string.IsNullOrWhiteSpace(incomingName) &&
+            string.Equals(main.EntityName, incomingName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var captured = main.EntityKind == EditorEntityKind.Units
+            ? await CaptureCurrentUnitDraftAsync()
+            : _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync();
+        if (!captured)
+            return false;
+        if (!IsDocumentTabDirty(main))
+            return true;
+
+        var destination = string.IsNullOrWhiteSpace(incomingName)
+            ? incomingKind == EditorEntityKind.Units ? "the Units browser" : "the Technologies browser"
+            : $"'{incomingName}'";
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Unsaved main document",
+            $"'{main.EntityName}' has unsaved changes. Discard those changes and open {destination}?",
+            confirmButtonText: "Discard changes");
+        await prompt.ShowDialog(this);
+        if (!prompt.Confirmed)
+            return false;
+
+        if (main.EntityKind == EditorEntityKind.Units)
+        {
+            DiscardUnitDocumentChanges(main);
+            _currentUnitName = null;
+            ClearEditorPanels();
+        }
+        else if (_technologyView != null)
+        {
+            _technologyView.DiscardTechnologyChanges(main.EntityName, main.SavedElement);
+        }
+
+        RefreshDocumentTabHeaders();
+        return true;
     }
 
     private async void UnitNameBox_TextChanged(object? sender, TextChangedEventArgs e)
@@ -3901,7 +4771,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         currentUnit.ReplaceWith(parsedUnit);
         TrackPendingUnitRename(oldUnitName, newUnitName);
         _currentUnitName = newUnitName;
-        MoveUnitCategoryAssignment(oldUnitName, newUnitName);
+        RenameOpenDocumentTabs(EditorEntityKind.Units, oldUnitName, newUnitName);
         _isXmlPreviewDirty = false;
         MarkDirty();
         InvalidateSuggestionCaches();
@@ -3920,8 +4790,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _ = SaveTacticsActionEditorAsync();
             else if (_isAbilityDefinitionEditorMode)
                 _ = SaveAbilityDefinitionEditorAsync();
-            else if (_saveActiveTransformCommandBeforeUnitSaveAsync != null)
-                _ = SaveActiveTransformCommandAndUnitAsync();
             else
                 Save_Click(this, e);
             e.Handled = true;
@@ -4437,6 +5305,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         "respawntraindata",
         "sharedselectionunittypes",
         "decay",
+        "recharge",
+        "auxrecharge",
         "replacement",
         "ondamagemodifiers",
     ];
@@ -5445,6 +6315,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                         stateStore.Remove(rowState);
                         commandContainer.Children.Remove(rowPanel);
                         headerGrid.IsVisible = stateStore.Count > 0;
+                        if (ReferenceEquals(stateStore, _unitCommandRows) &&
+                            rowState.ValueAcb.Text?.Trim().Equals("Eject", StringComparison.OrdinalIgnoreCase) == true &&
+                            !stateStore.Any(row => row.ValueAcb.Text?.Trim().Equals("Eject", StringComparison.OrdinalIgnoreCase) == true) &&
+                            _containEjectCommandCheckBox != null)
+                        {
+                            _syncingContainEjectCommand = true;
+                            _containEjectCommandCheckBox.IsChecked = false;
+                            _syncingContainEjectCommand = false;
+                        }
                         MarkDirty();
                     }
                 };
@@ -5458,11 +6337,31 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var entry in entryList)
             AddCommandRow(entry);
 
+        if (ReferenceEquals(stateStore, _unitCommandRows))
+        {
+            _addUnitCommandRow = entry =>
+            {
+                if (!stateStore.Any(row => row.ValueAcb.Text?.Trim().Equals(entry.Value, StringComparison.OrdinalIgnoreCase) == true))
+                    AddCommandRow(entry);
+            };
+            _removeUnitCommandRows = value =>
+            {
+                foreach (var row in stateStore
+                             .Where(row => row.ValueAcb.Text?.Trim().Equals(value, StringComparison.OrdinalIgnoreCase) == true)
+                             .ToList())
+                {
+                    stateStore.Remove(row);
+                    commandContainer.Children.Remove(row.RowPanel);
+                }
+                headerGrid.IsVisible = stateStore.Count > 0;
+            };
+        }
+
         if (!_isReadOnly)
         {
             var btnAdd = new Button
             {
-                Content = $"+ Add {itemLabel}",
+                Content = $"Add {itemLabel}",
                 Background = Brush.Parse("#2b7a0b"),
                 Margin = new Thickness(0, 4, 0, 4)
             };
@@ -6129,6 +7028,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsManagedThrowFieldTag(string actionType, string tag)
         => (IsGoreActionType(actionType) || IsThrowActionType(actionType)) &&
            (ThrowAdditionalInfoTags.Contains(tag, StringComparer.OrdinalIgnoreCase) ||
+            tag.Equals("maxsizeclass", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("damagearea", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("damageflags", StringComparison.OrdinalIgnoreCase));
 
@@ -6666,9 +7566,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!tags.Contains(normalized, StringComparer.OrdinalIgnoreCase))
                 tags.Add(normalized);
         }
-
-        if (actionType.Equals("ReflectAttack", StringComparison.OrdinalIgnoreCase))
-            tags.RemoveAll(x => x.Equals("impacteffect", StringComparison.OrdinalIgnoreCase));
 
         return tags;
     }
@@ -9932,6 +10829,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         ArrangeAutoBoostPostRateLayout(state, actionType);
         ArrangeLureLayout(state, actionType);
         ArrangeBuckAttackAndBuildLayout(state, actionType);
+        ArrangeTrailingImpactEffectLayout(state, actionType);
         ArrangeRampageLayout(state, actionType);
         RenderAbductPostCoreFields(state, currentSimpleValues, actionType);
         RenderAbductPostRateAnimationFields(state, currentSimpleValues, actionType);
@@ -10010,11 +10908,39 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (IsThrowActionType(actionType) || IsJumpAttackActionType(actionType) || IsGoreActionType(actionType))
+        {
+            var visualRow = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 2, 0, 2)
+            };
+
+            foreach (var tag in new[] { "anim", "impacteffect" })
+            {
+                if (!state.AdditionalFieldControls.TryGetValue(tag, out var editor) || editor.Parent is not Grid fieldRow)
+                    continue;
+                if (!state.AdditionalFieldsContainer.Children.Remove(fieldRow))
+                    continue;
+
+                fieldRow.ColumnDefinitions = fieldRow.ColumnDefinitions.Count >= 3
+                    ? new ColumnDefinitions("Auto, 200, Auto")
+                    : new ColumnDefinitions("Auto, 200");
+                fieldRow.HorizontalAlignment = HorizontalAlignment.Left;
+                fieldRow.Margin = new Thickness(visualRow.Children.Count == 0 ? 0 : 14, 0, 0, 0);
+                editor.Width = 200;
+                editor.MinWidth = 200;
+                editor.MaxWidth = 200;
+                visualRow.Children.Add(fieldRow);
+            }
+
+            if (visualRow.Children.Count > 0)
+                state.StructuredFieldsContainer.Children.Add(visualRow);
+            return;
+        }
+
         if (!IsAutoBoostActionType(actionType) &&
-            !IsThrowActionType(actionType) &&
-            !IsSpawnAssistActionType(actionType) &&
-            !IsJumpAttackActionType(actionType) &&
-            !IsGoreActionType(actionType))
+            !IsSpawnAssistActionType(actionType))
             return;
 
         if (!state.AdditionalFieldControls.TryGetValue("anim", out var animationEditor) || animationEditor.Parent is not Control animationRow)
@@ -10023,7 +10949,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!state.AdditionalFieldsContainer.Children.Remove(animationRow))
             return;
 
-        if ((IsAutoBoostActionType(actionType) || IsJumpAttackActionType(actionType) || IsGoreActionType(actionType)) && animationRow is Grid compactAnimationRow)
+        if (IsAutoBoostActionType(actionType) && animationRow is Grid compactAnimationRow)
         {
             compactAnimationRow.ColumnDefinitions = new ColumnDefinitions("Auto, 200");
             compactAnimationRow.HorizontalAlignment = HorizontalAlignment.Left;
@@ -10098,9 +11024,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             .FirstOrDefault(control => string.Equals(control.Tag as string, "lure.animations", StringComparison.Ordinal));
         if (animationRow is Grid animationGrid)
         {
-            animationGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 200, Auto, 200");
+            animationGrid.ColumnDefinitions = new ColumnDefinitions("Auto, 200, Auto, 200, Auto, 200");
             animationGrid.HorizontalAlignment = HorizontalAlignment.Left;
-            foreach (var editor in animationGrid.Children.Where(control => Grid.GetColumn(control) is 1 or 3))
+            foreach (var editor in animationGrid.Children.Where(control => Grid.GetColumn(control) is 1 or 3 or 5))
             {
                 editor.Width = 200;
                 editor.MaxWidth = 200;
@@ -10108,6 +11034,29 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (animationRow != null && state.AdditionalFieldsContainer.Children.Remove(animationRow))
             state.StructuredFieldsContainer.Children.Add(animationRow);
+    }
+
+    private static void ArrangeTrailingImpactEffectLayout(ProtoActionWidgetState state, string actionType)
+    {
+        if (!IsReflectAttackActionType(actionType) &&
+            !actionType.Equals("Hunting", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (!state.AdditionalFieldControls.TryGetValue("impacteffect", out var impactEditor) ||
+            impactEditor.Parent is not Grid impactRow ||
+            !state.AdditionalFieldsContainer.Children.Remove(impactRow))
+        {
+            return;
+        }
+
+        impactRow.ColumnDefinitions = impactRow.ColumnDefinitions.Count >= 3
+            ? new ColumnDefinitions("Auto, 200, Auto")
+            : new ColumnDefinitions("Auto, 200");
+        impactRow.HorizontalAlignment = HorizontalAlignment.Left;
+        impactEditor.Width = 200;
+        impactEditor.MinWidth = 200;
+        impactEditor.MaxWidth = 200;
+        state.StructuredFieldsContainer.Children.Add(impactRow);
     }
 
     private static void MoveLikeBonusAttachmentRowsBelowRate(ProtoActionWidgetState state, string actionType)
@@ -10593,7 +11542,54 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (animationRow == null)
                 return;
             state.AdditionalFieldsContainer.Children.Remove(animationRow);
-            state.StructuredFieldsContainer.Children.Insert(Math.Min(insertIndex, state.StructuredFieldsContainer.Children.Count), animationRow);
+
+            Control visualControl = animationRow;
+            if (isBuckAttack)
+            {
+                if (animationRow is Grid compactAnimationRow)
+                {
+                    compactAnimationRow.ColumnDefinitions = compactAnimationRow.ColumnDefinitions.Count >= 3
+                        ? new ColumnDefinitions("Auto, 200, Auto")
+                        : new ColumnDefinitions("Auto, 200");
+                    compactAnimationRow.HorizontalAlignment = HorizontalAlignment.Left;
+                    animationEditor.Width = 200;
+                    animationEditor.MinWidth = 200;
+                    animationEditor.MaxWidth = 200;
+                }
+
+                var visualRow = new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
+                animationRow.Margin = new Thickness(0);
+                visualRow.Children.Add(animationRow);
+
+                if (state.AdditionalFieldControls.TryGetValue("impacteffect", out var impactEditor))
+                {
+                    var impactRow = state.AdditionalFieldsContainer.Children
+                        .OfType<Control>()
+                        .FirstOrDefault(child => ContainsControl(child, impactEditor));
+                    if (impactRow != null && state.AdditionalFieldsContainer.Children.Remove(impactRow))
+                    {
+                        if (impactRow is Grid compactImpactRow)
+                        {
+                            compactImpactRow.ColumnDefinitions = compactImpactRow.ColumnDefinitions.Count >= 3
+                                ? new ColumnDefinitions("Auto, 200, Auto")
+                                : new ColumnDefinitions("Auto, 200");
+                            compactImpactRow.HorizontalAlignment = HorizontalAlignment.Left;
+                            impactEditor.Width = 200;
+                            impactEditor.MinWidth = 200;
+                            impactEditor.MaxWidth = 200;
+                        }
+                        impactRow.Margin = new Thickness(14, 0, 0, 0);
+                        visualRow.Children.Add(impactRow);
+                    }
+                }
+                visualControl = visualRow;
+            }
+
+            state.StructuredFieldsContainer.Children.Insert(Math.Min(insertIndex, state.StructuredFieldsContainer.Children.Count), visualControl);
             insertIndex++;
         }
 
@@ -10928,6 +11924,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         var reloadAnimation = currentValues.TryGetValue("reloadanim", out var currentReloadAnimation)
             ? currentReloadAnimation
             : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "reloadanim");
+        var impactEffect = currentValues.TryGetValue("impacteffect", out var currentImpactEffect)
+            ? currentImpactEffect
+            : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "impacteffect");
         var duration = currentValues.TryGetValue("modifyduration", out var currentDuration)
             ? currentDuration
             : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "modifyduration");
@@ -10937,13 +11936,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             Margin = new Thickness(0, 2, 0, 2)
         };
 
-        void AddAnimationField(string tag, string label, string value, string defaultValue)
+        void AddVisualField(string tag, string label, string value, string defaultValue)
         {
             var editor = new AutoCompleteBox
             {
                 Text = string.IsNullOrWhiteSpace(value) ? defaultValue : value,
                 FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = GetProtoActionValueSuggestions("anim") ?? [],
+                ItemsSource = tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase)
+                    ? KnownImpactEffects
+                    : GetProtoActionValueSuggestions("anim") ?? [],
                 IsEnabled = !_isReadOnly
             };
             EditorTextFieldStyle.ConfigureSelector(editor);
@@ -10966,8 +11967,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             state.AdditionalFieldControls[tag] = editor;
         }
 
-        AddAnimationField("anim", "Animation", animation, "TeleportStart");
-        AddAnimationField("reloadanim", "Reload Animation", reloadAnimation, "TeleportEnd");
+        AddVisualField("anim", "Animation", animation, "TeleportStart");
+        AddVisualField("reloadanim", "Reload Animation", reloadAnimation, "TeleportEnd");
+        AddVisualField("impacteffect", "Impact Effect", impactEffect, "");
         if (animationRow.Children.Count > 0)
             state.StructuredFieldsContainer.Children.Add(animationRow);
 
@@ -11904,7 +12906,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (IsTeleportAttackActionType(actionType))
         {
             primaryFieldTags.RemoveAll(tag => tag.Equals("anim", StringComparison.OrdinalIgnoreCase) ||
-                                              tag.Equals("reloadanim", StringComparison.OrdinalIgnoreCase));
+                                              tag.Equals("reloadanim", StringComparison.OrdinalIgnoreCase) ||
+                                              tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase));
+        }
+        else if (IsAttackActionType(actionType))
+        {
+            primaryFieldTags.RemoveAll(tag => tag.Equals("anim", StringComparison.OrdinalIgnoreCase) ||
+                                              tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase));
         }
 
         void RenderThrowAdditionalInfo()
@@ -11917,89 +12925,174 @@ public partial class ProtoEditorWindow : SimpleWindow
                 StringComparer.OrdinalIgnoreCase);
             var shouldShow = ThrowAdditionalInfoTags.Any(tag =>
                 state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(values[tag]));
-            if (!shouldShow)
+            var maxSizeClass = currentValues.TryGetValue("maxsizeclass", out var currentMaxSizeClass)
+                ? currentMaxSizeClass
+                : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "maxsizeclass");
+            var shouldShowMaxSizeClass = state.ForcedVisibleFieldTags.Contains("maxsizeclass") ||
+                                         !string.IsNullOrWhiteSpace(maxSizeClass);
+            var addButtonsRow = new WrapPanel
             {
-                if (!_isReadOnly)
-                {
-                    var addButton = new Button
-                    {
-                        Content = "Additional Throw Information",
-                        Background = Brush.Parse("#2b7a0b"),
-                        HorizontalAlignment = HorizontalAlignment.Left
-                    };
-                    addButton.Click += async (_, _) =>
-                    {
-                        var proceed = await CheckStartLocalMod();
-                        if (!proceed)
-                            return;
-                        foreach (var tag in ThrowAdditionalInfoTags)
-                            state.ForcedVisibleFieldTags.Add(tag);
-                        RefreshProtoActionMetadataPanels(state);
-                        MarkDirty();
-                    };
-                    state.AdditionalFieldsContainer.Children.Add(addButton);
-                }
-                return;
-            }
-
-            var row = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("Auto, 90, Auto, 90, Auto, 90, Auto, 90, Auto"),
+                Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 2, 0, 2)
             };
-            var labels = new[]
+
+            if (!shouldShow && !_isReadOnly)
             {
-                ("throwdistancemin", "Distance Min"),
-                ("throwdistancemax", "Max"),
-                ("throwmaxheight", "Height Max"),
-                ("throwvelocity", "Velocity"),
-            };
-            for (var index = 0; index < labels.Length; index++)
-            {
-                var (tag, label) = labels[index];
-                var labelControl = new TextBlock
+                var addButton = new Button
                 {
-                    Text = label + ":",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(index == 0 ? 0 : 10, 0, 6, 0)
+                    Content = "Additional Throw Information",
+                    Background = Brush.Parse("#2b7a0b"),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Margin = new Thickness(0, 0, 8, 0)
                 };
-                Grid.SetColumn(labelControl, index * 2);
-                row.Children.Add(labelControl);
-                var editor = new TextBox { Text = values[tag], IsEnabled = !_isReadOnly };
-                AttachProtoActionDecimalBehavior(editor);
-                editor.TextChanged += async (_, _) =>
-                {
-                    if (_isPopulating)
-                        return;
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                        MarkDirty();
-                };
-                Grid.SetColumn(editor, index * 2 + 1);
-                row.Children.Add(editor);
-                state.AdditionalFieldControls[tag] = editor;
-            }
-            if (!_isReadOnly)
-            {
-                var removeButton = new Button { Classes = { "remove-button" } };
-                removeButton.Click += async (_, _) =>
+                addButton.Click += async (_, _) =>
                 {
                     var proceed = await CheckStartLocalMod();
                     if (!proceed)
                         return;
                     foreach (var tag in ThrowAdditionalInfoTags)
-                    {
-                        state.ForcedVisibleFieldTags.Remove(tag);
-                        state.AdditionalFieldControls.Remove(tag);
-                        ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
-                    }
+                        state.ForcedVisibleFieldTags.Add(tag);
                     RefreshProtoActionMetadataPanels(state);
                     MarkDirty();
                 };
-                Grid.SetColumn(removeButton, 8);
-                row.Children.Add(removeButton);
+                addButtonsRow.Children.Add(addButton);
             }
-            state.AdditionalFieldsContainer.Children.Add(row);
+
+            if (!shouldShowMaxSizeClass && !_isReadOnly)
+            {
+                var addMaxSizeClassButton = new Button
+                {
+                    Content = "Max Size Class",
+                    Background = Brush.Parse("#2b7a0b"),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                addMaxSizeClassButton.Click += async (_, _) =>
+                {
+                    if (!await CheckStartLocalMod())
+                        return;
+                    state.ForcedVisibleFieldTags.Add("maxsizeclass");
+                    RefreshProtoActionMetadataPanels(state);
+                    MarkDirty();
+                };
+                addButtonsRow.Children.Add(addMaxSizeClassButton);
+            }
+
+            if (addButtonsRow.Children.Count > 0)
+                state.AdditionalFieldsContainer.Children.Add(addButtonsRow);
+
+            if (shouldShow)
+            {
+                var row = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto, 90, Auto, 90, Auto, 90, Auto, 90, Auto"),
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
+                var labels = new[]
+                {
+                    ("throwdistancemin", "Distance Min"),
+                    ("throwdistancemax", "Max"),
+                    ("throwmaxheight", "Height Max"),
+                    ("throwvelocity", "Velocity"),
+                };
+                for (var index = 0; index < labels.Length; index++)
+                {
+                    var (tag, label) = labels[index];
+                    var labelControl = new TextBlock
+                    {
+                        Text = label + ":",
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(index == 0 ? 0 : 10, 0, 6, 0)
+                    };
+                    Grid.SetColumn(labelControl, index * 2);
+                    row.Children.Add(labelControl);
+                    var editor = new TextBox { Text = values[tag], IsEnabled = !_isReadOnly };
+                    AttachProtoActionDecimalBehavior(editor);
+                    editor.TextChanged += async (_, _) =>
+                    {
+                        if (_isPopulating)
+                            return;
+                        var proceed = await CheckStartLocalMod();
+                        if (proceed)
+                            MarkDirty();
+                    };
+                    Grid.SetColumn(editor, index * 2 + 1);
+                    row.Children.Add(editor);
+                    state.AdditionalFieldControls[tag] = editor;
+                }
+                if (!_isReadOnly)
+                {
+                    var removeButton = new Button { Classes = { "remove-button" } };
+                    removeButton.Click += async (_, _) =>
+                    {
+                        var proceed = await CheckStartLocalMod();
+                        if (!proceed)
+                            return;
+                        foreach (var tag in ThrowAdditionalInfoTags)
+                        {
+                            state.ForcedVisibleFieldTags.Remove(tag);
+                            state.AdditionalFieldControls.Remove(tag);
+                            ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, tag, "");
+                        }
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    Grid.SetColumn(removeButton, 8);
+                    row.Children.Add(removeButton);
+                }
+                state.AdditionalFieldsContainer.Children.Add(row);
+            }
+
+            if (shouldShowMaxSizeClass)
+            {
+                var maxSizeClassRow = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto, 90, Auto"),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
+                maxSizeClassRow.Children.Add(new TextBlock
+                {
+                    Text = "Max Size Class:",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 4, 8, 4)
+                });
+                var maxSizeClassEditor = new TextBox
+                {
+                    Text = maxSizeClass,
+                    Width = 90,
+                    IsEnabled = !_isReadOnly
+                };
+                AttachProtoActionIntegerBehavior(maxSizeClassEditor);
+                maxSizeClassEditor.TextChanged += async (_, _) =>
+                {
+                    if (!_isPopulating && await CheckStartLocalMod())
+                        MarkDirty();
+                };
+                Grid.SetColumn(maxSizeClassEditor, 1);
+                maxSizeClassRow.Children.Add(maxSizeClassEditor);
+                state.AdditionalFieldControls["maxsizeclass"] = maxSizeClassEditor;
+                if (!_isReadOnly)
+                {
+                    var removeButton = new Button
+                    {
+                        Classes = { "remove-button" },
+                        Margin = new Thickness(2, 0, 0, 0)
+                    };
+                    removeButton.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod())
+                            return;
+                        state.ForcedVisibleFieldTags.Remove("maxsizeclass");
+                        state.AdditionalFieldControls.Remove("maxsizeclass");
+                        ProtoXmlHandler.SetProtoActionSimpleFieldValue(state.Model, "maxsizeclass", "");
+                        RefreshProtoActionMetadataPanels(state);
+                        MarkDirty();
+                    };
+                    Grid.SetColumn(removeButton, 2);
+                    maxSizeClassRow.Children.Add(removeButton);
+                }
+                state.AdditionalFieldsContainer.Children.Add(maxSizeClassRow);
+            }
         }
 
         if (IsGoreActionType(actionType) || IsThrowActionType(actionType))
@@ -13392,7 +14485,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             ItemsSource = suggestions,
                             FilterMode = AutoCompleteFilterMode.Contains,
                             IsEnabled = !_isReadOnly,
-                            Width = tag.Equals("impacteffect", StringComparison.OrdinalIgnoreCase) ? 300 : 260
+                            Width = 200
                         };
                         EditorTextFieldStyle.ConfigureSelector(selector);
                         EnableDropdownAutoComplete(selector);
@@ -19628,10 +20721,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var animEditor = CreateSimpleEditor("anim");
                 var reloadAnimEditor = CreateSimpleEditor("reloadanim");
+                var impactEffectEditor = CreateSimpleEditor("impacteffect");
                 var animRow = new Grid
                 {
                     Tag = "lure.animations",
-                    ColumnDefinitions = new ColumnDefinitions("120, *, 140, *"),
+                    ColumnDefinitions = new ColumnDefinitions("120, *, 140, *, 110, *"),
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Stretch
                 };
@@ -19653,6 +20747,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 animRow.Children.Add(reloadAnimLabel);
                 Grid.SetColumn(reloadAnimEditor, 3);
                 animRow.Children.Add(reloadAnimEditor);
+                var impactEffectLabel = new TextBlock
+                {
+                    Text = "Impact Effect:",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 4, 10, 4)
+                };
+                Grid.SetColumn(impactEffectLabel, 4);
+                animRow.Children.Add(impactEffectLabel);
+                Grid.SetColumn(impactEffectEditor, 5);
+                animRow.Children.Add(impactEffectEditor);
                 state.AdditionalFieldsContainer.Children.Add(animRow);
 
                 var maxRangeMirror = new TextBox
@@ -34005,6 +35109,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         _currentFlags = null;
         _currentContains = null;
         _currentNotContains = null;
+        _containEjectCommandCheckBox = null;
+        _addUnitCommandRow = null;
+        _removeUnitCommandRows = null;
+        _syncingContainEjectCommand = false;
+        _containRemovedDuringEdit = false;
+        _statsRechargeModeEditors.Clear();
+        _statsRechargeValueEditors.Clear();
+        _statsRechargeStartChargedEditors.Clear();
+        _statsRechargeRemoveButtons.Clear();
+        _abilityRechargeModeEditors.Clear();
+        _abilityRechargeValueEditors.Clear();
+        _abilityRechargeStartChargedEditors.Clear();
+        _syncingSharedRechargeEditors = false;
         _cultureFieldRows.Clear();
         _trainCommandRows.Clear();
         _techCommandRows.Clear();
@@ -36052,6 +37169,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         string containedRegenRateValue = ProtoXmlHandler.GetSimpleField(unit, "containedregenrate") ?? "";
         var initialContains = new HashSet<string>(ProtoXmlHandler.GetContainList(unit), StringComparer.OrdinalIgnoreCase);
         var initialNotContains = new HashSet<string>(ProtoXmlHandler.GetNotContainList(unit), StringComparer.OrdinalIgnoreCase);
+        var initialContainExternal = unit.Elements("contain").Any(element =>
+            string.Equals((string?)element.Attribute("external"), "1", StringComparison.OrdinalIgnoreCase));
+        var initialContainEjectCommand = ProtoXmlHandler.GetCommandEntries(unit).Any(entry =>
+            entry.Value.Equals("Eject", StringComparison.OrdinalIgnoreCase));
         var containSuggestions = GetAvailableBuildLimitTargets();
         var containContainer = new StackPanel { Spacing = 4, IsVisible = false };
         structureEditorsContainer.Children.Add(containContainer);
@@ -36092,7 +37213,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
             }
 
-            var topGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, 90, Auto") };
+            var topGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, 90, Auto, Auto, Auto") };
 
             var lbl = new TextBlock { Text = "Contain", VerticalAlignment = VerticalAlignment.Center };
             Grid.SetColumn(lbl, 0);
@@ -36123,6 +37244,66 @@ public partial class ProtoEditorWindow : SimpleWindow
             topGrid.Children.Add(maxContainedTb);
             _fieldControls["maxcontained"] = maxContainedTb;
 
+            var externalCheckBox = new CheckBox
+            {
+                Content = "External",
+                IsChecked = initialContainExternal,
+                IsEnabled = !_isReadOnly,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            externalCheckBox.Click += async (_, _) =>
+            {
+                if (_isPopulating) return;
+                if (!await CheckStartLocalMod())
+                {
+                    externalCheckBox.IsChecked = externalCheckBox.IsChecked != true;
+                    return;
+                }
+                MarkDirty();
+            };
+            Grid.SetColumn(externalCheckBox, 2);
+            topGrid.Children.Add(externalCheckBox);
+            _fieldControls["contain.external"] = externalCheckBox;
+
+            var ejectCommandCheckBox = new CheckBox
+            {
+                Content = "Eject command",
+                IsChecked = initialContainEjectCommand,
+                IsEnabled = !_isReadOnly,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            _containEjectCommandCheckBox = ejectCommandCheckBox;
+            ejectCommandCheckBox.Click += async (_, _) =>
+            {
+                if (_isPopulating || _syncingContainEjectCommand) return;
+                if (!await CheckStartLocalMod())
+                {
+                    _syncingContainEjectCommand = true;
+                    ejectCommandCheckBox.IsChecked = ejectCommandCheckBox.IsChecked != true;
+                    _syncingContainEjectCommand = false;
+                    return;
+                }
+
+                if (ejectCommandCheckBox.IsChecked == true)
+                {
+                    _addUnitCommandRow?.Invoke(new ProtoCommandEntry
+                    {
+                        Value = "Eject",
+                        Row = "3",
+                        Column = "1"
+                    });
+                }
+                else
+                {
+                    _removeUnitCommandRows?.Invoke("Eject");
+                }
+                MarkDirty();
+            };
+            Grid.SetColumn(ejectCommandCheckBox, 3);
+            topGrid.Children.Add(ejectCommandCheckBox);
+
             if (!_isReadOnly)
             {
                 var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 0, 0) };
@@ -36132,13 +37313,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed)
                     {
                         _fieldControls.Remove("maxcontained");
+                        _fieldControls.Remove("contain.external");
                         _currentContains = null;
                         _currentNotContains = null;
+                        initialContainExternal = false;
+                        initialContainEjectCommand = false;
+                        _containRemovedDuringEdit = true;
+                        _removeUnitCommandRows?.Invoke("Eject");
+                        _containEjectCommandCheckBox = null;
                         MarkDirty();
                         ShowAddContainButton();
                     }
                 };
-                Grid.SetColumn(btnDel, 2);
+                Grid.SetColumn(btnDel, 4);
                 topGrid.Children.Add(btnDel);
             }
 
@@ -36181,6 +37368,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 values.Remove(value);
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                             }
                         });
                         wrap.Children.Add(chip);
@@ -36216,6 +37404,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 acbAdd.SelectedItem = null;
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                                 Dispatcher.UIThread.Post(() =>
                                 {
                                     if (acbAdd.IsEnabled && string.IsNullOrWhiteSpace(acbAdd.Text))
@@ -36375,8 +37564,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (addContainButton != null)
                 structureAddButtonsRow.Children.Remove(addContainButton);
             _fieldControls.Remove("maxcontained");
+            _fieldControls.Remove("contain.external");
             _currentContains = null;
             _currentNotContains = null;
+            _containEjectCommandCheckBox = null;
 
             if (!_isReadOnly)
             {
@@ -36394,6 +37585,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         initialContains = [];
                         initialNotContains = [];
+                        initialContainExternal = false;
+                        initialContainEjectCommand = false;
+                        _containRemovedDuringEdit = false;
                         MarkDirty();
                         ShowContainEditor("0");
                     }
@@ -36436,7 +37630,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         async Task HandleOtherFieldChangedAsync()
         {
-            if (_isPopulating)
+            if (_isPopulating || _syncingSharedRechargeEditors)
                 return;
 
             var proceed = await CheckStartLocalMod();
@@ -39864,6 +41058,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ? "Time"
                 : (ProtoConstants.KnownRechargeTypes.FirstOrDefault(x => x.Equals(rechargeTypeRaw, StringComparison.OrdinalIgnoreCase))
                    ?? (string.IsNullOrWhiteSpace(rechargeTypeRaw) ? "Time" : rechargeTypeRaw.Trim()));
+            currentMode = GetRechargeModeDisplayValue(currentMode);
             var initialValue = currentMode.Equals("Time", StringComparison.OrdinalIgnoreCase)
                 ? rechargeTime
                 : recharge?.Value?.Trim() ?? "";
@@ -39878,14 +41073,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 (_currentRechargeExcludeTypes?.Count ?? 0) > 0;
 
             var stack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 2) };
-            var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 170, Auto, 120, Auto, 120, Auto") };
+            var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 170, Auto, 120, Auto, Auto") };
             headerGrid.Children.Add(new TextBlock { Text = "Ability Recharge", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
             var modeLabel = new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
             Grid.SetColumn(modeLabel, 1);
             headerGrid.Children.Add(modeLabel);
             var modeCb = new ComboBox
             {
-                ItemsSource = (new[] { "Time" }).Concat(ProtoConstants.KnownRechargeTypes).Append(currentMode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                ItemsSource = GetRechargeModeDisplayOptions().Append(currentMode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 SelectedItem = currentMode,
                 IsEnabled = !_isReadOnly,
                 MinWidth = 180
@@ -39902,30 +41097,38 @@ public partial class ProtoEditorWindow : SimpleWindow
             headerGrid.Children.Add(valueTb);
             _fieldControls["recharge.value"] = valueTb;
 
-            var initLabel = new TextBlock { Text = "Init", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(initLabel, 5);
-            headerGrid.Children.Add(initLabel);
-            var initTb = CreateOtherTextBox(initialInit, true);
-            Grid.SetColumn(initTb, 6);
-            headerGrid.Children.Add(initTb);
-            _fieldControls["recharge.init"] = initTb;
+            var startChargedCheckBox = CreateRechargeStartChargedCheckBox(initialInit, new Thickness(12, 0, 0, 0));
+            Grid.SetColumn(startChargedCheckBox, 5);
+            headerGrid.Children.Add(startChargedCheckBox);
+            _fieldControls["recharge.init"] = startChargedCheckBox;
+            RegisterStatsRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
 
             if (!_isReadOnly)
             {
                 var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                _statsRechargeRemoveButtons[key] = deleteButton;
                 deleteButton.Click += async (s, e) =>
                 {
+                    if (IsRechargeUsedByAnyAbility(key))
+                    {
+                        RefreshStatsRechargeRemoveAvailability();
+                        return;
+                    }
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
                         _currentRechargeIncludeTypes = null;
                         _currentRechargeExcludeTypes = null;
+                        _statsRechargeModeEditors.Remove(key);
+                        _statsRechargeValueEditors.Remove(key);
+                        _statsRechargeStartChargedEditors.Remove(key);
+                        _statsRechargeRemoveButtons.Remove(key);
                         RemoveOtherSpecificContainer(key, "recharge.mode", "recharge.init", "recharge.value");
                         MarkDirty();
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 7);
+                Grid.SetColumn(deleteButton, 6);
                 headerGrid.Children.Add(deleteButton);
             }
 
@@ -39935,13 +41138,30 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             StackPanel CreateInlineRechargeTypeEditor(string title, HashSet<string> values)
             {
-                var editorStack = new StackPanel { Spacing = 4 };
-                editorStack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 2) });
-                var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+                var editorStack = new StackPanel { Spacing = 2 };
+                var selectorRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                selectorRow.Children.Add(new TextBlock
+                {
+                    Text = title,
+                    FontWeight = FontWeight.Bold,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                editorStack.Children.Add(selectorRow);
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
                 editorStack.Children.Add(wrap);
+
+                AutoCompleteBox? selector = null;
+                var suggestions = GetAvailableBuildLimitTargets();
 
                 void RefreshDisplay()
                 {
+                    if (selector != null)
+                        selector.ItemsSource = suggestions.Where(value => !values.Contains(value)).ToList();
                     wrap.Children.Clear();
                     foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                     {
@@ -39953,34 +41173,34 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 values.Remove(value);
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                             }
                         }));
                     }
                 }
 
-                RefreshDisplay();
-
                 if (!_isReadOnly)
                 {
-                    var addGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*, Auto") };
-                    var suggestions = GetAvailableBuildLimitTargets();
-                    var acb = CreateOtherSuggestionBox("", suggestions, title);
-                    Grid.SetColumn(acb, 0);
-                    addGrid.Children.Add(acb);
-                    string? selectedValue = null;
+                    selector = CreateOtherSuggestionBox("", suggestions, title);
+                    selector.Width = 150;
+                    selector.MaxWidth = 150;
+                    selector.Margin = new Thickness(0, 4, 0, 4);
+                    selectorRow.Children.Add(selector);
 
                     async Task PerformAdd()
                     {
-                        var input = acb.Text?.Trim() ?? "";
+                        var input = selector.Text?.Trim() ?? "";
                         var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
                         if (!string.IsNullOrWhiteSpace(match) && values.Add(match))
                         {
                             var proceed = await CheckStartLocalMod();
                             if (proceed)
                             {
-                                acb.Text = "";
+                                selector.Text = "";
+                                selector.SelectedItem = null;
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                             }
                             else
                             {
@@ -39989,32 +41209,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                     }
 
-                    acb.SelectionChanged += (s, e) =>
+                    selector.SelectionChanged += async (_, _) =>
                     {
-                        if (acb.SelectedItem is string selected)
+                        if (selector.SelectedItem is string selected)
                         {
-                            selectedValue = selected;
-                            acb.Text = selected;
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                var input = acb.Text?.Trim() ?? "";
-                                var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                                if (string.IsNullOrWhiteSpace(match) && !string.IsNullOrWhiteSpace(selectedValue))
-                                    match = suggestions.FirstOrDefault(x => x.Equals(selectedValue, StringComparison.OrdinalIgnoreCase));
-
-                                if (!string.IsNullOrWhiteSpace(match))
-                                    _ = PerformAdd();
-                            }, DispatcherPriority.Background);
+                            selector.Text = selected;
+                            await PerformAdd();
                         }
                     };
-
-                var addButton = new Button { Content = "Add", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(8, 0, 0, 0) };
-                    addButton.Click += async (s, e) => await PerformAdd();
-                    Grid.SetColumn(addButton, 1);
-                    addGrid.Children.Add(addButton);
-                    editorStack.Children.Add(addGrid);
                 }
 
+                RefreshDisplay();
                 return editorStack;
             }
 
@@ -40052,7 +41257,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return;
                 }
 
-                var filtersGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*, *, Auto"), ColumnSpacing = 12 };
+                var filtersGrid = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("*, *, Auto"),
+                    ColumnSpacing = 16,
+                    Margin = new Thickness(150, 0, 0, 0)
+                };
                 var includeEditor = CreateInlineRechargeTypeEditor("Recharge Include Types", _currentRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(includeEditor, 0);
                 filtersGrid.Children.Add(includeEditor);
@@ -40086,12 +41296,30 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (_isPopulating)
                     return;
+                if (_syncingSharedRechargeEditors)
+                {
+                    RenderBody();
+                    return;
+                }
                 var proceed = await CheckStartLocalMod();
                 if (proceed)
                 {
+                    SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
                     MarkDirty();
                     RenderBody();
                 }
+            };
+            valueTb.TextChanged += (_, _) =>
+            {
+                if (!_isPopulating && !_syncingSharedRechargeEditors)
+                    SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
+            };
+            startChargedCheckBox.IsCheckedChanged += async (_, _) =>
+            {
+                if (_isPopulating || _syncingSharedRechargeEditors) return;
+                if (!await CheckStartLocalMod()) return;
+                SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
+                MarkDirty();
             };
 
             RenderBody();
@@ -40112,6 +41340,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ? "Time"
                 : (ProtoConstants.KnownRechargeTypes.FirstOrDefault(x => x.Equals(rechargeTypeRaw, StringComparison.OrdinalIgnoreCase))
                    ?? (string.IsNullOrWhiteSpace(rechargeTypeRaw) ? "Time" : rechargeTypeRaw.Trim()));
+            currentMode = GetRechargeModeDisplayValue(currentMode);
             var initialValue = currentMode.Equals("Time", StringComparison.OrdinalIgnoreCase)
                 ? rechargeTime
                 : recharge?.Value?.Trim() ?? "";
@@ -40126,14 +41355,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 (_currentAuxRechargeExcludeTypes?.Count ?? 0) > 0;
 
             var stack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 2) };
-            var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 170, Auto, 120, Auto, 120, Auto") };
+            var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 170, Auto, 120, Auto, Auto") };
             headerGrid.Children.Add(new TextBlock { Text = "Aux Ability Recharge", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
             var modeLabel = new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
             Grid.SetColumn(modeLabel, 1);
             headerGrid.Children.Add(modeLabel);
             var modeCb = new ComboBox
             {
-                ItemsSource = (new[] { "Time" }).Concat(ProtoConstants.KnownRechargeTypes).Append(currentMode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                ItemsSource = GetRechargeModeDisplayOptions().Append(currentMode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 SelectedItem = currentMode,
                 IsEnabled = !_isReadOnly,
                 MinWidth = 180
@@ -40150,30 +41379,38 @@ public partial class ProtoEditorWindow : SimpleWindow
             headerGrid.Children.Add(valueTb);
             _fieldControls["auxrecharge.value"] = valueTb;
 
-            var initLabel = new TextBlock { Text = "Init", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(initLabel, 5);
-            headerGrid.Children.Add(initLabel);
-            var initTb = CreateOtherTextBox(initialInit, true);
-            Grid.SetColumn(initTb, 6);
-            headerGrid.Children.Add(initTb);
-            _fieldControls["auxrecharge.init"] = initTb;
+            var startChargedCheckBox = CreateRechargeStartChargedCheckBox(initialInit, new Thickness(12, 0, 0, 0));
+            Grid.SetColumn(startChargedCheckBox, 5);
+            headerGrid.Children.Add(startChargedCheckBox);
+            _fieldControls["auxrecharge.init"] = startChargedCheckBox;
+            RegisterStatsRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
 
             if (!_isReadOnly)
             {
                 var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                _statsRechargeRemoveButtons[key] = deleteButton;
                 deleteButton.Click += async (s, e) =>
                 {
+                    if (IsRechargeUsedByAnyAbility(key))
+                    {
+                        RefreshStatsRechargeRemoveAvailability();
+                        return;
+                    }
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
                         _currentAuxRechargeIncludeTypes = null;
                         _currentAuxRechargeExcludeTypes = null;
+                        _statsRechargeModeEditors.Remove(key);
+                        _statsRechargeValueEditors.Remove(key);
+                        _statsRechargeStartChargedEditors.Remove(key);
+                        _statsRechargeRemoveButtons.Remove(key);
                         RemoveOtherSpecificContainer(key, "auxrecharge.mode", "auxrecharge.init", "auxrecharge.value");
                         MarkDirty();
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 7);
+                Grid.SetColumn(deleteButton, 6);
                 headerGrid.Children.Add(deleteButton);
             }
 
@@ -40183,13 +41420,30 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             StackPanel CreateInlineRechargeTypeEditor(string title, HashSet<string> values)
             {
-                var editorStack = new StackPanel { Spacing = 4 };
-                editorStack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 2) });
-                var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+                var editorStack = new StackPanel { Spacing = 2 };
+                var selectorRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                selectorRow.Children.Add(new TextBlock
+                {
+                    Text = title,
+                    FontWeight = FontWeight.Bold,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                editorStack.Children.Add(selectorRow);
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
                 editorStack.Children.Add(wrap);
+
+                AutoCompleteBox? selector = null;
+                var suggestions = GetAvailableBuildLimitTargets();
 
                 void RefreshDisplay()
                 {
+                    if (selector != null)
+                        selector.ItemsSource = suggestions.Where(value => !values.Contains(value)).ToList();
                     wrap.Children.Clear();
                     foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                     {
@@ -40201,34 +41455,34 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 values.Remove(value);
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                             }
                         }));
                     }
                 }
 
-                RefreshDisplay();
-
                 if (!_isReadOnly)
                 {
-                    var addGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*, Auto") };
-                    var suggestions = GetAvailableBuildLimitTargets();
-                    var acb = CreateOtherSuggestionBox("", suggestions, title);
-                    Grid.SetColumn(acb, 0);
-                    addGrid.Children.Add(acb);
-                    string? selectedValue = null;
+                    selector = CreateOtherSuggestionBox("", suggestions, title);
+                    selector.Width = 150;
+                    selector.MaxWidth = 150;
+                    selector.Margin = new Thickness(0, 4, 0, 4);
+                    selectorRow.Children.Add(selector);
 
                     async Task PerformAdd()
                     {
-                        var input = acb.Text?.Trim() ?? "";
+                        var input = selector.Text?.Trim() ?? "";
                         var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
                         if (!string.IsNullOrWhiteSpace(match) && values.Add(match))
                         {
                             var proceed = await CheckStartLocalMod();
                             if (proceed)
                             {
-                                acb.Text = "";
+                                selector.Text = "";
+                                selector.SelectedItem = null;
                                 MarkDirty();
                                 RefreshDisplay();
+                                CommitChipAdditionAndRefreshXmlPreview();
                             }
                             else
                             {
@@ -40237,32 +41491,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                     }
 
-                    acb.SelectionChanged += (s, e) =>
+                    selector.SelectionChanged += async (_, _) =>
                     {
-                        if (acb.SelectedItem is string selected)
+                        if (selector.SelectedItem is string selected)
                         {
-                            selectedValue = selected;
-                            acb.Text = selected;
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                var input = acb.Text?.Trim() ?? "";
-                                var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                                if (string.IsNullOrWhiteSpace(match) && !string.IsNullOrWhiteSpace(selectedValue))
-                                    match = suggestions.FirstOrDefault(x => x.Equals(selectedValue, StringComparison.OrdinalIgnoreCase));
-
-                                if (!string.IsNullOrWhiteSpace(match))
-                                    _ = PerformAdd();
-                            }, DispatcherPriority.Background);
+                            selector.Text = selected;
+                            await PerformAdd();
                         }
                     };
-
-                var addButton = new Button { Content = "Add", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(8, 0, 0, 0) };
-                    addButton.Click += async (s, e) => await PerformAdd();
-                    Grid.SetColumn(addButton, 1);
-                    addGrid.Children.Add(addButton);
-                    editorStack.Children.Add(addGrid);
                 }
 
+                RefreshDisplay();
                 return editorStack;
             }
 
@@ -40300,7 +41539,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return;
                 }
 
-                var filtersGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*, *, Auto"), ColumnSpacing = 12 };
+                var filtersGrid = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("*, *, Auto"),
+                    ColumnSpacing = 16,
+                    Margin = new Thickness(150, 0, 0, 0)
+                };
                 var includeEditor = CreateInlineRechargeTypeEditor("Aux Recharge Include Types", _currentAuxRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(includeEditor, 0);
                 filtersGrid.Children.Add(includeEditor);
@@ -40334,12 +41578,30 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (_isPopulating)
                     return;
+                if (_syncingSharedRechargeEditors)
+                {
+                    RenderBody();
+                    return;
+                }
                 var proceed = await CheckStartLocalMod();
                 if (proceed)
                 {
+                    SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
                     MarkDirty();
                     RenderBody();
                 }
+            };
+            valueTb.TextChanged += (_, _) =>
+            {
+                if (!_isPopulating && !_syncingSharedRechargeEditors)
+                    SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
+            };
+            startChargedCheckBox.IsCheckedChanged += async (_, _) =>
+            {
+                if (_isPopulating || _syncingSharedRechargeEditors) return;
+                if (!await CheckStartLocalMod()) return;
+                SynchronizeSharedRechargeEditors(key, modeCb, valueTb, startChargedCheckBox);
+                MarkDirty();
             };
 
             RenderBody();
@@ -44189,7 +45451,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var oldUnitName = _currentUnitName;
                     unit.SetAttributeValue("name", newUnitName);
                     _currentUnitName = newUnitName;
-                    MoveUnitCategoryAssignment(oldUnitName, newUnitName);
+                    RenameOpenDocumentTabs(EditorEntityKind.Units, oldUnitName, newUnitName);
 
                     var renamedIds = BuildRenamedUnitStringIds(newUnitName, oldStringIds, stringTexts);
                     _currentStringFieldIds.Clear();
@@ -45470,7 +46732,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 unit,
                 _currentContains != null
                     ? _currentContains.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                    : Enumerable.Empty<string>());
+                    : Enumerable.Empty<string>(),
+                _fieldControls.TryGetValue("contain.external", out var containExternalControl) &&
+                containExternalControl is CheckBox { IsChecked: true });
             ProtoXmlHandler.SetNotContainList(
                 unit,
                 _currentNotContains != null
@@ -45631,6 +46895,23 @@ public partial class ProtoEditorWindow : SimpleWindow
             .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
             .ToList();
         var commandEntries = CollectValidCommandEntries(_unitCommandRows, regularCommandNamesForSave);
+        if (_containEjectCommandCheckBox != null)
+        {
+            commandEntries.RemoveAll(entry => entry.Value.Equals("Eject", StringComparison.OrdinalIgnoreCase));
+            if (_containEjectCommandCheckBox.IsChecked == true)
+            {
+                commandEntries.Add(new ProtoCommandEntry
+                {
+                    Value = "Eject",
+                    Row = "3",
+                    Column = "1"
+                });
+            }
+        }
+        else if (_containRemovedDuringEdit)
+        {
+            commandEntries.RemoveAll(entry => entry.Value.Equals("Eject", StringComparison.OrdinalIgnoreCase));
+        }
         commandEntries.AddRange(_transformCommandAssignments.BuildCommandEntries(
             IsTransformUniqueCommand,
             IsTransformMultipleCommand));
@@ -46211,6 +47492,157 @@ public partial class ProtoEditorWindow : SimpleWindow
     internal static void SaveUnitTypeXmlDocument(XDocument document, string path)
         => SaveAbilityXmlDocument(document, path);
 
+    private static string GetRechargeModeDisplayValue(string? value)
+        => string.Equals(value?.Trim(), "resourceDropoff", StringComparison.OrdinalIgnoreCase)
+            ? "ResourceDropoff"
+            : value?.Trim() ?? "";
+
+    private static string[] GetRechargeModeDisplayOptions()
+        => (new[] { "Time" })
+            .Concat(ProtoConstants.KnownRechargeTypes.Select(GetRechargeModeDisplayValue))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private CheckBox CreateRechargeStartChargedCheckBox(string? init, Thickness? margin = null)
+        => new()
+        {
+            Content = "Start charged",
+            IsChecked = !string.Equals(init, "0", StringComparison.OrdinalIgnoreCase),
+            IsEnabled = !_isReadOnly,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = margin ?? new Thickness(0)
+        };
+
+    private void RegisterStatsRechargeEditors(
+        string prefix,
+        ComboBox modeEditor,
+        TextBox valueEditor,
+        CheckBox startChargedEditor)
+    {
+        _statsRechargeModeEditors[prefix] = modeEditor;
+        _statsRechargeValueEditors[prefix] = valueEditor;
+        _statsRechargeStartChargedEditors[prefix] = startChargedEditor;
+
+        if (!_abilityRechargeModeEditors.TryGetValue(prefix, out var abilityMode) ||
+            !_abilityRechargeValueEditors.TryGetValue(prefix, out var abilityValue) ||
+            !_abilityRechargeStartChargedEditors.TryGetValue(prefix, out var abilityStartCharged))
+        {
+            return;
+        }
+
+        _syncingSharedRechargeEditors = true;
+        try
+        {
+            modeEditor.SelectedItem = GetRechargeModeDisplayValue(abilityMode.SelectedItem as string);
+            valueEditor.Text = abilityValue.Text;
+            startChargedEditor.IsChecked = abilityStartCharged.IsChecked;
+        }
+        finally
+        {
+            _syncingSharedRechargeEditors = false;
+        }
+    }
+
+    private void RegisterAbilityRechargeEditors(
+        string prefix,
+        ComboBox modeEditor,
+        TextBox valueEditor,
+        CheckBox startChargedEditor)
+    {
+        _abilityRechargeModeEditors[prefix] = modeEditor;
+        _abilityRechargeValueEditors[prefix] = valueEditor;
+        _abilityRechargeStartChargedEditors[prefix] = startChargedEditor;
+
+        if (!_statsRechargeModeEditors.TryGetValue(prefix, out var statsMode) ||
+            !_statsRechargeValueEditors.TryGetValue(prefix, out var statsValue) ||
+            !_statsRechargeStartChargedEditors.TryGetValue(prefix, out var statsStartCharged))
+        {
+            return;
+        }
+
+        _syncingSharedRechargeEditors = true;
+        try
+        {
+            modeEditor.SelectedItem = GetRechargeModeDisplayValue(statsMode.SelectedItem as string);
+            valueEditor.Text = statsValue.Text;
+            startChargedEditor.IsChecked = statsStartCharged.IsChecked;
+        }
+        finally
+        {
+            _syncingSharedRechargeEditors = false;
+        }
+    }
+
+    private void RestoreStatsRechargeFieldControls()
+    {
+        foreach (var prefix in new[] { "recharge", "auxrecharge" })
+        {
+            if (_statsRechargeModeEditors.TryGetValue(prefix, out var mode))
+                _fieldControls[$"{prefix}.mode"] = mode;
+            if (_statsRechargeValueEditors.TryGetValue(prefix, out var value))
+                _fieldControls[$"{prefix}.value"] = value;
+            if (_statsRechargeStartChargedEditors.TryGetValue(prefix, out var startCharged))
+                _fieldControls[$"{prefix}.init"] = startCharged;
+        }
+    }
+
+    private bool IsRechargeUsedByAnyAbility(string prefix)
+        => prefix.Equals("auxrecharge", StringComparison.OrdinalIgnoreCase)
+            ? _abilityDrafts.Values.Any(draft =>
+                draft.GeneralFlags.Contains("auxchargetimeasrof") ||
+                draft.GeneralFlags.Contains("bindtoauxchargeaction"))
+            : _abilityDrafts.Values.Any(draft =>
+                draft.GeneralFlags.Contains("chargetimeasrof") ||
+                draft.GeneralFlags.Contains("bindtochargeaction"));
+
+    private void RefreshStatsRechargeRemoveAvailability()
+    {
+        foreach (var pair in _statsRechargeRemoveButtons)
+        {
+            var isUsed = IsRechargeUsedByAnyAbility(pair.Key);
+            pair.Value.IsEnabled = !_isReadOnly && !isUsed;
+            ToolTip.SetTip(pair.Value, isUsed
+                ? $"This {GetOtherSpecificAttributeLabel(pair.Key)} is used by an ability and cannot be removed."
+                : null);
+        }
+    }
+
+    private void SynchronizeSharedRechargeEditors(
+        string prefix,
+        ComboBox sourceMode,
+        TextBox sourceValue,
+        CheckBox sourceStartCharged)
+    {
+        if (_syncingSharedRechargeEditors)
+            return;
+
+        _syncingSharedRechargeEditors = true;
+        try
+        {
+            var mode = GetRechargeModeDisplayValue(sourceMode.SelectedItem as string);
+            var value = sourceValue.Text;
+            var startCharged = sourceStartCharged.IsChecked;
+
+            if (_statsRechargeModeEditors.TryGetValue(prefix, out var statsMode) && !ReferenceEquals(statsMode, sourceMode))
+                statsMode.SelectedItem = mode;
+            if (_statsRechargeValueEditors.TryGetValue(prefix, out var statsValue) && !ReferenceEquals(statsValue, sourceValue))
+                statsValue.Text = value;
+            if (_statsRechargeStartChargedEditors.TryGetValue(prefix, out var statsStart) && !ReferenceEquals(statsStart, sourceStartCharged))
+                statsStart.IsChecked = startCharged;
+
+            if (_abilityRechargeModeEditors.TryGetValue(prefix, out var abilityMode) && !ReferenceEquals(abilityMode, sourceMode))
+                abilityMode.SelectedItem = mode;
+            if (_abilityRechargeValueEditors.TryGetValue(prefix, out var abilityValue) && !ReferenceEquals(abilityValue, sourceValue))
+                abilityValue.Text = value;
+            if (_abilityRechargeStartChargedEditors.TryGetValue(prefix, out var abilityStart) && !ReferenceEquals(abilityStart, sourceStartCharged))
+                abilityStart.IsChecked = startCharged;
+        }
+        finally
+        {
+            _syncingSharedRechargeEditors = false;
+        }
+    }
+
     private void MarkDirty()
     {
         if (_isPopulating || _suppressEditorChangeTracking) return;
@@ -46222,6 +47654,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_isAbilityDefinitionEditorMode && _protoActionHostAdapter.Context.TracksProtoUnitDraft && !string.IsNullOrWhiteSpace(_currentUnitName))
             _dirtyUnitNames.Add(_currentUnitName);
         _fileLabel.Text = (_modFilePath ?? "Unsaved Mod") + " *";
+        RefreshDocumentTabHeaders();
         ScheduleXmlPreviewRefresh();
     }
 
@@ -46277,7 +47710,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             _modXmlRoot = root;
             _modFilePath = path;
             LoadCurrentModAssetCatalogs();
-            LoadCategoriesForCurrentMod();
             _fileLabel.Text = path;
             _isDirty = false;
             ClearPendingUnitDrafts();
@@ -46342,7 +47774,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _modXmlDoc = doc;
                 _modXmlRoot = root;
                 _modFilePath = xmlPath;
-                LoadCategoriesForCurrentMod();
                 InvalidateSuggestionCaches(includeTechNames: true);
                 InvalidateModStringEntriesCache();
                 RefreshProtoActionMetadata();
@@ -46937,9 +48368,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var path = Path.Combine(localModsDir, picker.PickedItem, "game", "data", "gameplay", "proto_mods.xml");
             if (TryLoadModFile(path))
             {
-                _technologyHost.IsVisible = false;
-                _technologyHost.Content = null;
-                _technologyView = null;
+                ResetEntityBrowserToUnits();
                 _unitTabs.SelectedIndex = 1;
                 RefreshUnitList();
                 ClearEditorPanels();
@@ -46963,9 +48392,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (await EnsureLocalModAsync(forceNew: true))
         {
-            _technologyHost.IsVisible = false;
-            _technologyHost.Content = null;
-            _technologyView = null;
+            ResetEntityBrowserToUnits();
             _unitTabs.SelectedIndex = 1;
             RefreshUnitList();
             ClearEditorPanels();
@@ -47725,7 +49152,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_isAbilityDefinitionEditorMode)
             LoadAbilitySources(unitName);
         _abilitiesEditorPanel.Children.Clear();
+        _abilityRechargeModeEditors.Clear();
         _abilityRechargeValueEditors.Clear();
+        _abilityRechargeStartChargedEditors.Clear();
         _abilityRangeIndicatorRangeEditorForValidation = null;
 
         _currentRechargeIncludeTypes = new HashSet<string>(
@@ -48091,9 +49520,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         void RenderRecharge()
         {
             rechargeHost.Children.Clear();
+            _abilityRechargeModeEditors.Clear();
             _abilityRechargeValueEditors.Clear();
+            _abilityRechargeStartChargedEditors.Clear();
             foreach (var key in new[] { "recharge.mode", "recharge.value", "recharge.init", "auxrecharge.mode", "auxrecharge.value", "auxrecharge.init" })
                 _fieldControls.Remove(key);
+            RestoreStatsRechargeFieldControls();
 
             var useMain = UsesMainAbilityRecharge();
             var useAux = UsesAuxAbilityRecharge();
@@ -48113,12 +49545,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var mode = rawMode.Equals("Time", StringComparison.OrdinalIgnoreCase)
                     ? "Time"
                     : ProtoConstants.KnownRechargeTypes.FirstOrDefault(type => type.Equals(rawMode, StringComparison.OrdinalIgnoreCase)) ?? "Time";
+                mode = GetRechargeModeDisplayValue(mode);
                 var value = timeElement?.Value ?? typedElement?.Value ?? "";
                 var init = timeElement?.Attribute("init")?.Value ?? typedElement?.Attribute("init")?.Value;
 
                 var lineHost = new StackPanel { Spacing = 5 };
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
-                var modeCb = new ComboBox { Width = 130, ItemsSource = (new[] { "Time" }).Concat(ProtoConstants.KnownRechargeTypes).ToArray(), SelectedItem = mode, IsEnabled = !_isReadOnly };
+                var modeCb = new ComboBox { Width = 130, ItemsSource = GetRechargeModeDisplayOptions(), SelectedItem = mode, IsEnabled = !_isReadOnly };
                 if (modeCb.SelectedItem == null) modeCb.SelectedItem = "Time";
                 var valueTb = new TextBox { Text = value, Width = 90, IsEnabled = !_isReadOnly };
                 EditorNumericFieldStyle.ConfigureNumericTextBox(valueTb);
@@ -48129,13 +49562,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         proposed is not "." and not "-" and not "-.")
                         args.Handled = true;
                 }, RoutingStrategies.Tunnel);
-                var startChargedCb = new CheckBox
-                {
-                    Content = "Start charged",
-                    IsChecked = !string.Equals(init, "0", StringComparison.OrdinalIgnoreCase),
-                    IsEnabled = !_isReadOnly,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
+                var startChargedCb = CreateRechargeStartChargedCheckBox(init);
                 row.Children.Add(modeCb);
                 row.Children.Add(new TextBlock { Text = "Value", VerticalAlignment = VerticalAlignment.Center });
                 row.Children.Add(valueTb);
@@ -48176,7 +49603,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _fieldControls[$"{prefix}.mode"] = modeCb;
                 _fieldControls[$"{prefix}.value"] = valueTb;
                 _fieldControls[$"{prefix}.init"] = startChargedCb;
-                _abilityRechargeValueEditors[prefix] = valueTb;
+                RegisterAbilityRechargeEditors(prefix, modeCb, valueTb, startChargedCb);
 
                 var filtersHost = new StackPanel { Spacing = 5, Margin = new Thickness(0, 0, 0, 2) };
                 lineHost.Children.Add(filtersHost);
@@ -48269,8 +49696,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 async void RechargeChanged(bool modeChanged = false)
                 {
                     if (_loadingAbilityEditor || _isPopulating) return;
+                    if (_syncingSharedRechargeEditors)
+                    {
+                        if (modeChanged) RenderFilters();
+                        return;
+                    }
                     var proceed = await CheckStartLocalMod();
                     if (!proceed) return;
+                    SynchronizeSharedRechargeEditors(prefix, modeCb, valueTb, startChargedCb);
                     if (modeChanged) RenderFilters();
                     MarkDirty();
                 }
@@ -48325,6 +49758,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (useMain) AddRechargeLine("recharge", "");
             if (useAux) AddRechargeLine("auxrecharge", "");
+            RefreshStatsRechargeRemoveAvailability();
         }
 
         abilityDetailsHost.Children.Add(new TextBlock { Text = "Ability description", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) });
@@ -49437,6 +50871,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var proceed = await CheckStartLocalMod();
             if (!proceed) return;
             CaptureCurrent();
+            RefreshStatsRechargeRemoveAvailability();
             SyncUnitActionRechargeBindings();
             MarkDirty();
         }
@@ -50694,7 +52129,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         Dictionary<string, string> PendingUnitRenames,
         HashSet<string> DirtyUnitNames,
         Dictionary<string, Dictionary<string, AbilityEditorDraft>> UnitAbilityDrafts,
-        Dictionary<string, string> UnitCategories,
         Dictionary<string, List<XElement>> DuplicatedUnitRechargeFallbacks);
 
     private ProtoUnitDraftCaptureSnapshot CreateProtoUnitDraftCaptureSnapshot()
@@ -50715,7 +52149,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 entry => entry.Key,
                 entry => CloneAbilityDrafts(entry.Value),
                 StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, string>(_unitCategories, StringComparer.OrdinalIgnoreCase),
             _duplicatedUnitRechargeFallbacks.ToDictionary(
                 entry => entry.Key,
                 entry => entry.Value.Select(element => new XElement(element)).ToList(),
@@ -50724,11 +52157,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void RestoreProtoUnitDraftCaptureSnapshot(ProtoUnitDraftCaptureSnapshot snapshot)
     {
-        var categoriesChanged = _unitCategories.Count != snapshot.UnitCategories.Count ||
-                                _unitCategories.Any(entry =>
-                                    !snapshot.UnitCategories.TryGetValue(entry.Key, out var value) ||
-                                    !string.Equals(value, entry.Value, StringComparison.OrdinalIgnoreCase));
-
         _modXmlDoc = new XDocument(snapshot.Document);
         _modXmlRoot = _modXmlDoc.Root;
         _currentUnitName = snapshot.CurrentUnitName;
@@ -50761,10 +52189,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var entry in snapshot.UnitAbilityDrafts)
             _unitAbilityDrafts[entry.Key] = CloneAbilityDrafts(entry.Value);
 
-        _unitCategories.Clear();
-        foreach (var entry in snapshot.UnitCategories)
-            _unitCategories[entry.Key] = entry.Value;
-
         _duplicatedUnitRechargeFallbacks.Clear();
         foreach (var entry in snapshot.DuplicatedUnitRechargeFallbacks)
         {
@@ -50773,8 +52197,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .ToList();
         }
 
-        if (categoriesChanged)
-            SaveCategoriesForCurrentMod();
     }
 
     private async Task<bool> CaptureCurrentUnitDraftAsync()
@@ -50878,14 +52300,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async void Save_Click(object? sender, RoutedEventArgs e)
     {
-        if (_technologyHost.IsVisible && _technologyView != null)
-        {
-            if (_technologyView.Save())
-                _cachedTechNames = null;
-            _abilityMainSavePointerPending = false;
-            return;
-        }
-
         if (_isUnitSaveInProgress)
             return;
 
@@ -50893,7 +52307,24 @@ public partial class ProtoEditorWindow : SimpleWindow
         _saveButton.IsEnabled = false;
         try
         {
-            await SaveCurrentUnitCoreAsync(sender, e);
+            // The editor has one global Save action, so persist pending work from
+            // both document kinds instead of silently saving only the visible one.
+            if (_isDirty)
+            {
+                await SaveCurrentUnitCoreAsync(sender, e);
+                if (_isDirty)
+                    return;
+            }
+
+            if (_technologyView?.IsDirty == true)
+            {
+                if (!await _technologyView.SaveAsync())
+                    return;
+                _cachedTechNames = null;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
+            }
+
+            RefreshDocumentTabHeaders();
         }
         catch (Exception ex)
         {
@@ -50929,7 +52360,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             var unitNameBackup = _currentUnitName;
             var stringFieldIdsBackup = new Dictionary<string, string>(_currentStringFieldIds, StringComparer.OrdinalIgnoreCase);
             var pendingRemovedStringIdsBackup = new HashSet<string>(_pendingUnitRenameRemovedStringIds, StringComparer.OrdinalIgnoreCase);
-            var unitCategoriesBackup = new Dictionary<string, string>(_unitCategories, StringComparer.OrdinalIgnoreCase);
             var abilityPowerCatalogBackup = _abilityPowerCatalog.ToDictionary(
                 entry => entry.Key,
                 entry => new XElement(entry.Value),
@@ -50964,9 +52394,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _pendingUnitRenameRemovedStringIds.Clear();
                 foreach (var id in pendingRemovedStringIdsBackup)
                     _pendingUnitRenameRemovedStringIds.Add(id);
-                _unitCategories.Clear();
-                foreach (var entry in unitCategoriesBackup)
-                    _unitCategories[entry.Key] = entry.Value;
                 _abilityPowerCatalog.Clear();
                 foreach (var entry in abilityPowerCatalogBackup)
                     _abilityPowerCatalog[entry.Key] = entry.Value;
@@ -50984,6 +52411,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (_currentAbilityNameEditor != null)
                 _currentAbilityNameEditor.ItemsSource = _availableAbilityNames.ToList();
             _isDirty = false;
+            RefreshSavedDocumentSnapshots(EditorEntityKind.Units);
+            RefreshDocumentTabHeaders();
             _fileLabel.Text = _modFilePath;
             _statusMessage.Text = "Saved successfully.";
             if (!string.IsNullOrWhiteSpace(_currentUnitName))
@@ -51017,39 +52446,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async void ProtounitEditView_Click(object? sender, RoutedEventArgs e)
     {
-        if (_technologyHost.IsVisible && (_technologyView?.IsDirty ?? false))
-        {
-            var proceed = await PromptUnsavedChangesAsync();
-            if (!proceed) return;
-        }
-
-        _technologyHost.IsVisible = false;
-        _unitList.Focus();
+        await ShowEntityKindAsync(EditorEntityKind.Units);
     }
 
-    private void TechnologyEditView_Click(object? sender, RoutedEventArgs e)
+    private async void TechnologyEditView_Click(object? sender, RoutedEventArgs e)
     {
-        if (_technologyView == null)
-        {
-            LoadCurrentModAssetCatalogs();
-            _technologyView = new TechnologyEditorView(
-                GetBaseTechtreeDocumentsFromLoadedBar(),
-                ResolveBaseGameplayDirectory(),
-                GetCurrentModGameplayFilePath("techtree_mods.xml"),
-                ResolveDisplayStringAsync,
-                SaveTechnologyStringValuesAsync,
-                _baseGameIconPaths.Concat(_customIconPaths),
-                GetTechnologyPrerequisiteUnitNames(),
-                GetTechnologyProtoUnitNames(),
-                SupportedCultureLabels,
-                GetTechnologyPrerequisiteMajorGodNames(),
-                GetTechnologyTechTypeNames(),
-                GetTechnologyProtoActionNames(),
-                GetAvailableCommandNames());
-            _technologyHost.Content = _technologyView;
-        }
-
-        _technologyHost.IsVisible = true;
+        await ShowEntityKindAsync(EditorEntityKind.Technologies);
     }
 
     private async void ProtounitCommands_Click(object? sender, RoutedEventArgs e)
@@ -51150,6 +52552,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async void AddUnit_Click(object? sender, RoutedEventArgs e)
     {
+        await AddUnitAsync(duplicateSelected: false);
+    }
+
+    private async Task AddUnitAsync(bool duplicateSelected)
+    {
         if (_modXmlRoot == null && !await EnsureLocalModAsync())
         {
             return;
@@ -51159,8 +52566,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
-        bool duplicate = false;
-        if (!string.IsNullOrEmpty(_currentUnitName))
+        var duplicate = duplicateSelected && !string.IsNullOrEmpty(_currentUnitName);
+        if (!duplicateSelected && !string.IsNullOrEmpty(_currentUnitName))
         {
             var pChoice = new Prompt(PromptType.Confirm, "Add Unit", $"Do you want to DUPLICATE the selected unit '{_currentUnitName}'?\n(Click Confirm to duplicate, or Cancel to create a blank unit instead.)");
             await pChoice.ShowDialog(this);
@@ -51287,6 +52694,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async void DeleteUnit_Click(object? sender, RoutedEventArgs e)
     {
+        await DeleteSelectedUnitAsync();
+    }
+
+    private async Task DeleteSelectedUnitAsync()
+    {
         if (string.IsNullOrEmpty(_currentUnitName))
         {
             var pErr = new Prompt(PromptType.Error, "Select Unit", "Please select a unit to delete.");
@@ -51313,11 +52725,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _pendingUnitStringRemovals.Add(stringId);
             }
             ProtoXmlHandler.DeleteUnit(_modXmlRoot, deletedUnitName);
-            _unitCategories.Remove(deletedUnitName);
-            SaveCategoriesForCurrentMod();
             _dirtyUnitNames.Add(deletedUnitName);
             _unitAbilityDrafts[deletedUnitName] = new Dictionary<string, AbilityEditorDraft>(StringComparer.OrdinalIgnoreCase);
             _currentUnitName = null;
+            RemoveDeletedDocumentTabs(EditorEntityKind.Units, deletedUnitName);
             MarkDirty();
             InvalidateSuggestionCaches();
             RefreshUnitList();
@@ -51359,9 +52770,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        e.Cancel = true;
+        if (_activeEntityKind == EditorEntityKind.Technologies &&
+            _technologyView != null &&
+            !await _technologyView.CommitCurrentTechnologyAsync())
+            return;
+
         if (_isDirty || (_technologyView?.IsDirty ?? false))
         {
-            e.Cancel = true;
             var proceed = await PromptUnsavedChangesAsync();
             if (proceed)
             {
@@ -51371,7 +52787,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else
         {
-            base.OnClosing(e);
+            _allowCloseAfterDiscard = true;
+            Close();
         }
     }
 

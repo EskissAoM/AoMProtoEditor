@@ -147,6 +147,32 @@
         <Style Selector="Button.topSave:pointerover">
             <Setter Property="Background" Value="#348f0e" />
         </Style>
+
+        <Style Selector="Button.entitySelector">
+            <Setter Property="Padding" Value="4,5" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Background" Value="#252526" />
+            <Setter Property="Foreground" Value="#b8b8b8" />
+        </Style>
+        <Style Selector="Button.entitySelector.active">
+            <Setter Property="Background" Value="#2b3c57" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
+        <Style Selector="TabStripItem.documentTab">
+            <Setter Property="Padding" Value="4,1" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Background" Value="#202024" />
+            <Setter Property="Foreground" Value="#b8b8b8" />
+        </Style>
+        <Style Selector="TabStripItem.documentTab:selected">
+            <Setter Property="Background" Value="#2b3c57" />
+            <Setter Property="Foreground" Value="#ffffff" />
+        </Style>
         <Style Selector="Button.topMenuItem">
             <Setter Property="Width" Value="125" />
             <Setter Property="MinWidth" Value="125" />
@@ -244,7 +270,7 @@
         </Border>
 
         <!-- Main content -->
-        <Grid x:Name="_mainContentGrid">
+        <Grid x:Name="_mainContentGrid" RowDefinitions="Auto,*">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="210" />
                 <ColumnDefinition Width="5" />
@@ -253,18 +279,34 @@
                 <ColumnDefinition Width="250" MinWidth="28" />
             </Grid.ColumnDefinitions>
             <!-- Left panel: unit list -->
-            <Border x:Name="_unitListPanel" Grid.Column="0" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
+            <Border x:Name="_unitListPanel" Grid.Column="0" Grid.RowSpan="2" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Units" FontWeight="Bold" FontSize="14" Margin="0,0,0,6" />
+                    <Border DockPanel.Dock="Top"
+                            x:Name="_entitySelectorContainer"
+                            Background="#1c1c1c"
+                            BorderBrush="#343438"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="5"
+                            Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
+                            <Button x:Name="_unitsEntityButton" Classes="entitySelector active" Content="Units" Click="UnitsEntity_Click" />
+                            <Button x:Name="_techsEntityButton" Grid.Column="1" Classes="entitySelector" Content="Technologies" Click="TechsEntity_Click" />
+                            <Button x:Name="_godsEntityButton" Grid.Row="1" Classes="entitySelector" Content="Gods" IsEnabled="False" ToolTip.Tip="God editing is not available yet." />
+                            <Button x:Name="_powersEntityButton" Grid.Row="1" Grid.Column="1" Classes="entitySelector" Content="Powers" IsEnabled="False" ToolTip.Tip="Power editing is not available yet." />
+                        </Grid>
+                    </Border>
+
+                    <TextBlock DockPanel.Dock="Top"
+                               x:Name="_entityListHeading"
+                               Text="Units"
+                               FontWeight="Bold"
+                               FontSize="14"
+                               TextAlignment="Center"
+                               HorizontalAlignment="Stretch"
+                               Margin="0,0,0,6" />
                     
                     <TextBox DockPanel.Dock="Top" x:Name="_searchBox" PlaceholderText="Search..." Margin="0,0,0,6" TextChanged="SearchBox_TextChanged" />
-
-                    <Grid DockPanel.Dock="Top" x:Name="_categoryControls" IsVisible="False" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,6">
-                        <ComboBox x:Name="_categoryFilter" SelectionChanged="CategoryFilter_SelectionChanged" />
-                        <Button Grid.Column="1" Content="+" ToolTip.Tip="Create category" Padding="8,4" Click="CreateCategory_Click" />
-                        <Button Grid.Column="2" Content="Set" ToolTip.Tip="Assign selected unit to this category" Padding="8,4" Click="AssignCategory_Click" />
-                        <Button Grid.Column="3" Content="×" ToolTip.Tip="Delete selected category" Padding="8,4" Click="DeleteCategory_Click" />
-                    </Grid>
                     
                     <TabStrip DockPanel.Dock="Top" x:Name="_unitTabs" Margin="0,0,0,6" SelectionChanged="UnitTab_SelectionChanged">
                         <TabStripItem x:Name="_originalTab" FontSize="14" Padding="8,4">Original</TabStripItem>
@@ -272,41 +314,48 @@
                     </TabStrip>
                     
                     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-                        <Button Grid.Column="0" Content="Add" Click="AddUnit_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <Button Grid.Column="1" Content="🗑 Delete" Click="DeleteUnit_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button x:Name="_entityAddButton" Grid.Column="0" Content="Add" Click="EntityAdd_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button x:Name="_entityDeleteButton" Grid.Column="1" Content="🗑 Delete" Click="EntityDelete_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                     
-                    <ListBox x:Name="_unitList" SelectionChanged="UnitList_SelectionChanged" />
+                    <ListBox x:Name="_unitList"
+                             SelectionChanged="UnitList_SelectionChanged"
+                             ContextRequested="UnitList_ContextRequested" />
                 </DockPanel>
             </Border>
 
-            <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Grid.RowSpan="2" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+
+            <Border x:Name="_documentTabsHost"
+                    Grid.Column="2"
+                    Grid.ColumnSpan="3"
+                    Grid.Row="0"
+                    Background="#171717"
+                    BorderBrush="#2d2d30"
+                    BorderThickness="0,0,0,1"
+                    Padding="8,3">
+                <ScrollViewer x:Name="_documentTabsScroller"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled">
+                    <ScrollViewer.Styles>
+                        <Style Selector="ScrollBar:horizontal">
+                            <Setter Property="Height" Value="6" />
+                        </Style>
+                    </ScrollViewer.Styles>
+                    <!-- Keep the overlay scrollbar in reserved space below the 40px tabs.
+                         Its expanded hover state must never cover the tab hit targets. -->
+                    <Border Padding="0,0,0,14">
+                        <TabStrip x:Name="_documentTabs" SelectionChanged="DocumentTabs_SelectionChanged" />
+                    </Border>
+                </ScrollViewer>
+            </Border>
 
             <!-- Right panel: fixed tools + scrollable editor -->
-            <Border Grid.Column="2" Padding="15,15,0,15">
+            <Border Grid.Column="2" Grid.Row="1" Padding="15,15,0,15">
                 <Grid RowDefinitions="Auto,*,Auto">
                     <Grid Grid.Row="0"
                           ColumnDefinitions="Auto,*,Auto"
                           Margin="0,0,0,10">
-                        <Button x:Name="_sectionsButton"
-                                Content="Sections"
-                                IsVisible="False"
-                                IsEnabled="False"
-                                Padding="12,5"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Top">
-                            <Button.Flyout>
-                                <Flyout Placement="BottomEdgeAlignedLeft">
-                                    <ScrollViewer MaxHeight="420"
-                                                  MinWidth="220"
-                                                  VerticalScrollBarVisibility="Auto">
-                                        <StackPanel x:Name="_sectionsFlyoutPanel"
-                                                    Spacing="4"
-                                                    Margin="4" />
-                                    </ScrollViewer>
-                                </Flyout>
-                            </Button.Flyout>
-                        </Button>
                         <Border Grid.Column="2"
                                 x:Name="_pageSearchPanel"
                                 IsVisible="False"
@@ -429,9 +478,30 @@
                         </Border>
                     </Grid>
                     <Grid Grid.Row="1" RowDefinitions="Auto,*">
-                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="0,0,0,10">
                             <TextBlock Text="Unit :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
                             <TextBox Grid.Column="1" x:Name="_unitNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
+                            <Button Grid.Column="2"
+                                    x:Name="_sectionsButton"
+                                    Content="Sections"
+                                    IsVisible="False"
+                                    IsEnabled="False"
+                                    Padding="12,5"
+                                    Margin="0,0,10,0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                                <Button.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedRight">
+                                        <ScrollViewer MaxHeight="420"
+                                                      MinWidth="220"
+                                                      VerticalScrollBarVisibility="Auto">
+                                            <StackPanel x:Name="_sectionsFlyoutPanel"
+                                                        Spacing="4"
+                                                        Margin="4" />
+                                        </ScrollViewer>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
                         </Grid>
                         <TabControl Grid.Row="1" x:Name="_editorTabs" SelectedIndex="0" SelectionChanged="EditorTab_SelectionChanged">
                             <TabItem Classes="editorTab" Header="Stats">
@@ -464,8 +534,8 @@
                     <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="#e3bd54" FontWeight="Bold" Margin="0,5,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Grid>
             </Border>
-            <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
-            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+            <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Grid.Row="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Grid.Row="1" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
                 <Grid>
                     <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
                         <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
@@ -495,7 +565,22 @@
                             Click="XmlPreviewToggle_Click" />
                 </Grid>
             </Border>
-            <ContentControl x:Name="_technologyHost" Grid.ColumnSpan="5" IsVisible="False" ZIndex="20" />
+            <ContentControl x:Name="_technologyHost" Grid.Column="2" Grid.ColumnSpan="3" Grid.Row="1" IsVisible="False" ZIndex="20" />
+            <Border x:Name="_emptyDocumentOverlay"
+                    Grid.Column="2"
+                    Grid.ColumnSpan="3"
+                    Grid.Row="1"
+                    IsVisible="True"
+                    Background="#141414"
+                    ZIndex="30">
+                <TextBlock x:Name="_emptyDocumentMessage"
+                           Text="Click on a unit to start"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="#777777"
+                           FontSize="18"
+                           FontWeight="SemiBold" />
+            </Border>
         </Grid>
     </DockPanel>
         <Border x:Name="_startupLoadingOverlay"

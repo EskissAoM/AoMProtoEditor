@@ -321,7 +321,7 @@ public sealed class ProtoActionFinalHardeningPass7Tests
 
         Assert.Contains("PendingUnitRenames", source, StringComparison.Ordinal);
         Assert.Contains("UnitAbilityDrafts", source, StringComparison.Ordinal);
-        Assert.Contains("UnitCategories", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("UnitCategories", source, StringComparison.Ordinal);
         Assert.Contains("DuplicatedUnitRechargeFallbacks", source, StringComparison.Ordinal);
     }
 

@@ -364,11 +364,16 @@ public static class ProtoXmlHandler
     public static List<string> GetContainList(XElement unit)
         => unit.Elements("contain").Select(e => e.Value?.Trim() ?? "").Where(v => v.Length > 0).ToList();
 
-    public static void SetContainList(XElement unit, IEnumerable<string> values)
+    public static void SetContainList(XElement unit, IEnumerable<string> values, bool external = false)
     {
         unit.Elements("contain").Remove();
         foreach (var value in values.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
-            unit.Add(new XElement("contain", value.Trim()));
+        {
+            var element = new XElement("contain", value.Trim());
+            if (external)
+                element.SetAttributeValue("external", "1");
+            unit.Add(element);
+        }
     }
 
     public static List<string> GetNotContainList(XElement unit)

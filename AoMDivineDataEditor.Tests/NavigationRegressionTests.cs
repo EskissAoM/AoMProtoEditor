@@ -7,6 +7,218 @@ namespace AoMDivineDataEditor.Tests;
 public sealed class NavigationRegressionTests
 {
     [Fact]
+    public void EntityBrowser_ExposesUnitsAndTechnologiesWithoutCategoryControls()
+    {
+        var root = FindProjectRoot();
+        var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        foreach (var entity in new[] { "Units", "Technologies", "Gods", "Powers" })
+        {
+            Assert.Contains(xaml.Descendants(), element =>
+                element.Name.LocalName == "Button" &&
+                (string?)element.Attribute("Content") == entity);
+        }
+
+        Assert.Contains(xaml.Descendants(), element =>
+            (string?)element.Attribute("Content") == "Gods" &&
+            (string?)element.Attribute("IsEnabled") == "False");
+        Assert.Contains(xaml.Descendants(), element =>
+            (string?)element.Attribute("Content") == "Powers" &&
+            (string?)element.Attribute("IsEnabled") == "False");
+
+        var selectorContainer = xaml.Descendants().Single(element =>
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Name" && attribute.Value == "_entitySelectorContainer"));
+        var selectorGrid = selectorContainer.Elements().Single(element => element.Name.LocalName == "Grid");
+        Assert.Equal("*,*", (string?)selectorGrid.Attribute("ColumnDefinitions"));
+        Assert.Equal("Auto,Auto", (string?)selectorGrid.Attribute("RowDefinitions"));
+
+        var selectorButtons = selectorGrid.Elements().Where(element => element.Name.LocalName == "Button").ToDictionary(
+            element => (string)element.Attribute("Content")!,
+            element => element);
+        Assert.DoesNotContain(selectorButtons["Units"].Attributes(), attribute => attribute.Name.LocalName.EndsWith(".Row", StringComparison.Ordinal));
+        Assert.Equal("1", selectorButtons["Technologies"].Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".Column", StringComparison.Ordinal)).Value);
+        Assert.Equal("1", selectorButtons["Gods"].Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".Row", StringComparison.Ordinal)).Value);
+        Assert.Equal("1", selectorButtons["Powers"].Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".Row", StringComparison.Ordinal)).Value);
+        Assert.Equal("1", selectorButtons["Powers"].Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".Column", StringComparison.Ordinal)).Value);
+
+        Assert.DoesNotContain(xaml.Descendants(), element =>
+            element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "Name")?.Value
+                ?.Contains("category", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain("GetCategoryForUnit", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("CategoryFilter_SelectionChanged", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("-- Uncategorized --", code, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityBrowser_TechnologiesUseTheSharedSidebarAndKeepTheirExistingEditor()
+    {
+        var root = FindProjectRoot();
+        var mainXaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var technologyXaml = XDocument.Load(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
+        var technologyCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        var technologyHost = mainXaml.Descendants().Single(element =>
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_technologyHost"));
+        Assert.Equal("2", technologyHost.Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".Column", StringComparison.Ordinal)).Value);
+        Assert.Equal("3", technologyHost.Attributes().Single(attribute => attribute.Name.LocalName.EndsWith(".ColumnSpan", StringComparison.Ordinal)).Value);
+
+        Assert.Contains("ShowEntityKindAsync(EditorEntityKind.Technologies)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyNames(modified: selectedIndex == 1)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("SelectTechnology(selectedName)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("public IReadOnlyList<string> GetTechnologyNames", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("public void SelectTechnology", technologyCode, StringComparison.Ordinal);
+
+        var hiddenTechnologyBrowser = technologyXaml.Descendants().Single(element =>
+            element.Name.LocalName == "Border" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName.EndsWith(".Column", StringComparison.Ordinal) && attribute.Value == "0"));
+        Assert.Equal("False", (string?)hiddenTechnologyBrowser.Attribute("IsVisible"));
+    }
+
+    [Fact]
+    public void EntityBrowser_InitialTabEventIsIgnoredUntilNamedControlsAreReady()
+    {
+        var root = FindProjectRoot();
+        var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var refresh = Regex.Match(
+            code,
+            @"private void RefreshUnitList\(\)\s*\{(?<body>.*?)(?=\n\s*private void FilterUnitList)",
+            RegexOptions.Singleline);
+
+        Assert.True(refresh.Success, "Could not locate RefreshUnitList.");
+        var guardIndex = refresh.Groups["body"].Value.IndexOf("if (_unitTabs is null)", StringComparison.Ordinal);
+        var accessIndex = refresh.Groups["body"].Value.IndexOf("_unitTabs.SelectedIndex", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0 && accessIndex > guardIndex,
+            "The initial TabStrip event must return before accessing controls still being assigned by XAML.");
+    }
+
+    [Fact]
+    public void DocumentTabs_ExposeMainDoubleClickContextMenuAndSafeCloseWorkflow()
+    {
+        var root = FindProjectRoot();
+        var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var technologyCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+
+        Assert.Contains(xaml.Descendants(), element =>
+            element.Name.LocalName == "TabStrip" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_documentTabs") &&
+            (string?)element.Attribute("SelectionChanged") == "DocumentTabs_SelectionChanged");
+
+        var entityList = xaml.Descendants().Single(element =>
+            element.Name.LocalName == "ListBox" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_unitList"));
+        Assert.Null((string?)entityList.Attribute("Tapped"));
+        Assert.Null((string?)entityList.Attribute("DoubleTapped"));
+        Assert.Equal("UnitList_ContextRequested", (string?)entityList.Attribute("ContextRequested"));
+
+        Assert.Contains("CreateDocumentTab(isMain: true", code, StringComparison.Ordinal);
+        Assert.Contains("if (_documentTabs is null || _suppressDocumentTabSelection", code, StringComparison.Ordinal);
+        Assert.Contains("OpenPinnedDocumentTabAsync", code, StringComparison.Ordinal);
+        Assert.Contains("InputElement.PointerPressedEvent", code, StringComparison.Ordinal);
+        Assert.Contains("handledEventsToo: true", code, StringComparison.Ordinal);
+        Assert.Contains("EntitySecondClickWindowMilliseconds = 500", code, StringComparison.Ordinal);
+        Assert.Contains("e.Timestamp - _lastEntityPointerPressTimestamp", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Delay(EntitySecondClickWindowMilliseconds", code, StringComparison.Ordinal);
+        Assert.Contains("await _unitSelectionChangeTask;", code, StringComparison.Ordinal);
+        Assert.Contains("RunUnitListSelectionChangeAsync", code, StringComparison.Ordinal);
+        Assert.Contains("HandleUnitListSelectionChangedAsync", code, StringComparison.Ordinal);
+        Assert.Contains("FindPinnedDocumentTab", code, StringComparison.Ordinal);
+        Assert.Contains("Open in new tab", code, StringComparison.Ordinal);
+        Assert.Contains("Header = \"Copy\"", code, StringComparison.Ordinal);
+        Assert.Contains("Header = \"Delete\"", code, StringComparison.Ordinal);
+        Assert.Contains("Foreground = Brushes.OrangeRed", code, StringComparison.Ordinal);
+        Assert.Contains("IsEnabled = isModified", code, StringComparison.Ordinal);
+        Assert.Contains("ActivateContextEntityAsync", code, StringComparison.Ordinal);
+        Assert.Contains("AddUnitAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
+        Assert.Contains("AddTechnologyAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
+        Assert.Contains("DeleteSelectedUnitAsync", code, StringComparison.Ordinal);
+        Assert.Contains("DeleteSelectedTechnologyAsync", code, StringComparison.Ordinal);
+        Assert.Contains("public async Task AddTechnologyAsync(bool duplicateSelected = false)", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("var wasRenamed = changedDocument", code, StringComparison.Ordinal);
+        Assert.Contains("That is navigation,", code, StringComparison.Ordinal);
+        Assert.Contains("if (tab.IsMain)", code, StringComparison.Ordinal);
+        Assert.Contains("if (IsDocumentTabDirty(tab))", code, StringComparison.Ordinal);
+        Assert.Contains("Discard those changes and close this tab", code, StringComparison.Ordinal);
+        Assert.Contains("DiscardUnitDocumentChanges(tab)", code, StringComparison.Ordinal);
+        Assert.Contains("DiscardTechnologyChanges(tab.EntityName, tab.SavedElement)", code, StringComparison.Ordinal);
+        Assert.Contains("Pending save — close this tab to cancel its changes.", code, StringComparison.Ordinal);
+        Assert.Contains("await CaptureCurrentUnitDraftAsync()", code, StringComparison.Ordinal);
+        Assert.Contains("RenameOpenDocumentTabs", code, StringComparison.Ordinal);
+        Assert.Contains("RemoveDeletedDocumentTabs", code, StringComparison.Ordinal);
+        Assert.Contains("ResetDocumentTabs", code, StringComparison.Ordinal);
+        Assert.Contains("RefreshDocumentTabHeaders();", code, StringComparison.Ordinal);
+        Assert.Contains("IsTechnologyDirty", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("public void DiscardTechnologyChanges", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("_dirtyTechnologyNames.Clear();", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("SelectDocumentTabWithoutActivation(_activeDocumentTab)", code, StringComparison.Ordinal);
+        Assert.Contains("_documentTabs.IsEnabled = false", code, StringComparison.Ordinal);
+        Assert.Contains("_entitySourceChangeInProgress", code, StringComparison.Ordinal);
+        Assert.Contains("_unitTabs.IsEnabled = false", code, StringComparison.Ordinal);
+        Assert.Contains("await _technologyView.CommitCurrentTechnologyAsync()", code, StringComparison.Ordinal);
+        Assert.Contains("public async Task<bool> CommitCurrentTechnologyAsync()", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("private readonly SemaphoreSlim _technologyNameCommitGate", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("private readonly SemaphoreSlim _editorBuildGate", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("generation != _editorBuildGeneration", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("RestorePendingTechnologyRenameState", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("IsUnitStringIdOwnedByAnotherDirtyDocument", code, StringComparison.Ordinal);
+        Assert.Contains("IsTechnologyStringIdOwnedByAnotherDirtyDocument", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("if (_technologyView?.IsDirty == true)", code, StringComparison.Ordinal);
+        Assert.Contains("await _technologyView.SaveAsync()", code, StringComparison.Ordinal);
+        Assert.Contains("ConfirmMainDocumentReplacementAsync", code, StringComparison.Ordinal);
+        Assert.Contains("Unsaved main document", code, StringComparison.Ordinal);
+        Assert.Contains("DiscardUnitDocumentChanges(main)", code, StringComparison.Ordinal);
+        Assert.Contains("DiscardTechnologyChanges(main.EntityName, main.SavedElement)", code, StringComparison.Ordinal);
+        Assert.Contains("_mainDocumentTab.SavedElement", code, StringComparison.Ordinal);
+        Assert.Contains("Duplicate technology name", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("ShowTechnologyNameErrorAsync", technologyCode, StringComparison.Ordinal);
+
+        var keyboardHandler = Regex.Match(
+            code,
+            @"private void OnWindowKeyDown\(.*?(?=\n\s*private void PageSearchBox_KeyDown)",
+            RegexOptions.Singleline);
+        Assert.True(keyboardHandler.Success, "Could not locate the window keyboard handler.");
+        Assert.Contains("Save_Click(this, e)", keyboardHandler.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveActiveTransformCommandAndUnitAsync", keyboardHandler.Value, StringComparison.Ordinal);
+
+        var xamlText = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        Assert.Contains("<Setter Property=\"FontSize\" Value=\"13\" />", xamlText, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Height\" Value=\"40\" />", xamlText, StringComparison.Ordinal);
+        Assert.Contains("<Style Selector=\"ScrollBar:horizontal\">", xamlText, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Height\" Value=\"6\" />", xamlText, StringComparison.Ordinal);
+        Assert.Contains("<Border Padding=\"0,0,0,14\">", xamlText, StringComparison.Ordinal);
+        Assert.Contains("var kind = tab.EntityKind == EditorEntityKind.Units ? \"Unit\" : \"Tech\";", code, StringComparison.Ordinal);
+        Assert.Contains("var source = tab.IsModified ? \"Custom\" : \"Original\";", code, StringComparison.Ordinal);
+        Assert.Contains("$\"{kind}: {tab.EntityName} ({source})\"", code, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth = 170", code, StringComparison.Ordinal);
+
+        var sectionsButton = xaml.Descendants().Single(element =>
+            element.Name.LocalName == "Button" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_sectionsButton"));
+        Assert.Equal("2", sectionsButton.Attributes().Single(attribute =>
+            attribute.Name.LocalName.EndsWith(".Column", StringComparison.Ordinal)).Value);
+        Assert.Equal("Right", (string?)sectionsButton.Attribute("HorizontalAlignment"));
+        Assert.Equal("0,0,10,0", (string?)sectionsButton.Attribute("Margin"));
+
+        var emptyDocumentOverlay = xaml.Descendants().Single(element =>
+            element.Name.LocalName == "Border" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_emptyDocumentOverlay"));
+        Assert.Equal("True", (string?)emptyDocumentOverlay.Attribute("IsVisible"));
+        Assert.Contains("ShowEmptyDocumentState(EditorEntityKind.Units);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PreloadInitialVisibleUnitAsync", code, StringComparison.Ordinal);
+        Assert.Contains("Click on a technology to start", code, StringComparison.Ordinal);
+
+        var unitSelection = Regex.Match(
+            code,
+            @"private async Task HandleUnitListSelectionChangedAsync\(\)\s*\{(?<body>.*?)(?=\n\s*private async void UnitNameBox_TextChanged)",
+            RegexOptions.Singleline);
+        Assert.True(unitSelection.Success, "Could not locate the shared entity selection handler.");
+        Assert.DoesNotContain("RefreshUnitList();", unitSelection.Groups["body"].Value, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProtoUnitMenu_TacticsAndAbilitiesRemainConnectedToTheirManagers()
     {
         var root = FindProjectRoot();

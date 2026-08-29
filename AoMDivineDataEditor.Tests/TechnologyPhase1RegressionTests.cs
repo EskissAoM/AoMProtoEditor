@@ -93,7 +93,8 @@ public sealed class TechnologyPhase1RegressionTests
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
         var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("<ColumnDefinition Width=\"210\"/>", techXaml, StringComparison.Ordinal);
+        Assert.Contains("<ColumnDefinition Width=\"0\"/>", techXaml, StringComparison.Ordinal);
+        Assert.Contains("<Border Grid.Column=\"0\" IsVisible=\"False\">", techXaml, StringComparison.Ordinal);
         Assert.Contains("<ColumnDefinition Width=\"4*\"/>", techXaml, StringComparison.Ordinal);
         Assert.Contains("<ColumnDefinition Width=\"1*\" MinWidth=\"250\"/>", techXaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_xmlPreviewToggleButton\"", techXaml, StringComparison.Ordinal);
@@ -102,6 +103,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("new AssetPathEditor", techCode, StringComparison.Ordinal);
         Assert.Contains("ResolveDisplayStringAsync", mainCode, StringComparison.Ordinal);
         Assert.Contains("_baseGameIconPaths.Concat(_customIconPaths)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyNames(modified: selectedIndex == 1)", mainCode, StringComparison.Ordinal);
     }
 
     [Fact]

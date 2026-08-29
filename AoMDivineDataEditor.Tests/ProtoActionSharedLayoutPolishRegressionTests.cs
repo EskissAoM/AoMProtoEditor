@@ -703,8 +703,9 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.Contains("IsTeleportAttackActionType(actionType) || isWaterTornado", source, StringComparison.Ordinal);
         Assert.Contains("Content = \"Duration\"", source, StringComparison.Ordinal);
         Assert.Contains("Text = \"Duration:\"", source, StringComparison.Ordinal);
-        Assert.Contains("AddAnimationField(\"anim\", \"Animation\", animation, \"TeleportStart\");", source, StringComparison.Ordinal);
-        Assert.Contains("AddAnimationField(\"reloadanim\", \"Reload Animation\", reloadAnimation, \"TeleportEnd\");", source, StringComparison.Ordinal);
+        Assert.Contains("AddVisualField(\"anim\", \"Animation\", animation, \"TeleportStart\");", source, StringComparison.Ordinal);
+        Assert.Contains("AddVisualField(\"reloadanim\", \"Reload Animation\", reloadAnimation, \"TeleportEnd\");", source, StringComparison.Ordinal);
+        Assert.Contains("AddVisualField(\"impacteffect\", \"Impact Effect\", impactEffect, \"\");", source, StringComparison.Ordinal);
         Assert.Contains("Text = string.IsNullOrWhiteSpace(value) ? defaultValue : value", source, StringComparison.Ordinal);
         Assert.Contains("editor.MinWidth = 200;", source, StringComparison.Ordinal);
         Assert.Contains("editor.MaxWidth = 200;", source, StringComparison.Ordinal);
@@ -724,6 +725,29 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.True(customLayoutsStart >= 0 && customLayoutsEnd > customLayoutsStart);
         var customLayouts = source[customLayoutsStart..customLayoutsEnd];
         Assert.DoesNotContain("GetProtoActionStructuredFieldEntriesForEditor(effectiveAction, actionType, \"", customLayouts, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RequestedCombatActions_DefaultToImpactEffectAndThrowUsesSeparateMaxSizeClassOption()
+    {
+        foreach (var actionType in new[]
+                 {
+                     "Attack", "ChainAttack", "Gore", "Throw", "TeleportAttack", "BuckAttack",
+                     "JumpAttack", "LinearAreaAttack", "ReflectAttack", "AoEAttack", "Hunting", "Lure"
+                 })
+        {
+            Assert.Contains(
+                "impacteffect",
+                ProtoActionMetadataCatalog.GetEditorProfile(actionType).DefaultVisibleTags,
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        var source = ReadProtoEditorSource();
+        Assert.Contains("tag.Equals(\"maxsizeclass\", StringComparison.OrdinalIgnoreCase)", source, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Additional Throw Information\"", source, StringComparison.Ordinal);
+        Assert.Contains("Content = \"Max Size Class\"", source, StringComparison.Ordinal);
+        Assert.Contains("state.AdditionalFieldControls[\"maxsizeclass\"] = maxSizeClassEditor;", source, StringComparison.Ordinal);
+        Assert.Contains("ArrangeTrailingImpactEffectLayout(state, actionType);", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -796,8 +820,9 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.True(linear.IndexOf("Content = \"Idle Anim\"", StringComparison.Ordinal) < linear.IndexOf("CreateLabeledFieldGroup(\"Impact Effect:\"", StringComparison.Ordinal));
 
         Assert.Contains("!((IsJumpAttackActionType(actionType) || IsGoreActionType(actionType))", source, StringComparison.Ordinal);
-        Assert.Contains("!IsJumpAttackActionType(actionType) &&\n            !IsGoreActionType(actionType)", source, StringComparison.Ordinal);
-        Assert.Contains("compactAnimationRow.ColumnDefinitions = new ColumnDefinitions(\"Auto, 200\")", source, StringComparison.Ordinal);
+        Assert.Contains("IsThrowActionType(actionType) || IsJumpAttackActionType(actionType) || IsGoreActionType(actionType)", source, StringComparison.Ordinal);
+        Assert.Contains("foreach (var tag in new[] { \"anim\", \"impacteffect\" })", source, StringComparison.Ordinal);
+        Assert.Contains("? new ColumnDefinitions(\"Auto, 200, Auto\")\n                    : new ColumnDefinitions(\"Auto, 200\")", source, StringComparison.Ordinal);
 
         Assert.Contains("modifyRow.Children.Add(CreateLabeledFieldGroup(\"Modify:\", modifyTypeAcb));", source, StringComparison.Ordinal);
         Assert.Contains("modifyRow.Children.Add(modeCombo);", source, StringComparison.Ordinal);
@@ -852,7 +877,7 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.Contains("state.CustomValues[AutoBoostAreaEnabledStateKey] = mode == \"Area\"", source, StringComparison.Ordinal);
         Assert.Contains("AutoBoostResetOnHitEffectStateKey", source, StringComparison.Ordinal);
         Assert.Contains("var canAddAutoBoostDamageArea = isAutoBoost && IsAutoBoostAreaEnabled", source, StringComparison.Ordinal);
-        Assert.Contains("IsAutoBoostActionType(actionType) || IsJumpAttackActionType(actionType)", source, StringComparison.Ordinal);
+        Assert.Contains("IsAutoBoostActionType(actionType) && animationRow is Grid compactAnimationRow", source, StringComparison.Ordinal);
         Assert.DoesNotContain("\"damage\", \"damagearea\", \"damageflags\"", metadata, StringComparison.Ordinal);
         Assert.DoesNotContain("\"modelattachment\", \"modelattachmentbone\"", metadata[metadata.IndexOf("[\"AutoBoost\"]", StringComparison.Ordinal)..metadata.IndexOf("[\"ChainAttack\"]", StringComparison.Ordinal)], StringComparison.Ordinal);
         Assert.Contains("ArrangeAutoBoostPostRateLayout(state, actionType);", source, StringComparison.Ordinal);
