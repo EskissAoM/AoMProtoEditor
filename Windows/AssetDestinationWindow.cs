@@ -19,7 +19,7 @@ internal sealed class AssetDestinationWindow : SimpleWindow
         _rootDirectory = rootDirectory; _physicalRootLabel = physicalRootLabel; _xmlPrefix = xmlPrefix; _extension = extension;
         Title = title; Width = 680; Height = 390; MinWidth = 560; MinHeight = 350;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414"); Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311"); Foreground = Brush.Parse("#E8DECC");
         var form = new Grid { Margin = new Thickness(18), ColumnDefinitions = new ColumnDefinitions("110,*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,*,Auto") };
         AddLabel(form, "Folder", 0); _folder.PlaceholderText = "custom\\units\\special (optional)"; _folder.Text = defaultFolder; Grid.SetColumn(_folder, 1); form.Children.Add(_folder);
         var browse = new Button { Content = "Browse…", Margin = new Thickness(8, 0, 0, 0) }; browse.Click += async (_, _) => await BrowseAsync(); Grid.SetColumn(browse, 2); form.Children.Add(browse);
@@ -30,7 +30,7 @@ internal sealed class AssetDestinationWindow : SimpleWindow
         Grid.SetRow(_error, 4); Grid.SetColumn(_error, 1); Grid.SetColumnSpan(_error, 2); _error.Margin = new Thickness(0, 8, 0, 0); form.Children.Add(_error);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "Cancel" }; cancel.Click += (_, _) => Close();
-        _confirm = new Button { Content = confirmButtonText, Background = Brush.Parse("#2b7a0b") }; _confirm.Click += (_, _) => Confirm();
+        _confirm = new Button { Content = confirmButtonText, Background = Brush.Parse("#163E26"), BorderBrush = Brush.Parse("#A98243") }; _confirm.Click += (_, _) => Confirm();
         buttons.Children.Add(cancel); buttons.Children.Add(_confirm); Grid.SetRow(buttons, 6); Grid.SetColumn(buttons, 1); Grid.SetColumnSpan(buttons, 2); form.Children.Add(buttons);
         _folder.TextChanged += (_, _) => RefreshPreview(); _name.TextChanged += (_, _) => RefreshPreview(); Content = form; RefreshPreview();
     }

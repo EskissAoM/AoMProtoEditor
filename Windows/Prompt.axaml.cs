@@ -59,8 +59,6 @@ public partial class Prompt : SimpleWindow
     public Prompt(PromptType type, string title, string text = "", Progress<string?>? progress_reporter = null, Progress<double>? progress_value = null, string confirmButtonText = "Confirm") : this()
     {
         _confirmButton.Content = confirmButtonText;
-        if (string.Equals(confirmButtonText, "Save", StringComparison.OrdinalIgnoreCase))
-            _confirmButton.Background = Brush.Parse("#2b7a0b");
         _type = type;
         PromptText = text;
         PromptTitle = title;

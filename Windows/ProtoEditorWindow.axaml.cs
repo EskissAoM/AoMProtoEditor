@@ -22,6 +22,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using AvaloniaEdit;
 using AoMDivineDataEditor.GameData;
 using AoMDivineDataEditor.Services;
 using AoMDivineDataEditor.Classes;
@@ -125,6 +126,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private const string ProtoUnitNameFieldKey = "__proto_unit_name";
 
     private readonly IEditorGameDataService _gameData;
+    private readonly IconPreviewService _iconPreviewService;
     private XElement? _barXmlRoot;
     private BarArchive? _protoDataBarFile;
     private string? _protoDataBarPath;
@@ -156,6 +158,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly List<TacticDefinition> _tacticsEditorTacticDefinitions = [];
     private Action? _rebuildTacticsPriorityRows;
     private bool _isAbilityDefinitionEditorMode;
+    private Task? _pendingAbilityEditorLoadTask;
     private bool _abilityDefinitionEditorReadOnly;
     private bool _allowAbilityDefinitionEditorClose;
     private bool _abilityDefinitionEditorClosePromptOpen;
@@ -720,7 +723,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required TextBox FreezeDurationTb { get; set; }
         public required ComboBox FreezeTypeCb { get; set; }
         public required TextBox FreezeDamageTb { get; set; }
-        public required TextBox RawXmlTb { get; set; }
+        public required TextEditor RawXmlTb { get; set; }
         public required XElement OriginalElement { get; set; }
         public bool IsSupported { get; set; }
         public List<OnHitEffectDamageRowState> DamageRows { get; } = [];
@@ -871,6 +874,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     protected ProtoEditorWindow(IEditorGameDataService gameData, bool initializeProtoEditor)
     {
         _gameData = gameData ?? throw new ArgumentNullException(nameof(gameData));
+        _iconPreviewService = new IconPreviewService(
+            () => ResolveIconArchivePath(ResolveDataBarPath()),
+            GetCurrentModIconResourcesDirectory);
         DataContext = this;
         InitializeComponent();
         InitializePageSearch();
@@ -952,6 +958,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _resolvedTacticsActionSources.Clear();
 
             ConfigureTacticsActionEditorChrome(isBuiltIn);
+            HideEmptyDocumentPlaceholder();
             BuildEditorPanel(_currentUnitName);
             _sectionsButton.IsVisible = false;
             _sectionsButton.IsEnabled = false;
@@ -1040,8 +1047,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .ToList();
 
             ConfigureAbilityDefinitionEditorChrome(isBuiltIn);
+            HideEmptyDocumentPlaceholder();
             _isReadOnly = isBuiltIn;
             BuildEditorPanel(_currentUnitName);
+            if (_pendingAbilityEditorLoadTask != null)
+                await _pendingAbilityEditorLoadTask;
             _sectionsButton.IsVisible = false;
             _sectionsButton.IsEnabled = false;
             _editorTabs.SelectedIndex = 3;
@@ -1505,7 +1515,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             Padding = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Background = Brush.Parse("#b00000"),
+            Background = Brush.Parse("#992824"),
             Foreground = Brushes.White
         };
     }
@@ -1623,7 +1633,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var removeTactic = new Button
                 {
                     Content = "Remove Tactic",
-                    Background = Brush.Parse("#8b0000"),
+                    Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                     Padding = new Thickness(8, 4),
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Center
@@ -1678,7 +1689,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 if (!_isReadOnly)
                 {
-                    var add = new Button { Content = "Add Action", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 10, 6) };
+                    var add = new Button { Content = "Add Action", Classes = { "add-item" }, Margin = new Thickness(0, 0, 10, 6) };
                     add.Click += (_, _) => { definition.Actions.Add(new TacticActionReference()); RebuildPriorityRows(); BasicTacticValueChanged(); };
                     priorityRows.Children.Add(add);
                 }
@@ -1696,7 +1707,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     if (!_isReadOnly)
                     {
-                        var show = new Button { Content = "Actions probability", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                        var show = new Button { Content = "Actions probability", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                         show.Click += (_, _) => { definition.Actions.Add(new TacticActionReference { Probability = 100, AttributeMode = "Probability", AttributeValueText = "100" }); RebuildProbabilitySection(); BasicTacticValueChanged(); };
                         probabilityHost.Children.Add(show);
                     }
@@ -1722,7 +1733,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 if (!_isReadOnly)
                 {
-                    var add = new Button { Content = "Add Probability", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    var add = new Button { Content = "Add Probability", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     add.Click += (_, _) => { definition.Actions.Add(new TacticActionReference { Probability = 100, AttributeMode = "Probability", AttributeValueText = "100" }); RebuildProbabilitySection(); BasicTacticValueChanged(); };
                     probabilityHost.Children.Add(add);
                 }
@@ -1758,7 +1769,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 if (!_isReadOnly)
                 {
-                    var add = new Button { Content = "Attack Priority", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    var add = new Button { Content = "Attack Priority", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     add.Click += (_, _) => { definition.AttackPriorities.Add(new TacticAttackPriority { BonusFactorText = "50" }); RebuildAttackPriorities(); BasicTacticValueChanged(); };
                     attackPriorityHost.Children.Add(add);
                 }
@@ -1767,16 +1778,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             Control CreateValueChip(string value, Action removeValue)
             {
-                var chip = new Border { Background = Brush.Parse("#365f8c"), CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 4), Margin = new Thickness(0, 0, 6, 6) };
-                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                content.Children.Add(new TextBlock { Text = value, VerticalAlignment = VerticalAlignment.Center });
-                if (!_isReadOnly)
-                {
-                    var remove = new Button { Content = "×", Padding = new Thickness(0), MinWidth = 16, Width = 16, Height = 16, Background = Brushes.Transparent };
-                    remove.Click += (_, _) => removeValue();
-                    content.Children.Add(remove);
-                }
-                chip.Child = content;
+                var chip = EditorChipService.CreateBlueChip(
+                    value,
+                    _isReadOnly ? null : removeValue,
+                    readOnly: _isReadOnly);
+                chip.Margin = new Thickness(0, 0, 6, 6);
                 return chip;
             }
 
@@ -1872,7 +1878,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var button = new Button
                     {
                         Content = text,
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 0, 8, 6)
                     };
                     button.Click += (_, _) => onClick();
@@ -1952,7 +1958,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         if (!_isReadOnly)
                         {
-                            var add = new Button { Content = entry.Label, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 6) };
+                            var add = new Button { Content = entry.Label, Classes = { "add-component" }, Margin = new Thickness(0, 0, 8, 6) };
                             add.Click += (_, _) => { entry.Set("1.0"); RebuildModifiers(); BasicTacticValueChanged(); };
                             wrap.Children.Add(add);
                         }
@@ -2007,7 +2013,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         if (!_isReadOnly)
                         {
-                            var add = new Button { Content = entry.Label, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 6) };
+                            var add = new Button { Content = entry.Label, Classes = { "add-component" }, Margin = new Thickness(0, 0, 8, 6) };
                             add.Click += (_, _) => { entry.Set(""); RebuildAnimations(); BasicTacticValueChanged(); };
                             wrap.Children.Add(add);
                         }
@@ -2161,7 +2167,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Padding = new Thickness(8, 3),
                     Margin = new Thickness(0, 0, 6, 6),
                     Background = ReferenceEquals(definition, _tacticsEditorTacticDefinition)
-                        ? Brush.Parse("#2b3c57")
+                        ? Brush.Parse("#393125")
                         : Brush.Parse("#252526")
                 };
                 tacticButton.Click += (_, _) =>
@@ -2177,8 +2183,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var tacticCard = new Border
                     {
-                        Background = Brush.Parse("#1c1c1c"),
-                        BorderBrush = Brush.Parse("#3f3f46"),
+                        Background = Brush.Parse("#0E1110"),
+                        BorderBrush = Brush.Parse("#4C4031"),
                         BorderThickness = new Thickness(1),
                         CornerRadius = new CornerRadius(8),
                         Padding = new Thickness(10),
@@ -2194,7 +2200,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addTactic = new Button
                 {
                     Content = "Add Tactic",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-item" },
                     Padding = new Thickness(8, 3),
                     Margin = new Thickness(10, 0, 0, 6)
                 };
@@ -2265,9 +2271,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
         _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
         _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
-        _xmlPreviewText.IsReadOnly = true;
+        XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
         _xmlPreviewText.Focusable = true;
-        _xmlPreviewText.IsTabStop = true;
+        _xmlPreviewText.IsTabStop = false;
         _applyXmlPreviewButton.IsVisible = false;
 
         if (_mainToolbar.Child is not DockPanel toolbar)
@@ -2301,7 +2307,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#2b7a0b")
+                Background = Brush.Parse("#163E26"),
+                BorderBrush = Brush.Parse("#A98243")
             };
             saveButton.Click += async (_, _) => await SaveTacticsActionEditorAsync();
             buttons.Children.Add(saveButton);
@@ -2324,9 +2331,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
         _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
         _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
-        _xmlPreviewText.IsReadOnly = true;
+        XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
         _xmlPreviewText.Focusable = true;
-        _xmlPreviewText.IsTabStop = true;
+        _xmlPreviewText.IsTabStop = false;
         _applyXmlPreviewButton.IsVisible = false;
 
         if (_mainToolbar.Child is not DockPanel toolbar)
@@ -2359,7 +2366,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#2b7a0b")
+                Background = Brush.Parse("#163E26"),
+                BorderBrush = Brush.Parse("#A98243")
             };
             saveButton.Click += async (_, _) => await SaveAbilityDefinitionEditorAsync();
             buttons.Children.Add(saveButton);
@@ -3389,6 +3397,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private void HideEmptyDocumentPlaceholder()
+    {
+        _emptyDocumentOverlay.IsVisible = false;
+    }
+
     private void RenameOpenDocumentTabs(EditorEntityKind entityKind, string oldName, string newName)
     {
         foreach (var tab in _openDocumentTabs.Where(tab =>
@@ -3846,7 +3859,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetTechnologyPrerequisiteMajorGodNames(),
             GetTechnologyTechTypeNames(),
             GetTechnologyProtoActionNames(),
-            GetAvailableCommandNames());
+            GetAvailableCommandNames(),
+            _iconPreviewService);
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
@@ -4354,6 +4368,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void InitializeXmlPreview()
     {
+        XmlSyntaxEditorService.Configure(_xmlPreviewText);
         _xmlPreviewRefreshTimer.Tick += (_, _) =>
         {
             _xmlPreviewRefreshTimer.Stop();
@@ -4421,12 +4436,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var draft = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName);
                 var preview = draft == null ? null : BuildAbilityPowerElement(draft);
                 _xmlPreviewText.IsEnabled = preview != null;
-                _xmlPreviewText.IsReadOnly = true;
+                XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
                 _xmlPreviewText.Focusable = true;
-                _xmlPreviewText.IsTabStop = true;
+                _xmlPreviewText.IsTabStop = false;
                 _xmlPreviewText.Opacity = 1;
-                _xmlPreviewText.Background = Brush.Parse("#080808");
-                _xmlPreviewText.Foreground = Brush.Parse("#d9d9d9");
+                _xmlPreviewText.Background = Brush.Parse("#090C0B");
+                _xmlPreviewText.Foreground = Brush.Parse("#E8DECC");
                 _applyXmlPreviewButton.IsVisible = false;
                 SetXmlPreviewText(preview == null ? "" : FormatXmlForPreview(preview));
             }
@@ -4441,12 +4456,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var previewDocument = BuildTacticsActionEditorDocument(validateSerializedActions: false);
                 var previewRoot = previewDocument.Root;
                 _xmlPreviewText.IsEnabled = previewRoot != null;
-                _xmlPreviewText.IsReadOnly = true;
+                XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
                 _xmlPreviewText.Focusable = true;
-                _xmlPreviewText.IsTabStop = true;
+                _xmlPreviewText.IsTabStop = false;
                 _xmlPreviewText.Opacity = 1;
-                _xmlPreviewText.Background = Brush.Parse("#080808");
-                _xmlPreviewText.Foreground = Brush.Parse("#d9d9d9");
+                _xmlPreviewText.Background = Brush.Parse("#090C0B");
+                _xmlPreviewText.Foreground = Brush.Parse("#E8DECC");
                 _applyXmlPreviewButton.IsVisible = false;
                 SetXmlPreviewText(previewRoot == null ? "" : FormatXmlForPreview(previewRoot));
             }
@@ -4468,12 +4483,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         // Base-game XML remains read-only, but stays enabled so it can be focused
         // and scrolled like any other text viewer.
         _xmlPreviewText.IsEnabled = sourceUnit != null;
-        _xmlPreviewText.IsReadOnly = !canEditRawXml;
-        _xmlPreviewText.Focusable = canEditRawXml;
+        XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: !canEditRawXml);
+        _xmlPreviewText.Focusable = sourceUnit != null;
         _xmlPreviewText.IsTabStop = canEditRawXml;
-        _xmlPreviewText.Opacity = canEditRawXml ? 1 : 0.55;
-        _xmlPreviewText.Background = Brush.Parse(canEditRawXml ? "#101010" : "#080808");
-        _xmlPreviewText.Foreground = Brush.Parse(canEditRawXml ? "#d9d9d9" : "#8a8a8a");
+        _xmlPreviewText.Opacity = sourceUnit != null ? 1 : 0.55;
+        _xmlPreviewText.Background = Brush.Parse(canEditRawXml ? "#090C0B" : "#090C0B");
+        _xmlPreviewText.Foreground = Brush.Parse(sourceUnit != null ? "#E8DECC" : "#8a8a8a");
         _applyXmlPreviewButton.IsVisible = canEditRawXml;
 
         if (!force && canEditRawXml && _isXmlPreviewDirty)
@@ -4708,7 +4723,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _isXmlPreviewDirty = false;
     }
 
-    private void XmlPreviewText_TextChanged(object? sender, TextChangedEventArgs e)
+    private void XmlPreviewText_TextChanged(object? sender, EventArgs e)
     {
         // Avalonia can dispatch a programmatic Text assignment after the setter
         // returns. Compare against the rendered value as well as the guard so a
@@ -4860,7 +4875,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             Classes = { "SectionHeader" },
             FontWeight = FontWeight.Bold,
             FontSize = 14,
-            Foreground = Brush.Parse("#5ba8de"),
+            Foreground = Brush.Parse("#C59A52"),
             Margin = new Thickness(0, 15, 0, 5)
         };
         _activeEditorPanel?.Children.Add(lbl);
@@ -5204,13 +5219,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void UpdatePageSearchUiState(bool hasMatches, bool hasQuery, bool hasValidPattern)
     {
         var borderBrush = hasMatches || !hasQuery
-            ? "#3f3f46"
-            : "#8b0000";
+            ? "#4C4031"
+            : "#7A1F1C";
 
         _pageSearchPanel.BorderBrush = Brush.Parse(borderBrush);
         _pageSearchPreviousButton.IsEnabled = hasMatches;
         _pageSearchNextButton.IsEnabled = hasMatches;
-        _pageSearchMatchCountText.Foreground = Brush.Parse(hasValidPattern ? "#d9d9d9" : "#ff7a7a");
+        _pageSearchMatchCountText.Foreground = Brush.Parse(hasValidPattern ? "#E8DECC" : "#ff7a7a");
 
         if (!hasQuery)
         {
@@ -6362,7 +6377,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var btnAdd = new Button
             {
                 Content = $"Add {itemLabel}",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 Margin = new Thickness(0, 4, 0, 4)
             };
             btnAdd.Click += async (s, e) =>
@@ -7789,7 +7804,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var editor = new AssetPathEditor();
         editor.IsEnabled = !_isReadOnly;
         editor.Opacity = _isReadOnly ? 0.55 : 1.0;
-        editor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#4a4a4a" : "#1b1b1b");
+        editor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#202220" : "#0E1110");
         editor.Configure(initialValue, suggestions, HandleAssetPathChangedAsync);
         editor.Margin = new Thickness(0, 4, 0, 4);
         return editor;
@@ -10548,7 +10563,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         Tag = "attack.minrange.button",
                         Content = "Min Range",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = isWaterTornado ? new Thickness(0, 0, 8, 0) : new Thickness(12, 0, 0, 0)
                     };
                     addMinRangeButton.Click += async (_, _) =>
@@ -11259,7 +11274,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addAnimationButton = new Button
                 {
                     Content = "Animation",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(0, 0, 8, 0)
                 };
@@ -11421,7 +11436,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var addAnimation = new Button
         {
             Content = "Animation",
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 2, 0, 2)
         };
@@ -11601,7 +11616,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var button = new Button
             {
                 Content = content,
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 2, 8, 2)
             };
@@ -11800,7 +11815,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addSplashButton = new Button
             {
                 Content = "Splash VFX Proto",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 Margin = new Thickness(14, 0, 0, 0)
             };
             addSplashButton.Click += async (_, _) =>
@@ -11846,7 +11861,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                     Content = buttonLabel,
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(row.Children.Count == 0 ? 0 : 8, 0, 0, 0)
                 };
                 addButton.Click += async (_, _) =>
@@ -11981,7 +11996,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addDurationButton = new Button
             {
                 Content = "Duration",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addDurationButton.Click += async (_, _) =>
@@ -12478,7 +12493,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             addRateButton = new Button
             {
                 Content = "Add Rate",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 0, 0, 4)
@@ -12941,7 +12956,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                     Content = "Additional Throw Information",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(0, 0, 8, 0)
                 };
@@ -12963,7 +12978,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addMaxSizeClassButton = new Button
                 {
                     Content = "Max Size Class",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 addMaxSizeClassButton.Click += async (_, _) =>
@@ -13159,7 +13174,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         Tag = "assistattack.option." + tag,
                         Content = label,
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(optionsRow.Children.Count == 0 ? 0 : 8, 0, 0, 0)
                     };
                     addButton.Click += async (_, _) =>
@@ -13490,7 +13505,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var addButton = new Button
                             {
                                 Content = label,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(10, 0, 0, 0)
                             };
                             addButton.Click += async (_, _) =>
@@ -13596,7 +13611,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addBounceButton = new Button
                     {
                         Content = "Bounce",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(10, 0, 0, 0)
                     };
                     addBounceButton.Click += async (_, _) =>
@@ -13793,7 +13808,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addThrowButton = new Button
                     {
                         Content = "Throw",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(0, 4, 0, 2)
                     };
@@ -13904,7 +13919,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addCastPowerButton = new Button
                     {
                         Content = "Cast Power",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(0, 4, 0, 2)
                     };
@@ -14037,7 +14052,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addMaxSizeClassButton = new Button
             {
                 Content = "Max Size Class",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addMaxSizeClassButton.Click += async (_, _) =>
@@ -14057,7 +14072,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addProjectileButton = new Button
             {
                 Content = "Projectile",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addProjectileButton.Click += async (_, _) =>
@@ -14261,7 +14276,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var addRollingSmashButton = new Button
                             {
                                 Content = "Rolling Smash",
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(12, 0, 0, 0)
                             };
                             addRollingSmashButton.Click += async (_, _) =>
@@ -14351,7 +14366,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addIdleAnimationButton = new Button
                     {
                         Content = "Idle Anim",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(12, 0, 0, 0)
                     };
                     addIdleAnimationButton.Click += async (_, _) =>
@@ -14387,7 +14402,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addThrowButton = new Button
                         {
                             Content = "Throw",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 4, 0, 2)
                         };
@@ -14540,7 +14555,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var addButton = new Button
                             {
                                 Content = label,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(10, 0, 0, 0)
                             };
                             addButton.Click += async (_, _) =>
@@ -14823,7 +14838,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var add = new Button
                             {
                                 Content = label,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(0, 0, 8, 6)
                             };
                             add.Click += async (_, _) =>
@@ -14985,7 +15000,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var add = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 6)
                         };
@@ -15004,7 +15019,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addScalingReduction = new Button
                         {
                             Content = "Scaling Reduction",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 6)
                         };
@@ -15114,7 +15129,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var add = new Button
                             {
                                 Content = label,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(0, 0, 8, 6)
                             };
                             add.Click += async (_, _) =>
@@ -15454,13 +15469,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 if (!_isReadOnly && mode == "Rate By Type" && !showRateCap)
                 {
-                    var button = new Button { Content = "Modify Rate Cap", Background = Brush.Parse("#2b7a0b") };
+                    var button = new Button { Content = "Modify Rate Cap", Classes = { "add-component" } };
                     button.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Add("modifyratecap"); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                     modeRow.Children.Add(button);
                 }
                 if (!_isReadOnly && mode != "Rate By Type" && !showTargetLimit)
                 {
-                    var button = new Button { Content = "Max Targets", Background = Brush.Parse("#2b7a0b") };
+                    var button = new Button { Content = "Max Targets", Classes = { "add-component" } };
                     button.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Add("modifytargetlimit"); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                     modeRow.Children.Add(button);
                 }
@@ -15482,7 +15497,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (!_isReadOnly)
                 {
-                    var button = new Button { Content = "Add Target Attachment", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    var button = new Button { Content = "Add Target Attachment", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     button.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Add("targetattachment"); state.ForcedVisibleFieldTags.Add("targetattachmentbone"); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                     state.AdditionalFieldsContainer.Children.Add(button);
                 }
@@ -15874,7 +15889,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     else if (!_isReadOnly)
                     {
-                        var addSlowHealButton = new Button { Content = "Slow Heal Multiplier", Background = Brush.Parse("#2b7a0b") };
+                        var addSlowHealButton = new Button { Content = "Slow Heal Multiplier", Classes = { "add-component" } };
                         addSlowHealButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -15981,7 +15996,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         if (!_isReadOnly)
                         {
-                            var addButton = new Button { Content = label, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(stackRow.Children.Count > 0 ? 10 : 0, 0, 0, 0) };
+                            var addButton = new Button { Content = label, Classes = { "add-component" }, Margin = new Thickness(stackRow.Children.Count > 0 ? 10 : 0, 0, 0, 0) };
                             addButton.Click += async (_, _) =>
                             {
                                 if (!await CheckStartLocalMod())
@@ -16098,7 +16113,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         AddAutoRangedBonusRow(bonus.Type, bonus.Value);
                     if (!_isReadOnly)
                     {
-                        var addBonusButton = new Button { Content = "+ Bonus", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 2, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+                        var addBonusButton = new Button { Content = "+ Bonus", Classes = { "add-component" }, Margin = new Thickness(0, 2, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
                         addBonusButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -16190,7 +16205,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         AddAutoRangedRateRow(entry);
                     if (!_isReadOnly)
                     {
-                        var addRateButton = new Button { Content = "Add Rate", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                        var addRateButton = new Button { Content = "Add Rate", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                         addRateButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -16393,7 +16408,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         return openRow;
                     }
 
-                    var addButton = new Button { Content = label, Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 2) };
+                    var addButton = new Button { Content = label, Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 2) };
                     addButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -16575,7 +16590,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (!_isReadOnly)
                 {
-                    var addPropertiesButton = new Button { Content = "Additional Properties", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 2) };
+                    var addPropertiesButton = new Button { Content = "Additional Properties", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 2) };
                     addPropertiesButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -16632,7 +16647,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (!_isReadOnly)
                 {
-                    var addInfectionButton = new Button { Content = "Infection", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 2) };
+                    var addInfectionButton = new Button { Content = "Infection", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 2) };
                     addInfectionButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -16735,7 +16750,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (!_isReadOnly)
                 {
-                    var addTargetLimit = new Button { Content = "Target Limit", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(20, 0, 0, 0) };
+                    var addTargetLimit = new Button { Content = "Target Limit", Classes = { "add-component" }, Margin = new Thickness(20, 0, 0, 0) };
                     addTargetLimit.Click += async (_, _) => { if (await CheckStartLocalMod()) { state.ForcedVisibleFieldTags.Add("modifytargetlimit"); RefreshProtoActionMetadataPanels(state); MarkDirty(); } };
                     shieldRow.Children.Add(addTargetLimit);
                 }
@@ -16768,7 +16783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (healEnabled && !_isReadOnly)
                 {
-                    var addSlowHealMultiplier = new Button { Content = "Slow Heal Multiplier", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(20, 0, 0, 0) };
+                    var addSlowHealMultiplier = new Button { Content = "Slow Heal Multiplier", Classes = { "add-component" }, Margin = new Thickness(20, 0, 0, 0) };
                     addSlowHealMultiplier.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod())
@@ -16818,7 +16833,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var addButton = new Button
                             {
                                 Content = addLabel,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 HorizontalAlignment = HorizontalAlignment.Left,
                                 Margin = new Thickness(0, 0, 8, 0)
                             };
@@ -17058,7 +17073,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddHealRateRow(displayedRateEntries[rateIndex], canRemove: rateIndex > 0);
                 if (!_isReadOnly)
                 {
-                    var addRateButton = new Button { Content = "Add Rate", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    var addRateButton = new Button { Content = "Add Rate", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addRateButton.Click += async (_, _) =>
                     {
                         if (await CheckStartLocalMod())
@@ -17107,7 +17122,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 else if (!_isReadOnly)
                 {
-                    var addSlowHealButton = new Button { Content = "Slow Heal Multiplier", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    var addSlowHealButton = new Button { Content = "Slow Heal Multiplier", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addSlowHealButton.Click += async (_, _) =>
                     {
                         if (await CheckStartLocalMod())
@@ -17195,7 +17210,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addTargetLimit = new Button
                         {
                             Content = "Target Limit",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addTargetLimit.Click += async (_, _) =>
@@ -17484,7 +17499,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -17660,7 +17675,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addTransformDurationButton = new Button
                     {
                         Content = "Transform Duration",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(18, 0, 0, 0)
                     };
@@ -17829,7 +17844,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addRateButton = new Button
                         {
                             Content = "Add Rate",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addRateButton.Click += async (_, _) =>
@@ -17970,7 +17985,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addMaintainTrainPointsButton = new Button
                     {
                         Content = "Maintain Train Points",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addMaintainTrainPointsButton.Click += async (_, _) =>
@@ -18045,7 +18060,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 12, 0)
                         };
@@ -18235,7 +18250,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -18507,7 +18522,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     addAutoGatherRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         VerticalAlignment = VerticalAlignment.Top,
                         Margin = new Thickness(0, 0, 0, 4)
@@ -18685,7 +18700,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addGatheringTypesButton = new Button
                     {
                         Content = "Do Not Auto Gather Unless Gathering Types",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(0, 2, 0, 6)
                     };
@@ -18752,7 +18767,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 12, 0)
                         };
@@ -18910,7 +18925,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addMinRange = new Button
                     {
                         Content = "Min Range",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 0, 8, 0)
                     };
                     addMinRange.Click += async (_, _) =>
@@ -19145,7 +19160,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             addConversionButton = new Button
                             {
                                 Content = "Transform into",
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 HorizontalAlignment = HorizontalAlignment.Left,
                                 Margin = new Thickness(8, 0, 0, 0),
                                 IsVisible = !conversionProtoLabel.IsVisible
@@ -19244,7 +19259,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -19314,7 +19329,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addButton.Click += async (_, _) =>
@@ -19409,7 +19424,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addButton.Click += async (_, _) =>
@@ -19596,7 +19611,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             addTypedStunButton = new Button
                             {
                                 Content = "Stun duration by Type",
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 HorizontalAlignment = HorizontalAlignment.Left,
                                 Margin = new Thickness(8, 0, 0, 0),
                                 IsVisible = !hasStun
@@ -19688,7 +19703,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = "Add Duration by Type",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addButton.Click += async (_, _) =>
@@ -19768,7 +19783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addButton.Click += async (_, _) =>
@@ -19884,7 +19899,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddSpawnAtTargetRow();
                 if (!_isReadOnly)
                 {
-                    addSpawnAtTargetButton = new Button { Content = "Add Spawn At Target", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    addSpawnAtTargetButton = new Button { Content = "Add Spawn At Target", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addSpawnAtTargetButton.Click += async (_, _) => { if (await CheckStartLocalMod()) { AddSpawnAtTargetRow(); MarkDirty(); } };
                     spawnAtTargetSection.Children.Add(addSpawnAtTargetButton);
                 }
@@ -19895,7 +19910,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddSpawnedUnitRow();
                 if (!_isReadOnly)
                 {
-                    addSpawnedUnitButton = new Button { Content = "Add Spawned Unit", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                    addSpawnedUnitButton = new Button { Content = "Add Spawned Unit", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addSpawnedUnitButton.Click += async (_, _) => { if (await CheckStartLocalMod()) { AddSpawnedUnitRow(); MarkDirty(); } };
                     spawnedUnitsSection.Children.Add(addSpawnedUnitButton);
                 }
@@ -20053,7 +20068,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -20264,7 +20279,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         AddGrantRow();
                     if (!_isReadOnly)
                     {
-                        addOtherResourceButton = new Button { Content = "Add other resource", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                        addOtherResourceButton = new Button { Content = "Add other resource", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                         addOtherResourceButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
@@ -20282,7 +20297,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                         Content = "Grant Other Resources",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (_, _) =>
@@ -20369,7 +20384,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                         Content = "Grant Resource to Ally",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (_, _) =>
@@ -20581,7 +20596,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addVfxButton = new Button
                     {
                         Content = "Optional VFX",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addVfxButton.Click += async (_, _) =>
@@ -20693,7 +20708,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addSoundsButton = new Button
                     {
                         Content = "Stealth Sounds",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addSoundsButton.Click += async (_, _) =>
@@ -20865,7 +20880,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addMinRangeButton = new Button
                     {
                         Content = "Min Range",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(14, 0, 0, 0)
                     };
                     addMinRangeButton.Click += async (_, _) =>
@@ -21013,7 +21028,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -21085,7 +21100,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                         Content = "Targeted Speed Multiplier",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (_, _) =>
@@ -21260,7 +21275,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -21380,7 +21395,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addResourceSubTypeButton = new Button
                     {
                         Content = "Resource Sub Type",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addResourceSubTypeButton.Click += async (_, _) =>
@@ -21822,7 +21837,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addModifyBaseButton = new Button
                     {
                         Content = "Modify Base",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addModifyBaseButton.Click += async (_, _) =>
@@ -22305,7 +22320,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addModifyBaseButton = new Button
                     {
                         Content = "Modify Base",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addModifyBaseButton.Click += async (_, _) =>
@@ -22458,7 +22473,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -22561,7 +22576,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addModifyProtoButton = new Button
                 {
                     Content = "VFX",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 addModifyProtoButton.Click += async (_, _) =>
@@ -22880,7 +22895,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addTimerButton = new Button
                 {
                     Content = "Timer",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(8, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -22943,7 +22958,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addModelAttachmentButton = new Button
             {
                 Content = "Add Model Attachment",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 2)
             };
@@ -23316,7 +23331,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addAreaSortButton = new Button
                     {
                         Content = "Area Sort",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(14, 0, 0, 0),
                         VerticalAlignment = VerticalAlignment.Center
                     };
@@ -23345,7 +23360,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addDamageAreaButton = new Button
             {
                 Content = "Add Damage Area",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 2)
             };
@@ -23751,11 +23766,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var card = new Border
                 {
-                    BorderBrush = Brush.Parse("#3f3f46"),
+                    BorderBrush = Brush.Parse("#4C4031"),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(8),
-                    Background = Brush.Parse("#202020")
+                    Background = Brush.Parse("#191C1A")
                 };
                 targetsContainer.Children.Add(card);
 
@@ -23798,7 +23813,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var removeButton = new Button
                     {
                         Content = "Remove",
-                        Background = Brush.Parse("#8b0000"),
+                        Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                         HorizontalAlignment = HorizontalAlignment.Right,
                         VerticalAlignment = VerticalAlignment.Top
                     };
@@ -23960,7 +23976,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     addForbidButton = new Button
                     {
                         Content = "Add Forbid Unit Type",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addForbidButton.Click += async (_, _) =>
@@ -23995,7 +24011,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addAttachment = new Button
                         {
                             Content = "Add Model Attachment",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addAttachment.Click += async (_, _) =>
@@ -24242,7 +24258,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addRateButton = new Button
                     {
                         Content = "Add Empower Rate",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addRateButton.Click += async (_, _) =>
@@ -24277,7 +24293,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addTargetButton = new Button
                 {
                     Content = $"Add {GetSectionLabel(sectionTag)} Target",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 addTargetButton.Click += async (_, _) =>
@@ -24548,7 +24564,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Tag = "protoaction.charged",
                 Content = "Charged Modifier",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addButton.Click += async (_, _) =>
@@ -24871,7 +24887,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addActivationButton = new Button
                 {
                     Content = "Activation Type",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left,
                     IsVisible = !activationRow.IsVisible,
                     Margin = new Thickness(0, 0, 0, 4)
@@ -24915,7 +24931,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addModifierButton = new Button
                 {
                     Content = "Add Modifier",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left,
                     IsVisible = !modifierRow.IsVisible,
                     Margin = new Thickness(0, 0, 0, 4)
@@ -24989,7 +25005,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addCooldownButton = new Button
                 {
                     Content = "Cooldown",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     IsVisible = !cooldownGroup.IsVisible,
                     Margin = new Thickness(0, 0, 6, 4)
                 };
@@ -25007,7 +25023,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addDurationButton = new Button
                 {
                     Content = "Duration",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     IsVisible = !durationGroup.IsVisible,
                     Margin = new Thickness(0, 0, 6, 4)
                 };
@@ -25220,7 +25236,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var button = new Button
                     {
                         Content = text,
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 0, 6, 4)
                     };
                     button.Click += async (_, _) =>
@@ -25328,7 +25344,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Tag = "protoaction.charged",
                 Content = "Charged Container",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 0)
             };
@@ -26194,15 +26210,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             AttachProtoActionDecimalBehavior(freezeDamageTb);
             freezeDamageTb.TextChanged += async (_, _) => await HandleCardChangedAsync();
 
-            var rawXmlTb = new TextBox
+            var rawXmlTb = new TextEditor
             {
                 Text = GetCompactOnHitEffectXml(element),
                 IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
+                WordWrap = true,
                 MinHeight = 52,
                 IsVisible = !isSupported
             };
+            XmlSyntaxEditorService.Configure(rawXmlTb);
 
             var childAttackTypes = element.Elements()
                 .Where(x => x.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase))
@@ -26633,7 +26649,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addStackButton = new Button
                     {
                         Content = "Stack",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(0, 0, 8, 0)
                     };
@@ -26693,7 +26709,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addTerrainButton = new Button
                         {
                             Content = "Terrain",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26713,7 +26729,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addDurationButton = new Button
                         {
                             Content = "Duration",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26733,7 +26749,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addPlayerRelationButton = new Button
                         {
                             Content = "Player Relation",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26755,7 +26771,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addShadingTypeButton = new Button
                         {
                             Content = "Shading Type",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26778,7 +26794,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addDelayButton = new Button
                         {
                             Content = "Delay",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26804,7 +26820,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addProbButton = new Button
                         {
                             Content = "Probability",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left,
                             Margin = new Thickness(0, 0, 8, 0)
                         };
@@ -26831,7 +26847,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addGlobalProbButton = new Button
                         {
                             Content = "Global Probability",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addGlobalProbButton.Click += async (_, _) =>
@@ -27063,7 +27079,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         addDamageButton ??= new Button
                         {
                             Content = "Add Damage",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(2, 0, 0, 0),
                             VerticalAlignment = VerticalAlignment.Center
                         };
@@ -27371,7 +27387,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addModifyButton = new Button
                         {
                             Content = "Modifier",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addModifyButton.Click += async (_, _) =>
@@ -27553,7 +27569,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addModifyRampButton = new Button
                         {
                             Content = "Modifier Ramp",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addModifyRampButton.Click += async (_, _) =>
@@ -27741,7 +27757,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addModifyButton = new Button
                         {
                             Content = "Modifier",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addModifyButton.Click += async (_, _) =>
@@ -27916,7 +27932,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addModifyRampButton = new Button
                         {
                             Content = "Modifier Ramp",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         addModifyRampButton.Click += async (_, _) =>
@@ -28050,7 +28066,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addButton = new Button
             {
                 Content = "Add On Hit Effect",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addButton.Click += async (_, _) =>
@@ -28421,7 +28437,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Content = tag.Equals("typedanim", StringComparison.OrdinalIgnoreCase)
                             ? "Add Animation by Type"
                             : "Add Max Range by Type",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Margin = new Thickness(0, 0, 0, 6)
                     };
@@ -28816,7 +28832,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addVeterancyYieldButton = new Button
                     {
                         Content = "Veterancy Yield",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
 
@@ -28844,7 +28860,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = buttonLabel,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             VerticalAlignment = VerticalAlignment.Center
                         };
 
@@ -28872,7 +28888,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addResourceButton = new Button
                     {
                         Content = "Resource",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     addResourceButton.Click += (_, _) =>
@@ -28897,7 +28913,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Content = definition.Label.Equals("Rate", StringComparison.OrdinalIgnoreCase)
                                 ? "Other Rate Attribute"
                                 : $"Other {definition.Label} Attribute",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             VerticalAlignment = VerticalAlignment.Center
                         };
 
@@ -29031,7 +29047,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                               tag.Equals("minrate", StringComparison.OrdinalIgnoreCase)
                                 ? "Add " + definition.Label
                                 : "+ Add " + definition.Label,
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 addButton.Click += async (s, e) =>
@@ -29497,7 +29513,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addButton = new Button
             {
                 Content = "Add Attribute From Full List",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             pickerHost.Children.Add(addButton);
@@ -30212,7 +30228,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     addAttributeButton = new Button
                     {
                         Content = buttonLabel,
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addAttributeButton.Click += async (_, _) =>
@@ -30287,7 +30303,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                     Content = "Add " + definition.Label,
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 addButton.Click += async (s, e) =>
@@ -33154,7 +33170,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         var manager = new UnitTypeManagerWindow(
             items,
             CreateUnitTypeAsync,
-            DuplicateUnitTypeAsync,
             RenameUnitTypeAsync,
             DeleteUnitTypeAsync,
             CountUnitTypeUsage);
@@ -33624,6 +33639,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         _captureAbilityEditorCurrent?.Invoke();
+        EnsureAbilityCatalogLoadedForManager();
         var customNames = GetCustomAbilityPowerNames();
         var usageCounts = GetAbilityUsageCounts();
         foreach (var draft in _abilityDrafts.Values.Where(draft => !string.IsNullOrWhiteSpace(draft.Name)))
@@ -33646,6 +33662,29 @@ public partial class ProtoEditorWindow : SimpleWindow
             DeleteManagedAbilityAsync,
             ResolveManagedAbilityUsageCount);
         await window.ShowDialog(this);
+    }
+
+    private void EnsureAbilityCatalogLoadedForManager()
+    {
+        if (_abilityPowerCatalog.Count > 0)
+            return;
+
+        // The main document now intentionally starts empty, so the normal per-unit
+        // ability loader may not have run before the global manager is opened.
+        // Preserve every in-memory unit draft while using a non-unit key to load only
+        // the shared ability/power catalog.
+        var preservedDrafts = CloneAbilityDrafts(_abilityDrafts);
+        var preservedNames = _availableAbilityNames.ToList();
+        LoadAbilitySources("__ability_manager_catalog__");
+
+        _abilityDrafts.Clear();
+        foreach (var entry in preservedDrafts)
+            _abilityDrafts[entry.Key] = entry.Value;
+        _availableAbilityNames = preservedNames
+            .Concat(_abilityPowerCatalog.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private async Task<bool> CreateManagedAbilityAsync(string abilityName)
@@ -35227,6 +35266,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             ColumnDefinitions = new ColumnDefinitions("150, *"),
         };
+        var iconPreview = new IconPreviewControl(_iconPreviewService)
+        {
+            Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset, 4, 8, 4),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        };
         int gridRow = 0;
 
         foreach (var field in ProtoConstants.SimpleFields)
@@ -35286,14 +35331,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 displayRow.Children.Add(displayNameTb);
                 _fieldControls["displaynameid"] = displayNameTb;
 
-                var addEditorNameButton = new Button
-                {
-                    Content = "Add Editor Name",
-                    Background = Brush.Parse("#2b7a0b"),
-                    Margin = new Thickness(0, 4, 0, 4),
-                    IsVisible = !_isReadOnly && string.IsNullOrWhiteSpace(editorNameId)
-                };
-                displayRow.Children.Add(addEditorNameButton);
                 Grid.SetColumn(displayRow, 1);
                 Grid.SetRow(displayRow, gridRow);
                 propertiesGrid.Children.Add(displayRow);
@@ -35305,7 +35342,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Text = "Editor Name",
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 4, 6, 4),
-                    IsVisible = !string.IsNullOrWhiteSpace(editorNameId)
+                    IsVisible = !_isReadOnly || !string.IsNullOrWhiteSpace(editorNameId)
                 };
                 Grid.SetRow(editorLabel, gridRow);
                 propertiesGrid.Children.Add(editorLabel);
@@ -35313,7 +35350,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var editorRow = new WrapPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    IsVisible = !string.IsNullOrWhiteSpace(editorNameId)
+                    IsVisible = !_isReadOnly || !string.IsNullOrWhiteSpace(editorNameId)
                 };
                 var editorNameTb = EditorTextFieldStyle.ConfigureTextBox(new TextBox
                 {
@@ -35321,39 +35358,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 4, 0, 4)
                 });
                 editorRow.Children.Add(editorNameTb);
-                var removeEditorNameButton = new Button
-                {
-                    Classes = { "remove-button" },
-                    Margin = new Thickness(2, 4, 0, 4),
-                    IsVisible = !_isReadOnly
-                };
-                editorRow.Children.Add(removeEditorNameButton);
                 Grid.SetColumn(editorRow, 1);
                 Grid.SetRow(editorRow, gridRow);
                 propertiesGrid.Children.Add(editorRow);
 
-                void ShowEditorName()
+                if (!_isReadOnly || !string.IsNullOrWhiteSpace(editorNameId))
                 {
-                    _currentStringFieldIds["editornameid"] = displayNameId;
-                    _fieldControls["editornameid"] = editorNameTb;
-                    editorNameTb.Text = displayNameTb.Text;
-                    editorLabel.IsVisible = true;
-                    editorRow.IsVisible = true;
-                    addEditorNameButton.IsVisible = false;
-                }
-
-                if (!string.IsNullOrWhiteSpace(editorNameId))
-                {
-                    _currentStringFieldIds["editornameid"] = editorNameId;
+                    _currentStringFieldIds["editornameid"] = string.IsNullOrWhiteSpace(editorNameId)
+                        ? displayNameId
+                        : editorNameId;
                     _fieldControls["editornameid"] = editorNameTb;
                 }
 
-                addEditorNameButton.Click += async (_, _) =>
-                {
-                    if (!await CheckStartLocalMod()) return;
-                    ShowEditorName();
-                    MarkDirty();
-                };
                 editorNameTb.TextChanged += async (_, _) =>
                 {
                     if (_isPopulating || !_fieldControls.ContainsKey("editornameid")) return;
@@ -35361,17 +35377,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                         ? _currentStringFieldIds.GetValueOrDefault("displaynameid", "")
                         : BuildStringIdForUnit(_currentUnitName ?? unitName, GetStringSuffixForField("editornameid"));
                     if (await CheckStartLocalMod()) MarkDirty();
-                };
-                removeEditorNameButton.Click += async (_, _) =>
-                {
-                    if (!await CheckStartLocalMod()) return;
-                    _fieldControls.Remove("editornameid");
-                    _currentStringFieldIds.Remove("editornameid");
-                    editorNameTb.Text = "";
-                    editorLabel.IsVisible = false;
-                    editorRow.IsVisible = false;
-                    addEditorNameButton.IsVisible = true;
-                    MarkDirty();
                 };
 
                 gridRow++;
@@ -35607,7 +35612,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = modifier.Label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(0, 4, 8, 4)
                         };
                         addButton.Click += async (_, _) =>
@@ -35681,7 +35686,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addModifiersButton = new Button
                         {
                             Content = "Add Modifiers",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(0, 4, 8, 4)
                         };
                         addModifiersButton.Click += async (_, _) =>
@@ -35732,7 +35737,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var button = new Button
                     {
                         Content = "Add Regen",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 4, 0, 4)
                     };
                     button.Click += async (s, e) =>
@@ -35884,7 +35889,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var button = new Button
                     {
                         Content = "Add Shield",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 4, 0, 4)
                     };
                     button.Click += async (s, e) =>
@@ -35952,7 +35957,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                     addShieldRegenButton = new Button
                                     {
                                         Content = "Add Regen",
-                                        Background = Brush.Parse("#2b7a0b"),
+                                        Classes = { "add-component" },
                                         Margin = new Thickness(0, 4, 8, 4)
                                     };
                                     addShieldRegenButton.Click += async (_, _) =>
@@ -35987,7 +35992,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         addShieldRegenButton = new Button
                         {
                             Content = "Add Regen",
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(0, 4, 8, 4)
                         };
                         addShieldRegenButton.Click += async (_, _) =>
@@ -36379,7 +36384,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addMaxRunVelocityButton = new Button
                 {
                     Content = "Add Max Run Velocity",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 4, 0, 4),
                     IsVisible = !_isReadOnly && !hasMaxRunVelocity
                 };
@@ -36454,6 +36459,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Button? btnAddCulture = null;
                 var defaultRowHasSelector = cultureEntries.Count > 0;
 
+                void RefreshCultureIconPreview()
+                {
+                    if (!field.Tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    var options = new List<(string Path, string? Culture)>();
+                    if (defaultAcb != null)
+                        options.Add((defaultAcb.FullValue, null));
+                    options.AddRange(rowStates.Select(state => (
+                        state.ValueEditor.FullValue,
+                        state.CultureCb.SelectedItem as string ?? state.CultureCb.SelectedValue as string)));
+                    _ = iconPreview.ShowOptionsAsync(options);
+                }
+
                 AssetPathEditor CreateValueEditor(string value, Thickness margin)
                 {
                     var allCulturePathValues = suggestionList
@@ -36508,6 +36527,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (showDefaultRow)
                 {
                     defaultAcb = CreateValueEditor(defaultEntry?.Value ?? "", new Thickness(0, 4, 8, 4));
+                    if (field.Tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                        defaultAcb.FullValueChanged += (_, _) => RefreshCultureIconPreview();
                     defaultRow = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
                     _fieldControls[field.Tag] = defaultAcb;
                     ConfigureDefaultRow();
@@ -36541,11 +36562,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var proceed = await CheckStartLocalMod();
                             if (proceed) MarkDirty();
                         }
+                        RefreshCultureIconPreview();
                     };
                     Grid.SetColumn(cultureCb, 0);
                     rowGrid.Children.Add(cultureCb);
 
                     var valueAcb = CreateValueEditor(value, new Thickness(0, 4, 8, 4));
+                    if (field.Tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                        valueAcb.FullValueChanged += (_, _) => RefreshCultureIconPreview();
                     Grid.SetColumn(valueAcb, 1);
                     rowGrid.Children.Add(valueAcb);
 
@@ -36572,6 +36596,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             {
                                 rowStates.Remove(rowState);
                                 fieldStack.Children.Remove(rowGrid);
+                                RefreshCultureIconPreview();
                                 if (field.Tag.Equals("animfile", StringComparison.OrdinalIgnoreCase))
                                     RefreshCurrentUnitAnimationCatalogFromEditors();
                                 MarkDirty();
@@ -36586,6 +36611,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 foreach (var entry in cultureEntries)
                     AddCultureRow(GetCultureLabel(entry.Culture), entry.Value);
+                RefreshCultureIconPreview();
 
                 if (!_isReadOnly)
                 {
@@ -36594,7 +36620,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Content = field.Tag.Equals("icon", StringComparison.OrdinalIgnoreCase)
                             ? "Add Culture Specific Icon"
                             : "Add Culture Specific Animfile",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 4, 0, 4),
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
@@ -36617,6 +36643,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 ConfigureDefaultRow();
                             }
                             AddCultureRow(nextCulture, "");
+                            RefreshCultureIconPreview();
                             MarkDirty();
                         }
                     };
@@ -36778,7 +36805,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             gridRow++;
         }
 
-        _activeEditorPanel.Children.Add(propertiesGrid);
+        var propertiesLayout = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        propertiesLayout.Children.Add(propertiesGrid);
+        propertiesLayout.Children.Add(iconPreview);
+        _activeEditorPanel.Children.Add(propertiesLayout);
 
         var structureEditorsContainer = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
         var structureAddButtonsRow = new WrapPanel { Orientation = Orientation.Horizontal };
@@ -37069,7 +37102,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var btnAddTarget = new Button
                     {
                         Content = mode == BuildLimitMode.Dynamic ? "Add Dynamic Type" : "Add Shared Type",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         Margin = new Thickness(0, 4, 0, 4),
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
@@ -37133,7 +37166,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _currentBuildLimitMode = BuildLimitMode.Standard;
             if (!_isReadOnly)
             {
-                addBuildLimitButton = new Button { Content = "Add a Build Limit", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 4, 8, 4) };
+                addBuildLimitButton = new Button { Content = "Add a Build Limit", Classes = { "add-component" }, Margin = new Thickness(0, 4, 8, 4) };
                 addBuildLimitButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -37496,7 +37529,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var addButton = new Button
                         {
                             Content = definition.Label,
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(0, 4, 8, 4)
                         };
                         addButton.Click += async (_, _) =>
@@ -37574,7 +37607,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addContainButton = new Button
                 {
                     Content = "Add Contain",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 4, 8, 4),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -38917,7 +38950,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                         Content = "Add Dependent Unit",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 4, 0, 4),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -39154,7 +39187,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
                     void AddOptionalButton(string text, Action show)
                     {
-                        var button = new Button { Content = text, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 2, 8, 2) };
+                        var button = new Button { Content = text, Classes = { "add-component" }, Margin = new Thickness(0, 2, 8, 2) };
                         button.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -39203,7 +39236,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                         Content = "Add Spawn",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 4, 0, 4),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -39523,7 +39556,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             if (!_isReadOnly)
                             {
-                                var addVfx = new Button { Content = "Respawn VFX", Background = Brush.Parse("#2b7a0b") };
+                                var addVfx = new Button { Content = "Respawn VFX", Classes = { "add-component" } };
                                 addVfx.Click += async (_, _) =>
                                 {
                                     if (!await CheckStartLocalMod()) return;
@@ -39638,7 +39671,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     else if (!_isReadOnly)
                     {
-                        var addLimit = new Button { Content = "Respawn Limit", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 0) };
+                        var addLimit = new Button { Content = "Respawn Limit", Classes = { "add-component" }, Margin = new Thickness(0, 0, 8, 0) };
                         addLimit.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -39674,7 +39707,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     else if (!_isReadOnly)
                     {
-                        var addVfx = new Button { Content = "Respawn VFX", Background = Brush.Parse("#2b7a0b") };
+                        var addVfx = new Button { Content = "Respawn VFX", Classes = { "add-component" } };
                         addVfx.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -40049,7 +40082,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addRankButton = new Button
                 {
                         Content = "Add Rank",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(150, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -40067,7 +40100,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addBonusButton = new Button
                 {
                         Content = "Add Bonus",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(150, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -40247,7 +40280,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                         Content = "Add Modifier",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(150, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -40416,7 +40449,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var showButton = new Button
                             {
                                 Content = "Add Drop Off Multiplier",
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 HorizontalAlignment = HorizontalAlignment.Left,
                                 Margin = new Thickness(150, 0, 0, 0)
                             };
@@ -40456,7 +40489,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var resourceButton = new Button
                             {
                                 Content = entry.ResourceType,
-                                Background = Brush.Parse("#2b7a0b"),
+                                Classes = { "add-component" },
                                 Margin = new Thickness(0, 4, 8, 4)
                             };
                             resourceButton.Click += async (_, _) =>
@@ -40643,7 +40676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var addButton = new Button
                 {
                         Content = "Add Conversion",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 4, 0, 4),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -40804,7 +40837,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                         Content = "Add Non Socket Place Proto ID",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (s, e) =>
@@ -40968,7 +41001,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!useInlineSharedSelectionLayout)
                 {
-                    var addButton = new Button { Content = "Add", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(8, 0, 8, 0) };
+                    var addButton = new Button { Content = "Add", Classes = { "add-component" }, Margin = new Thickness(8, 0, 8, 0) };
                     addButton.Click += async (s, e) => await PerformAdd();
                     Grid.SetColumn(addButton, 1);
                     addGrid.Children.Add(addButton);
@@ -41238,7 +41271,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                     Content = "Add Recharge Include/Exclude Types",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (s, e) =>
@@ -41520,7 +41553,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                     Content = "Add Aux Recharge Include/Exclude Types",
-                        Background = Brush.Parse("#2b7a0b"),
+                        Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
                     addButton.Click += async (s, e) =>
@@ -41812,7 +41845,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var buttons = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(150, 2, 0, 0) };
                     void AddOptionalButton(string text, Action show)
                     {
-                        var button = new Button { Content = text, Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 8, 0) };
+                        var button = new Button { Content = text, Classes = { "add-component" }, Margin = new Thickness(0, 0, 8, 0) };
                         button.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod()) return;
@@ -41922,7 +41955,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addLifespanButton = new Button
                 {
                     Content = "Add lifespan",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(150, 0, 0, 0),
                     IsVisible = string.IsNullOrWhiteSpace(lifespan)
@@ -42132,7 +42165,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var addButton = new Button
             {
                 Content = "Other specific attribute",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             addButton.Click += (s, e) =>
@@ -42733,7 +42766,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var card = new Border
             {
                 Background = Brush.Parse("#181818"),
-                BorderBrush = Brush.Parse("#3f3f46"),
+                BorderBrush = Brush.Parse("#4C4031"),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(12),
                 CornerRadius = new CornerRadius(6),
@@ -42747,7 +42780,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var saveDefinitionButton = new Button
             {
                 Content = "Save",
-                Background = Brush.Parse("#2b7a0b"),
+                Background = Brush.Parse("#163E26"),
+                BorderBrush = Brush.Parse("#A98243"),
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(8, 0, 0, 0),
                 IsVisible = !_isReadOnly && (state.DefinitionDirty || sourceBelongsToOtherUnit)
@@ -42957,7 +42991,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var remove = new Button
                 {
                     Content = "Remove",
-                    Background = Brush.Parse("#8b0000"),
+                    Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                     VerticalAlignment = VerticalAlignment.Top,
                     Margin = new Thickness(8, 0, 0, 0)
                 };
@@ -43119,7 +43154,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var toEditor = sharedTransformEditor.ToEditor;
             var prereqTechEditor = sharedTransformEditor.PrereqTechEditor;
             var associatedTechEditor = sharedTransformEditor.AssociatedTechEditor;
-            fromEditor.BorderBrush = sourceBelongsToOtherUnit ? Brush.Parse("#d64545") : Brush.Parse("#3f3f46");
+            fromEditor.BorderBrush = sourceBelongsToOtherUnit ? Brush.Parse("#d64545") : Brush.Parse("#4C4031");
 
             var sharedFlagsEditor = new ProtoUnitCommandFlagsEditor(
                 definition.Flags,
@@ -43255,7 +43290,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var add = new Button
                 {
                     Content = "Add Transform Command",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-item" },
                     Margin = new Thickness(0, 0, 6, 6),
                     Padding = new Thickness(10, 4),
                     HorizontalAlignment = HorizontalAlignment.Left
@@ -43360,7 +43395,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var save = new Button
             {
                 Content = "Save",
-                Background = Brush.Parse("#2b7a0b"),
+                Background = Brush.Parse("#163E26"),
+                BorderBrush = Brush.Parse("#A98243"),
                 Padding = new Thickness(8, 4),
                 Margin = new Thickness(0, 0, 6, 0),
                 IsVisible = false
@@ -43758,8 +43794,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 ItemsSource = new[]
                 {
-                    new TabItem { Header = "Actions", Content = tacticsModeActionsPanel },
-                    new TabItem { Header = "Tactic", Content = tacticsModeTacticPanel },
+                    new TabItem { Header = "Actions", Content = tacticsModeActionsPanel, Classes = { "compact-mode-tab" } },
+                    new TabItem { Header = "Tactic", Content = tacticsModeTacticPanel, Classes = { "compact-mode-tab" } },
                 },
                 SelectedIndex = 0
             };
@@ -43985,7 +44021,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Padding = new Thickness(8, 3),
                     Margin = new Thickness(0, 0, 6, 6),
                     Background = ReferenceEquals(actionState, selectedAction)
-                        ? Brush.Parse("#2b3c57")
+                        ? Brush.Parse("#393125")
                         : Brush.Parse("#252526")
                 };
                 if (CanReorderActionGroup(actionState))
@@ -44074,7 +44110,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var btnAddAction = new Button
                 {
                     Content = "Add Action",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-item" },
                     Padding = new Thickness(8, 3),
                     Margin = new Thickness(0, 0, 6, 6)
                 };
@@ -44318,7 +44354,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var btnAddAction = new Button
             {
                 Content = "Add Proto Action",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-item" },
                 Margin = new Thickness(0)
             };
             btnAddAction.Click += async (s, e) =>
@@ -44339,7 +44375,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var btnCopyAction = new Button
             {
                 Content = "Copy From Another Unit",
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "copy-import" },
                 Margin = new Thickness(0)
             };
             btnCopyAction.Click += async (_, _) =>
@@ -44437,8 +44473,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var border = new Border
         {
-            Background = Brush.Parse("#1c1c1c"),
-            BorderBrush = Brush.Parse("#3f3f46"),
+            Background = Brush.Parse("#0E1110"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(10),
@@ -44671,7 +44707,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var btnRemove = new Button
             {
                 Content = "Remove",
-                Background = Brush.Parse("#8b0000"),
+                Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             btnRemove.Click += async (s, e) =>
@@ -45026,7 +45063,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addDamageButton = new Button
                 {
                     Content = "Add Damage",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(2, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -45316,7 +45353,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 btnAddBonus = new Button
                 {
                     Content = "Add Damage Bonus",
-                    Background = Brush.Parse("#2b7a0b"),
+                    Classes = { "add-component" },
                     Margin = new Thickness(0, 0, 0, 6),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -49152,6 +49189,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_isAbilityDefinitionEditorMode)
             LoadAbilitySources(unitName);
         _abilitiesEditorPanel.Children.Clear();
+        AddSectionHeader("Abilities");
         _abilityRechargeModeEditors.Clear();
         _abilityRechargeValueEditors.Clear();
         _abilityRechargeStartChargedEditors.Clear();
@@ -49187,7 +49225,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var card = new Border
         {
             Background = Brush.Parse("#181818"),
-            BorderBrush = Brush.Parse("#3f3f46"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(12),
@@ -49258,7 +49296,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         var createAbilitySaveButton = new Button
         {
             Content = "Save",
-            Background = Brush.Parse("#2b7a0b"),
+            Background = Brush.Parse("#163E26"),
+            BorderBrush = Brush.Parse("#A98243"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
             IsVisible = false
@@ -49279,7 +49318,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         var removeAbilityButton = new Button
         {
             Content = "Remove",
-            Background = Brush.Parse("#8b0000"),
+            Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
             VerticalAlignment = VerticalAlignment.Center,
             IsVisible = !_isReadOnly && !_isAbilityDefinitionEditorMode
         };
@@ -49399,7 +49439,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var button = new Button
             {
                 Content = AbilityFieldLabel(tag),
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 IsVisible = !_isReadOnly
             };
             generalValueButtons[tag] = button;
@@ -49417,7 +49457,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var remove = new Button
                 {
-                    Content = "X", Background = Brush.Parse("#8b0000"), Width = 28, Height = 28,
+                    Content = "X", Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"), Width = 28, Height = 28,
                     Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center,
                     VerticalContentAlignment = VerticalAlignment.Center
                 };
@@ -49822,7 +49863,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Opacity = _isReadOnly ? 0.55 : 1.0,
                     VerticalAlignment = VerticalAlignment.Bottom
                 };
-                abilityIconEditor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#4a4a4a" : "#1b1b1b");
+                abilityIconEditor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#202220" : "#0E1110");
                 fieldRow.Children.Add(abilityIconEditor);
             }
             else if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase))
@@ -50047,7 +50088,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var removeButton = new Button
             {
                 Content = "X",
-                Background = Brush.Parse("#8b0000"),
+                Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                 Width = 28,
                 Height = 28,
                 Padding = new Thickness(0),
@@ -50318,7 +50360,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         var button = new Button
                         {
                             Content = AbilityFieldLabel(tag),
-                            Background = Brush.Parse("#2b7a0b"),
+                            Classes = { "add-component" },
                             Margin = new Thickness(0, 0, 8, 4)
                         };
                         button.Click += async (_, _) =>
@@ -50455,14 +50497,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Content = displayName,
                     Margin = new Thickness(0, 0, 6, 6),
                     Padding = new Thickness(10, 4),
-                    Background = draftKey.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase) ? Brush.Parse("#28466f") : Brush.Parse("#2b2b2b")
+                    Classes = { "ability-tab" }
                 };
+                if (draftKey.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase))
+                    button.Classes.Add("active");
                 button.Click += async (_, _) => await LoadNamedAbilityAsync(draftKey);
                 abilityTabs.Children.Add(button);
             }
             if (!_isReadOnly && _abilityDrafts.Count < 6)
             {
-                var add = new Button { Content = "Add Ability", Background = Brush.Parse("#2b7a0b"), Margin = new Thickness(0, 0, 6, 6) };
+                var add = new Button { Content = "Add Ability", Classes = { "add-item" }, Margin = new Thickness(0, 0, 6, 6) };
                 add.Click += async (_, _) =>
                 {
                     CaptureCurrent();
@@ -51327,8 +51371,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         _currentAbilityEditorName = "";
         RenderAbilityTabs();
         var firstAbility = _abilityDrafts.FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(firstAbility.Key))
-            _ = LoadNamedAbilityAsync(firstAbility.Key);
+        _pendingAbilityEditorLoadTask = !string.IsNullOrWhiteSpace(firstAbility.Key)
+            ? LoadNamedAbilityAsync(firstAbility.Key)
+            : null;
     }
 
     internal static bool AbilityRangeIndicatorHasRequiredRange(string? indicator, IReadOnlyDictionary<string, string> attributes)

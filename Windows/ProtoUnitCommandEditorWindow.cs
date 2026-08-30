@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
+using AvaloniaEdit;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
 
@@ -37,7 +38,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     private readonly Dictionary<string, List<string>> _repeatables = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _flags = new(StringComparer.OrdinalIgnoreCase);
     private readonly TextBox _nameBox;
-    private readonly TextBox _xmlPreview;
+    private readonly TextEditor _xmlPreview;
     private readonly TextBlock _statusText;
     private readonly Dictionary<string, string> _stringTexts = new(StringComparer.OrdinalIgnoreCase);
     private bool _refreshingPreview;
@@ -102,8 +103,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         MinWidth = 760;
         MinHeight = 520;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414");
-        Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311");
+        Foreground = Brush.Parse("#E8DECC");
 
         AddHandler(InputElement.KeyDownEvent, async (_, e) =>
         {
@@ -118,8 +119,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
 
         var toolbarBorder = new Border
         {
-            Background = Brush.Parse("#1c1c1c"),
-            BorderBrush = Brush.Parse("#2d2d30"),
+            Background = Brush.Parse("#0E1110"),
+            BorderBrush = Brush.Parse("#6A5434"),
             BorderThickness = new Thickness(0, 0, 0, 1),
             Height = 45
         };
@@ -148,7 +149,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#2b7a0b")
+                Background = Brush.Parse("#163E26"),
+                BorderBrush = Brush.Parse("#A98243")
             };
             saveButton.Click += async (_, _) => await SaveAsync();
             toolbarButtons.Children.Add(saveButton);
@@ -160,7 +162,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         _statusText = new TextBlock
         {
             Text = "",
-            Foreground = Brush.Parse("#e3bd54"),
+            Foreground = Brush.Parse("#C59A52"),
             FontWeight = FontWeight.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
@@ -173,7 +175,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var root = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("7*,5,3*"),
-            Background = Brush.Parse("#141414")
+            Background = Brush.Parse("#111311")
         };
         root.ColumnDefinitions[2].MinWidth = 28;
         var expandedPreviewWidth = root.ColumnDefinitions[2].Width;
@@ -182,8 +184,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var scrollPanel = new StackPanel { Spacing = 8 };
         var commandCard = new Border
         {
-            Background = Brush.Parse("#1c1c1c"),
-            BorderBrush = Brush.Parse("#3f3f46"),
+            Background = Brush.Parse("#0E1110"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(12),
@@ -252,7 +254,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var splitter = new GridSplitter
         {
             Width = 5,
-            Background = Brush.Parse("#2d2d30"),
+            Background = Brush.Parse("#6A5434"),
             ResizeDirection = GridResizeDirection.Columns,
             ResizeBehavior = GridResizeBehavior.PreviousAndNext,
             HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -273,21 +275,20 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             FontWeight = FontWeight.Bold,
             Margin = new Thickness(28, 0, 0, 8)
         });
-        _xmlPreview = new TextBox
+        _xmlPreview = new TextEditor
         {
             IsReadOnly = true,
             Focusable = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
             FontFamily = new FontFamily("Consolas"),
-            Background = Brush.Parse("#101010"),
-            Foreground = Brush.Parse("#d9d9d9")
+            Background = Brush.Parse("#090C0B"),
+            Foreground = Brush.Parse("#E8DECC"),
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
-        ScrollViewer.SetHorizontalScrollBarVisibility(_xmlPreview, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-        ScrollViewer.SetVerticalScrollBarVisibility(_xmlPreview, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        XmlSyntaxEditorService.Configure(_xmlPreview);
         var previewBorder = new Border
         {
-            BorderBrush = Brush.Parse("#3f3f46"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             Child = _xmlPreview
         };
@@ -483,7 +484,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                     Content = Labels.GetValueOrDefault(tag, tag),
                     Margin = new Thickness(0, 0, 6, 6),
                     Padding = new Thickness(8, 4),
-                    Background = Brush.Parse("#2b7a0b")
+                    Classes = { "add-component" }
                 };
                 buttons[tag] = button;
                 button.Click += (_, _) => { AddOptional(tag); RefreshPreview(); };
@@ -713,7 +714,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 Content = tag switch { "age" => "Age", "trainableunitreq" => "Trainable Unit", _ => "Command" },
                 Margin = new Thickness(0, 0, 6, 6),
                 Padding = new Thickness(8, 4),
-                Background = Brush.Parse("#2b7a0b")
+                Classes = { "add-component" }
             };
             buttons[tag] = button;
             button.Click += (_, _) => { AddPrereq(tag); RefreshPreview(); };
@@ -742,7 +743,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             Content = "×",
             Width = 28,
             Height = 28,
-            Background = Brush.Parse("#8b0000"),
+            Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
             Padding = new Thickness(0),
             Margin = new Thickness(2, 0, 0, 0)
         };
@@ -766,7 +768,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             Content = $"Add {Labels.GetValueOrDefault(tag, tag)}",
             HorizontalAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(8, 4),
-            Background = Brush.Parse("#2b7a0b")
+            Classes = { "add-component" }
         };
         panel.Children.Add(button);
 
@@ -823,7 +825,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 Content = Labels.GetValueOrDefault(tag, tag),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Padding = new Thickness(8, 4),
-                Background = Brush.Parse("#2b7a0b"),
+                Classes = { "add-component" },
                 VerticalAlignment = VerticalAlignment.Center
             };
             host.Children.Add(add);
@@ -853,7 +855,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                     Content = "×",
                     Width = 28,
                     Height = 28,
-                    Background = Brush.Parse("#8b0000"),
+                    Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                     Padding = new Thickness(0),
                     Margin = new Thickness(2, 0, 0, 0)
                 };
@@ -914,7 +917,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 : $"Add {Labels.GetValueOrDefault(secondTag, secondTag)}",
             HorizontalAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(8, 4),
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(add, 2);
@@ -943,7 +946,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 Content = "×",
                 Width = 28,
                 Height = 28,
-                Background = Brush.Parse("#8b0000"),
+                Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
                 Padding = new Thickness(0),
                 Margin = new Thickness(2, 0, 0, 0)
             };
@@ -1178,7 +1182,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 Grid.SetColumn(acb,1); row.Children.Add(acb);
                 if (!_readOnly)
                 {
-                    var remove = new Button { Content = "×", Width = 28, Height = 28, Background = Brush.Parse("#8b0000"), Padding = new Thickness(0), Margin = new Thickness(2, 0, 0, 0) };
+                    var remove = new Button { Content = "×", Width = 28, Height = 28, Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"), Padding = new Thickness(0), Margin = new Thickness(2, 0, 0, 0) };
                     remove.Click += (_,_) =>
                     {
                         if (rowIndex < _repeatables[tag].Count) _repeatables[tag].RemoveAt(rowIndex);
@@ -1191,7 +1196,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             }
             if (!_readOnly)
             {
-                var add = new Button { Content = $"Add {label}", Background = Brush.Parse("#2b7a0b"), HorizontalAlignment = HorizontalAlignment.Left };
+                var add = new Button { Content = $"Add {label}", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                 add.Click += (_,_) => { _repeatables[tag].Add(""); Rebuild(); RefreshPreview(); };
                 holder.Children.Add(add);
             }
@@ -1352,7 +1357,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
 
     private static void SetValidationBorder(Control? control, bool invalid)
     {
-        var brush = Brush.Parse(invalid ? "#d64545" : "#3f3f46");
+        var brush = Brush.Parse(invalid ? "#d64545" : "#4C4031");
         switch (control)
         {
             case AutoCompleteBox autoCompleteBox:

@@ -27,11 +27,11 @@ public sealed class OnHitEffectEditor : Border
         TypeField = typeField;
         ActiveField = activeField;
 
-        BorderBrush = Brush.Parse("#3f3f46");
+        BorderBrush = Brush.Parse("#4C4031");
         BorderThickness = new Thickness(1);
         CornerRadius = new CornerRadius(6);
         Padding = new Thickness(8);
-        Background = Brush.Parse("#202020");
+        Background = Brush.Parse("#191C1A");
 
         Body = new StackPanel { Spacing = 4 };
         Child = Body;

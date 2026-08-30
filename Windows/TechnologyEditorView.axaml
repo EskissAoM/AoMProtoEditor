@@ -1,14 +1,10 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
              x:Class="AoMDivineDataEditor.Windows.TechnologyEditorView"
-             Background="#141414" Foreground="#d9d9d9">
+             Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
   <UserControl.Styles>
-    <Style Selector="Button"><Setter Property="Background" Value="#252526"/><Setter Property="Foreground" Value="#d9d9d9"/><Setter Property="Padding" Value="10,5"/></Style>
-    <Style Selector="TextBox"><Setter Property="Background" Value="#1c1c1c"/><Setter Property="Foreground" Value="#d9d9d9"/><Setter Property="BorderBrush" Value="#3f3f46"/></Style>
-    <Style Selector="ListBox"><Setter Property="Background" Value="#1c1c1c"/><Setter Property="BorderBrush" Value="#2d2d30"/></Style>
-    <Style Selector="ListBoxItem:selected /template/ ContentPresenter"><Setter Property="Background" Value="#2b3c57"/><Setter Property="Foreground" Value="#ffffff"/></Style>
-    <Style Selector="TabItem.editorTab"><Setter Property="Padding" Value="7,3"/><Setter Property="FontSize" Value="14"/><Setter Property="Foreground" Value="#a0a0a0"/><Setter Property="Background" Value="#1c1c1c"/></Style>
-    <Style Selector="TabItem.editorTab:selected"><Setter Property="Foreground" Value="#d9d9d9"/><Setter Property="Background" Value="#2b3c57"/></Style>
+    <Style Selector="TabItem.editorTab"><Setter Property="Padding" Value="9,5"/><Setter Property="FontSize" Value="14"/></Style>
   </UserControl.Styles>
     <Grid x:Name="_mainGrid">
     <Grid.ColumnDefinitions>
@@ -29,14 +25,14 @@
           <TabStripItem FontSize="14" Padding="8,4">Modified</TabStripItem>
         </TabStrip>
         <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-          <Button Grid.Column="0" Content="Add" Click="AddTech_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-          <Button Grid.Column="1" Content="Delete" Click="DeleteTech_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+          <Button Grid.Column="0" Classes="add-item" Content="Add" Click="AddTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+          <Button Grid.Column="1" Classes="danger" Content="Delete" Click="DeleteTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
         </Grid>
         <ListBox x:Name="_techList" SelectionChanged="TechList_SelectionChanged"/>
       </DockPanel>
     </Border>
     <GridSplitter Grid.Column="1" IsVisible="False" Width="0" />
-    <Border Grid.Column="2" Padding="15,15,0,15">
+    <Border Grid.Column="2" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Technology :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
@@ -59,22 +55,28 @@
             </ScrollViewer>
           </TabItem>
         </TabControl>
-        <TextBlock Grid.Row="2" x:Name="_statusMessage" Foreground="#e3bd54" FontWeight="Bold" Margin="0,5,0,0" HorizontalAlignment="Center"/>
+        <TextBlock Grid.Row="2" x:Name="_statusMessage" Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold" Margin="0,6,0,0" HorizontalAlignment="Center"/>
       </Grid>
     </Border>
-    <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Width="5" Background="#2d2d30" ResizeDirection="Columns"/>
-    <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+    <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns"/>
+    <Border x:Name="_xmlPreviewPanel" Classes="XmlPanel" Grid.Column="4" BorderThickness="1,0,0,0">
       <Grid>
         <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
           <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
-            <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center"/>
+            <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center"/>
           </Grid>
-          <TextBox Grid.Row="1" x:Name="_xmlPreview" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="12" Background="#101010" Foreground="#d9d9d9" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+          <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_xmlPreview" IsReadOnly="True"
+                                   FontFamily="Consolas" FontSize="12"
+                                   Background="{DynamicResource XmlEditorBrush}"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                   BorderBrush="{DynamicResource NormalBorderBrush}"
+                                   HorizontalScrollBarVisibility="Auto"
+                                   VerticalScrollBarVisibility="Auto"/>
         </Grid>
         <Button x:Name="_xmlPreviewToggleButton"
                 Content="&#x25B6;"
                 Width="20" Height="24" MinWidth="20" MinHeight="24"
-                FontSize="10" Padding="0" Background="#050505" BorderThickness="0" CornerRadius="0"
+                FontSize="10" Padding="0" Background="{DynamicResource DeepPanelBrush}" BorderBrush="{DynamicResource NormalBorderBrush}" BorderThickness="0" CornerRadius="0"
                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                 HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,8,0,0" ZIndex="1"
                 ToolTip.Tip="Collapse XML Preview" Click="XmlPreviewToggle_Click"/>

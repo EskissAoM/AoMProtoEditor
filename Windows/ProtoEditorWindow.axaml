@@ -3,11 +3,12 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:ce="using:AoMDivineDataEditor.Windows"
+        xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
         mc:Ignorable="d" d:DesignWidth="1440" d:DesignHeight="900"
         x:Class="AoMDivineDataEditor.Windows.ProtoEditorWindow"
         x:DataType="ce:ProtoEditorWindow"
-        Foreground="#d9d9d9"
-        Background="#141414"
+        Foreground="{DynamicResource PrimaryTextBrush}"
+        Background="{DynamicResource AppBackgroundBrush}"
         Width="1440" Height="900"
         MinWidth="960" MinHeight="600"
         WindowStartupLocation="CenterScreen"
@@ -23,129 +24,44 @@
     </Window.Resources>
 
     <Window.Styles>
-        <Style Selector="TextBlock.SectionHeader">
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="Foreground" Value="#e3bd54" />
-            <Setter Property="Margin" Value="0,15,0,5" />
-        </Style>
         <Style Selector="TextBlock.PageSearchQueryMatch">
-            <Setter Property="Background" Value="#2b3c57" />
-            <Setter Property="Foreground" Value="#ffffff" />
-        </Style>
-        <Style Selector="Button">
-            <Setter Property="Background" Value="#252526" />
-            <Setter Property="Foreground" Value="#d9d9d9" />
-            <Setter Property="Padding" Value="10,5" />
-        </Style>
-        <Style Selector="Button:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#313132" />
-            <Setter Property="Foreground" Value="#ffffff" />
-        </Style>
-        <Style Selector="Button.remove-button">
-            <Setter Property="Content" Value="×" />
-            <Setter Property="Margin" Value="2,0,0,0" />
-            <Setter Property="Width" Value="28" />
-            <Setter Property="Height" Value="28" />
-            <Setter Property="MinWidth" Value="28" />
-            <Setter Property="MinHeight" Value="28" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Background" Value="#8b0000" />
-            <Setter Property="Foreground" Value="#ffffff" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="3" />
-            <Setter Property="FontSize" Value="18" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Button.remove-button:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#b00000" />
-            <Setter Property="Foreground" Value="#ffffff" />
-        </Style>
-        <Style Selector="Button.remove-button:pressed /template/ ContentPresenter">
-            <Setter Property="Background" Value="#650000" />
-            <Setter Property="Foreground" Value="#ffffff" />
-        </Style>
-        <Style Selector="Button.remove-button:disabled">
-            <Setter Property="Opacity" Value="0.45" />
-        </Style>
-        <Style Selector="Button.chip-remove-button">
-            <Setter Property="Content" Value="X" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="LightGray" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="4,0" />
-            <Setter Property="Margin" Value="4,0,0,0" />
-            <Setter Property="FontSize" Value="10" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Button.chip-remove-button:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="White" />
-        </Style>
-        <Style Selector="Button.chip-remove-button:pressed /template/ ContentPresenter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="#bfbfbf" />
-        </Style>
-        <Style Selector="TextBox">
-            <Setter Property="Background" Value="#1c1c1c" />
-            <Setter Property="Foreground" Value="#d9d9d9" />
-            <Setter Property="BorderBrush" Value="#3f3f46" />
-            <Setter Property="BorderThickness" Value="1" />
-        </Style>
-        <Style Selector="AutoCompleteBox">
-            <Setter Property="Background" Value="#1c1c1c" />
-            <Setter Property="Foreground" Value="#d9d9d9" />
-            <Setter Property="BorderBrush" Value="#3f3f46" />
-            <Setter Property="BorderThickness" Value="1" />
-        </Style>
-        <Style Selector="ListBox">
-            <Setter Property="Background" Value="#1c1c1c" />
-            <Setter Property="BorderBrush" Value="#2d2d30" />
-            <Setter Property="BorderThickness" Value="1" />
-        </Style>
-        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-            <Setter Property="Background" Value="#2b3c57" />
-            <Setter Property="Foreground" Value="#ffffff" />
-        </Style>
-        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#1a2436" />
-            <Setter Property="Foreground" Value="#ffffff" />
+            <Setter Property="Background" Value="{DynamicResource ChipBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ChipTextBrush}" />
         </Style>
         <Style Selector="TabItem.editorTab">
-            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="Padding" Value="9,5" />
             <Setter Property="FontSize" Value="14" />
-            <Setter Property="Foreground" Value="#a0a0a0" />
-            <Setter Property="Background" Value="#1c1c1c" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="Background" Value="#171A19" />
+            <Setter Property="BorderBrush" Value="#493E30" />
         </Style>
         <Style Selector="TabItem.editorTab:selected">
-            <Setter Property="Foreground" Value="#d9d9d9" />
-            <Setter Property="Background" Value="#2b3c57" />
+            <Setter Property="Foreground" Value="#F0E2C9" />
+            <Setter Property="Background" Value="#24231E" />
+            <Setter Property="BorderBrush" Value="#8A693B" />
         </Style>
         <Style Selector="Button.topNav">
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Background" Value="#262629" />
-            <Setter Property="BorderBrush" Value="#4a4a4f" />
-            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Background" Value="#171A19" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+            <Setter Property="BorderBrush" Value="#493E30" />
+            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="12,6" />
         </Style>
-        <Style Selector="Button.topNav:pointerover">
-            <Setter Property="Background" Value="#303034" />
-            <Setter Property="BorderBrush" Value="#68686e" />
+        <Style Selector="Button.topNav:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#202321" />
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}" />
         </Style>
         <Style Selector="Button.topSave">
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Background" Value="#2b7a0b" />
-            <Setter Property="BorderBrush" Value="#3a9215" />
-            <Setter Property="BorderThickness" Value="1.5" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Background" Value="{DynamicResource PositiveBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource PositiveBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource PositiveTextBrush}" />
         </Style>
-        <Style Selector="Button.topSave:pointerover">
-            <Setter Property="Background" Value="#348f0e" />
+        <Style Selector="Button.topSave:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource PositiveHoverBrush}" />
+            <Setter Property="BorderBrush" Value="#B99550" />
         </Style>
 
         <Style Selector="Button.entitySelector">
@@ -154,24 +70,28 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="Background" Value="#252526" />
-            <Setter Property="Foreground" Value="#b8b8b8" />
+            <Setter Property="Background" Value="#181B1A" />
+            <Setter Property="Foreground" Value="#BEB5A7" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
         </Style>
         <Style Selector="Button.entitySelector.active">
-            <Setter Property="Background" Value="#2b3c57" />
-            <Setter Property="Foreground" Value="#ffffff" />
+            <Setter Property="Background" Value="#2D2920" />
+            <Setter Property="Foreground" Value="#F0E2C9" />
+            <Setter Property="BorderBrush" Value="#9B753E" />
         </Style>
         <Style Selector="TabStripItem.documentTab">
             <Setter Property="Padding" Value="4,1" />
             <Setter Property="Margin" Value="0,0,4,0" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Height" Value="40" />
-            <Setter Property="Background" Value="#202024" />
-            <Setter Property="Foreground" Value="#b8b8b8" />
+            <Setter Property="Background" Value="{DynamicResource DocumentTabBrush}" />
+            <Setter Property="Foreground" Value="#B7AEA0" />
+            <Setter Property="BorderBrush" Value="#393A35" />
         </Style>
         <Style Selector="TabStripItem.documentTab:selected">
-            <Setter Property="Background" Value="#2b3c57" />
-            <Setter Property="Foreground" Value="#ffffff" />
+            <Setter Property="Background" Value="{DynamicResource DocumentTabActiveBrush}" />
+            <Setter Property="Foreground" Value="#EEE2CE" />
+            <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}" />
         </Style>
         <Style Selector="Button.topMenuItem">
             <Setter Property="Width" Value="125" />
@@ -186,7 +106,7 @@
     <Grid>
     <DockPanel>
         <!-- Menu bar / Top toolbar -->
-        <Border x:Name="_mainToolbar" DockPanel.Dock="Top" Background="#1c1c1c" BorderThickness="0,0,0,1" BorderBrush="#2d2d30" Height="45">
+        <Border x:Name="_mainToolbar" Classes="MainPanel" DockPanel.Dock="Top" BorderThickness="0,0,0,1" Height="48">
             <DockPanel Margin="10,0">
                 <Button x:Name="_saveButton"
                         DockPanel.Dock="Right"
@@ -272,23 +192,20 @@
         <!-- Main content -->
         <Grid x:Name="_mainContentGrid" RowDefinitions="Auto,*">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="210" />
+                <ColumnDefinition Width="220" />
                 <ColumnDefinition Width="5" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="5" />
-                <ColumnDefinition Width="250" MinWidth="28" />
+                <ColumnDefinition Width="280" MinWidth="28" />
             </Grid.ColumnDefinitions>
             <!-- Left panel: unit list -->
-            <Border x:Name="_unitListPanel" Grid.Column="0" Grid.RowSpan="2" Background="#171717" BorderThickness="0,0,1,0" BorderBrush="#2d2d30" Padding="8">
+            <Border x:Name="_unitListPanel" Classes="MainPanel" Grid.Column="0" Grid.RowSpan="2" BorderThickness="0,0,1,0" Padding="10">
                 <DockPanel>
                     <Border DockPanel.Dock="Top"
+                            Classes="RaisedPanel"
                             x:Name="_entitySelectorContainer"
-                            Background="#1c1c1c"
-                            BorderBrush="#343438"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="5"
-                            Margin="0,0,0,10">
+                            Padding="6"
+                            Margin="0,0,0,12">
                         <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
                             <Button x:Name="_unitsEntityButton" Classes="entitySelector active" Content="Units" Click="UnitsEntity_Click" />
                             <Button x:Name="_techsEntityButton" Grid.Column="1" Classes="entitySelector" Content="Technologies" Click="TechsEntity_Click" />
@@ -314,8 +231,8 @@
                     </TabStrip>
                     
                     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-                        <Button x:Name="_entityAddButton" Grid.Column="0" Content="Add" Click="EntityAdd_Click" Background="#2b7a0b" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <Button x:Name="_entityDeleteButton" Grid.Column="1" Content="🗑 Delete" Click="EntityDelete_Click" Background="#8b0000" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button x:Name="_entityAddButton" Grid.Column="0" Classes="add-item" Content="Add" Click="EntityAdd_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button x:Name="_entityDeleteButton" Grid.Column="1" Classes="danger" Content="🗑 Delete" Click="EntityDelete_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                     
                     <ListBox x:Name="_unitList"
@@ -324,14 +241,14 @@
                 </DockPanel>
             </Border>
 
-            <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Grid.RowSpan="2" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
+            <GridSplitter x:Name="_unitListSplitter" Grid.Column="1" Grid.RowSpan="2" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns" />
 
             <Border x:Name="_documentTabsHost"
                     Grid.Column="2"
                     Grid.ColumnSpan="3"
                     Grid.Row="0"
-                    Background="#171717"
-                    BorderBrush="#2d2d30"
+                    Background="{DynamicResource MainPanelBrush}"
+                    BorderBrush="{DynamicResource NormalBorderBrush}"
                     BorderThickness="0,0,0,1"
                     Padding="8,3">
                 <ScrollViewer x:Name="_documentTabsScroller"
@@ -351,7 +268,7 @@
             </Border>
 
             <!-- Right panel: fixed tools + scrollable editor -->
-            <Border Grid.Column="2" Grid.Row="1" Padding="15,15,0,15">
+            <Border Grid.Column="2" Grid.Row="1" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
                 <Grid RowDefinitions="Auto,*,Auto">
                     <Grid Grid.Row="0"
                           ColumnDefinitions="Auto,*,Auto"
@@ -363,8 +280,8 @@
                                 VerticalAlignment="Top"
                                 BorderThickness="1,0,1,1"
                                 CornerRadius="0,0,4,4"
-                                BorderBrush="#3f3f46"
-                                Background="#1c1c1c"
+                                BorderBrush="{DynamicResource NormalBorderBrush}"
+                                Background="{DynamicResource RaisedPanelBrush}"
                                 Padding="8">
                             <StackPanel Spacing="4">
                                 <StackPanel Orientation="Horizontal">
@@ -375,7 +292,7 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <ToggleButton x:Name="_pageSearchMatchCaseToggle"
                                                               Background="Transparent"
-                                                              Foreground="#d9d9d9"
+                                                              Foreground="{DynamicResource SecondaryTextBrush}"
                                                               BorderThickness="0"
                                                               MinWidth="22"
                                                               MinHeight="20"
@@ -391,7 +308,7 @@
                                                 </ToggleButton>
                                                 <ToggleButton x:Name="_pageSearchWholeWordToggle"
                                                               Background="Transparent"
-                                                              Foreground="#d9d9d9"
+                                                              Foreground="{DynamicResource SecondaryTextBrush}"
                                                               BorderThickness="0"
                                                               MinWidth="22"
                                                               MinHeight="20"
@@ -408,7 +325,7 @@
                                                 </ToggleButton>
                                                 <ToggleButton x:Name="_pageSearchRegexToggle"
                                                               Background="Transparent"
-                                                              Foreground="#d9d9d9"
+                                                              Foreground="{DynamicResource SecondaryTextBrush}"
                                                               BorderThickness="0"
                                                               MinWidth="22"
                                                               MinHeight="20"
@@ -472,7 +389,7 @@
                                 <TextBlock x:Name="_pageSearchMatchCountText"
                                            Text=""
                                            FontSize="12"
-                                           Foreground="#d9d9d9"
+                                           Foreground="{DynamicResource SecondaryTextBrush}"
                                            Margin="2,0,0,0" />
                             </StackPanel>
                         </Border>
@@ -531,18 +448,25 @@
                             </TabItem>
                         </TabControl>
                     </Grid>
-                    <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="#e3bd54" FontWeight="Bold" Margin="0,5,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold" Margin="0,6,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Grid>
             </Border>
-            <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Grid.Row="1" Width="5" Background="#2d2d30" ResizeDirection="Columns" />
-            <Border x:Name="_xmlPreviewPanel" Grid.Column="4" Grid.Row="1" Background="#171717" BorderBrush="#2d2d30" BorderThickness="1,0,0,0">
+            <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Grid.Row="1" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns" />
+            <Border x:Name="_xmlPreviewPanel" Classes="XmlPanel" Grid.Column="4" Grid.Row="1" BorderThickness="1,0,0,0">
                 <Grid>
                     <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
                         <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
-                            <TextBlock Text="XML Preview" FontWeight="Bold" FontSize="15" Foreground="#e3bd54" VerticalAlignment="Center" />
-                            <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
+                            <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Classes="positive" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
                         </Grid>
-                        <TextBox Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="12" Background="#101010" Foreground="#d9d9d9" TextChanged="XmlPreviewText_TextChanged" />
+                        <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True"
+                                                 FontFamily="Consolas" FontSize="12"
+                                                 Background="{DynamicResource XmlEditorBrush}"
+                                                 Foreground="{DynamicResource PrimaryTextBrush}"
+                                                 BorderBrush="{DynamicResource NormalBorderBrush}"
+                                                 HorizontalScrollBarVisibility="Auto"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 TextChanged="XmlPreviewText_TextChanged" />
                     </Grid>
                     <Button x:Name="_xmlPreviewToggleButton"
                             Content="&#x25B6;"
@@ -552,7 +476,8 @@
                             MinHeight="24"
                             FontSize="10"
                             Padding="0"
-                            Background="#050505"
+                            Background="{DynamicResource DeepPanelBrush}"
+                            BorderBrush="{DynamicResource NormalBorderBrush}"
                             BorderThickness="0"
                             CornerRadius="0"
                             HorizontalContentAlignment="Center"
@@ -571,13 +496,13 @@
                     Grid.ColumnSpan="3"
                     Grid.Row="1"
                     IsVisible="True"
-                    Background="#141414"
+                    Background="{DynamicResource AppBackgroundBrush}"
                     ZIndex="30">
                 <TextBlock x:Name="_emptyDocumentMessage"
                            Text="Click on a unit to start"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
-                           Foreground="#777777"
+                           Foreground="{DynamicResource MutedTextBrush}"
                            FontSize="18"
                            FontWeight="SemiBold" />
             </Border>
@@ -585,7 +510,7 @@
     </DockPanel>
         <Border x:Name="_startupLoadingOverlay"
                 IsVisible="False"
-                Background="#CC141414"
+                Background="#E60D0F0E"
                 ZIndex="10">
             <StackPanel Width="280"
                         HorizontalAlignment="Center"
@@ -599,7 +524,7 @@
                            TextAlignment="Center"
                            FontSize="15"
                            FontWeight="SemiBold"
-                           Foreground="#f0f0f0" />
+                           Foreground="{DynamicResource PrimaryTextBrush}" />
             </StackPanel>
         </Border>
     </Grid>

@@ -33,7 +33,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
     private readonly List<AnimFileCatalogEntry> _items;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
-    private readonly StackPanel _itemsPanel;
+    private readonly ListBox _itemsList;
     private readonly TextBlock _footerText;
     private readonly Func<AnimFileCatalogEntry, Task<string?>> _loadXmlAsync;
     private readonly string? _customArtDirectory;
@@ -68,18 +68,19 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         MinWidth = 520;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414");
-        Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311");
+        Foreground = Brush.Parse("#E8DECC");
 
         var shell = new ManagerListShell(
-            $"Search {_profile.SearchLabel} (type at least 3 characters)...",
+            $"Search {_profile.SearchLabel}...",
             ["All", "Original", "Custom"],
             "",
             addEnabled: false,
             disabledAddToolTip: $"Adding custom {_profile.ItemPlural} is not available yet.");
         _searchBox = shell.SearchBox;
         _filterComboBox = shell.FilterComboBox;
-        _itemsPanel = shell.ItemsPanel;
+        _itemsList = ManagerListShell.CreateVirtualizedList<AnimFileCatalogEntry>(CreateRow);
+        shell.ReplaceItemsHost(_itemsList);
         _footerText = shell.FooterTextBlock;
         _searchBox.TextChanged += (_, _) => ScheduleRefresh();
         _filterComboBox.SelectionChanged += (_, _) => RefreshList();
@@ -101,68 +102,63 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
-        _footerText.Text = $"{_items.Count:N0} items: {_items.Count(item => !item.IsCustom):N0} original, {_items.Count(item => item.IsCustom):N0} customs. Double-click a custom {_profile.ItemLabel} name to rename or move it.";
-        _itemsPanel.Children.Clear();
+        _footerText.Text = ManagerListShell.FormatEntityCountFooter(
+            _items.Count,
+            _items.Count(item => !item.IsCustom),
+            _items.Count(item => item.IsCustom),
+            $"Double-click a custom {_profile.ItemLabel} name to rename or move it.");
         var search = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
-        if (search.Length < 3)
-        {
-            _itemsPanel.Children.Add(new TextBlock
-            {
-                Text = $"Type at least 3 characters to display {_profile.ItemPlural}.",
-                Foreground = Brushes.Gray,
-                Margin = new Thickness(10, 9)
-            });
-            return;
-        }
+        _itemsList.ItemsSource = _items
+            .Where(item => sourceFilter == "All" ||
+                           (sourceFilter == "Original" && !item.IsCustom) ||
+                           (sourceFilter == "Custom" && item.IsCustom))
+            .Where(item => string.IsNullOrWhiteSpace(search) ||
+                           GetFileName(item.Path).Contains(search, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
 
-        foreach (var item in _items
-                     .Where(item => sourceFilter == "All" ||
-                                    (sourceFilter == "Original" && !item.IsCustom) ||
-                                    (sourceFilter == "Custom" && item.IsCustom))
-                     .Where(item => GetFileName(item.Path).Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                                    item.Path.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                                    item.ArchiveName.Contains(search, StringComparison.OrdinalIgnoreCase)))
+    private Control CreateRow(AnimFileCatalogEntry item)
+    {
+        var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto");
+        row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
+        row.Children.Add(new TextBlock
         {
-            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto");
-            row.Children.Add(new TextBlock
-            {
-                Text = GetFileName(item.Path),
-                Margin = new Thickness(10, 9),
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            });
+            Text = GetFileName(item.Path),
+            Margin = new Thickness(10, 9),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
 
-            var source = new TextBlock
+        var source = new TextBlock
+        {
+            Text = item.ArchiveName,
+            Foreground = Brushes.Gray,
+            Margin = new Thickness(8, 9),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(source, 1);
+        row.Children.Add(source);
+
+        var editButton = CreateEditButton(item);
+        Grid.SetColumn(editButton, 2);
+        row.Children.Add(editButton);
+
+        var duplicateButton = CreateDuplicateButton(item);
+        Grid.SetColumn(duplicateButton, 3);
+        row.Children.Add(duplicateButton);
+        if (item.IsCustom && _moveAsync != null && !string.IsNullOrWhiteSpace(_customArtDirectory))
+        {
+            row.DoubleTapped += async (_, eventArgs) =>
             {
-                Text = item.ArchiveName,
-                Foreground = Brushes.Gray,
-                Margin = new Thickness(8, 9),
-                VerticalAlignment = VerticalAlignment.Center
+                if (eventArgs.Source is Control eventSource &&
+                    (eventSource is Button || eventSource.GetVisualAncestors().OfType<Button>().Any()))
+                    return;
+                await OpenMoveDialogAsync(item);
             };
-            Grid.SetColumn(source, 1);
-            row.Children.Add(source);
-
-            var editButton = CreateEditButton(item);
-            Grid.SetColumn(editButton, 2);
-            row.Children.Add(editButton);
-
-            var duplicateButton = CreateDuplicateButton(item);
-            Grid.SetColumn(duplicateButton, 3);
-            row.Children.Add(duplicateButton);
-            if (item.IsCustom && _moveAsync != null && !string.IsNullOrWhiteSpace(_customArtDirectory))
-            {
-                row.DoubleTapped += async (_, eventArgs) =>
-                {
-                    if (eventArgs.Source is Control source &&
-                        (source is Button || source.GetVisualAncestors().OfType<Button>().Any()))
-                        return;
-                    await OpenMoveDialogAsync(item);
-                };
-                ToolTip.SetTip(row, $"Double-click to rename or move this custom {_profile.ItemLabel}");
-            }
-            _itemsPanel.Children.Add(row);
+            ToolTip.SetTip(row, $"Double-click to rename or move this custom {_profile.ItemLabel}");
         }
+        return row;
     }
 
     private async Task OpenMoveDialogAsync(AnimFileCatalogEntry item)
@@ -257,7 +253,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             BorderBrush = Brushes.White,
             BorderThickness = new Thickness(1.5),
             CornerRadius = new CornerRadius(1),
-            Background = Brush.Parse("#202020")
+            Background = Brush.Parse("#191C1A")
         };
         Canvas.SetLeft(frontPage, 1);
         Canvas.SetTop(frontPage, 4);

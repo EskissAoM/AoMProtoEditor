@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using AoMDivineDataEditor.Classes;
+using AoMDivineDataEditor.Controls;
 
 namespace AoMDivineDataEditor.Windows;
 
@@ -89,6 +90,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         _searchBox = new TextBox
         {
             PlaceholderText = "Search tactics...",
+            Height = ManagerListShell.HeaderControlHeight,
             Margin = new Thickness(0, 0, 8, 0)
         };
         _searchBox.TextChanged += (_, _) => RefreshList();
@@ -98,6 +100,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         {
             ItemsSource = new[] { "All", "Original", "Custom" },
             SelectedIndex = 0,
+            Height = ManagerListShell.HeaderControlHeight,
             Margin = new Thickness(0, 0, 8, 0),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -110,9 +113,9 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             Content = "+",
             FontSize = 22,
             Width = 40,
-            Height = 36,
+            Height = ManagerListShell.HeaderControlHeight,
             Padding = new Thickness(0),
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-item" },
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
@@ -126,7 +129,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         _itemsPanel = new StackPanel
         {
             Spacing = 4,
-            Margin = new Thickness(0, 0, 10, 0)
+            Margin = new Thickness(0, 0, ManagerListShell.ScrollBarClearance, 0)
         };
         var scroll = new ScrollViewer
         {
@@ -293,7 +296,11 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
-        _footerHint.Text = $"{_items.Count:N0} items: {_items.Count(item => item.IsBuiltIn):N0} original, {_items.Count(item => !item.IsBuiltIn):N0} customs. Double-click a custom tactics name to rename it.";
+        _footerHint.Text = ManagerListShell.FormatEntityCountFooter(
+            _items.Count,
+            _items.Count(item => item.IsBuiltIn),
+            _items.Count(item => !item.IsBuiltIn),
+            "Double-click a custom tactics name to rename it.");
         _itemsPanel.Children.Clear();
         var filter = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
@@ -309,7 +316,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             var row = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-                Background = Brush.Parse("#202020"),
+                Background = Brush.Parse("#191C1A"),
                 Margin = new Thickness(0, 1)
             };
 
@@ -378,7 +385,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                 BorderBrush = Brushes.White,
                 BorderThickness = new Thickness(1.5),
                 CornerRadius = new CornerRadius(1),
-                Background = Brush.Parse("#202020")
+                Background = Brush.Parse("#191C1A")
             };
             Canvas.SetLeft(frontPage, 1);
             Canvas.SetTop(frontPage, 4);
@@ -409,7 +416,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                     Height = 28,
                     Padding = new Thickness(0),
                     Margin = new Thickness(4),
-                    Background = Brush.Parse("#b00000"),
+                    Background = Brush.Parse("#992824"),
                     Foreground = Brushes.White,
                     HorizontalContentAlignment = HorizontalAlignment.Center,
                     VerticalContentAlignment = VerticalAlignment.Center

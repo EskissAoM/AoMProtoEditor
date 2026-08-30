@@ -25,8 +25,8 @@ public static class ProtoUnitTransformRemovalDialog
             Height = 180,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Background = Brush.Parse("#141414"),
-            Foreground = Brush.Parse("#d9d9d9")
+            Background = Brush.Parse("#111311"),
+            Foreground = Brush.Parse("#E8DECC")
         };
 
         var root = new Grid
@@ -54,7 +54,8 @@ public static class ProtoUnitTransformRemovalDialog
         var removeTotally = new Button
         {
             Content = "Remove totally",
-            Background = Brush.Parse("#2b7a0b"),
+            Background = Brush.Parse("#7A1F1C"),
+            BorderBrush = Brush.Parse("#B55640"),
             Padding = new Thickness(12, 5)
         };
         removeTotally.Click += (_, _) => { choice = ProtoUnitTransformRemovalChoice.RemoveTotally; dialog.Close(); };

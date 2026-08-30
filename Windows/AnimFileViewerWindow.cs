@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using AvaloniaEdit;
 using AoMDivineDataEditor.Classes;
 
 namespace AoMDivineDataEditor.Windows;
@@ -15,29 +16,24 @@ internal sealed class AnimFileViewerWindow : SimpleWindow
         MinWidth = 600;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414");
-        Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311");
+        Foreground = Brush.Parse("#E8DECC");
 
-        var preview = new TextBox
+        var preview = new TextEditor
         {
             Text = xml,
             IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
             FontFamily = new FontFamily("Consolas"),
             FontSize = 12,
-            Background = Brush.Parse("#101010"),
-            Foreground = Brush.Parse("#a9a9a9"),
+            Background = Brush.Parse("#090C0B"),
+            Foreground = Brush.Parse("#E8DECC"),
             Margin = new Thickness(12),
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
-        ScrollViewer.SetHorizontalScrollBarVisibility(
-            preview,
-            Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-        ScrollViewer.SetVerticalScrollBarVisibility(
-            preview,
-            Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        XmlSyntaxEditorService.Configure(preview);
         Content = preview;
     }
 }

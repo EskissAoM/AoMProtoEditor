@@ -13,29 +13,13 @@
 	MinHeight="300"
 	d:DesignHeight="600"
 	d:DesignWidth="500"
-	Background="#141414"
+	Background="{DynamicResource AppBackgroundBrush}"
 	DataContext="{Binding RelativeSource={RelativeSource Self}}"
-	Foreground="#d9d9d9"
+	Foreground="{DynamicResource PrimaryTextBrush}"
 	WindowStartupLocation="CenterOwner"
 	mc:Ignorable="d"
 	x:DataType="ce:PickerWindow">
 	<Window.Styles>
-		<Style Selector="ListBox">
-			<Setter Property="Background" Value="#171717" />
-		</Style>
-
-		<Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-			<Setter Property="Background" Value="#2b3c57" />
-		</Style>
-
-		<Style Selector="ListBoxItem:focus /template/ ContentPresenter">
-			<Setter Property="Background" Value="#2b3c57" />
-		</Style>
-
-		<Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-			<Setter Property="Background" Value="#1a2436" />
-		</Style>
-
 		<Style Selector="ListBoxItem">
 			<Setter Property="Padding" Value="4" />
 		</Style>
@@ -64,11 +48,11 @@
 					Spacing="8" HorizontalAlignment="Right" Margin="0,8,0,0">
 			<Button Content="Cancel" Click="OnCancel" />
 			<Button x:Name="_confirmBtn" Content="Confirm" Click="OnConfirm"
-					Background="#4772b5" IsDefault="True" IsEnabled="False" />
+					Classes="positive" IsDefault="True" IsEnabled="False" />
 		</StackPanel>
 
 		<!-- Status -->
-		<TextBlock DockPanel.Dock="Bottom" Margin="0,6,0,0" Foreground="Gray"
+		<TextBlock DockPanel.Dock="Bottom" Classes="muted" Margin="0,6,0,0"
 				   Text="{Binding StatusText}" />
 
 		<!-- List -->
@@ -80,7 +64,7 @@
 					<StackPanel Orientation="Horizontal" Spacing="0">
 						<TextBlock Text="{Binding Group}" Foreground="{Binding GroupBrush}"
 								   IsVisible="{Binding ShowGroup}" />
-						<TextBlock Text="|" Foreground="#606060"
+						<TextBlock Text="|" Foreground="{DynamicResource MutedTextBrush}"
 								   IsVisible="{Binding ShowGroup}" />
 						<TextBlock Text="{Binding Display}" />
 					</StackPanel>

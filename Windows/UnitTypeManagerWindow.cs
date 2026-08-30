@@ -22,8 +22,8 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
     private readonly StackPanel _itemsPanel;
+    private readonly TextBlock _footerText;
     private readonly Func<string, Task<bool>> _createAsync;
-    private readonly Func<string, bool, string, Task<bool>> _duplicateAsync;
     private readonly Func<string, string, Task<bool>> _renameAsync;
     private readonly Func<string, Task<bool>> _deleteAsync;
     private readonly Func<string, int> _resolveUsageCount;
@@ -31,13 +31,11 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
     public UnitTypeManagerWindow(
         IEnumerable<UnitTypeManagerItem> items,
         Func<string, Task<bool>> createAsync,
-        Func<string, bool, string, Task<bool>> duplicateAsync,
         Func<string, string, Task<bool>> renameAsync,
         Func<string, Task<bool>> deleteAsync,
         Func<string, int> resolveUsageCount)
     {
         _createAsync = createAsync;
-        _duplicateAsync = duplicateAsync;
         _renameAsync = renameAsync;
         _deleteAsync = deleteAsync;
         _resolveUsageCount = resolveUsageCount;
@@ -54,8 +52,8 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
         MinWidth = 520;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414");
-        Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311");
+        Foreground = Brush.Parse("#E8DECC");
 
         var shell = new ManagerListShell(
             "Search Unit Types...",
@@ -67,6 +65,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
         _filterComboBox.SelectionChanged += (_, _) => RefreshList();
         shell.AddButton.Click += async (_, _) => await AddAsync();
         _itemsPanel = shell.ItemsPanel;
+        _footerText = shell.FooterTextBlock;
         Content = shell;
         RefreshList();
     }
@@ -79,14 +78,6 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
     {
         var name = await PromptForNameAsync("New Unit Type name:");
         if (name == null || !await _createAsync(name)) return;
-        _items.Add(new EditableItem { Name = name, IsBuiltIn = false, UsageCount = 0 });
-        RefreshList();
-    }
-
-    private async Task DuplicateAsync(EditableItem item)
-    {
-        var name = await PromptForNameAsync("Duplicate Unit Type as:");
-        if (name == null || !await _duplicateAsync(item.Name, item.IsBuiltIn, name)) return;
         _items.Add(new EditableItem { Name = name, IsBuiltIn = false, UsageCount = 0 });
         RefreshList();
     }
@@ -141,6 +132,11 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
+        _footerText.Text = ManagerListShell.FormatEntityCountFooter(
+            _items.Count,
+            _items.Count(item => item.IsBuiltIn),
+            _items.Count(item => !item.IsBuiltIn),
+            "Double-click a custom Unit Type name to rename it.");
         _itemsPanel.Children.Clear();
         var search = _searchBox.Text?.Trim() ?? "";
         var filter = _filterComboBox.SelectedItem as string ?? "All";
@@ -150,7 +146,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
                      .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
         {
             if (!item.IsBuiltIn) item.UsageCount = _resolveUsageCount(item.Name);
-            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto");
+            var row = ManagerListShell.CreateRow("*,Auto,Auto");
             row.Children.Add(new TextBlock
             {
                 Text = item.Name,
@@ -168,26 +164,6 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
             Grid.SetColumn(status, 1);
             row.Children.Add(status);
 
-            var duplicateIcon = new Canvas { Width = 16, Height = 16 };
-            var backPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1) };
-            Canvas.SetLeft(backPage, 5); Canvas.SetTop(backPage, 1); duplicateIcon.Children.Add(backPage);
-            var frontPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1), Background = Brush.Parse("#202020") };
-            Canvas.SetLeft(frontPage, 1); Canvas.SetTop(frontPage, 4); duplicateIcon.Children.Add(frontPage);
-            var duplicateButton = new Button
-            {
-                Content = duplicateIcon,
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(4),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            ToolTip.SetTip(duplicateButton, "Duplicate Unit Type");
-            duplicateButton.Click += async (_, _) => await DuplicateAsync(item);
-            Grid.SetColumn(duplicateButton, 2);
-            row.Children.Add(duplicateButton);
-
             if (!item.IsBuiltIn)
             {
                 var deleteButton = new Button
@@ -198,11 +174,11 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
                     Height = 28,
                     Padding = new Thickness(0),
                     Margin = new Thickness(4),
-                    Background = Brush.Parse("#b00000"),
+                    Background = Brush.Parse("#992824"),
                     Foreground = Brushes.White
                 };
                 deleteButton.Click += async (_, _) => await DeleteAsync(item);
-                Grid.SetColumn(deleteButton, 3);
+                Grid.SetColumn(deleteButton, 2);
                 row.Children.Add(deleteButton);
                 row.DoubleTapped += async (_, _) => await RenameAsync(item);
             }

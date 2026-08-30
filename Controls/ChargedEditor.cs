@@ -18,7 +18,7 @@ public sealed class ChargedEditor : Border
     public ChargedEditor(bool isReadOnly, bool showRemoveButton)
     {
         Background = Brush.Parse("#181818");
-        BorderBrush = Brush.Parse("#3f3f46");
+        BorderBrush = Brush.Parse("#4C4031");
         BorderThickness = new Thickness(1);
         CornerRadius = new CornerRadius(6);
         Padding = new Thickness(8);

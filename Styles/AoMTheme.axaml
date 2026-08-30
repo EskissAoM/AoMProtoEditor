@@ -1,0 +1,361 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:micons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia">
+  <Styles.Resources>
+    <Color x:Key="BackgroundTopColor">#171816</Color>
+    <Color x:Key="BackgroundMainColor">#111311</Color>
+    <Color x:Key="BackgroundDeepColor">#0D0F0E</Color>
+    <Color x:Key="MainPanelColor">#151817</Color>
+    <Color x:Key="RaisedPanelColor">#191C1A</Color>
+    <Color x:Key="DeepPanelColor">#0C100F</Color>
+    <Color x:Key="InputBackgroundColor">#0E1110</Color>
+    <Color x:Key="PrimaryTextColor">#E8DECC</Color>
+    <Color x:Key="SecondaryTextColor">#C6BAA7</Color>
+    <Color x:Key="MutedTextColor">#8E8578</Color>
+    <Color x:Key="DisabledTextColor">#706C64</Color>
+    <Color x:Key="MainGoldColor">#C59A52</Color>
+    <Color x:Key="MutedGoldColor">#896B40</Color>
+    <Color x:Key="SubtleBorderColor">#4C4031</Color>
+    <Color x:Key="NormalBorderColor">#6A5434</Color>
+    <Color x:Key="StrongBorderColor">#7A633F</Color>
+    <Color x:Key="AccentBorderColor">#B78A43</Color>
+
+    <SolidColorBrush x:Key="MainPanelBrush" Color="{StaticResource MainPanelColor}" />
+    <SolidColorBrush x:Key="RaisedPanelBrush" Color="{StaticResource RaisedPanelColor}" />
+    <SolidColorBrush x:Key="DeepPanelBrush" Color="{StaticResource DeepPanelColor}" />
+    <SolidColorBrush x:Key="InputBackgroundBrush" Color="{StaticResource InputBackgroundColor}" />
+    <SolidColorBrush x:Key="PrimaryTextBrush" Color="{StaticResource PrimaryTextColor}" />
+    <SolidColorBrush x:Key="SecondaryTextBrush" Color="{StaticResource SecondaryTextColor}" />
+    <SolidColorBrush x:Key="MutedTextBrush" Color="{StaticResource MutedTextColor}" />
+    <SolidColorBrush x:Key="DisabledTextBrush" Color="{StaticResource DisabledTextColor}" />
+    <SolidColorBrush x:Key="MainGoldBrush" Color="{StaticResource MainGoldColor}" />
+    <SolidColorBrush x:Key="MutedGoldBrush" Color="{StaticResource MutedGoldColor}" />
+    <SolidColorBrush x:Key="SubtleBorderBrush" Color="{StaticResource SubtleBorderColor}" />
+    <SolidColorBrush x:Key="NormalBorderBrush" Color="{StaticResource NormalBorderColor}" />
+    <SolidColorBrush x:Key="StrongBorderBrush" Color="{StaticResource StrongBorderColor}" />
+    <SolidColorBrush x:Key="AccentBorderBrush" Color="{StaticResource AccentBorderColor}" />
+    <SolidColorBrush x:Key="ActionButtonHoverBrush" Color="#2A2E2B" />
+    <SolidColorBrush x:Key="ActionButtonPressedBrush" Color="#171918" />
+    <SolidColorBrush x:Key="PositiveBrush" Color="#163E26" />
+    <SolidColorBrush x:Key="PositiveHoverBrush" Color="#205333" />
+    <SolidColorBrush x:Key="PositivePressedBrush" Color="#13321F" />
+    <SolidColorBrush x:Key="PositiveBorderBrush" Color="#A98243" />
+    <SolidColorBrush x:Key="PositiveTextBrush" Color="#F1E7D4" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#7A1F1C" />
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="#992824" />
+    <SolidColorBrush x:Key="DangerPressedBrush" Color="#5B1614" />
+    <SolidColorBrush x:Key="DangerBorderBrush" Color="#B55640" />
+    <SolidColorBrush x:Key="DangerTextBrush" Color="#F2DDD8" />
+    <SolidColorBrush x:Key="ChipBackgroundBrush" Color="#193A52" />
+    <SolidColorBrush x:Key="ChipBorderBrush" Color="#3D7898" />
+    <SolidColorBrush x:Key="ChipTextBrush" Color="#D9EEF7" />
+    <SolidColorBrush x:Key="ChipRemoveBrush" Color="#B9D8E6" />
+    <SolidColorBrush x:Key="ListHoverBrush" Color="#22231F" />
+    <SolidColorBrush x:Key="ListSelectedBrush" Color="#393125" />
+    <SolidColorBrush x:Key="SelectedSurfaceBrush" Color="#2D2920" />
+    <SolidColorBrush x:Key="DocumentTabBrush" Color="#141716" />
+    <SolidColorBrush x:Key="DocumentTabActiveBrush" Color="#1D211F" />
+    <SolidColorBrush x:Key="XmlEditorBrush" Color="#090C0B" />
+    <SolidColorBrush x:Key="DisabledSurfaceBrush" Color="#202220" />
+    <SolidColorBrush x:Key="DisabledBorderBrush" Color="#343532" />
+
+    <LinearGradientBrush x:Key="AppBackgroundBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+      <GradientStop Color="{StaticResource BackgroundTopColor}" Offset="0" />
+      <GradientStop Color="{StaticResource BackgroundMainColor}" Offset="0.45" />
+      <GradientStop Color="{StaticResource BackgroundDeepColor}" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="ActionButtonBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+      <GradientStop Color="#252823" Offset="0" />
+      <GradientStop Color="#1A1D1B" Offset="1" />
+    </LinearGradientBrush>
+  </Styles.Resources>
+
+  <Style Selector="Window">
+    <Setter Property="Background" Value="{DynamicResource AppBackgroundBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <Style Selector="UserControl">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+  </Style>
+  <Style Selector="TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+  </Style>
+  <Style Selector="TextBlock.SectionHeader">
+    <Setter Property="Foreground" Value="{DynamicResource MainGoldBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="Margin" Value="0,16,0,6" />
+  </Style>
+  <Style Selector="TextBlock.section-header">
+    <Setter Property="Foreground" Value="{DynamicResource MainGoldBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style Selector="TextBlock.muted">
+    <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+  </Style>
+
+  <Style Selector="TextBox, AutoCompleteBox, ComboBox, NumericUpDown">
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+  </Style>
+  <Style Selector="TextBox:pointerover, AutoCompleteBox:pointerover, ComboBox:pointerover, NumericUpDown:pointerover">
+    <Setter Property="BorderBrush" Value="#6E5A3C" />
+  </Style>
+  <Style Selector="TextBox:focus, AutoCompleteBox:focus, ComboBox:focus, NumericUpDown:focus">
+    <Setter Property="BorderBrush" Value="#B58A47" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="TextBox:disabled, AutoCompleteBox:disabled, ComboBox:disabled, NumericUpDown:disabled">
+    <Setter Property="Background" Value="#141615" />
+    <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+  </Style>
+
+  <Style Selector="Button">
+    <Setter Property="MinHeight" Value="31" />
+    <Setter Property="Padding" Value="12,5" />
+    <Setter Property="Background" Value="{DynamicResource ActionButtonBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="#9F7A3D" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ActionButtonHoverBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="#B38A47" />
+  </Style>
+  <Style Selector="Button:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ActionButtonPressedBrush}" />
+    <Setter Property="BorderBrush" Value="#806336" />
+  </Style>
+  <Style Selector="Button.positive">
+    <Setter Property="Background" Value="{DynamicResource PositiveBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource PositiveTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PositiveBorderBrush}" />
+  </Style>
+  <Style Selector="Button.positive:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PositiveHoverBrush}" />
+    <Setter Property="BorderBrush" Value="#B99550" />
+  </Style>
+  <Style Selector="Button.positive:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PositivePressedBrush}" />
+  </Style>
+  <Style Selector="Button.danger">
+    <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+  </Style>
+  <Style Selector="Button.danger:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DangerHoverBrush}" />
+  </Style>
+  <Style Selector="Button.danger:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DangerPressedBrush}" />
+  </Style>
+  <Style Selector="Button:disabled">
+    <Setter Property="Background" Value="{DynamicResource DisabledSurfaceBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+    <Setter Property="Opacity" Value="1" />
+  </Style>
+  <Style Selector="Button.ability-tab">
+    <Setter Property="Background" Value="#171A19" />
+    <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="#5B4A34" />
+  </Style>
+  <Style Selector="Button.ability-tab:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#242621" />
+    <Setter Property="BorderBrush" Value="#8B6C3D" />
+  </Style>
+  <Style Selector="Button.ability-tab.active">
+    <Setter Property="Background" Value="#4A3820" />
+    <Setter Property="Foreground" Value="#F3E5CB" />
+    <Setter Property="BorderBrush" Value="{DynamicResource MainGoldBrush}" />
+  </Style>
+  <Style Selector="Button.add-item">
+    <Setter Property="Background" Value="#173326" />
+    <Setter Property="Foreground" Value="#E0EEDF" />
+    <Setter Property="BorderBrush" Value="#568565" />
+  </Style>
+  <Style Selector="Button.add-item:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#214735" />
+    <Setter Property="BorderBrush" Value="#76A47F" />
+  </Style>
+  <Style Selector="Button.add-component">
+    <Setter Property="Background" Value="#153A41" />
+    <Setter Property="Foreground" Value="#DDF0EE" />
+    <Setter Property="BorderBrush" Value="#4F9098" />
+  </Style>
+  <Style Selector="Button.add-component:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#20515A" />
+    <Setter Property="BorderBrush" Value="#72B0B7" />
+  </Style>
+  <Style Selector="Button.copy-import">
+    <Setter Property="Background" Value="#24384B" />
+    <Setter Property="Foreground" Value="#E1EDF6" />
+    <Setter Property="BorderBrush" Value="#668EAC" />
+  </Style>
+  <Style Selector="Button.copy-import:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#304A61" />
+    <Setter Property="BorderBrush" Value="#83A9C3" />
+  </Style>
+
+  <Style Selector="Button.remove-button">
+    <Setter Property="Content" Value="×" />
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="MinWidth" Value="28" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="6,0,0,0" />
+    <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="FontSize" Value="18" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="Button.remove-button:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DangerHoverBrush}" />
+  </Style>
+  <Style Selector="Button.remove-button:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DangerPressedBrush}" />
+  </Style>
+  <Style Selector="Button.remove-button:disabled">
+    <Setter Property="Background" Value="{DynamicResource DisabledSurfaceBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+  </Style>
+  <Style Selector="Button.chip-remove-button">
+    <Setter Property="Content" Value="×" />
+    <Setter Property="MinWidth" Value="16" />
+    <Setter Property="MinHeight" Value="16" />
+    <Setter Property="Padding" Value="3,0" />
+    <Setter Property="Margin" Value="4,0,0,0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource ChipRemoveBrush}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+  <Style Selector="Button.chip-remove-button:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="#E0B2A6" />
+  </Style>
+
+  <Style Selector="TabItem.editorTab, TabStripItem">
+    <Setter Property="MinHeight" Value="31" />
+    <Setter Property="Padding" Value="8,4" />
+    <Setter Property="Background" Value="#171A19" />
+    <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="#493E30" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="TabItem.editorTab:pointerover, TabStripItem:pointerover">
+    <Setter Property="Background" Value="#202321" />
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}" />
+  </Style>
+  <Style Selector="TabItem.editorTab:selected, TabStripItem:selected">
+    <Setter Property="Background" Value="#24231E" />
+    <Setter Property="Foreground" Value="#F0E2C9" />
+    <Setter Property="BorderBrush" Value="#8A693B" />
+  </Style>
+
+  <Style Selector="TabItem.compact-mode-tab">
+    <Setter Property="FontSize" Value="17" />
+    <Setter Property="MinHeight" Value="34" />
+    <Setter Property="Padding" Value="8,4" />
+  </Style>
+
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="{DynamicResource DeepPanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="Foreground" Value="#D9D0C1" />
+    <Setter Property="Padding" Value="6,5" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ListHoverBrush}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ListSelectedBrush}" />
+    <Setter Property="Foreground" Value="#F2E5D1" />
+    <Setter Property="BorderBrush" Value="#A47B3D" />
+  </Style>
+
+  <Style Selector="ListBox.manager-list">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+  <Style Selector="ListBox.manager-list ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="ListBox.manager-list ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="CheckBox">
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}" />
+  </Style>
+  <Style Selector="CheckBox:pointerover">
+    <Setter Property="BorderBrush" Value="#C79A52" />
+  </Style>
+  <Style Selector="CheckBox:checked">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
+  </Style>
+
+  <Style Selector="Border.MainPanel">
+    <Setter Property="Background" Value="{DynamicResource MainPanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource StrongBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+  </Style>
+  <Style Selector="Border.RaisedPanel">
+    <Setter Property="Background" Value="{DynamicResource RaisedPanelBrush}" />
+    <Setter Property="BorderBrush" Value="#5E4D35" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+  </Style>
+  <Style Selector="Border.DeepPanel, Border.XmlPanel">
+    <Setter Property="Background" Value="{DynamicResource DeepPanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+  </Style>
+  <Style Selector="TextBlock.XmlHeader">
+    <Setter Property="Foreground" Value="{DynamicResource MainGoldBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="FontSize" Value="15" />
+  </Style>
+
+  <Style Selector="ScrollBar">
+    <Setter Property="Background" Value="#0E100F" />
+    <Setter Property="Foreground" Value="#4D473B" />
+  </Style>
+  <Style Selector="ProgressBar">
+    <Setter Property="Background" Value="{DynamicResource DeepPanelBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource MainGoldBrush}" />
+  </Style>
+  <Style Selector="micons|MaterialIcon">
+    <Setter Property="Width" Value="18" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="Margin" Value="1" />
+  </Style>
+</Styles>

@@ -83,4 +83,29 @@ public sealed class IconCatalogTests
             "custom\\unlisted_icon.dds",
             ProtoEditorWindow.NormalizeIconCatalogValue("custom/unlisted_icon.dds", catalog));
     }
+
+    [Fact]
+    public void IconPreview_SelectsTheDefaultCulturePathBeforeOtherIcons()
+    {
+        var selected = IconPreviewService.SelectPreferredPath(
+        [
+            ("resources\\greek\\culture.png", false),
+            ("resources\\shared\\default.png", true),
+            ("resources\\norse\\culture.png", false)
+        ]);
+
+        Assert.Equal("resources\\shared\\default.png", selected);
+    }
+
+    [Fact]
+    public void IconPreview_FallsBackToTheFirstPathWhenThereIsNoDefault()
+    {
+        var selected = IconPreviewService.SelectPreferredPath(
+        [
+            ("resources/greek/first.png", false),
+            ("resources/norse/second.png", false)
+        ]);
+
+        Assert.Equal("resources/greek/first.png", selected);
+    }
 }

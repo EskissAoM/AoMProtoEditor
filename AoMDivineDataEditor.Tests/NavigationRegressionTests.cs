@@ -266,7 +266,7 @@ public sealed class NavigationRegressionTests
     }
 
     [Fact]
-    public void ProtoUnitMenu_ExposesUnitTypeManagerWithoutAnEditButton()
+    public void ProtoUnitMenu_ExposesUnitTypeManagerWithoutEditOrDuplicateButtons()
     {
         var root = FindProjectRoot();
         var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
@@ -276,7 +276,8 @@ public sealed class NavigationRegressionTests
             (string?)element.Attribute("Content") == "Unit Type" &&
             (string?)element.Attribute("Click") == "ProtounitUnitType_Click");
         Assert.DoesNotContain("editButton", managerCode, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Duplicate Unit Type", managerCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("duplicateButton", managerCode, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Duplicate Unit Type", managerCode, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -299,7 +300,7 @@ public sealed class NavigationRegressionTests
         Assert.Contains("OpenFilePickerAsync", managerCode, StringComparison.Ordinal);
         Assert.Contains("*.png", managerCode, StringComparison.Ordinal);
         Assert.Contains("AssetDestinationWindow", managerCode, StringComparison.Ordinal);
-        Assert.Contains("item.IsCustom ? \"Custom\" : \"UITextureCache.bar\"", managerCode, StringComparison.Ordinal);
+        Assert.Contains("item.IsCustom ? $\"Custom · {item.DisplayPath}\" : item.DisplayPath", managerCode, StringComparison.Ordinal);
         Assert.DoesNotContain("deleteButton", managerCode, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("duplicateButton", managerCode, StringComparison.OrdinalIgnoreCase);
     }
@@ -367,9 +368,168 @@ public sealed class NavigationRegressionTests
         var root = FindProjectRoot();
         var tacticsCode = File.ReadAllText(Path.Combine(root, "Windows", "TacticsManagerWindow.cs"));
         var abilitiesCode = File.ReadAllText(Path.Combine(root, "Windows", "AbilitiesManagerWindow.cs"));
+        var editorCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
         Assert.Contains(": base(initializeProtoEditor: false)", tacticsCode, StringComparison.Ordinal);
         Assert.Contains(": base(gameData, initializeProtoEditor: false)", abilitiesCode, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Matches(editorCode, @"HideEmptyDocumentPlaceholder\(\);").Count);
+        Assert.Contains("private void HideEmptyDocumentPlaceholder()", editorCode, StringComparison.Ordinal);
+        Assert.Contains("_emptyDocumentOverlay.IsVisible = false;", editorCode, StringComparison.Ordinal);
+        Assert.Contains("await _pendingAbilityEditorLoadTask;", editorCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AbilityManager_LoadsTheGlobalCatalogWhenTheMainDocumentIsStillEmpty()
+    {
+        var root = FindProjectRoot();
+        var editorCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("EnsureAbilityCatalogLoadedForManager();", editorCode, StringComparison.Ordinal);
+        Assert.Contains("LoadAbilitySources(\"__ability_manager_catalog__\")", editorCode, StringComparison.Ordinal);
+        Assert.Contains("var preservedDrafts = CloneAbilityDrafts(_abilityDrafts);", editorCode, StringComparison.Ordinal);
+        Assert.Contains("foreach (var entry in preservedDrafts)", editorCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StandaloneTacticsMode_UsesCompactActionAndTacticTabs()
+    {
+        var root = FindProjectRoot();
+        var editorCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var theme = File.ReadAllText(Path.Combine(root, "Styles", "AoMTheme.axaml"));
+
+        Assert.Equal(2, Regex.Matches(editorCode, "Classes = \\{ \"compact-mode-tab\" \\}").Count);
+        Assert.Contains("Selector=\"TabItem.compact-mode-tab\"", theme, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"FontSize\" Value=\"17\" />", theme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ManagerLists_ReserveSharedClearanceForTheVerticalScrollbar()
+    {
+        var root = FindProjectRoot();
+        var sharedShell = File.ReadAllText(Path.Combine(root, "Controls", "ManagerListShell.cs"));
+        var managerFiles = new[]
+        {
+            "AbilitiesManagerWindow.cs",
+            "TacticsManagerWindow.cs",
+            "ProtoUnitCommandsManagerWindow.cs"
+        };
+
+        Assert.Contains("ScrollBarClearance = 20", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("new Thickness(0, 0, ScrollBarClearance, 0)", sharedShell, StringComparison.Ordinal);
+        foreach (var managerFile in managerFiles)
+        {
+            var managerCode = File.ReadAllText(Path.Combine(root, "Windows", managerFile));
+            Assert.Contains("ManagerListShell.ScrollBarClearance", managerCode, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ManagerHeadersAndEntityCountFootersUseSharedFormatting()
+    {
+        var root = FindProjectRoot();
+        var sharedShell = File.ReadAllText(Path.Combine(root, "Controls", "ManagerListShell.cs"));
+        var managerFiles = new[]
+        {
+            "AbilitiesManagerWindow.cs",
+            "AnimFileManagerWindow.cs",
+            "IconManagerWindow.cs",
+            "ProtoUnitCommandsManagerWindow.cs",
+            "TacticsManagerWindow.cs",
+            "UnitTypeManagerWindow.cs"
+        };
+
+        Assert.Contains("HeaderControlHeight = 36", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("Height = HeaderControlHeight", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("FormatEntityCountFooter", sharedShell, StringComparison.Ordinal);
+        foreach (var managerFile in managerFiles)
+        {
+            var managerCode = File.ReadAllText(Path.Combine(root, "Windows", managerFile));
+            Assert.Contains("FormatEntityCountFooter", managerCode, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void LargeAssetManagers_UseTheOptInVirtualizedListWithoutSearchGate()
+    {
+        var root = FindProjectRoot();
+        var sharedShell = File.ReadAllText(Path.Combine(root, "Controls", "ManagerListShell.cs"));
+        var animManager = File.ReadAllText(Path.Combine(root, "Windows", "AnimFileManagerWindow.cs"));
+        var iconManager = File.ReadAllText(Path.Combine(root, "Windows", "IconManagerWindow.cs"));
+
+        Assert.Contains("CreateVirtualizedList<T>", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("new VirtualizingStackPanel", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("CacheLength = 0.5", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("supportsRecycling: false", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("item is null", sharedShell, StringComparison.Ordinal);
+        Assert.Contains("IsHitTestVisible = false", sharedShell, StringComparison.Ordinal);
+
+        Assert.Contains("CreateVirtualizedList<AnimFileCatalogEntry>(CreateRow)", animManager, StringComparison.Ordinal);
+        Assert.Contains("CreateVirtualizedList<IconManagerItem>(CreateRow)", iconManager, StringComparison.Ordinal);
+        Assert.Contains("shell.ReplaceItemsHost(_itemsList)", animManager, StringComparison.Ordinal);
+        Assert.Contains("shell.ReplaceItemsHost(_itemsList)", iconManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("Type at least 3 characters", animManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("Type at least 3 characters", iconManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("_itemsPanel.Children", animManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("_itemsPanel.Children", iconManager, StringComparison.Ordinal);
+
+        // Search results must correspond to the visible name, not hidden path,
+        // archive, or source metadata (Anim File and Sound Set share this code).
+        Assert.Contains("GetFileName(item.Path).Contains(search", animManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("item.Path.Contains(search", animManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("item.ArchiveName.Contains(search", animManager, StringComparison.Ordinal);
+        Assert.Contains("item.Name.Contains(search", iconManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("item.DisplayPath.Contains(search", iconManager, StringComparison.Ordinal);
+        Assert.DoesNotContain("UITextureCache.bar", iconManager, StringComparison.Ordinal);
+
+        // Anim File and Sound Set intentionally share this window/profile, so their
+        // edit, duplicate and custom move actions must remain in the virtualized row.
+        Assert.Contains("CreateEditButton(item)", animManager, StringComparison.Ordinal);
+        Assert.Contains("CreateDuplicateButton(item)", animManager, StringComparison.Ordinal);
+        Assert.Contains("OpenMoveDialogAsync(item)", animManager, StringComparison.Ordinal);
+        Assert.Contains("OpenMoveDialogAsync(item)", iconManager, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnitAndTechnologyEditors_UseTheSharedPngAndDdsIconPreview()
+    {
+        var root = FindProjectRoot();
+        var project = File.ReadAllText(Path.Combine(root, "AoMDivineDataEditor.csproj"));
+        var unitEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var technologyEditor = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
+        var previewService = File.ReadAllText(Path.Combine(root, "Classes", "IconPreviewService.cs"));
+        var ddsDecoder = File.ReadAllText(Path.Combine(root, "Classes", "DdsIconDecoder.cs"));
+        var previewControl = File.ReadAllText(Path.Combine(root, "Controls", "IconPreviewControl.cs"));
+
+        Assert.Contains("BCnEncoder.Net", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("CryBarEditor", project, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("new IconPreviewControl(_iconPreviewService)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("new IconPreviewControl(_iconPreviewService)", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("DdsIconDecoder.ConvertToPngBytesAsync", previewService, StringComparison.Ordinal);
+        Assert.Contains("new BcDecoder().DecodeAsync(dds)", ddsDecoder, StringComparison.Ordinal);
+        Assert.Contains("ChangeExtension(normalizedPath, \".dds\")", previewService, StringComparison.Ordinal);
+        Assert.Contains("Width = 132", previewControl, StringComparison.Ordinal);
+        Assert.Contains("BorderThickness = new Thickness(2)", previewControl, StringComparison.Ordinal);
+        Assert.Contains("Bitmap.DecodeToWidth(stream, 128", previewControl, StringComparison.Ordinal);
+        Assert.Contains("ShowOptionsAsync", previewControl, StringComparison.Ordinal);
+        Assert.Contains("_cycleButton.Click", previewControl, StringComparison.Ordinal);
+        Assert.Contains("_cycleButton.IsVisible = _options.Count > 1", previewControl, StringComparison.Ordinal);
+        Assert.Contains("AttachedToVisualTree", previewControl, StringComparison.Ordinal);
+        Assert.Contains("_ = ShowCurrentOptionAsync()", previewControl, StringComparison.Ordinal);
+        Assert.Contains("propertiesLayout.Children.Add(propertiesGrid)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset", unitEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("Grid.SetColumn(iconPreview, 1)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("RefreshCultureIconPreview()", unitEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("displayRow.Children.Add(iconPreview)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("var identityFields = new StackPanel", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("_propertiesPanel.IsEnabled = _current != null", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("AddPrimaryTechnologyRowAsync(tech, displayName, identityFields)", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("target.Children.Add(displayGrid)", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("target.Children.Add(metadataGrid)", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("metadataRow.Children.Add(segment)", technologyEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content = \"Add Editor Name\"", unitEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("removeEditorNameButton", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("IsVisible = !_isReadOnly || !string.IsNullOrWhiteSpace(editorNameId)", unitEditor, StringComparison.Ordinal);
     }
 
     [Fact]

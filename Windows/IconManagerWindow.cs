@@ -16,7 +16,7 @@ internal sealed class IconManagerWindow : SimpleWindow
     private readonly List<IconManagerItem> _items;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
-    private readonly StackPanel _itemsPanel;
+    private readonly ListBox _itemsList;
     private readonly TextBlock _footerText;
     private readonly string? _resourcesDirectory;
     private readonly Func<IconManagerItem, AssetDestination, Task<bool>>? _moveAsync;
@@ -54,11 +54,11 @@ internal sealed class IconManagerWindow : SimpleWindow
         MinWidth = 520;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414");
-        Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311");
+        Foreground = Brush.Parse("#E8DECC");
 
         var shell = new ManagerListShell(
-            "Search Icons (type at least 3 characters)...",
+            "Search Icons...",
             ["All", "Original", "Custom"],
             "",
             addEnabled: !string.IsNullOrWhiteSpace(_resourcesDirectory),
@@ -68,7 +68,8 @@ internal sealed class IconManagerWindow : SimpleWindow
         _searchBox.TextChanged += (_, _) => ScheduleRefresh();
         _filterComboBox.SelectionChanged += (_, _) => RefreshList();
         shell.AddButton.Click += async (_, _) => await ImportIconAsync();
-        _itemsPanel = shell.ItemsPanel;
+        _itemsList = ManagerListShell.CreateVirtualizedList<IconManagerItem>(CreateRow);
+        shell.ReplaceItemsHost(_itemsList);
         _footerText = shell.FooterTextBlock;
         _searchDebounceTimer.Tick += (_, _) =>
         {
@@ -126,57 +127,51 @@ internal sealed class IconManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
-        _footerText.Text = $"{_items.Count:N0} items: {_items.Count(item => !item.IsCustom):N0} original, {_items.Count(item => item.IsCustom):N0} customs. Double-click a custom icon name to rename or move it.";
-        _itemsPanel.Children.Clear();
+        _footerText.Text = ManagerListShell.FormatEntityCountFooter(
+            _items.Count,
+            _items.Count(item => !item.IsCustom),
+            _items.Count(item => item.IsCustom),
+            "Double-click a custom icon name to rename or move it.");
         var search = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
-        if (search.Length < 3)
-        {
-            _itemsPanel.Children.Add(new TextBlock
-            {
-                Text = "Type at least 3 characters to display icons.",
-                Foreground = Brushes.Gray,
-                Margin = new Thickness(10, 9)
-            });
-            return;
-        }
+        _itemsList.ItemsSource = _items
+            .Where(item => sourceFilter == "All" ||
+                           (sourceFilter == "Original" && !item.IsCustom) ||
+                           (sourceFilter == "Custom" && item.IsCustom))
+            .Where(item => string.IsNullOrWhiteSpace(search) ||
+                           item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
 
-        foreach (var item in _items
-                     .Where(item => sourceFilter == "All" ||
-                                    (sourceFilter == "Original" && !item.IsCustom) ||
-                                    (sourceFilter == "Custom" && item.IsCustom))
-                     .Where(item => item.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                                    item.DisplayPath.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                                    (item.IsCustom ? "Custom" : "UITextureCache.bar")
-                                    .Contains(search, StringComparison.OrdinalIgnoreCase)))
+    private Control CreateRow(IconManagerItem item)
+    {
+        var row = ManagerListShell.CreateRow("*,Auto");
+        row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
+        row.Children.Add(new TextBlock
         {
-            var row = ManagerListShell.CreateRow("*,Auto");
-            row.Children.Add(new TextBlock
-            {
-                Text = item.Name,
-                Margin = new Thickness(10, 9),
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            });
-            var path = new TextBlock
-            {
-                Text = item.IsCustom ? $"Custom · {item.DisplayPath}" : item.DisplayPath,
-                Margin = new Thickness(8, 9),
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = 430
-            };
-            ToolTip.SetTip(path, item.DisplayPath);
-            Grid.SetColumn(path, 1);
-            row.Children.Add(path);
-            if (item.IsCustom && _moveAsync != null && !string.IsNullOrWhiteSpace(_resourcesDirectory))
-            {
-                row.DoubleTapped += async (_, _) => await OpenMoveDialogAsync(item);
-                ToolTip.SetTip(row, "Double-click to rename or move this custom icon");
-            }
-            _itemsPanel.Children.Add(row);
+            Text = item.Name,
+            Margin = new Thickness(10, 9),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        var path = new TextBlock
+        {
+            Text = item.IsCustom ? $"Custom · {item.DisplayPath}" : item.DisplayPath,
+            Margin = new Thickness(8, 9),
+            Foreground = Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 430
+        };
+        ToolTip.SetTip(path, item.DisplayPath);
+        Grid.SetColumn(path, 1);
+        row.Children.Add(path);
+        if (item.IsCustom && _moveAsync != null && !string.IsNullOrWhiteSpace(_resourcesDirectory))
+        {
+            row.DoubleTapped += async (_, _) => await OpenMoveDialogAsync(item);
+            ToolTip.SetTip(row, "Double-click to rename or move this custom icon");
         }
+        return row;
     }
 
     private async Task OpenMoveDialogAsync(IconManagerItem item)

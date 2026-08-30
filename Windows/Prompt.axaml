@@ -7,12 +7,12 @@
         x:Class="AoMDivineDataEditor.Windows.Prompt" WindowStartupLocation="CenterOwner"
 		WindowDecorations="None"
 		ExtendClientAreaToDecorationsHint="True"
-		Foreground="#d9d9d9"
-		Background="#141414"
+		Foreground="{DynamicResource PrimaryTextBrush}"
+		Background="{DynamicResource AppBackgroundBrush}"
 		DataContext="{Binding RelativeSource={RelativeSource Self}}"
 		CanResize="False" Width="400" Height="160"
         Title="Prompt">
-	<Border Padding="5" BorderThickness="2" BorderBrush="#d9d9d9">
+	<Border Classes="MainPanel" Padding="10" BorderThickness="1">
 		<Grid>
 			<Grid.RowDefinitions>
 				<RowDefinition Height="*" />
@@ -36,7 +36,7 @@
 
 				<micons:MaterialIcon DockPanel.Dock="Left" VerticalAlignment="Top"
 									 Kind="CogOutline" Width="50" Height="50"
-									 Foreground="#5da2e8"
+									   Foreground="{DynamicResource MainGoldBrush}"
 									 Classes.Rotating="{Binding !ProgressFinished}"
 									 Classes.Finished="{Binding ProgressFinished}"
 									 IsVisible="{Binding ShowProgressIcon}">
@@ -117,9 +117,8 @@
 					<Button Content="Cancel"
 							Click="CancelButton_Click"
 							IsCancel="True" />
-					<Button x:Name="_confirmButton" Content="Confirm"
+					<Button x:Name="_confirmButton" Classes="positive" Content="Confirm"
 							Click="ConfirmButton_Click"
-							Background="#4772b5"
 							IsDefault="True" />
 				</StackPanel>
 			</Grid>

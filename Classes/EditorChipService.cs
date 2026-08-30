@@ -15,9 +15,11 @@ public static class EditorChipService
     {
         var border = new Border
         {
-            Background = Brush.Parse("#3a5a78"),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(8, 4),
+            Background = Brush.Parse("#193A52"),
+            BorderBrush = Brush.Parse("#3D7898"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(11),
+            Padding = new Thickness(8, 3),
             Margin = new Thickness(2),
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -27,6 +29,7 @@ public static class EditorChipService
         {
             Text = text,
             FontSize = 12,
+            Foreground = Brush.Parse("#D9EEF7"),
             VerticalAlignment = VerticalAlignment.Center
         });
 

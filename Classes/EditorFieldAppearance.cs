@@ -16,15 +16,15 @@ public static class EditorFieldAppearance
         switch (control)
         {
             case TextBox textBox:
-                textBox.Background = Brush.Parse("#1c1c1c");
-                textBox.Foreground = Brush.Parse("#d9d9d9");
-                textBox.BorderBrush = Brush.Parse("#3f3f46");
+                textBox.Background = Brush.Parse("#0E1110");
+                textBox.Foreground = Brush.Parse("#E8DECC");
+                textBox.BorderBrush = Brush.Parse("#4C4031");
                 textBox.BorderThickness = new Thickness(1);
                 break;
             case AutoCompleteBox autoCompleteBox:
-                autoCompleteBox.Background = Brush.Parse("#1c1c1c");
-                autoCompleteBox.Foreground = Brush.Parse("#d9d9d9");
-                autoCompleteBox.BorderBrush = Brush.Parse("#3f3f46");
+                autoCompleteBox.Background = Brush.Parse("#0E1110");
+                autoCompleteBox.Foreground = Brush.Parse("#E8DECC");
+                autoCompleteBox.BorderBrush = Brush.Parse("#4C4031");
                 autoCompleteBox.BorderThickness = new Thickness(1);
                 break;
         }

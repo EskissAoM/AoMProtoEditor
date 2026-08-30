@@ -19,14 +19,14 @@ internal sealed class AssetFolderTreeWindow : SimpleWindow
         Title = $"Choose {rootLabel} Folder";
         Width = 520; Height = 560; MinWidth = 400; MinHeight = 360;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush.Parse("#141414"); Foreground = Brush.Parse("#d9d9d9");
+        Background = Brush.Parse("#111311"); Foreground = Brush.Parse("#E8DECC");
 
         var root = new Grid { Margin = new Thickness(16), RowDefinitions = new RowDefinitions("*,Auto") };
         root.Children.Add(_tree);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
         var newFolder = new Button { Content = "New Folder" };
         var cancel = new Button { Content = "Cancel" };
-        var choose = new Button { Content = "Choose", Background = Brush.Parse("#2b7a0b") };
+        var choose = new Button { Content = "Choose" };
         newFolder.Click += async (_, _) => await CreateFolderAsync(rootLabel);
         cancel.Click += (_, _) => Close();
         choose.Click += (_, _) => Choose();

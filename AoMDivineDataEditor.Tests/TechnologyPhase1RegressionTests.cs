@@ -134,8 +134,9 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("AddSectionHeader(\"Properties\")", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSectionHeader(\"Costs\")", techCode, StringComparison.Ordinal);
         Assert.Contains("AddChipListEditor(tech, \"techtype\", \"Technology Types\")", techCode, StringComparison.Ordinal);
-        Assert.Contains("_propertiesPanel.IsEnabled = canEdit", techCode, StringComparison.Ordinal);
-        Assert.Contains("_xmlPreview.Opacity = canEdit ? 1.0 : 0.55", techCode, StringComparison.Ordinal);
+        Assert.Contains("_propertiesPanel.IsEnabled = _current != null", techCode, StringComparison.Ordinal);
+        Assert.Contains("_xmlPreview.Opacity = _current != null ? 1.0 : 0.55", techCode, StringComparison.Ordinal);
+        Assert.Contains("XmlSyntaxEditorService.Configure(_xmlPreview)", techCode, StringComparison.Ordinal);
         Assert.Contains("SaveOptions.DisableFormatting", techCode, StringComparison.Ordinal);
         Assert.Contains("XElement.Parse(_current.ToString(SaveOptions.DisableFormatting), LoadOptions.None)", techCode, StringComparison.Ordinal);
     }
@@ -147,11 +148,11 @@ public sealed class TechnologyPhase1RegressionTests
         var root = FindProjectRoot();
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
 
-        var displayIndex = techCode.IndexOf("AddPrimaryTechnologyRowAsync(tech, displayName)", StringComparison.Ordinal);
+        var displayIndex = techCode.IndexOf("AddPrimaryTechnologyRowAsync(tech, displayName, identityFields)", StringComparison.Ordinal);
         var rolloverIndex = techCode.IndexOf("AddStringBackedPropertyRowAsync(\"Rollover text\"", StringComparison.Ordinal);
         var advancedIndex = techCode.IndexOf("AddStringBackedPropertyRowAsync(\"Advanced rollover\"", StringComparison.Ordinal);
-        var iconIndex = techCode.IndexOf("AddIconEditor(icon)", StringComparison.Ordinal);
-        var statusIndex = techCode.IndexOf("AddStatusEditor(status)", StringComparison.Ordinal);
+        var iconIndex = techCode.IndexOf("AddIconEditor(icon, identityFields)", StringComparison.Ordinal);
+        var statusIndex = techCode.IndexOf("AddStatusEditor(status, identityFields)", StringComparison.Ordinal);
         var researchIndex = techCode.IndexOf("AddResearchPointsEditor(tech, researchPoints, devotionCost)", StringComparison.Ordinal);
 
         Assert.True(displayIndex < rolloverIndex && rolloverIndex < advancedIndex && advancedIndex < iconIndex);
@@ -159,7 +160,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("if (devotionCost != null)\n            AddDevotionCostEditor(devotionCost);", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
         Assert.Contains("Text = \"Type\"", techCode, StringComparison.Ordinal);
         Assert.Contains("Text = \"Order hint\"", techCode, StringComparison.Ordinal);
-        Assert.Contains("typeSelector.Width = 200", techCode, StringComparison.Ordinal);
+        Assert.Contains("typeSelector.Width = 130", techCode, StringComparison.Ordinal);
         Assert.Contains("Text = \"Number\"", techCode, StringComparison.Ordinal);
         Assert.Contains("ProtoUnitNumericKind.UnsignedInteger", techCode, StringComparison.Ordinal);
         Assert.Contains("\"Livestock\"", techCode, StringComparison.Ordinal);
@@ -318,7 +319,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.DoesNotContain("Text = \"Type\"", prereqCode, StringComparison.Ordinal);
         Assert.Contains("new XAttribute(\"kbStat\", \"\")", techCode, StringComparison.Ordinal);
         Assert.Contains("deferSelectionCommit: true", techCode, StringComparison.Ordinal);
-        Assert.Contains("primaryLabel.VerticalAlignment = VerticalAlignment.Top", techCode, StringComparison.Ordinal);
+        Assert.Contains("primaryLabel.VerticalAlignment = VerticalAlignment.Center", techCode, StringComparison.Ordinal);
         Assert.Contains("selector.Width = width;", techCode, StringComparison.Ordinal);
         Assert.Contains("selector.MaxWidth = width;", techCode, StringComparison.Ordinal);
         Assert.Contains("ItemsSource = ProtoConstants.KnownResourceTypes", techCode, StringComparison.Ordinal);
@@ -613,7 +614,8 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("AddCommandDataEffectEditor", techCode, StringComparison.Ordinal);
         Assert.Contains("new[] { \"Unit\", \"Tech\", \"Command\" }", techCode, StringComparison.Ordinal);
         Assert.Contains("_protoUnitCommandNames", techCode, StringComparison.Ordinal);
-        Assert.Contains("GetAvailableCommandNames());", windowCode, StringComparison.Ordinal);
+        Assert.Contains("GetAvailableCommandNames(),", windowCode, StringComparison.Ordinal);
+        Assert.Contains("_iconPreviewService);", windowCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"row\"", techCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"column\"", techCode, StringComparison.Ordinal);
         Assert.Contains("AddDamageByCostDataEffectEditor", techCode, StringComparison.Ordinal);

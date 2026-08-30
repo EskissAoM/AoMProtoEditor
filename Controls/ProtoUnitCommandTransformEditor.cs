@@ -107,7 +107,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         _revertAddButton = new Button
         {
             Content = "Revert others to",
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             Padding = new Thickness(8, 4),
             IsVisible = editable && string.IsNullOrWhiteSpace(_transform.RevertOthersTo)
         };
@@ -205,7 +205,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
 
     private static void SetValidationBorder(Control control, bool invalid)
     {
-        var brush = Brush.Parse(invalid ? "#d64545" : "#3f3f46");
+        var brush = Brush.Parse(invalid ? "#d64545" : "#4C4031");
         switch (control)
         {
             case AutoCompleteBox autoCompleteBox:
@@ -256,7 +256,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         var add = new Button
         {
             Content = addText,
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             Padding = new Thickness(8, 4),
             Margin = new Thickness(0, 0, 8, 0)
         };

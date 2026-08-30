@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using AoMDivineDataEditor.Services;
 using AoMDivineDataEditor.Classes;
+using AoMDivineDataEditor.Controls;
 
 namespace AoMDivineDataEditor.Windows;
 
@@ -34,6 +35,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
     private readonly StackPanel _itemsPanel;
+    private readonly TextBlock _footerHint;
     private readonly Func<Window, string, bool, Task<string?>>? _openEditorAsync;
     private readonly Func<string, Task<bool>>? _createAbilityAsync;
     private readonly Func<string, bool, string, Task<bool>>? _duplicateAbilityAsync;
@@ -88,6 +90,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
         _searchBox = new TextBox
         {
             PlaceholderText = "Search abilities...",
+            Height = ManagerListShell.HeaderControlHeight,
             Margin = new Thickness(0, 0, 8, 0)
         };
         _searchBox.TextChanged += (_, _) => RefreshList();
@@ -97,6 +100,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
         {
             ItemsSource = new[] { "All", "Original", "Custom" },
             SelectedIndex = 0,
+            Height = ManagerListShell.HeaderControlHeight,
             Margin = new Thickness(0, 0, 8, 0),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -109,9 +113,9 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
             Content = "+",
             FontSize = 22,
             Width = 40,
-            Height = 36,
+            Height = ManagerListShell.HeaderControlHeight,
             Padding = new Thickness(0),
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-item" },
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
@@ -123,7 +127,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
         _itemsPanel = new StackPanel
         {
             Spacing = 4,
-            Margin = new Thickness(0, 0, 10, 0)
+            Margin = new Thickness(0, 0, ManagerListShell.ScrollBarClearance, 0)
         };
         var scroll = new ScrollViewer
         {
@@ -138,12 +142,13 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
         {
             Margin = new Thickness(0, 12, 0, 0)
         };
-        footer.Children.Add(new TextBlock
+        _footerHint = new TextBlock
         {
-            Text = "Double-click a custom ability name to rename it.",
+            Text = "",
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center
-        });
+        };
+        footer.Children.Add(_footerHint);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
 
@@ -261,6 +266,11 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
 
     private void RefreshList()
     {
+        _footerHint.Text = ManagerListShell.FormatEntityCountFooter(
+            _items.Count,
+            _items.Count(item => item.IsBuiltIn),
+            _items.Count(item => !item.IsBuiltIn),
+            "Double-click a custom ability name to rename it.");
         _itemsPanel.Children.Clear();
         var filter = _searchBox.Text?.Trim() ?? "";
         var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
@@ -273,7 +283,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
             var row = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-                Background = Brush.Parse("#202020"),
+                Background = Brush.Parse("#191C1A"),
                 Margin = new Thickness(0, 1)
             };
             row.Children.Add(new TextBlock
@@ -329,7 +339,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
             var duplicateIcon = new Canvas { Width = 16, Height = 16 };
             var backPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1) };
             Canvas.SetLeft(backPage, 5); Canvas.SetTop(backPage, 1); duplicateIcon.Children.Add(backPage);
-            var frontPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1), Background = Brush.Parse("#202020") };
+            var frontPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1), Background = Brush.Parse("#191C1A") };
             Canvas.SetLeft(frontPage, 1); Canvas.SetTop(frontPage, 4); duplicateIcon.Children.Add(frontPage);
             var duplicateButton = new Button
             {
@@ -356,7 +366,7 @@ internal sealed class AbilitiesManagerWindow : SimpleWindow
                     Height = 28,
                     Padding = new Thickness(0),
                     Margin = new Thickness(4),
-                    Background = Brush.Parse("#b00000"),
+                    Background = Brush.Parse("#992824"),
                     Foreground = Brushes.White,
                     HorizontalContentAlignment = HorizontalAlignment.Center,
                     VerticalContentAlignment = VerticalAlignment.Center

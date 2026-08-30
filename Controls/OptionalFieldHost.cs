@@ -43,7 +43,7 @@ public sealed class OptionalFieldHost : Grid
         AddButton = new Button
         {
             Content = addButtonText,
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             HorizontalAlignment = HorizontalAlignment.Left,
             IsEnabled = !isReadOnly
         };

@@ -8,6 +8,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using AvaloniaEdit;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
 
@@ -300,6 +301,7 @@ public partial class TechnologyEditorView : UserControl
     private readonly string? _modTechtreePath;
     private readonly Func<string, Task<string?>>? _resolveStringAsync;
     private readonly Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? _saveStringsAsync;
+    private readonly IconPreviewService? _iconPreviewService;
     private readonly Dictionary<string, string> _pendingStringUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyList<string> _iconPaths = [];
@@ -323,11 +325,13 @@ public partial class TechnologyEditorView : UserControl
     private readonly HashSet<string> _dirtyTechnologyNames = new(StringComparer.OrdinalIgnoreCase);
     private bool _controlsReady;
     private bool _isXmlPreviewCollapsed;
+    private IconPreviewControl? _iconPreviewControl;
 
     public TechnologyEditorView()
     {
         InitializeComponent();
         _controlsReady = true;
+        XmlSyntaxEditorService.Configure(_xmlPreview);
     }
 
     public TechnologyEditorView(
@@ -343,7 +347,8 @@ public partial class TechnologyEditorView : UserControl
         IEnumerable<string>? majorGodNames = null,
         IEnumerable<string>? techTypeNames = null,
         IEnumerable<string>? protoActionNames = null,
-        IEnumerable<string>? protoUnitCommandNames = null)
+        IEnumerable<string>? protoUnitCommandNames = null,
+        IconPreviewService? iconPreviewService = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
@@ -351,6 +356,7 @@ public partial class TechnologyEditorView : UserControl
         _modTechtreePath = modTechtreePath;
         _resolveStringAsync = resolveStringAsync;
         _saveStringsAsync = saveStringsAsync;
+        _iconPreviewService = iconPreviewService;
         _iconPaths = iconPaths?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _prereqUnitNames = prereqUnitNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _protoUnitNames = protoUnitNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
@@ -602,6 +608,7 @@ public partial class TechnologyEditorView : UserControl
         _loadingUi = true;
         _current = null;
         _currentOriginalName = null;
+        _iconPreviewControl = null;
         _techNameBox.Text = "";
         _techNameBox.IsReadOnly = true;
         _techNameBox.IsEnabled = false;
@@ -621,6 +628,7 @@ public partial class TechnologyEditorView : UserControl
             if (_current == null || generation != _editorBuildGeneration) return;
             var tech = _current;
             _loadingUi = true;
+            _iconPreviewControl = null;
             _propertiesPanel.Children.Clear();
             _prereqsPanel.Children.Clear();
             _effectsPanel.Children.Clear();
@@ -712,24 +720,52 @@ public partial class TechnologyEditorView : UserControl
             return element;
         }
 
+        var identityLayout = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        var identityFields = new StackPanel { Spacing = 0 };
+        identityLayout.Children.Add(identityFields);
+        _iconPreviewControl = new IconPreviewControl(_iconPreviewService)
+        {
+            Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset, 4, 12, 4),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        identityLayout.Children.Add(_iconPreviewControl);
+        RefreshIconPreview();
+        _propertiesPanel.Children.Add(identityLayout);
+
         var displayName = FindVisible("displaynameid");
-        await AddPrimaryTechnologyRowAsync(tech, displayName);
+        await AddPrimaryTechnologyRowAsync(tech, displayName, identityFields);
 
         var rollover = FindVisible("rollovertextid");
         if (rollover != null)
-            await AddStringBackedPropertyRowAsync("Rollover text", rollover, multiline: true);
+            await AddStringBackedPropertyRowAsync("Rollover text", rollover, multiline: true, target: identityFields);
 
         var advancedRollover = FindVisible("advancedrollovertextoverrideid");
         if (advancedRollover != null)
-            await AddStringBackedPropertyRowAsync("Advanced rollover", advancedRollover, multiline: true, removable: IsModifiedTab);
+            await AddStringBackedPropertyRowAsync("Advanced rollover", advancedRollover, multiline: true, removable: IsModifiedTab, target: identityFields);
 
         var icon = FindVisible("icon");
         if (icon != null)
-            AddIconEditor(icon);
+            AddIconEditor(icon, identityFields);
 
         var status = FindVisible("status");
         if (status != null)
-            AddStatusEditor(status);
+            AddStatusEditor(status, identityFields);
+
+        void RefreshIconPreview()
+        {
+            if (_iconPreviewControl == null)
+                return;
+            _ = _iconPreviewControl.ShowOptionsAsync(
+                tech.Elements()
+                    .Where(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                    .Select(element => (
+                        element.Value,
+                        (string?)element.Attribute("culture"))));
+        }
 
         var researchPoints = FindVisible("researchpoints");
         var devotionCost = FindVisible("devotioncost");
@@ -748,22 +784,25 @@ public partial class TechnologyEditorView : UserControl
         return stringId;
     }
 
-    private async Task AddPrimaryTechnologyRowAsync(XElement tech, XElement? displayNameElement)
+    private async Task AddPrimaryTechnologyRowAsync(XElement tech, XElement? displayNameElement, Panel target)
     {
+        var hasIcon = tech.Elements()
+            .Any(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
         var typeAttribute = tech.Attribute("type");
         if (!IsModifiedTab && string.IsNullOrWhiteSpace(typeAttribute?.Value)) typeAttribute = null;
         var orderHintAttribute = tech.Attribute("orderhint");
         if (!IsModifiedTab && string.IsNullOrWhiteSpace(orderHintAttribute?.Value)) orderHintAttribute = null;
-        if (!IsModifiedTab && displayNameElement == null && typeAttribute == null && orderHintAttribute == null)
+        if (!IsModifiedTab && displayNameElement == null && typeAttribute == null &&
+            orderHintAttribute == null && !hasIcon)
             return;
 
-        var grid = CreatePropertyGrid(displayNameElement != null ? "Display name" : "");
-        if (grid.Children.OfType<TextBlock>().FirstOrDefault() is { } primaryLabel)
+        var displayGrid = CreatePropertyGrid(displayNameElement != null ? "Display name" : "");
+        if (displayGrid.Children.OfType<TextBlock>().FirstOrDefault() is { } primaryLabel)
         {
-            primaryLabel.VerticalAlignment = VerticalAlignment.Top;
-            primaryLabel.Margin = new Thickness(0, 8, 6, 4);
+            primaryLabel.VerticalAlignment = VerticalAlignment.Center;
+            primaryLabel.Margin = new Thickness(0, 4, 6, 4);
         }
-        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        var displayRow = new WrapPanel { Orientation = Orientation.Horizontal };
 
         if (displayNameElement != null)
         {
@@ -782,8 +821,14 @@ public partial class TechnologyEditorView : UserControl
                 _pendingStringUpdates[stringId] = displayBox.Text ?? "";
                 MarkDirty();
             };
-            row.Children.Add(displayBox);
+            displayRow.Children.Add(displayBox);
+            Grid.SetColumn(displayRow, 1);
+            displayGrid.Children.Add(displayRow);
+            target.Children.Add(displayGrid);
         }
+
+        var metadataGrid = CreatePropertyGrid("");
+        var metadataRow = new WrapPanel { Orientation = Orientation.Horizontal };
 
         void AddTypeEditor()
         {
@@ -834,7 +879,7 @@ public partial class TechnologyEditorView : UserControl
             segment.Children.Add(typeSelector);
             if (IsModifiedTab)
                 segment.Children.Add(CreateRemoveButton(() => tech.Attribute("type")?.Remove()));
-            row.Children.Add(segment);
+            metadataRow.Children.Add(segment);
         }
 
         void AddOrderHintEditor()
@@ -859,7 +904,7 @@ public partial class TechnologyEditorView : UserControl
             segment.Children.Add(orderBox);
             if (IsModifiedTab)
                 segment.Children.Add(CreateRemoveButton(() => tech.Attribute("orderhint")?.Remove()));
-            row.Children.Add(segment);
+            metadataRow.Children.Add(segment);
         }
 
         if (typeAttribute != null)
@@ -879,7 +924,7 @@ public partial class TechnologyEditorView : UserControl
                     MarkDirty();
                     _ = BuildEditorAsync();
                 };
-                row.Children.Add(addTypeButton);
+                metadataRow.Children.Add(addTypeButton);
             }
             if (orderHintAttribute == null)
             {
@@ -891,20 +936,23 @@ public partial class TechnologyEditorView : UserControl
                     MarkDirty();
                     _ = BuildEditorAsync();
                 };
-                row.Children.Add(addOrderButton);
+                metadataRow.Children.Add(addOrderButton);
             }
         }
 
-        Grid.SetColumn(row, 1);
-        grid.Children.Add(row);
-        _propertiesPanel.Children.Add(grid);
+        if (metadataRow.Children.Count > 0)
+        {
+            Grid.SetColumn(metadataRow, 1);
+            metadataGrid.Children.Add(metadataRow);
+            target.Children.Add(metadataGrid);
+        }
     }
 
     private static Button CreateOptionalPropertyButton(string label)
         => new()
         {
             Content = label,
-            Background = Brush.Parse("#2b7a0b"),
+            Classes = { "add-component" },
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4),
             Padding = new Thickness(8, 3)
@@ -1059,7 +1107,12 @@ public partial class TechnologyEditorView : UserControl
         _propertiesPanel.Children.Add(grid);
     }
 
-    private async Task AddStringBackedPropertyRowAsync(string label, XElement element, bool multiline = false, bool removable = false)
+    private async Task AddStringBackedPropertyRowAsync(
+        string label,
+        XElement element,
+        bool multiline = false,
+        bool removable = false,
+        Panel? target = null)
     {
         var stringId = element.Value.Trim();
         var text = await ResolveTechnologyStringValueAsync(stringId);
@@ -1090,7 +1143,7 @@ public partial class TechnologyEditorView : UserControl
             MarkDirty();
         };
         grid.Children.Add(row);
-        _propertiesPanel.Children.Add(grid);
+        (target ?? _propertiesPanel).Children.Add(grid);
     }
 
     private TextBox CreateNumericTextBox(string value, double? width = null)
@@ -1250,7 +1303,7 @@ public partial class TechnologyEditorView : UserControl
         _propertiesPanel.Children.Add(grid);
     }
 
-    private void AddStatusEditor(XElement status)
+    private void AddStatusEditor(XElement status, Panel? target = null)
     {
         var grid = CreatePropertyGrid("Status");
         var combo = new ComboBox
@@ -1271,7 +1324,7 @@ public partial class TechnologyEditorView : UserControl
             UpdatePreview();
         };
         grid.Children.Add(combo);
-        _propertiesPanel.Children.Add(grid);
+        (target ?? _propertiesPanel).Children.Add(grid);
     }
 
     private static string ToStatusDisplay(string value)
@@ -1282,7 +1335,7 @@ public partial class TechnologyEditorView : UserControl
             _ => "Unobtainable"
         };
 
-    private void AddIconEditor(XElement icon)
+    private void AddIconEditor(XElement icon, Panel? target = null)
     {
         var grid = CreatePropertyGrid("Icon");
         var initial = ProtoEditorWindow.NormalizeIconCatalogValue(icon.Value, _iconPaths);
@@ -1292,7 +1345,7 @@ public partial class TechnologyEditorView : UserControl
             Opacity = IsModifiedTab ? 1.0 : 0.55,
             Margin = new Thickness(0, 4, 0, 4)
         };
-        editor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#1b1b1b" : "#4a4a4a");
+        editor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
         editor.Configure(initial, _iconPaths, async value =>
         {
             if (!IsModifiedTab) return;
@@ -1301,9 +1354,18 @@ public partial class TechnologyEditorView : UserControl
             UpdatePreview();
             await Task.CompletedTask;
         });
+        editor.FullValueChanged += (_, _) =>
+        {
+            if (_iconPreviewControl != null)
+                _ = _iconPreviewControl.ShowOptionsAsync(
+                    icon.Parent?.Elements()
+                        .Where(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase))
+                        .Select(element => (element.Value, (string?)element.Attribute("culture")))
+                    ?? []);
+        };
         Grid.SetColumn(editor, 1);
         grid.Children.Add(editor);
-        _propertiesPanel.Children.Add(grid);
+        (target ?? _propertiesPanel).Children.Add(grid);
     }
 
     private void AddChipListEditor(XElement tech, string tag, string sectionTitle)
@@ -1469,7 +1531,7 @@ public partial class TechnologyEditorView : UserControl
             Text = $"──── {text} ────",
             FontWeight = FontWeight.Bold,
             FontSize = 14,
-            Foreground = Brush.Parse("#5ba8de"),
+            Foreground = Brush.Parse("#C59A52"),
             Margin = new Thickness(0, 15, 0, 5)
         });
     }
@@ -1477,19 +1539,21 @@ public partial class TechnologyEditorView : UserControl
     private void ApplyReadOnlyVisualState()
     {
         var canEdit = IsModifiedTab;
-        _propertiesPanel.IsEnabled = canEdit;
+        // Keep the preview's culture-cycle button interactive for original technologies.
+        // Every actual property editor still applies its own modified-tab guard.
+        _propertiesPanel.IsEnabled = _current != null;
         _prereqsPanel.IsEnabled = canEdit;
         _effectsPanel.IsEnabled = canEdit;
         _propertiesPanel.Opacity = canEdit ? 1.0 : 0.55;
         _prereqsPanel.Opacity = canEdit ? 1.0 : 0.55;
         _effectsPanel.Opacity = canEdit ? 1.0 : 0.55;
         _xmlPreview.IsEnabled = _current != null;
-        _xmlPreview.IsReadOnly = true;
-        _xmlPreview.Focusable = canEdit;
-        _xmlPreview.IsTabStop = canEdit;
-        _xmlPreview.Opacity = canEdit ? 1.0 : 0.55;
-        _xmlPreview.Background = Brush.Parse(canEdit ? "#101010" : "#080808");
-        _xmlPreview.Foreground = Brush.Parse(canEdit ? "#d9d9d9" : "#8a8a8a");
+        XmlSyntaxEditorService.SetReadOnly(_xmlPreview, isReadOnly: true);
+        _xmlPreview.Focusable = _current != null;
+        _xmlPreview.IsTabStop = false;
+        _xmlPreview.Opacity = _current != null ? 1.0 : 0.55;
+        _xmlPreview.Background = Brush.Parse(canEdit ? "#090C0B" : "#090C0B");
+        _xmlPreview.Foreground = Brush.Parse(_current != null ? "#E8DECC" : "#8a8a8a");
     }
 
     private static void InsertBeforeEffectsOrAppend(XElement tech, XElement element)
@@ -1507,7 +1571,7 @@ public partial class TechnologyEditorView : UserControl
             Text = "──── Prerequisites ────",
             FontWeight = FontWeight.Bold,
             FontSize = 14,
-            Foreground = Brush.Parse("#5ba8de"),
+            Foreground = Brush.Parse("#C59A52"),
             Margin = new Thickness(0, 15, 0, 8)
         });
 
@@ -1542,7 +1606,7 @@ public partial class TechnologyEditorView : UserControl
     {
         var border = new Border
         {
-            BorderBrush = Brush.Parse("#3f3f46"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(10, 8),
@@ -2013,7 +2077,7 @@ public partial class TechnologyEditorView : UserControl
             Text = "──── Effects ────",
             FontWeight = FontWeight.Bold,
             FontSize = 14,
-            Foreground = Brush.Parse("#5ba8de"),
+            Foreground = Brush.Parse("#C59A52"),
             Margin = new Thickness(0, 15, 0, 8)
         });
     }
@@ -2075,7 +2139,7 @@ public partial class TechnologyEditorView : UserControl
     {
         var border = new Border
         {
-            BorderBrush = Brush.Parse("#3f3f46"),
+            BorderBrush = Brush.Parse("#4C4031"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(10, 8),
@@ -4603,7 +4667,16 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddRawEffectXmlEditor(XElement effect, StackPanel content)
     {
-        var box = new TextBox { Text = effect.ToString(SaveOptions.DisableFormatting), AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Consolas"), MinHeight = 42, IsReadOnly = !IsModifiedTab };
+        var box = new TextEditor
+        {
+            Text = effect.ToString(SaveOptions.DisableFormatting),
+            FontFamily = new FontFamily("Consolas"),
+            MinHeight = 42,
+            IsReadOnly = !IsModifiedTab,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
+        };
+        XmlSyntaxEditorService.Configure(box);
         box.LostFocus += (_, _) =>
         {
             if (!IsModifiedTab) return;
