@@ -1,0 +1,30 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+             x:Class="AoMDivineDataEditor.Windows.MajorGodEditorView"
+             Background="{DynamicResource AppBackgroundBrush}"
+             Foreground="{DynamicResource PrimaryTextBrush}">
+  <Border Classes="MainPanel" Padding="18">
+    <Grid RowDefinitions="Auto,*,Auto">
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,12">
+        <TextBlock Text="Major god:" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="1" x:Name="_nameText" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
+      </Grid>
+      <Border Grid.Row="1" Classes="XmlPanel" BorderThickness="1">
+        <Grid RowDefinitions="Auto,*" Margin="12">
+          <TextBlock Classes="XmlHeader" Text="Raw XML" Margin="0,0,0,8"/>
+          <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
+                                   FontFamily="Consolas" FontSize="12"
+                                   Background="{DynamicResource XmlEditorBrush}"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                   BorderBrush="{DynamicResource NormalBorderBrush}"
+                                   HorizontalScrollBarVisibility="Auto"
+                                   VerticalScrollBarVisibility="Auto"
+                                   TextChanged="RawXmlEditor_TextChanged"/>
+        </Grid>
+      </Border>
+      <TextBlock Grid.Row="2" x:Name="_statusMessage" Foreground="{DynamicResource MainGoldBrush}"
+                 FontWeight="SemiBold" Margin="0,8,0,0" HorizontalAlignment="Center"/>
+    </Grid>
+  </Border>
+</UserControl>

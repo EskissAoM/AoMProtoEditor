@@ -180,7 +180,7 @@
                             </Flyout>
                         </Button.Flyout>
                     </Button>
-                    <Button Classes="topNav" Content="Gods" />
+                    <Button Classes="topNav" Content="Gods" Click="Gods_Click" />
                     <Button Classes="topNav" Content="Settings" Click="Settings_Click" />
                 </StackPanel>
 
@@ -209,7 +209,7 @@
                         <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
                             <Button x:Name="_unitsEntityButton" Classes="entitySelector active" Content="Units" Click="UnitsEntity_Click" />
                             <Button x:Name="_techsEntityButton" Grid.Column="1" Classes="entitySelector" Content="Technologies" Click="TechsEntity_Click" />
-                            <Button x:Name="_godsEntityButton" Grid.Row="1" Classes="entitySelector" Content="Gods" IsEnabled="False" ToolTip.Tip="God editing is not available yet." />
+                            <Button x:Name="_godsEntityButton" Grid.Row="1" Classes="entitySelector" Content="Gods" Click="GodsEntity_Click" />
                             <Button x:Name="_powersEntityButton" Grid.Row="1" Grid.Column="1" Classes="entitySelector" Content="Powers" IsEnabled="False" ToolTip.Tip="Power editing is not available yet." />
                         </Grid>
                     </Border>

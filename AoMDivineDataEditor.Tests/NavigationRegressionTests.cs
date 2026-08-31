@@ -22,7 +22,8 @@ public sealed class NavigationRegressionTests
 
         Assert.Contains(xaml.Descendants(), element =>
             (string?)element.Attribute("Content") == "Gods" &&
-            (string?)element.Attribute("IsEnabled") == "False");
+            (string?)element.Attribute("Click") == "GodsEntity_Click" &&
+            element.Attribute("IsEnabled") == null);
         Assert.Contains(xaml.Descendants(), element =>
             (string?)element.Attribute("Content") == "Powers" &&
             (string?)element.Attribute("IsEnabled") == "False");
@@ -189,7 +190,7 @@ public sealed class NavigationRegressionTests
         Assert.Contains("<Style Selector=\"ScrollBar:horizontal\">", xamlText, StringComparison.Ordinal);
         Assert.Contains("<Setter Property=\"Height\" Value=\"6\" />", xamlText, StringComparison.Ordinal);
         Assert.Contains("<Border Padding=\"0,0,0,14\">", xamlText, StringComparison.Ordinal);
-        Assert.Contains("var kind = tab.EntityKind == EditorEntityKind.Units ? \"Unit\" : \"Tech\";", code, StringComparison.Ordinal);
+        Assert.Contains("EditorEntityKind.MajorGods => \"Major God\"", code, StringComparison.Ordinal);
         Assert.Contains("var source = tab.IsModified ? \"Custom\" : \"Original\";", code, StringComparison.Ordinal);
         Assert.Contains("$\"{kind}: {tab.EntityName} ({source})\"", code, StringComparison.Ordinal);
         Assert.Contains("MaxWidth = 170", code, StringComparison.Ordinal);

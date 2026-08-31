@@ -35,7 +35,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     private enum EditorEntityKind
     {
         Units,
-        Technologies
+        Technologies,
+        MajorGods
     }
 
     private enum NewCustomUnitKind
@@ -135,6 +136,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private XElement? _modXmlRoot;
     private string? _modFilePath;
     private TechnologyEditorView? _technologyView;
+    private MajorGodEditorView? _majorGodView;
     private ProtoBarData? _barData;
     private bool _isDirty;
     private bool _isPopulating;
@@ -3231,7 +3233,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         foreach (var tab in _openDocumentTabs)
         {
-            var kind = tab.EntityKind == EditorEntityKind.Units ? "Unit" : "Tech";
+            var kind = tab.EntityKind switch
+            {
+                EditorEntityKind.Units => "Unit",
+                EditorEntityKind.Technologies => "Tech",
+                EditorEntityKind.MajorGods => "Major God",
+                _ => "Entity"
+            };
             var source = tab.IsModified ? "Custom" : "Original";
             var target = string.IsNullOrWhiteSpace(tab.EntityName)
                 ? tab.IsMain ? "Main" : kind
@@ -3252,9 +3260,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!tab.IsModified || string.IsNullOrWhiteSpace(tab.EntityName))
             return false;
 
-        return tab.EntityKind == EditorEntityKind.Units
-            ? _dirtyUnitNames.Contains(tab.EntityName)
-            : _technologyView?.IsTechnologyDirty(tab.EntityName) == true;
+        return tab.EntityKind switch
+        {
+            EditorEntityKind.Units => _dirtyUnitNames.Contains(tab.EntityName),
+            EditorEntityKind.Technologies => _technologyView?.IsTechnologyDirty(tab.EntityName) == true,
+            EditorEntityKind.MajorGods => _majorGodView?.IsMajorGodDirty(tab.EntityName) == true,
+            _ => false
+        };
     }
 
     private static HashSet<string> CollectUnitOwnedStringIds(string unitName, XElement? unit)
@@ -3356,9 +3368,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         _mainDocumentTab.EntityName = entityName;
         _mainDocumentTab.SavedElement = !isModified || string.IsNullOrWhiteSpace(entityName)
             ? null
-            : entityKind == EditorEntityKind.Units
-                ? LoadSavedUnitElement(entityName)
-                : _technologyView?.LoadSavedTechnologyElement(entityName);
+            : entityKind switch
+            {
+                EditorEntityKind.Units => LoadSavedUnitElement(entityName),
+                EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(entityName),
+                EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(entityName),
+                _ => null
+            };
         SelectDocumentTabWithoutActivation(_mainDocumentTab);
         _activeDocumentTab = _mainDocumentTab;
         if (string.IsNullOrWhiteSpace(entityName))
@@ -3370,9 +3386,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ShowEmptyDocumentState(EditorEntityKind entityKind)
     {
-        _emptyDocumentMessage.Text = entityKind == EditorEntityKind.Technologies
-            ? "Click on a technology to start"
-            : "Click on a unit to start";
+        _emptyDocumentMessage.Text = entityKind switch
+        {
+            EditorEntityKind.Technologies => "Click on a technology to start",
+            EditorEntityKind.MajorGods => "Click on a major god to view its raw XML",
+            _ => "Click on a unit to start"
+        };
         _emptyDocumentOverlay.IsVisible = true;
 
         _suppressUnitListSelectionChange = true;
@@ -3388,6 +3407,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (entityKind == EditorEntityKind.Technologies)
         {
             _technologyView?.SelectTechnology(null);
+        }
+        else if (entityKind == EditorEntityKind.MajorGods)
+        {
+            _majorGodView?.SelectMajorGod(null);
         }
         else
         {
@@ -3494,9 +3517,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         var tab = CreateDocumentTab(false, _activeEntityKind, isModified, entityName);
         if (isModified)
         {
-            tab.SavedElement = _activeEntityKind == EditorEntityKind.Units
-                ? LoadSavedUnitElement(entityName)
-                : _technologyView?.LoadSavedTechnologyElement(entityName);
+            tab.SavedElement = _activeEntityKind switch
+            {
+                EditorEntityKind.Units => LoadSavedUnitElement(entityName),
+                EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(entityName),
+                EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(entityName),
+                _ => null
+            };
         }
 
         if (_mainDocumentTab?.EntityKind == _activeEntityKind &&
@@ -3522,6 +3549,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             _technologyView != null &&
             !await _technologyView.CommitCurrentTechnologyAsync())
             return;
+        if (ReferenceEquals(_activeDocumentTab, tab) &&
+            tab.EntityKind == EditorEntityKind.MajorGods &&
+            _majorGodView != null &&
+            !await _majorGodView.CommitCurrentMajorGodAsync())
+            return;
 
         if (IsDocumentTabDirty(tab))
         {
@@ -3536,8 +3568,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (tab.EntityKind == EditorEntityKind.Units)
                 DiscardUnitDocumentChanges(tab);
-            else if (_technologyView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
+            else if (tab.EntityKind == EditorEntityKind.Technologies && _technologyView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
                 _technologyView.DiscardTechnologyChanges(tab.EntityName, tab.SavedElement);
+            else if (tab.EntityKind == EditorEntityKind.MajorGods && _majorGodView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
+                _majorGodView.DiscardMajorGodChanges(tab.EntityName, tab.SavedElement);
         }
 
         var wasActive = ReferenceEquals(_activeDocumentTab, tab);
@@ -3597,6 +3631,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SelectDocumentTabWithoutActivation(previous);
                 return;
             }
+            if (_activeEntityKind == EditorEntityKind.MajorGods &&
+                _majorGodView != null &&
+                !await _majorGodView.CommitCurrentMajorGodAsync())
+            {
+                if (previous != null)
+                    SelectDocumentTabWithoutActivation(previous);
+                return;
+            }
 
             _activeDocumentTab = target;
             if (string.IsNullOrWhiteSpace(target.EntityName))
@@ -3612,6 +3654,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             _unitTabs.SelectedIndex = target.IsModified ? 1 : 0;
             if (target.EntityKind == EditorEntityKind.Technologies)
                 _technologyView?.SetModifiedMode(target.IsModified);
+            else if (target.EntityKind == EditorEntityKind.MajorGods)
+                _majorGodView?.SetModifiedMode(target.IsModified);
             RefreshUnitList();
 
             _suppressUnitListSelectionChange = true;
@@ -3627,6 +3671,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (target.EntityKind == EditorEntityKind.Technologies)
                 _technologyView?.SelectTechnology(target.EntityName);
+            else if (target.EntityKind == EditorEntityKind.MajorGods)
+                _majorGodView?.SelectMajorGod(target.EntityName);
             else
                 BuildEditorPanel(target.EntityName);
         }
@@ -3664,6 +3710,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
 
             names.AddRange(_technologyView.GetTechnologyNames(modified: selectedIndex == 1));
+        }
+        else if (_activeEntityKind == EditorEntityKind.MajorGods)
+        {
+            if (_majorGodView == null)
+                return;
+
+            names.AddRange(_majorGodView.GetMajorGodNames(modified: selectedIndex == 1));
         }
         else if (_barData == null)
         {
@@ -3705,9 +3758,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void RestoreEntityBrowserSelection()
     {
-        var selectedName = _activeEntityKind == EditorEntityKind.Technologies
-            ? _technologyView?.CurrentTechnologyName
-            : _currentUnitName;
+        var selectedName = _activeEntityKind switch
+        {
+            EditorEntityKind.Technologies => _technologyView?.CurrentTechnologyName,
+            EditorEntityKind.MajorGods => _majorGodView?.CurrentMajorGodName,
+            _ => _currentUnitName
+        };
         if (string.IsNullOrWhiteSpace(selectedName))
             return;
 
@@ -3753,6 +3809,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         await ShowEntityKindAsync(EditorEntityKind.Technologies);
     }
 
+    private async void GodsEntity_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowEntityKindAsync(EditorEntityKind.MajorGods);
+    }
+
     private async Task ShowEntityKindAsync(EditorEntityKind entityKind)
     {
         if (_activeEntityKind == entityKind)
@@ -3770,30 +3831,40 @@ public partial class ProtoEditorWindow : SimpleWindow
             _technologyView != null &&
             !await _technologyView.CommitCurrentTechnologyAsync())
             return;
+        if (_activeEntityKind == EditorEntityKind.MajorGods &&
+            _majorGodView != null &&
+            !await _majorGodView.CommitCurrentMajorGodAsync())
+            return;
 
         ApplyEntityKindUi(entityKind);
-        var showTechnologies = entityKind == EditorEntityKind.Technologies;
         SetMainDocumentTarget(entityKind, _unitTabs.SelectedIndex == 1, entityName: null);
         RefreshUnitList();
 
-        if (!showTechnologies)
-            _unitList.Focus();
+        _unitList.Focus();
     }
 
     private void ApplyEntityKindUi(EditorEntityKind entityKind)
     {
         _activeEntityKind = entityKind;
         var showTechnologies = entityKind == EditorEntityKind.Technologies;
+        var showMajorGods = entityKind == EditorEntityKind.MajorGods;
         if (showTechnologies)
         {
             EnsureTechnologyView();
             _technologyView!.SetModifiedMode(_unitTabs.SelectedIndex == 1);
         }
+        else if (showMajorGods)
+        {
+            EnsureMajorGodView();
+            _majorGodView!.SetModifiedMode(_unitTabs.SelectedIndex == 1);
+        }
 
-        _technologyHost.IsVisible = showTechnologies;
-        _entityListHeading.Text = showTechnologies ? "Technologies" : "Units";
-        _unitsEntityButton.Classes.Set("active", !showTechnologies);
+        _technologyHost.IsVisible = showTechnologies || showMajorGods;
+        _technologyHost.Content = showTechnologies ? _technologyView : showMajorGods ? _majorGodView : null;
+        _entityListHeading.Text = showTechnologies ? "Technologies" : showMajorGods ? "Major Gods" : "Units";
+        _unitsEntityButton.Classes.Set("active", entityKind == EditorEntityKind.Units);
         _techsEntityButton.Classes.Set("active", showTechnologies);
+        _godsEntityButton.Classes.Set("active", showMajorGods);
         _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1;
     }
 
@@ -3803,9 +3874,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _technologyHost.IsVisible = false;
         _technologyHost.Content = null;
         _technologyView = null;
+        _majorGodView = null;
         _entityListHeading.Text = "Units";
         _unitsEntityButton.Classes.Set("active", true);
         _techsEntityButton.Classes.Set("active", false);
+        _godsEntityButton.Classes.Set("active", false);
         _entityDeleteButton.IsEnabled = false;
         ResetDocumentTabs();
     }
@@ -3834,9 +3907,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                      tab.IsModified && tab.EntityKind == entityKind &&
                      !string.IsNullOrWhiteSpace(tab.EntityName)))
         {
-            tab.SavedElement = entityKind == EditorEntityKind.Units
-                ? LoadSavedUnitElement(tab.EntityName!)
-                : _technologyView?.LoadSavedTechnologyElement(tab.EntityName!);
+            tab.SavedElement = entityKind switch
+            {
+                EditorEntityKind.Units => LoadSavedUnitElement(tab.EntityName!),
+                EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(tab.EntityName!),
+                EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(tab.EntityName!),
+                _ => null
+            };
         }
     }
 
@@ -3865,6 +3942,57 @@ public partial class ProtoEditorWindow : SimpleWindow
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
     }
+
+    private void EnsureMajorGodView()
+    {
+        if (_majorGodView != null)
+            return;
+
+        var baseDefinitions = MajorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
+        if (baseDefinitions.Count == 0)
+        {
+            var loosePath = ResolveBaseGameplayXmlPath("major_gods.xml");
+            if (!string.IsNullOrWhiteSpace(loosePath) && File.Exists(loosePath))
+            {
+                try
+                {
+                    baseDefinitions = MajorGodCatalog.ExtractDefinitions(
+                        XDocument.Load(loosePath, LoadOptions.PreserveWhitespace),
+                        isBuiltIn: true);
+                }
+                catch
+                {
+                    // Keep the Gods browser available even if the optional loose fallback is malformed.
+                }
+            }
+        }
+
+        _majorGodView = new MajorGodEditorView(
+            baseDefinitions,
+            GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName));
+        _majorGodView.BrowserStateChanged += MajorGodView_BrowserStateChanged;
+        _majorGodView.DirtyStateChanged += MajorGodView_DirtyStateChanged;
+        _technologyHost.Content = _majorGodView;
+    }
+
+    private void MajorGodView_BrowserStateChanged(object? sender, EventArgs e)
+    {
+        if (_activeEntityKind != EditorEntityKind.MajorGods || _majorGodView == null)
+            return;
+
+        if (_activeDocumentTab?.EntityKind == EditorEntityKind.MajorGods &&
+            !string.IsNullOrWhiteSpace(_majorGodView.CurrentMajorGodName))
+        {
+            _activeDocumentTab.IsModified = _majorGodView.IsModifiedMode;
+            _activeDocumentTab.EntityName = _majorGodView.CurrentMajorGodName;
+        }
+        RefreshUnitList();
+        RestoreEntityBrowserSelection();
+        RefreshDocumentTabHeaders();
+    }
+
+    private void MajorGodView_DirtyStateChanged(object? sender, EventArgs e)
+        => RefreshDocumentTabHeaders();
 
     private void TechnologyView_BrowserStateChanged(object? sender, EventArgs e)
     {
@@ -3917,6 +4045,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (_activeEntityKind == EditorEntityKind.MajorGods)
+        {
+            if (_majorGodView == null)
+                return;
+            await _majorGodView.AddMajorGodAsync();
+            ShowAddedMajorGodInModifiedBrowser();
+            return;
+        }
+
         if (_technologyView == null)
             return;
         await _technologyView.AddTechnologyAsync();
@@ -3932,7 +4069,38 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (_activeEntityKind == EditorEntityKind.MajorGods)
+        {
+            if (_majorGodView == null)
+                return;
+            var deletedName = _majorGodView.CurrentMajorGodName;
+            await _majorGodView.DeleteCurrentMajorGodAsync();
+            if (!string.IsNullOrWhiteSpace(deletedName))
+                RemoveDeletedDocumentTabs(EditorEntityKind.MajorGods, deletedName);
+            RefreshUnitList();
+            return;
+        }
+
         await DeleteSelectedTechnologyAsync();
+    }
+
+    private void ShowAddedMajorGodInModifiedBrowser()
+    {
+        if (_majorGodView == null || string.IsNullOrWhiteSpace(_majorGodView.CurrentMajorGodName))
+            return;
+
+        _documentTabActivationInProgress = true;
+        try
+        {
+            _unitTabs.SelectedIndex = 1;
+        }
+        finally
+        {
+            _documentTabActivationInProgress = false;
+        }
+        SetMainDocumentTarget(EditorEntityKind.MajorGods, isModified: true, _majorGodView.CurrentMajorGodName);
+        RefreshUnitList();
+        RestoreEntityBrowserSelection();
     }
 
     private async Task DeleteSelectedTechnologyAsync()
@@ -4077,8 +4245,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (entityKind == EditorEntityKind.Units)
                 await AddUnitAsync(duplicateSelected: true);
-            else if (_technologyView != null)
+            else if (entityKind == EditorEntityKind.Technologies && _technologyView != null)
                 await _technologyView.AddTechnologyAsync(duplicateSelected: true);
+            else if (entityKind == EditorEntityKind.MajorGods && _majorGodView != null)
+            {
+                await _majorGodView.AddMajorGodAsync(duplicateSelected: true);
+                ShowAddedMajorGodInModifiedBrowser();
+            }
         };
         menu.Items.Add(copyItem);
 
@@ -4097,9 +4270,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 await DeleteSelectedUnitAsync();
             }
-            else
+            else if (entityKind == EditorEntityKind.Technologies)
             {
                 await DeleteSelectedTechnologyAsync();
+            }
+            else if (_majorGodView != null)
+            {
+                await _majorGodView.DeleteCurrentMajorGodAsync();
+                RefreshUnitList();
             }
         };
         menu.Items.Add(deleteItem);
@@ -4144,9 +4322,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return;
                 }
 
-                var canLeave = _activeEntityKind == EditorEntityKind.Units
-                    ? await CaptureCurrentUnitDraftAsync()
-                    : _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync();
+                var canLeave = _activeEntityKind switch
+                {
+                    EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
+                    EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
+                    EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
+                    _ => true
+                };
                 if (!canLeave)
                 {
                     _unitTabs.SelectedIndex = previousTab.IsModified ? 1 : 0;
@@ -4179,6 +4361,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_activeEntityKind == EditorEntityKind.Technologies)
             _technologyView?.SetModifiedMode(selectedModified);
+        else if (_activeEntityKind == EditorEntityKind.MajorGods)
+            _majorGodView?.SetModifiedMode(selectedModified);
         if (_entityDeleteButton != null)
             _entityDeleteButton.IsEnabled = selectedModified;
         RefreshUnitList();
@@ -4243,6 +4427,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             }
 
+            if (_activeEntityKind == EditorEntityKind.MajorGods)
+            {
+                if (_majorGodView != null && !await _majorGodView.CommitCurrentMajorGodAsync())
+                {
+                    RestoreEntityBrowserSelection();
+                    return;
+                }
+                SetMainDocumentTarget(EditorEntityKind.MajorGods, _unitTabs.SelectedIndex == 1, selectedName);
+                _majorGodView?.SelectMajorGod(selectedName);
+                return;
+            }
+
             if (selectedName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase))
             {
                 SetMainDocumentTarget(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
@@ -4296,16 +4492,26 @@ public partial class ProtoEditorWindow : SimpleWindow
             string.Equals(main.EntityName, incomingName, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var captured = main.EntityKind == EditorEntityKind.Units
-            ? await CaptureCurrentUnitDraftAsync()
-            : _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync();
+        var captured = main.EntityKind switch
+        {
+            EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
+            EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
+            EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
+            _ => true
+        };
         if (!captured)
             return false;
         if (!IsDocumentTabDirty(main))
             return true;
 
         var destination = string.IsNullOrWhiteSpace(incomingName)
-            ? incomingKind == EditorEntityKind.Units ? "the Units browser" : "the Technologies browser"
+            ? incomingKind switch
+            {
+                EditorEntityKind.Units => "the Units browser",
+                EditorEntityKind.Technologies => "the Technologies browser",
+                EditorEntityKind.MajorGods => "the Major Gods browser",
+                _ => "the entity browser"
+            }
             : $"'{incomingName}'";
         var prompt = new Prompt(
             PromptType.Confirm,
@@ -4322,9 +4528,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             _currentUnitName = null;
             ClearEditorPanels();
         }
-        else if (_technologyView != null)
+        else if (main.EntityKind == EditorEntityKind.Technologies && _technologyView != null)
         {
             _technologyView.DiscardTechnologyChanges(main.EntityName, main.SavedElement);
+        }
+        else if (main.EntityKind == EditorEntityKind.MajorGods && _majorGodView != null)
+        {
+            _majorGodView.DiscardMajorGodChanges(main.EntityName, main.SavedElement);
         }
 
         RefreshDocumentTabHeaders();
@@ -52369,6 +52579,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
             }
 
+            if (_majorGodView?.IsDirty == true)
+            {
+                if (!await _majorGodView.SaveAsync())
+                    return;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
+            }
+
             RefreshDocumentTabHeaders();
         }
         catch (Exception ex)
@@ -52497,6 +52714,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async void TechnologyEditView_Click(object? sender, RoutedEventArgs e)
     {
         await ShowEntityKindAsync(EditorEntityKind.Technologies);
+    }
+
+    private async void Gods_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowEntityKindAsync(EditorEntityKind.MajorGods);
     }
 
     private async void ProtounitCommands_Click(object? sender, RoutedEventArgs e)
@@ -52821,7 +53043,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             !await _technologyView.CommitCurrentTechnologyAsync())
             return;
 
-        if (_isDirty || (_technologyView?.IsDirty ?? false))
+        if (_activeEntityKind == EditorEntityKind.MajorGods &&
+            _majorGodView != null &&
+            !await _majorGodView.CommitCurrentMajorGodAsync())
+            return;
+
+        if (_isDirty || (_technologyView?.IsDirty ?? false) || (_majorGodView?.IsDirty ?? false))
         {
             var proceed = await PromptUnsavedChangesAsync();
             if (proceed)
