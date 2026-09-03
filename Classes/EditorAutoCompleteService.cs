@@ -24,16 +24,16 @@ public static class EditorAutoCompleteService
         autoCompleteBox.MinimumPopulateDelay = TimeSpan.Zero;
         bool suppressAutoOpen = false;
         bool userInteracted = false;
-        bool selectedAllForCurrentFocus = false;
+        bool selectAllAfterPointerRelease = false;
 
         bool Busy() => isBusy?.Invoke() == true;
 
-        void SelectAllOnInitialPointerFocus()
+        void SelectAllAfterPointerFocus()
         {
-            if (!selectAllOnFirstClick || selectedAllForCurrentFocus)
+            if (!selectAllAfterPointerRelease)
                 return;
 
-            selectedAllForCurrentFocus = true;
+            selectAllAfterPointerRelease = false;
             Dispatcher.UIThread.Post(() =>
             {
                 if (Busy() || !autoCompleteBox.IsEnabled)
@@ -45,7 +45,7 @@ public static class EditorAutoCompleteService
 
                 textEditor.Focus();
                 textEditor.SelectAll();
-            }, DispatcherPriority.Input);
+            }, DispatcherPriority.Background);
         }
 
         void OpenDropdownIfEnabled()
@@ -67,9 +67,20 @@ public static class EditorAutoCompleteService
 
             userInteracted = true;
             suppressAutoOpen = false;
-            SelectAllOnInitialPointerFocus();
+            selectAllAfterPointerRelease = selectAllOnFirstClick && !autoCompleteBox.IsKeyboardFocusWithin;
             OpenDropdownIfEnabled();
         }, RoutingStrategies.Tunnel, handledEventsToo: true);
+
+        autoCompleteBox.AddHandler(InputElement.PointerReleasedEvent, (_, _) =>
+        {
+            if (Busy() || !autoCompleteBox.IsEnabled)
+            {
+                selectAllAfterPointerRelease = false;
+                return;
+            }
+
+            SelectAllAfterPointerFocus();
+        }, RoutingStrategies.Bubble, handledEventsToo: true);
 
         autoCompleteBox.SelectionChanged += (_, _) =>
         {
@@ -92,7 +103,6 @@ public static class EditorAutoCompleteService
         autoCompleteBox.LostFocus += (_, _) =>
         {
             suppressAutoOpen = false;
-            selectedAllForCurrentFocus = false;
         };
     }
 
@@ -148,9 +158,14 @@ public static class EditorAutoCompleteService
                 var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
                 if (textEditor != null)
                 {
-                    textEditor.SelectionStart = 0;
-                    textEditor.SelectionEnd = 0;
-                    textEditor.CaretIndex = 0;
+                    // Do not let a deferred "show the start" update erase Select All
+                    // or a selection the user made while commit work was queued.
+                    if (textEditor.SelectionStart == textEditor.SelectionEnd)
+                    {
+                        textEditor.SelectionStart = 0;
+                        textEditor.SelectionEnd = 0;
+                        textEditor.CaretIndex = 0;
+                    }
                 }
 
                 var scrollViewer = autoCompleteBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();

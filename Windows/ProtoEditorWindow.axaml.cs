@@ -91,21 +91,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static readonly string[] KnownInitialUnitAiStances = ["Aggressive", "Defensive", "StandGround", "Passive"];
     private static readonly string[] KnownInitialShadingTypes = ProtoConstants.KnownShadingTypeDisplayNames;
     private static readonly string[] KnownVeterancyRankTypes = ["NumKills", "NumAttacks", "TotalDamage", "DamageAndResourcesEaten"];
-    private static readonly string[] SupportedOnHitEffectTypes =
-    [
-        .. new[]
-        {
-            "Stun", "Snare", "Freeze", "Lifesteal", "Flee", "Exile", "Attach", "DamageOverTime", "StatModify",
-            "Throw", "Boost", "SelfModify", "SelfStealth", "ShadingFade", "Shading", "ProgShading", "ProgFreeze", "ProgFreezeROF", "ProgFreezeSpeed", "Pull", "Push", "Root", "AnimOverride", "Chaos", "Sleep", "Reincarnation", "Infect", "InstantKillablePercentChance", "KillReward", "MutateNature", "Spawn", "TreeFlatten"
-        }.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-    ];
-    private static readonly string[] KnownOnHitEffectFreezeTypes = ["default", "stone", "StoneDamage", "acid", "sand"];
-    private static readonly string[] KnownOnHitEffectFreezeTypeDisplayNames = ["Default", "Stone", "StoneDamage", "Acid", "Sand"];
+    private static readonly string[] SupportedOnHitEffectTypes = ProtoConstants.KnownOnHitEffectTypes;
+    private static readonly string[] KnownOnHitEffectFreezeTypes = ProtoConstants.KnownOnHitEffectFreezeTypes;
+    private static readonly string[] KnownOnHitEffectFreezeTypeDisplayNames = ProtoConstants.KnownOnHitEffectFreezeTypeDisplayNames;
 
     private static string GetOnHitEffectFreezeTypeXmlValue(string? value)
-        => KnownOnHitEffectFreezeTypes.FirstOrDefault(candidate => candidate.Equals(value?.Trim(), StringComparison.OrdinalIgnoreCase))
-           ?? value?.Trim()
-           ?? "";
+        => ProtoConstants.GetOnHitEffectFreezeTypeXmlValue(value);
     private static readonly string[] KnownImpactEffects =
     [
         "effects\\impacts\\ambush_strike",
@@ -3936,7 +3927,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetTechnologyPrerequisiteMajorGodNames(),
             GetTechnologyTechTypeNames(),
             GetTechnologyProtoActionNames(),
+            GetTechnologyTacticDefinitionNames(),
             GetAvailableCommandNames(),
+            GetAvailableProtoActionModelAttachmentBones(),
             _iconPreviewService);
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
@@ -6242,6 +6235,65 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetTechnologyTacticDefinitionNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        static void AddNames(XDocument document, HashSet<string> target)
+        {
+            foreach (var tactic in document.Descendants().Where(element =>
+                         element.Name.LocalName.Equals("tactic", StringComparison.OrdinalIgnoreCase)))
+            {
+                var name = tactic.Nodes().OfType<XText>()
+                    .Select(node => node.Value.Trim())
+                    .FirstOrDefault(value => value.Length > 0);
+                if (!string.IsNullOrWhiteSpace(name)) target.Add(name);
+            }
+        }
+
+        if (_protoDataBarFile?.Entries != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
+        {
+            using var stream = File.OpenRead(_protoDataBarPath);
+            foreach (var entry in _protoDataBarFile.Entries.Where(entry =>
+                         entry.Name.Contains("tactics", StringComparison.OrdinalIgnoreCase) &&
+                         entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var xml = ReadBarXmbXml(entry, stream);
+                    if (!string.IsNullOrWhiteSpace(xml)) AddNames(XDocument.Parse(xml), names);
+                }
+                catch
+                {
+                    // Keep tactic names already found if one BAR entry is malformed.
+                }
+            }
+        }
+
+        void AddLooseTactics(string? gameplayDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(gameplayDirectory)) return;
+            var tacticsDirectory = Path.Combine(gameplayDirectory, "tactics");
+            if (!Directory.Exists(tacticsDirectory)) return;
+
+            foreach (var path in Directory.GetFiles(tacticsDirectory, "*.tactics", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    AddNames(XDocument.Load(path), names);
+                }
+                catch
+                {
+                    // Keep valid names from the remaining loose tactics files.
+                }
+            }
+        }
+
+        AddLooseTactics(ResolveBaseGameplayDirectory());
+        AddLooseTactics(string.IsNullOrWhiteSpace(_modFilePath) ? null : Path.GetDirectoryName(_modFilePath));
         return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -26644,7 +26696,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     AddLabeledControl("Duration:", durationTb);
                 }
 
-                if (currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase))
+                if (ProtoConstants.IsMutateOnHitEffectType(currentSupportedType))
                 {
                     AddLabeledControl("Proto:", attachProtoAcb);
                 }
@@ -26766,13 +26818,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                     !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                     !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
-                    !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                    !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                     showProbField)
                     AddLabeledControl("Probability:", probTb, () => probTb.Text = "");
                 if (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                     !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                     !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
-                    !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                    !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                     showGlobalProbField)
                     AddLabeledControl("Global Probability:", globalProbTb, () => globalProbTb.Text = "");
 
@@ -26887,7 +26939,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                        ((!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("Spawn", StringComparison.OrdinalIgnoreCase) &&
-                                         !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                                         !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                                          !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase)) ||
                                         showDelayField == false ||
                                         showStackLimitField == false ||
@@ -26896,13 +26948,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                                         (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("Spawn", StringComparison.OrdinalIgnoreCase) &&
-                                         !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                                         !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                                          !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                                          showProbField == false) ||
                                         (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
                                          !currentSupportedType.Equals("Spawn", StringComparison.OrdinalIgnoreCase) &&
-                                         !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                                         !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                                          !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                                          showGlobalProbField == false));
                 if (needsOptionalRow)
@@ -27023,7 +27075,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                     if (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                         !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
-                        !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                        !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                         !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                         !showProbField)
                     {
@@ -27050,7 +27102,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                     if (!currentSupportedType.Equals("SelfModify", StringComparison.OrdinalIgnoreCase) &&
                         !currentSupportedType.Equals("InstantKillablePercentChance", StringComparison.OrdinalIgnoreCase) &&
-                        !currentSupportedType.Equals("MutateNature", StringComparison.OrdinalIgnoreCase) &&
+                        !ProtoConstants.IsMutateOnHitEffectType(currentSupportedType) &&
                         !currentSupportedType.Equals("SelfStealth", StringComparison.OrdinalIgnoreCase) &&
                         !showGlobalProbField)
                     {

@@ -70,6 +70,33 @@ public static class ProtoConstants
     public static readonly string[] KnownReplacementTypes = ["dead", "killed", "birth", "build", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
     public static readonly string[] KnownSpawnTypes = ["dead", "killed", "birth", "build", "mutate", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
     public static readonly string[] KnownRechargeTypes = ["Kills", "Damage", "Attacks", "resourceDropoff"];
+    public static readonly string[] KnownOnHitEffectTypes =
+    [
+        .. new[]
+        {
+            "Stun", "Snare", "Freeze", "Lifesteal", "Flee", "Exile", "Attach", "DamageOverTime", "StatModify",
+            "Throw", "Boost", "SelfModify", "SelfStealth", "ShadingFade", "Shading", "ProgShading", "ProgFreeze",
+            "ProgFreezeROF", "ProgFreezeSpeed", "Pull", "Push", "Root", "AnimOverride", "Chaos", "Sleep",
+            "Reincarnation", "Infect", "InstantKillablePercentChance", "KillReward", "Mutate", "MutateNature", "Spawn", "TreeFlatten"
+        }.OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+    ];
+
+    public static bool IsMutateOnHitEffectType(string? value)
+        => value?.Trim() is { } type &&
+           (type.Equals("Mutate", StringComparison.OrdinalIgnoreCase) ||
+            type.Equals("MutateNature", StringComparison.OrdinalIgnoreCase));
+    public static readonly string[] KnownOnHitEffectFreezeTypes = ["default", "stone", "StoneDamage", "acid", "sand"];
+    public static readonly string[] KnownOnHitEffectFreezeTypeDisplayNames = ["Default", "Stone", "StoneDamage", "Acid", "Sand"];
+
+    public static string GetOnHitEffectFreezeTypeXmlValue(string? value)
+        => KnownOnHitEffectFreezeTypes.FirstOrDefault(candidate => candidate.Equals(value?.Trim(), StringComparison.OrdinalIgnoreCase))
+           ?? value?.Trim()
+           ?? "";
+
+    public static string GetOnHitEffectFreezeTypeDisplayName(string? value)
+        => KnownOnHitEffectFreezeTypeDisplayNames.FirstOrDefault(candidate => candidate.Equals(value?.Trim(), StringComparison.OrdinalIgnoreCase))
+           ?? value?.Trim()
+           ?? "";
     public static readonly string[] KnownArmorTypes    = ["Hack", "Pierce", "Crush"];
     public static readonly string[] KnownDamageTypes   = ["Hack", "Pierce", "Crush", "Divine"];
     public static readonly string[] KnownModifyTypes =

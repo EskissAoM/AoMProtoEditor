@@ -538,7 +538,8 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.Contains("AddLabeledControl(\"Proto:\", attachProtoAcb);\n                    AddLabeledControl(\"Duration:\", durationTb);", onHit, StringComparison.Ordinal);
         Assert.Contains("AddLabeledControl(\"Rate:\", rateTb);\n                    if (currentSupportedType.Equals(\"Snare\"", onHit, StringComparison.Ordinal);
         Assert.Contains("AddLabeledControl(\"Factor:\", factorTb);\n                    AddLabeledControl(\"Duration:\", durationTb);", onHit, StringComparison.Ordinal);
-        Assert.Contains("\"Pull\", \"Push\", \"Root\"", source, StringComparison.Ordinal);
+        Assert.Contains("\"Pull\", \"Push\", \"Root\"", ReadProtoConstantsSource(), StringComparison.Ordinal);
+        Assert.Contains("SupportedOnHitEffectTypes = ProtoConstants.KnownOnHitEffectTypes", source, StringComparison.Ordinal);
         Assert.Contains("AddLabeledControl(\"Rate:\", amountTb);\n                    AddLabeledControl(\"Proto:\", attachProtoAcb);\n                    AddLabeledControl(\"Duration:\", durationTb);", onHit, StringComparison.Ordinal);
         Assert.Contains("effectType.Equals(\"Root\"", onHit, StringComparison.Ordinal);
         Assert.Contains("ConfigureStrictSuggestionAutoComplete(attachProtoAcb, protoUnitSuggestions", onHit, StringComparison.Ordinal);
@@ -1131,6 +1132,11 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
     private static string ReadProtoActionMetadataSource()
         => File.ReadAllText(Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory, "..", "..", "..", "..", "Classes", "ProtoActionMetadata.cs")))
+            .ReplaceLineEndings("\n");
+
+    private static string ReadProtoConstantsSource()
+        => File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "Classes", "ProtoConstants.cs")))
             .ReplaceLineEndings("\n");
 
     private static string ReadAttachmentEditorSource()

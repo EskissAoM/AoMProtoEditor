@@ -78,15 +78,17 @@ public partial class TechnologyEditorView : UserControl
         "BuildPoints", "DisplayedRange", "DropoffHeal", "GathererLimit", "GodPowerBlockRadius",
         "Hitpoints", "InitialResource", "LOS", "MaximumContained", "MaximumVelocity",
         "ObstructionRadiusX", "ObstructionRadiusZ", "OnDeathCombatXP", "PopulationCapAddition",
-        "PopulationCount", "RechargeTime", "ResearchRate", "ShieldPoints", "StealthDetectionRadius",
-        "TrainingRate", "TrainPoints", "UnitRegenCombatMultiplier", "UnitRegenRate", "WanderDistance"
+        "PopulationCount", "RechargeTime", "ResearchRate", "ShieldPoints", "StealthDetectionRadius", "DodgeChance",
+        "TrainingRate", "TrainPoints", "UnitRegenCombatMultiplier", "UnitRegenRate", "WanderDistance",
+        "ContainedHitpointBonus", "GatherRateMultiplier", "TurnRate",
+        "UnitShieldRegenDamageTimeout", "UnitShieldRegenIdleTimeout", "UnitShieldRegenRateLimit", "UnitShieldRegenRate"
     };
 
     private static readonly HashSet<string> ActionUnitAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "Accuracy", "DamageArea", "DisplayedNumberProjectiles", "FullCapacityMultiplier",
-        "MaximumRange", "ModifyDuration", "ModifyRate", "ModifyRateCap", "ModifyStackLimit",
-        "NumberBounces", "NumberProjectiles", "RateOfFire", "TargetedSpeedMultiplier", "Trackrating", "DamageCap"
+        "MaximumRange", "MinimumRange", "ModifyDuration", "ModifyRate", "ModifyRateCap", "ModifyStackLimit",
+        "NumberBounces", "NumberProjectiles", "RateOfFire", "TargetedSpeedMultiplier", "Trackrating", "DamageCap", "AnimationRate"
     };
 
     private static readonly HashSet<string> DamageTypeActionDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
@@ -115,6 +117,11 @@ public partial class TechnologyEditorView : UserControl
         "CostBuildingAll", "CostBuildingUnits", "KillReward"
     };
 
+    private static readonly HashSet<string> PlayerResourceDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Resource"
+    };
+
     private static readonly HashSet<string> ActionAddAttachingUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "ActionAddAttachingUnit"
@@ -133,12 +140,23 @@ public partial class TechnologyEditorView : UserControl
     private static readonly HashSet<string> EnableDisableUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "AuxRechargeInit", "RechargeInit", "RespawnTrainActive", "VeterancyEnable",
-        "EnableDodge", "EnableSharedBuildLimit"
+        "EnableDodge", "EnableSharedBuildLimit", "DeadTransformBuildLimit", "FreeRepair",
+        "SetNextResearchFree", "FakeConversion", "ResourceReturnRateTotalCost"
     };
 
     private static readonly HashSet<string> EnableDisableActionUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "HomingBallistics"
+        "HomingBallistics", "InstantBallistics", "PerfectAccuracy", "VolleyMode", "Snare"
+    };
+
+    private static readonly HashSet<string> MovementTypeDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "MovementType"
+    };
+
+    private static readonly HashSet<string> RevealLosDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "RevealLOS"
     };
 
     private static readonly HashSet<string> ChargedModifyAdjustDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
@@ -186,6 +204,11 @@ public partial class TechnologyEditorView : UserControl
         "MinWorkRate", "WorkRate"
     };
 
+    private static readonly HashSet<string> ContainingUnitAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ContainedHitpointBonusUnitType", "GarrisonBonusDamage"
+    };
+
     private static readonly HashSet<string> ModifyReplacementDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "ModifyReplacement"
@@ -199,6 +222,17 @@ public partial class TechnologyEditorView : UserControl
     private static readonly HashSet<string> OnDamageModifyDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "OnDamageModify"
+    };
+
+    private static readonly HashSet<string> OnHitEffectDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "OnHitEffect"
+    };
+
+    private static readonly HashSet<string> OnHitEffectAttributeDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "OnHitEffectActive", "OnHitEffectAttachBone", "OnHitEffectDuration",
+        "OnHitEffectProbability", "OnHitEffectRate", "OnHitEffectStatModify"
     };
 
     private static readonly HashSet<string> ProjectileDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
@@ -311,7 +345,9 @@ public partial class TechnologyEditorView : UserControl
     private readonly IReadOnlyList<string> _majorGodNames = [];
     private readonly IReadOnlyList<string> _techTypeNames = [];
     private readonly IReadOnlyList<string> _protoActionNames = [];
+    private readonly IReadOnlyList<string> _tacticNames = [];
     private readonly IReadOnlyList<string> _protoUnitCommandNames = [];
+    private readonly IReadOnlyList<string> _boneNames = [];
     private readonly Dictionary<string, XElement> _original = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, XElement> _modified = new(StringComparer.OrdinalIgnoreCase);
     private XDocument _modDocument = new(new XElement("techtreemods"));
@@ -323,6 +359,7 @@ public partial class TechnologyEditorView : UserControl
     private readonly SemaphoreSlim _technologyNameCommitGate = new(1, 1);
     private bool _dirty;
     private readonly HashSet<string> _dirtyTechnologyNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<(XElement Effect, string Attribute)> _openOnHitOptionalSelectors = [];
     private bool _controlsReady;
     private bool _isXmlPreviewCollapsed;
     private IconPreviewControl? _iconPreviewControl;
@@ -347,7 +384,9 @@ public partial class TechnologyEditorView : UserControl
         IEnumerable<string>? majorGodNames = null,
         IEnumerable<string>? techTypeNames = null,
         IEnumerable<string>? protoActionNames = null,
+        IEnumerable<string>? tacticNames = null,
         IEnumerable<string>? protoUnitCommandNames = null,
+        IEnumerable<string>? boneNames = null,
         IconPreviewService? iconPreviewService = null)
         : this()
     {
@@ -364,7 +403,9 @@ public partial class TechnologyEditorView : UserControl
         _majorGodNames = majorGodNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _techTypeNames = techTypeNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _protoActionNames = protoActionNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        _tacticNames = tacticNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _protoUnitCommandNames = protoUnitCommandNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        _boneNames = boneNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _techTabs.SelectedIndex = 0;
         LoadAll();
         RefreshList();
@@ -2289,12 +2330,20 @@ public partial class TechnologyEditorView : UserControl
             var subtype = GetCaseInsensitiveAttribute(effect, "subtype")?.Value ?? "";
             if (SimpleUnitAmountDataSubtypes.Contains(subtype))
             {
-                AddSimpleUnitAmountDataEffectEditor(effect, content);
+                if (subtype.Equals("BuildingWorkRate", StringComparison.OrdinalIgnoreCase))
+                    AddSimpleUnitAmountDataEffectEditor(effect, content, allowOverride: true);
+                else
+                    AddSimpleUnitAmountDataEffectEditor(effect, content);
                 return true;
             }
             if (ActionUnitAmountDataSubtypes.Contains(subtype))
             {
                 AddActionUnitAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("WorkRateAll", StringComparison.OrdinalIgnoreCase))
+            {
+                AddActionUnitAmountDataEffectEditor(effect, content, allowOverride: true);
                 return true;
             }
             if (DamageTypeActionDataSubtypes.Contains(subtype))
@@ -2322,6 +2371,111 @@ public partial class TechnologyEditorView : UserControl
                 AddResourceAmountDataEffectEditor(effect, content);
                 return true;
             }
+            if (PlayerResourceDataSubtypes.Contains(subtype))
+            {
+                AddPlayerResourceDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("MaxResource", StringComparison.OrdinalIgnoreCase))
+            {
+                AddMaxResourceDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("PopulationCap", StringComparison.OrdinalIgnoreCase))
+            {
+                AddPopulationCapDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("SetCivilization", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSetCivilizationDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("EmpowerModify", StringComparison.OrdinalIgnoreCase))
+            {
+                AddEmpowerModifyDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("ProtoActionAdd", StringComparison.OrdinalIgnoreCase))
+            {
+                AddProtoActionAddDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("AutoAttackType", StringComparison.OrdinalIgnoreCase))
+            {
+                AddAutoAttackTypeDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("BoostRadius", StringComparison.OrdinalIgnoreCase))
+            {
+                AddBoostRadiusDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("DeadTransform", StringComparison.OrdinalIgnoreCase))
+            {
+                AddFixedUnitReferenceDataEffectEditor(effect, content, "Transform to", "unittype", _protoUnitNames);
+                return true;
+            }
+            if (subtype.Equals("PlacementRulesOverride", StringComparison.OrdinalIgnoreCase))
+            {
+                AddFixedUnitReferenceDataEffectEditor(effect, content, "Assign rules of", "unittype", _protoUnitNames);
+                return true;
+            }
+            if (subtype.Equals("EmpowerArea", StringComparison.OrdinalIgnoreCase))
+            {
+                AddEmpowerAreaDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("EmpowerEnable", StringComparison.OrdinalIgnoreCase))
+            {
+                AddEmpowerEnableDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("GatherResourceOverride", StringComparison.OrdinalIgnoreCase))
+            {
+                AddGatherResourceOverrideDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("SetVeterancyRankActive", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSetVeterancyRankActiveDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("InitialVeterancyRank", StringComparison.OrdinalIgnoreCase))
+            {
+                AddInitialVeterancyRankDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("UnitRegenRateLimit", StringComparison.OrdinalIgnoreCase))
+            {
+                AddUnitRegenRateLimitDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("VeterancyBonus", StringComparison.OrdinalIgnoreCase))
+            {
+                AddVeterancyBonusDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("VeterancyRankAdd", StringComparison.OrdinalIgnoreCase))
+            {
+                AddVeterancyRankAddDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("SpeedModifier", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSpeedModifierDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("StackControl", StringComparison.OrdinalIgnoreCase))
+            {
+                AddStackControlDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("TacticEnable", StringComparison.OrdinalIgnoreCase))
+            {
+                AddTacticEnableDataEffectEditor(effect, content);
+                return true;
+            }
             if (ActionAddAttachingUnitDataSubtypes.Contains(subtype))
             {
                 AddActionAddAttachingUnitDataEffectEditor(effect, content);
@@ -2345,6 +2499,16 @@ public partial class TechnologyEditorView : UserControl
             if (EnableDisableActionUnitDataSubtypes.Contains(subtype))
             {
                 AddEnableDisableUnitDataEffectEditor(effect, content, includeAction: true);
+                return true;
+            }
+            if (MovementTypeDataSubtypes.Contains(subtype))
+            {
+                AddMovementTypeDataEffectEditor(effect, content);
+                return true;
+            }
+            if (RevealLosDataSubtypes.Contains(subtype))
+            {
+                AddRevealLosDataEffectEditor(effect, content);
                 return true;
             }
             if (ChargedModifyAdjustDataSubtypes.Contains(subtype))
@@ -2392,6 +2556,26 @@ public partial class TechnologyEditorView : UserControl
                 AddMinWorkRateDataEffectEditor(effect, content);
                 return true;
             }
+            if (subtype.Equals("Yield", StringComparison.OrdinalIgnoreCase))
+            {
+                AddMinWorkRateDataEffectEditor(effect, content, defaultAction: "Gather", allowOverride: false);
+                return true;
+            }
+            if (ContainingUnitAmountDataSubtypes.Contains(subtype))
+            {
+                AddContainingUnitAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("WorkRateSpecific", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWorkRateSpecificDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("YieldSpecific", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWorkRateSpecificDataEffectEditor(effect, content, defaultAction: "Gather", allowOverride: false);
+                return true;
+            }
             if (ModifyReplacementDataSubtypes.Contains(subtype))
             {
                 AddModifyReplacementDataEffectEditor(effect, content);
@@ -2405,6 +2589,16 @@ public partial class TechnologyEditorView : UserControl
             if (OnDamageModifyDataSubtypes.Contains(subtype))
             {
                 AddOnDamageModifyDataEffectEditor(effect, content);
+                return true;
+            }
+            if (OnHitEffectDataSubtypes.Contains(subtype))
+            {
+                AddOnHitEffectDataEffectEditor(effect, content);
+                return true;
+            }
+            if (OnHitEffectAttributeDataSubtypes.Contains(subtype))
+            {
+                AddOnHitEffectAttributeDataEffectEditor(effect, content, subtype);
                 return true;
             }
             if (ProjectileDataSubtypes.Contains(subtype))
@@ -2430,6 +2624,11 @@ public partial class TechnologyEditorView : UserControl
             if (ContainedTypeDataSubtypes.Contains(subtype))
             {
                 AddContainedTypeDataEffectEditor(effect, content, subtype);
+                return true;
+            }
+            if (subtype.Equals("SharedBuildLimitUnit", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSharedBuildLimitUnitDataEffectEditor(effect, content);
                 return true;
             }
             return false;
@@ -2515,17 +2714,17 @@ public partial class TechnologyEditorView : UserControl
         return true;
     }
 
-    private void AddSimpleUnitAmountDataEffectEditor(XElement effect, StackPanel content)
+    private void AddSimpleUnitAmountDataEffectEditor(XElement effect, StackPanel content, bool allowOverride = false)
     {
         EnsureDefaultDataRelativity(effect);
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddDataTargetEditor(effect, row);
-        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row, allowOverride);
         AddDataIgnoreNatureEditor(effect, row);
         content.Children.Add(row);
     }
 
-    private void AddActionUnitAmountDataEffectEditor(XElement effect, StackPanel content)
+    private void AddActionUnitAmountDataEffectEditor(XElement effect, StackPanel content, bool allowOverride = false)
     {
         EnsureDefaultDataRelativity(effect);
         EnsureDefaultDataAction(effect);
@@ -2533,7 +2732,7 @@ public partial class TechnologyEditorView : UserControl
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddDataTargetEditor(effect, row);
         row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
-        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row, allowOverride);
         AddDataIgnoreNatureEditor(effect, row);
         content.Children.Add(row);
     }
@@ -2614,6 +2813,517 @@ public partial class TechnologyEditorView : UserControl
         AddDataTargetEditor(effect, row);
         AddDataRelativityAndAmountEditors(effect, row);
         row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddPlayerResourceDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeResourceEffect(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizeResourceEffect));
+
+        var currentRelativity = GetCaseInsensitiveAttribute(effect, "relativity")?.Value ?? "Absolute";
+        var relativityOptions = TechnologyDataEffectRules.ResourceRelativityDisplayOptions.AsEnumerable();
+        if (currentRelativity.Equals("Override", StringComparison.OrdinalIgnoreCase))
+            relativityOptions = relativityOptions.Append("Override");
+        var relativityCombo = new ComboBox
+        {
+            ItemsSource = relativityOptions.ToList(),
+            SelectedItem = RelativityToDisplay(currentRelativity),
+            IsEnabled = IsModifiedTab,
+            Width = 132,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(8, 4, 8, 4)
+        };
+        relativityCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || relativityCombo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "relativity", DisplayToRelativity(selected));
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(relativityCombo);
+        row.Children.Add(CreateLabeledEffectSegment("Amount", CreateSignedFloatEffectBox(effect, "amount", 80, "0")));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        content.Children.Add(row);
+    }
+
+    private void AddMaxResourceDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeMaxResourceEffect(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizeMaxResourceEffect));
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Capped at initial resource +",
+            CreateSignedFloatEffectBox(effect, "amount", 80, "0"),
+            leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        content.Children.Add(row);
+    }
+
+    private void AddPopulationCapDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePopulationCapEffect(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePopulationCapEffect));
+        AddDataRelativityAndAmountEditors(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddSetCivilizationDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeSetCivilizationEffect(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizeSetCivilizationEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Set to", CreateStrictEffectSelector(
+            _majorGodNames,
+            GetCaseInsensitiveAttribute(effect, "civ")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "civ");
+                else SetCaseInsensitiveAttribute(effect, "civ", value);
+                MarkDirty();
+                UpdatePreview();
+            },
+            180), leftSpacing: 8));
+        content.Children.Add(row);
+    }
+
+    private ComboBox CreateForcedPlayerTargetCombo(XElement effect, Func<XElement, bool> normalize)
+    {
+        var targetCombo = new ComboBox
+        {
+            ItemsSource = TechnologyDataEffectRules.ResourceTargetOptions,
+            SelectedItem = "Player",
+            IsEnabled = false,
+            Width = 100,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        targetCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || !normalize(effect)) return;
+            MarkDirty();
+            UpdatePreview();
+        };
+        return targetCombo;
+    }
+
+    private void AddEmpowerModifyDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, "Empower");
+        EnsureFixedDataAttribute(effect, "empowertype", "self");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Target", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+
+        var currentModifyType = ProtoConstants.GetModifyTypeValue(GetCaseInsensitiveAttribute(effect, "modifytype")?.Value ?? "");
+        row.Children.Add(CreateLabeledEffectSegment("Modify Type", CreateStrictEffectSelector(
+            ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName),
+            ProtoConstants.GetModifyTypeDisplayName(currentModifyType),
+            value =>
+            {
+                var normalized = ProtoConstants.GetModifyTypeValue(value);
+                if (string.IsNullOrWhiteSpace(normalized)) RemoveCaseInsensitiveAttribute(effect, "modifytype");
+                else SetCaseInsensitiveAttribute(effect, "modifytype", normalized);
+            },
+            180), leftSpacing: 8));
+
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Player affected", CreateEmpowerPlayerTypeCombo(effect), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private ComboBox CreateEmpowerPlayerTypeCombo(XElement effect)
+    {
+        var options = new[] { "Self", "Enemy", "Gaia" };
+        var current = GetCaseInsensitiveAttribute(effect, "empowertype")?.Value.Trim() ?? "self";
+        var combo = new ComboBox
+        {
+            ItemsSource = options,
+            SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "Self",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "empowertype", selected.ToLowerInvariant());
+            MarkDirty();
+            UpdatePreview();
+        };
+        return combo;
+    }
+
+    private void AddProtoActionAddDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeProtoActionAddEffect(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Grants", CreateStrictEffectSelector(
+            _protoActionNames,
+            GetCaseInsensitiveAttribute(effect, "protoaction")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "protoaction");
+                else SetCaseInsensitiveAttribute(effect, "protoaction", value);
+            },
+            180), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("From", CreateStrictEffectSelector(
+            _protoUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+
+        var addToTactics = new CheckBox
+        {
+            Content = "Add to tactics",
+            IsChecked = !string.Equals(GetCaseInsensitiveAttribute(effect, "addToTactics")?.Value, "0", StringComparison.OrdinalIgnoreCase),
+            IsEnabled = IsModifiedTab,
+            Margin = new Thickness(8, 4, 0, 4),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        addToTactics.IsCheckedChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            if (addToTactics.IsChecked == false) SetCaseInsensitiveAttribute(effect, "addToTactics", "0");
+            else RemoveCaseInsensitiveAttribute(effect, "addToTactics");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(addToTactics);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddAutoAttackTypeDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Tactic", CreateTacticNameEditor(effect), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Can auto attack", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unitType")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unitType");
+                else SetCaseInsensitiveAttribute(effect, "unitType", value);
+            },
+            180), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private Control CreateTacticNameEditor(XElement effect, double width = 150)
+    {
+        return _tacticNames.Count > 0
+            ? CreateStrictEffectSelector(
+                _tacticNames,
+                GetCaseInsensitiveAttribute(effect, "tactic")?.Value.Trim() ?? "",
+                value =>
+                {
+                    if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "tactic");
+                    else SetCaseInsensitiveAttribute(effect, "tactic", value);
+                },
+                width)
+            : CreateFreeTextEffectAttributeBox(effect, "tactic", width);
+    }
+
+    private void AddBoostRadiusDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddOnHitOptionalReferenceSelector(
+            row,
+            effect,
+            "Target",
+            "Target",
+            "targetType",
+            _prereqUnitNames,
+            180,
+            showWhenMissing: false,
+            buttonLeftSpacing: 8);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddFixedUnitReferenceDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        string label,
+        string attributeName,
+        IEnumerable<string> suggestions)
+    {
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment(label, CreateStrictEffectSelector(
+            suggestions,
+            GetCaseInsensitiveAttribute(effect, attributeName)?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, attributeName);
+                else SetCaseInsensitiveAttribute(effect, attributeName, value);
+            },
+            180), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddEmpowerAreaDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, "Empower");
+        EnsureFixedDataAttribute(effect, "empowertype", "self");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Target", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Player affected", CreateEmpowerPlayerTypeCombo(effect), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddEmpowerEnableDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultEnableDisableDataState(effect);
+        EnsureDefaultDataAction(effect, "Empower");
+        EnsureFixedDataAttribute(effect, "empowertype", "self");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Target", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        row.Children.Add(CreateLabeledEffectSegment("Player affected", CreateEmpowerPlayerTypeCombo(effect), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddGatherResourceOverrideDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, "Gather");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("For", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddSetVeterancyRankActiveDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultEnableDisableDataState(effect);
+        EnsureFixedDataAttribute(effect, "rank", "0");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Rank", CreateUnsignedIntegerEffectBox(effect, "rank", 70, "0"), leftSpacing: 8));
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddInitialVeterancyRankDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "0");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Start at rank",
+            CreateUnsignedIntegerEffectBox(effect, "amount", 80, "0"),
+            leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddVeterancyBonusDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "rank", "0");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Rank", CreateUnsignedIntegerEffectBox(effect, "rank", 70, "0"), leftSpacing: 8));
+
+        var currentModifyType = ProtoConstants.GetModifyTypeValue(GetCaseInsensitiveAttribute(effect, "modifytype")?.Value ?? "");
+        row.Children.Add(CreateLabeledEffectSegment("Bonus", CreateStrictEffectSelector(
+            ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName),
+            ProtoConstants.GetModifyTypeDisplayName(currentModifyType),
+            value =>
+            {
+                var normalized = ProtoConstants.GetModifyTypeValue(value);
+                if (string.IsNullOrWhiteSpace(normalized)) RemoveCaseInsensitiveAttribute(effect, "modifytype");
+                else SetCaseInsensitiveAttribute(effect, "modifytype", normalized);
+                if (normalized is not "DamageSpecific" and not "ArmorSpecific")
+                    RemoveCaseInsensitiveAttribute(effect, "damagetype");
+                _ = BuildEditorAsync();
+            },
+            180), leftSpacing: 8));
+
+        if (currentModifyType is "DamageSpecific" or "ArmorSpecific")
+        {
+            EnsureFixedDataAttribute(effect, "damagetype", "Hack");
+            row.Children.Add(CreateLabeledEffectSegment(
+                "Damage type",
+                CreateRequiredDataTypeCombo(effect, includeDivine: currentModifyType == "DamageSpecific"),
+                leftSpacing: 8));
+        }
+
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddVeterancyRankAddDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsureFixedDataAttribute(effect, "rankType", "Attacks");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        var rankTypeOptions = new[] { "Attacks", "Kills", "Damage" };
+        var currentRankType = GetCaseInsensitiveAttribute(effect, "rankType")?.Value.Trim() ?? "Attacks";
+        var rankType = new ComboBox
+        {
+            ItemsSource = rankTypeOptions,
+            SelectedItem = rankTypeOptions.FirstOrDefault(value => value.Equals(currentRankType, StringComparison.OrdinalIgnoreCase)) ?? "Attacks",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        rankType.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || rankType.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "rankType", selected);
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment("Type", rankType, leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Amount", CreateSignedFloatEffectBox(effect, "amount", 80, "0"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddSpeedModifierDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Tactic", CreateTacticNameEditor(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddStackControlDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, "StackControl");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddTacticEnableDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultEnableDisableDataState(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Tactic", CreateTacticNameEditor(effect), leftSpacing: 8));
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
         AddDataIgnoreNatureEditor(effect, row);
         content.Children.Add(row);
     }
@@ -2970,7 +3680,7 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
-    private ComboBox CreateEnableDisableAmountCombo(XElement effect)
+    private ComboBox CreateEnableDisableAmountCombo(XElement effect, string relativity = "Assign", double leftMargin = 8)
     {
         var currentAmount = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() ?? "1";
         var combo = new ComboBox
@@ -2979,13 +3689,13 @@ public partial class TechnologyEditorView : UserControl
             SelectedItem = currentAmount == "0" ? "Disable" : "Enable",
             IsEnabled = IsModifiedTab,
             Width = 100,
-            Margin = new Thickness(8, 4, 0, 4)
+            Margin = new Thickness(leftMargin, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
             if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
-            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            SetCaseInsensitiveAttribute(effect, "relativity", relativity);
             MarkDirty(); UpdatePreview();
         };
         return combo;
@@ -3018,15 +3728,117 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
-    private void AddMinWorkRateDataEffectEditor(XElement effect, StackPanel content)
+    private void AddUnitRegenRateLimitDataEffectEditor(XElement effect, StackPanel content)
     {
         EnsureDefaultDataRelativity(effect);
-        EnsureDefaultDataAction(effect);
+
+        var target = effect.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        var playerMode = target != null &&
+            GetCaseInsensitiveAttribute(target, "type")?.Value.Equals("Player", StringComparison.OrdinalIgnoreCase) == true;
+        if (IsModifiedTab && playerMode && target != null)
+        {
+            var misplacedUnitType = GetCaseInsensitiveAttribute(target, "unittype")?.Value.Trim() ?? "";
+            if (GetCaseInsensitiveAttribute(effect, "unittype") == null && !string.IsNullOrWhiteSpace(misplacedUnitType))
+                SetCaseInsensitiveAttribute(effect, "unittype", misplacedUnitType);
+            if (GetCaseInsensitiveAttribute(target, "unittype") != null)
+            {
+                RemoveCaseInsensitiveAttribute(target, "unittype");
+                MarkDirty();
+                UpdatePreview();
+            }
+        }
+        var targetKind = new ComboBox
+        {
+            ItemsSource = new[] { "Player", "Unit" },
+            SelectedItem = playerMode ? "Player" : "Unit",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(targetKind);
+        if (playerMode)
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Unit", CreateStrictEffectSelector(
+                _prereqUnitNames,
+                GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+                value =>
+                {
+                    var currentTarget = EnsureDataTarget(effect);
+                    SetCaseInsensitiveAttribute(currentTarget, "type", "Player");
+                    RemoveCaseInsensitiveAttribute(currentTarget, "unittype");
+                    if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                    else SetCaseInsensitiveAttribute(effect, "unittype", value);
+                    MarkDirty();
+                    UpdatePreview();
+                },
+                200), leftSpacing: 8));
+        }
+        else
+        {
+            row.Children.Add(CreateStrictEffectSelector(_prereqUnitNames, target?.Value.Trim() ?? "", value =>
+            {
+                var currentTarget = EnsureDataTarget(effect);
+                SetCaseInsensitiveAttribute(currentTarget, "type", "ProtoUnit");
+                RemoveCaseInsensitiveAttribute(effect, "unittype");
+                currentTarget.Value = value;
+                MarkDirty();
+                UpdatePreview();
+            }, 200));
+        }
+
+        targetKind.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || targetKind.SelectedItem is not string selected) return;
+            var currentTarget = EnsureDataTarget(effect);
+            if (selected == "Player")
+            {
+                var unitValue = currentTarget.Value.Trim();
+                var misplacedUnitType = GetCaseInsensitiveAttribute(currentTarget, "unittype")?.Value.Trim() ?? "";
+                currentTarget.RemoveNodes();
+                SetCaseInsensitiveAttribute(currentTarget, "type", "Player");
+                RemoveCaseInsensitiveAttribute(currentTarget, "unittype");
+                if (GetCaseInsensitiveAttribute(effect, "unittype") == null)
+                {
+                    var selectedUnitType = !string.IsNullOrWhiteSpace(unitValue) ? unitValue : misplacedUnitType;
+                    if (!string.IsNullOrWhiteSpace(selectedUnitType))
+                        SetCaseInsensitiveAttribute(effect, "unittype", selectedUnitType);
+                }
+            }
+            else
+            {
+                var unitType = GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(unitType))
+                    unitType = GetCaseInsensitiveAttribute(currentTarget, "unittype")?.Value.Trim() ?? "";
+                RemoveCaseInsensitiveAttribute(effect, "unittype");
+                RemoveCaseInsensitiveAttribute(currentTarget, "unittype");
+                SetCaseInsensitiveAttribute(currentTarget, "type", "ProtoUnit");
+                currentTarget.Value = unitType;
+            }
+            MarkDirty();
+            UpdatePreview();
+            _ = BuildEditorAsync();
+        };
+
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddMinWorkRateDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        string? defaultAction = null,
+        bool allowOverride = true)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, defaultAction);
 
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddDataTargetEditor(effect, row);
         row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
-        AddDataRelativityAndAmountEditors(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row, allowOverride);
 
         var currentFor = GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "";
         var resourceMode = ProtoConstants.KnownResourceTypes.Contains(currentFor, StringComparer.OrdinalIgnoreCase);
@@ -3062,6 +3874,53 @@ public partial class TechnologyEditorView : UserControl
             MarkDirty(); UpdatePreview();
             _ = BuildEditorAsync();
         };
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddWorkRateSpecificDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        string? defaultAction = null,
+        bool allowOverride = true)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureDefaultDataAction(effect, defaultAction);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row, allowOverride);
+        row.Children.Add(CreateLabeledEffectSegment("For", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddContainingUnitAmountDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Containing", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unittype");
+                else SetCaseInsensitiveAttribute(effect, "unittype", value);
+            },
+            180), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
         AddDataIgnoreNatureEditor(effect, row);
         content.Children.Add(row);
     }
@@ -3483,6 +4342,509 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
+    private void AddSharedBuildLimitUnitDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Shared with", CreateStrictEffectSelector(
+            _protoUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unitType")?.Value.Trim() ?? "",
+            value =>
+            {
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "unitType");
+                else SetCaseInsensitiveAttribute(effect, "unitType", value);
+                MarkDirty();
+                UpdatePreview();
+            },
+            180), leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddOnHitEffectDataEffectEditor(XElement effect, StackPanel content)
+    {
+        if (IsModifiedTab && TechnologyOnHitEffectRules.Normalize(effect))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+        EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+
+        var effectType = GetCaseInsensitiveAttribute(effect, "effecttype")?.Value.Trim() ?? "";
+        row.Children.Add(CreateLabeledEffectSegment("Effect", CreateStrictEffectSelector(
+            ProtoConstants.KnownOnHitEffectTypes,
+            effectType,
+            value =>
+            {
+                if (value.Equals(effectType, StringComparison.OrdinalIgnoreCase)) return;
+                _openOnHitOptionalSelectors.RemoveWhere(entry => ReferenceEquals(entry.Effect, effect));
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "effecttype");
+                else SetCaseInsensitiveAttribute(effect, "effecttype", value);
+                TechnologyOnHitEffectRules.Normalize(effect);
+                MarkDirty();
+                UpdatePreview();
+                _ = BuildEditorAsync();
+            },
+            180), leftSpacing: 8));
+
+        AddOptionalEffectAttribute(
+            row,
+            effect,
+            "Duration",
+            "duration",
+            "1",
+            70,
+            ProtoUnitNumericKind.PositiveFloat,
+            requirePositive: true,
+            buttonLeftSpacing: 8,
+            offerWhenMissing: TechnologyOnHitEffectRules.OffersDuration(effectType));
+        AddOnHitOptionalReferenceSelector(row, effect, "Target", "Target", "targettype", _prereqUnitNames, 180, showWhenMissing: false);
+
+        var currentModifyType = ProtoConstants.GetModifyTypeValue(GetCaseInsensitiveAttribute(effect, "modifytype")?.Value ?? "");
+        if (TechnologyOnHitEffectRules.UsesModify(effectType))
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Modify", CreateStrictEffectSelector(
+                ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName),
+                ProtoConstants.GetModifyTypeDisplayName(currentModifyType),
+                value =>
+                {
+                    var normalized = ProtoConstants.GetModifyTypeValue(value);
+                    if (string.IsNullOrWhiteSpace(normalized)) RemoveCaseInsensitiveAttribute(effect, "modifytype");
+                    else SetCaseInsensitiveAttribute(effect, "modifytype", normalized);
+                    TechnologyOnHitEffectRules.Normalize(effect);
+                    MarkDirty();
+                    UpdatePreview();
+                    _ = BuildEditorAsync();
+                },
+                180), leftSpacing: 8));
+        }
+
+        AddOnHitDamageTypeEditor(
+            row,
+            effect,
+            showWhenMissing: TechnologyOnHitEffectRules.RequiresDamageType(effectType, currentModifyType),
+            offerWhenMissing: TechnologyOnHitEffectRules.OffersDamageType(effectType),
+            armorOnly: currentModifyType.Equals("ArmorSpecific", StringComparison.OrdinalIgnoreCase));
+
+        AddOnHitOptionalReferenceSelector(
+            row,
+            effect,
+            "Protounit",
+            TechnologyOnHitEffectRules.GetProtoFieldLabel(effectType),
+            "proto",
+            _protoUnitNames,
+            180,
+            showWhenMissing: TechnologyOnHitEffectRules.AutomaticProtoEffectTypes.Contains(effectType),
+            offerWhenMissing: TechnologyOnHitEffectRules.OffersProto(effectType));
+
+        AddOnHitFreezeTypeEditor(row, effect, effectType);
+        if (TechnologyOnHitEffectRules.UsesProgressiveFreezeDuration(effectType))
+            AddOnHitProgressiveFreezeDurationEditor(row, effect);
+
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Amount",
+            CreateSignedFloatEffectBox(effect, "amount", 80, "0"),
+            leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddOnHitEffectAttributeDataEffectEditor(XElement effect, StackPanel content, string subtype)
+    {
+        if (IsModifiedTab && TechnologyOnHitEffectRules.NormalizeAttributeSubtype(effect, subtype))
+        {
+            MarkDirty();
+            UpdatePreview();
+        }
+        EnsureDefaultDataAction(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
+
+        if (subtype.Equals("OnHitEffectActive", StringComparison.OrdinalIgnoreCase))
+            row.Children.Add(CreateOnHitEffectActiveStateCombo(effect));
+
+        var effectType = GetCaseInsensitiveAttribute(effect, "effecttype")?.Value.Trim() ?? "";
+        var effectTypeOptions = subtype.Equals("OnHitEffectStatModify", StringComparison.OrdinalIgnoreCase)
+            ? TechnologyOnHitEffectRules.StatModifyEffectTypes
+            : ProtoConstants.KnownOnHitEffectTypes;
+        row.Children.Add(CreateLabeledEffectSegment("Effect", CreateStrictEffectSelector(
+            effectTypeOptions,
+            effectType,
+            value =>
+            {
+                if (value.Equals(effectType, StringComparison.OrdinalIgnoreCase)) return;
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "effecttype");
+                else SetCaseInsensitiveAttribute(effect, "effecttype", value);
+
+                if (subtype.Equals("OnHitEffectRate", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (effectType.Equals("DamageOverTime", StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals("DamageOverTime", StringComparison.OrdinalIgnoreCase))
+                        RemoveCaseInsensitiveAttribute(effect, "dmgtype");
+                    TechnologyOnHitEffectRules.NormalizeAttributeSubtype(effect, subtype);
+                    _ = BuildEditorAsync();
+                }
+            },
+            180), leftSpacing: 8));
+
+        if (subtype.Equals("OnHitEffectAttachBone", StringComparison.OrdinalIgnoreCase))
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Bone", CreateStrictEffectSelector(
+                _boneNames,
+                GetCaseInsensitiveAttribute(effect, "attachbone")?.Value.Trim() ?? "",
+                value =>
+                {
+                    if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "attachbone");
+                    else SetCaseInsensitiveAttribute(effect, "attachbone", value);
+                },
+                180), leftSpacing: 8));
+        }
+
+        if (subtype.Equals("OnHitEffectRate", StringComparison.OrdinalIgnoreCase) &&
+            (effectType.Equals("DamageOverTime", StringComparison.OrdinalIgnoreCase) ||
+             GetCaseInsensitiveAttribute(effect, "dmgtype") != null))
+        {
+            row.Children.Add(CreateLabeledEffectSegment(
+                "Damage type",
+                CreateExplicitOnHitDamageTypeCombo(effect, includeAll: true),
+                leftSpacing: 8));
+        }
+
+        if (subtype.Equals("OnHitEffectStatModify", StringComparison.OrdinalIgnoreCase))
+            AddOnHitEffectStatModifyFields(effect, row);
+
+        if (TechnologyOnHitEffectRules.UsesEditableAmount(subtype))
+            AddDataRelativityAndAmountEditors(effect, row);
+
+        AddOnHitOptionalReferenceSelector(
+            row,
+            effect,
+            "Target",
+            "Target",
+            "targettype",
+            _prereqUnitNames,
+            180,
+            showWhenMissing: false,
+            buttonLeftSpacing: 8);
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private ComboBox CreateOnHitEffectActiveStateCombo(XElement effect)
+    {
+        var combo = new ComboBox
+        {
+            ItemsSource = new[] { "Enable", "Disable" },
+            SelectedItem = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() == "0" ? "Disable" : "Enable",
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(8, 4, 0, 4)
+        };
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            MarkDirty();
+            UpdatePreview();
+        };
+        return combo;
+    }
+
+    private ComboBox CreateExplicitOnHitDamageTypeCombo(XElement effect, bool includeAll)
+    {
+        var options = includeAll
+            ? new[] { "All" }.Concat(ProtoConstants.KnownDamageTypes).ToArray()
+            : ProtoConstants.KnownDamageTypes;
+        var current = GetCaseInsensitiveAttribute(effect, "dmgtype")?.Value.Trim() ?? options[0];
+        var combo = new ComboBox
+        {
+            ItemsSource = options,
+            SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? options[0],
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "dmgtype", selected);
+            MarkDirty();
+            UpdatePreview();
+        };
+        return combo;
+    }
+
+    private void AddOnHitEffectStatModifyFields(XElement effect, WrapPanel row)
+    {
+        var currentModifyType = ProtoConstants.GetModifyTypeValue(GetCaseInsensitiveAttribute(effect, "modifytype")?.Value ?? "");
+        row.Children.Add(CreateLabeledEffectSegment("Modify", CreateStrictEffectSelector(
+            ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName),
+            ProtoConstants.GetModifyTypeDisplayName(currentModifyType),
+            value =>
+            {
+                var normalized = ProtoConstants.GetModifyTypeValue(value);
+                if (string.IsNullOrWhiteSpace(normalized)) RemoveCaseInsensitiveAttribute(effect, "modifytype");
+                else SetCaseInsensitiveAttribute(effect, "modifytype", normalized);
+                if (TechnologyOnHitEffectRules.RequiresSpecificDamageType(currentModifyType) &&
+                    !TechnologyOnHitEffectRules.RequiresSpecificDamageType(normalized))
+                    RemoveCaseInsensitiveAttribute(effect, "dmgtype");
+                _ = BuildEditorAsync();
+            },
+            180), leftSpacing: 8));
+
+        var damageType = GetCaseInsensitiveAttribute(effect, "dmgtype");
+        if (!TechnologyOnHitEffectRules.RequiresSpecificDamageType(currentModifyType) && damageType == null) return;
+
+        var armorOnly = currentModifyType.Equals("ArmorSpecific", StringComparison.OrdinalIgnoreCase);
+        var options = armorOnly ? ProtoConstants.KnownArmorTypes : ProtoConstants.KnownDamageTypes;
+        var currentDamageType = damageType?.Value.Trim() ?? "";
+        var damageTypeOptions = options
+            .Append(currentDamageType)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var damageTypeCombo = new ComboBox
+        {
+            ItemsSource = damageTypeOptions,
+            SelectedItem = damageTypeOptions.FirstOrDefault(value => value.Equals(currentDamageType, StringComparison.OrdinalIgnoreCase)),
+            IsEnabled = IsModifiedTab,
+            Width = 110,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        damageTypeCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || damageTypeCombo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "dmgtype", selected);
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment("Damage type", damageTypeCombo, leftSpacing: 8));
+    }
+
+    private void AddOnHitOptionalReferenceSelector(
+        WrapPanel row,
+        XElement effect,
+        string buttonLabel,
+        string fieldLabel,
+        string attributeName,
+        IEnumerable<string> options,
+        double width,
+        bool showWhenMissing,
+        bool offerWhenMissing = true,
+        double buttonLeftSpacing = 0)
+    {
+        var key = (effect, attributeName.ToLowerInvariant());
+        var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
+        if (attribute == null && !showWhenMissing && !_openOnHitOptionalSelectors.Contains(key))
+        {
+            if (!IsModifiedTab || !offerWhenMissing) return;
+            var button = CreateOptionalPropertyButton(buttonLabel);
+            button.Margin = new Thickness(buttonLeftSpacing, button.Margin.Top, button.Margin.Right, button.Margin.Bottom);
+            button.Click += (_, _) =>
+            {
+                _openOnHitOptionalSelectors.Add(key);
+                _ = BuildEditorAsync();
+            };
+            row.Children.Add(button);
+            return;
+        }
+
+        var selector = CreateStrictEffectSelector(options, attribute?.Value.Trim() ?? "", value =>
+        {
+            if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, attributeName);
+            else SetCaseInsensitiveAttribute(effect, attributeName, value);
+            _openOnHitOptionalSelectors.Remove(key);
+            MarkDirty();
+            UpdatePreview();
+        }, width);
+        var segment = CreateLabeledEffectSegment(fieldLabel, selector, leftSpacing: 8);
+        if (IsModifiedTab && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        {
+            segment.Children.Add(CreateRemoveButton(() =>
+            {
+                RemoveCaseInsensitiveAttribute(effect, attributeName);
+                _openOnHitOptionalSelectors.Remove(key);
+            }));
+        }
+        row.Children.Add(segment);
+    }
+
+    private void AddOnHitDamageTypeEditor(WrapPanel row, XElement effect, bool showWhenMissing, bool offerWhenMissing, bool armorOnly)
+    {
+        const string attributeName = "dmgtype";
+        var key = (effect, attributeName);
+        var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
+        if (attribute == null && !showWhenMissing && !_openOnHitOptionalSelectors.Contains(key))
+        {
+            if (!IsModifiedTab || !offerWhenMissing) return;
+            var button = CreateOptionalPropertyButton("Damage type");
+            button.Click += (_, _) =>
+            {
+                _openOnHitOptionalSelectors.Add(key);
+                _ = BuildEditorAsync();
+            };
+            row.Children.Add(button);
+            return;
+        }
+
+        var options = armorOnly ? ProtoConstants.KnownArmorTypes : ProtoConstants.KnownDamageTypes;
+        var combo = new ComboBox
+        {
+            ItemsSource = options,
+            SelectedItem = options.FirstOrDefault(value => value.Equals(attribute?.Value.Trim() ?? "", StringComparison.OrdinalIgnoreCase)),
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, attributeName, selected);
+            _openOnHitOptionalSelectors.Remove(key);
+            MarkDirty();
+            UpdatePreview();
+        };
+        var segment = CreateLabeledEffectSegment("Damage type", combo, leftSpacing: 8);
+        if (IsModifiedTab && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        {
+            segment.Children.Add(CreateRemoveButton(() =>
+            {
+                RemoveCaseInsensitiveAttribute(effect, attributeName);
+                _openOnHitOptionalSelectors.Remove(key);
+            }));
+        }
+        row.Children.Add(segment);
+    }
+
+    private void AddOnHitFreezeTypeEditor(WrapPanel row, XElement effect, string effectType)
+    {
+        if (!TechnologyOnHitEffectRules.UsesFreezeType(effectType)) return;
+
+        const string attributeName = "freezetype";
+        var key = (effect, attributeName);
+        var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
+        var required = effectType.Equals("Freeze", StringComparison.OrdinalIgnoreCase);
+        if (!required && attribute == null && !_openOnHitOptionalSelectors.Contains(key))
+        {
+            if (!IsModifiedTab) return;
+            var button = CreateOptionalPropertyButton("Type");
+            button.Click += (_, _) =>
+            {
+                _openOnHitOptionalSelectors.Add(key);
+                _ = BuildEditorAsync();
+            };
+            row.Children.Add(button);
+            return;
+        }
+
+        var current = ProtoConstants.GetOnHitEffectFreezeTypeDisplayName(attribute?.Value);
+        var combo = new ComboBox
+        {
+            ItemsSource = ProtoConstants.KnownOnHitEffectFreezeTypeDisplayNames,
+            SelectedItem = ProtoConstants.KnownOnHitEffectFreezeTypeDisplayNames.FirstOrDefault(value =>
+                value.Equals(current, StringComparison.OrdinalIgnoreCase)),
+            IsEnabled = IsModifiedTab,
+            Width = 130,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, attributeName, ProtoConstants.GetOnHitEffectFreezeTypeXmlValue(selected));
+            _openOnHitOptionalSelectors.Remove(key);
+            MarkDirty();
+            UpdatePreview();
+        };
+        var segment = CreateLabeledEffectSegment("Type", combo, leftSpacing: 8);
+        if (!required && IsModifiedTab && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        {
+            segment.Children.Add(CreateRemoveButton(() =>
+            {
+                RemoveCaseInsensitiveAttribute(effect, attributeName);
+                _openOnHitOptionalSelectors.Remove(key);
+            }));
+        }
+        row.Children.Add(segment);
+    }
+
+    private void AddOnHitProgressiveFreezeDurationEditor(WrapPanel row, XElement effect)
+    {
+        var box = CreateNumericTextBox(
+            FormatNumericForDisplay(GetCaseInsensitiveAttribute(effect, "progFreezeDuration")?.Value ?? "1"),
+            80);
+        EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.PositiveFloat);
+        box.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            var value = box.Text ?? "";
+            if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) || number <= 0) return;
+            SetCaseInsensitiveAttribute(effect, "progFreezeDuration", value);
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment("Duration", box, leftSpacing: 8));
+    }
+
+    private void AddMovementTypeDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+
+        var movementTypes = ProtoConstants.FieldSuggestions.TryGetValue("movementtype", out var knownMovementTypes)
+            ? knownMovementTypes
+            : [];
+        var currentMovementType = GetCaseInsensitiveAttribute(effect, "movementtype")?.Value.Trim() ?? "";
+        var movementTypeCombo = new ComboBox
+        {
+            ItemsSource = movementTypes,
+            SelectedItem = movementTypes.FirstOrDefault(value => value.Equals(currentMovementType, StringComparison.OrdinalIgnoreCase)),
+            IsEnabled = IsModifiedTab,
+            Width = 120,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        movementTypeCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || movementTypeCombo.SelectedItem is not string selected) return;
+            SetCaseInsensitiveAttribute(effect, "movementtype", selected);
+            SetCaseInsensitiveAttribute(effect, "amount", "1");
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(CreateLabeledEffectSegment("Set movement type to", movementTypeCombo, leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddRevealLosDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Absolute");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddDataTargetEditor(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment(
+            "LOS revealed",
+            CreateEnableDisableAmountCombo(effect, relativity: "Absolute", leftMargin: 0),
+            leftSpacing: 8));
+        AddDataIgnoreNatureEditor(effect, row);
+        content.Children.Add(row);
+    }
+
     private void EnsureDefaultEnableDisableDataState(XElement effect)
     {
         if (!IsModifiedTab) return;
@@ -3554,12 +4916,15 @@ public partial class TechnologyEditorView : UserControl
         return target;
     }
 
-    private void AddDataRelativityAndAmountEditors(XElement effect, WrapPanel row)
+    private void AddDataRelativityAndAmountEditors(XElement effect, WrapPanel row, bool allowOverride = false)
     {
         var currentRelativity = GetCaseInsensitiveAttribute(effect, "relativity")?.Value ?? "BasePercent";
+        var relativityOptions = new List<string> { "Add", "Multiply", "Multiply base", "Set to" };
+        if (allowOverride || currentRelativity.Equals("Override", StringComparison.OrdinalIgnoreCase))
+            relativityOptions.Add("Override");
         var relativityCombo = new ComboBox
         {
-            ItemsSource = new[] { "Add", "Multiply", "Multiply base", "Set to" },
+            ItemsSource = relativityOptions,
             SelectedItem = RelativityToDisplay(currentRelativity),
             IsEnabled = IsModifiedTab,
             Width = 132,
@@ -3613,11 +4978,12 @@ public partial class TechnologyEditorView : UserControl
         UpdatePreview();
     }
 
-    private void EnsureDefaultDataAction(XElement effect)
+    private void EnsureDefaultDataAction(XElement effect, string? defaultAction = null)
     {
         if (!IsModifiedTab) return;
         if (GetCaseInsensitiveAttribute(effect, "action") != null || GetCaseInsensitiveAttribute(effect, "allactions") != null) return;
-        SetCaseInsensitiveAttribute(effect, "allactions", "1");
+        if (string.IsNullOrWhiteSpace(defaultAction)) SetCaseInsensitiveAttribute(effect, "allactions", "1");
+        else SetCaseInsensitiveAttribute(effect, "action", defaultAction);
         MarkDirty();
         UpdatePreview();
     }
@@ -3663,6 +5029,7 @@ public partial class TechnologyEditorView : UserControl
             "percent" => "Multiply",
             "basepercent" => "Multiply base",
             "assign" => "Set to",
+            "override" => "Override",
             _ => "Add"
         };
 
@@ -3672,6 +5039,7 @@ public partial class TechnologyEditorView : UserControl
             "Multiply" => "Percent",
             "Multiply base" => "BasePercent",
             "Set to" => "Assign",
+            "Override" => "Override",
             _ => "Absolute"
         };
 
@@ -4599,13 +5967,24 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
-    private void AddOptionalEffectAttribute(WrapPanel row, XElement effect, string label, string attributeName, string defaultValue, double width, ProtoUnitNumericKind? numericKind, bool requirePositive = false)
+    private void AddOptionalEffectAttribute(
+        WrapPanel row,
+        XElement effect,
+        string label,
+        string attributeName,
+        string defaultValue,
+        double width,
+        ProtoUnitNumericKind? numericKind,
+        bool requirePositive = false,
+        double buttonLeftSpacing = 0,
+        bool offerWhenMissing = true)
     {
         var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
         if (attribute == null)
         {
-            if (!IsModifiedTab) return;
+            if (!IsModifiedTab || !offerWhenMissing) return;
             var button = CreateOptionalPropertyButton(label);
+            button.Margin = new Thickness(buttonLeftSpacing, button.Margin.Top, button.Margin.Right, button.Margin.Bottom);
             button.Click += (_, _) => { SetCaseInsensitiveAttribute(effect, attributeName, defaultValue); MarkDirty(); _ = BuildEditorAsync(); };
             row.Children.Add(button);
             return;
@@ -4708,7 +6087,17 @@ public partial class TechnologyEditorView : UserControl
     {
         var selector = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox { Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedTab, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 4) });
         selector.Width = selector.MaxWidth = width;
-        EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: false, keepStartVisibleAfterCommit: true, preserveSuggestionOrder: preserveSuggestionOrder, valueCommitted: v => { if (_loadingUi || !IsModifiedTab) return; commit(v); MarkDirty(); UpdatePreview(); });
+        var lastCommittedValue = value.Trim();
+        EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: true, keepStartVisibleAfterCommit: true, preserveSuggestionOrder: preserveSuggestionOrder, valueCommitted: v =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            var normalized = v.Trim();
+            if (normalized.Equals(lastCommittedValue, StringComparison.OrdinalIgnoreCase)) return;
+            lastCommittedValue = normalized;
+            commit(v);
+            MarkDirty();
+            UpdatePreview();
+        });
         return selector;
     }
 

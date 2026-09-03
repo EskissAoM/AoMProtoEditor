@@ -350,6 +350,10 @@ public sealed class TechnologyPhase1RegressionTests
 
         Assert.Contains("bool selectAllOnFirstClick = true", autoCompleteCode, StringComparison.Ordinal);
         Assert.Contains("EnableDropdown(autoCompleteBox, isBusy, selectAllOnFirstClick)", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("selectAllOnFirstClick && !autoCompleteBox.IsKeyboardFocusWithin", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("InputElement.PointerReleasedEvent", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("SelectAllAfterPointerFocus();", autoCompleteCode, StringComparison.Ordinal);
+        Assert.Contains("textEditor.SelectionStart == textEditor.SelectionEnd", autoCompleteCode, StringComparison.Ordinal);
         Assert.Contains("selectAllOnFirstClick: false", techCode, StringComparison.Ordinal);
     }
 
@@ -548,7 +552,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("ActionUnitAmountDataSubtypes", techCode, StringComparison.Ordinal);
         Assert.Contains("\"Accuracy\", \"DamageArea\", \"DisplayedNumberProjectiles\"", techCode, StringComparison.Ordinal);
         Assert.Contains("AddActionUnitAmountDataEffectEditor(effect, content)", techCode, StringComparison.Ordinal);
-        Assert.Contains("ItemsSource = new[] { \"Add\", \"Multiply\", \"Multiply base\", \"Set to\" }", techCode, StringComparison.Ordinal);
+        Assert.Contains("new List<string> { \"Add\", \"Multiply\", \"Multiply base\", \"Set to\" }", techCode, StringComparison.Ordinal);
         Assert.Contains("Width = 132", techCode, StringComparison.Ordinal);
         Assert.Contains("Content = \"Not Nature\"", techCode, StringComparison.Ordinal);
         Assert.Contains("SetCaseInsensitiveAttribute(currentTarget, \"ignoreNature\", \"\")", techCode, StringComparison.Ordinal);
