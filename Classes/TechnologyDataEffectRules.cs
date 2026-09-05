@@ -51,6 +51,9 @@ public static class TechnologyDataEffectRules
     public static bool NormalizePopulationCapEffect(XElement effect)
         => NormalizeResourceEffect(effect);
 
+    public static bool NormalizePlayerTargetEffect(XElement effect)
+        => NormalizePlayerTarget(effect);
+
     public static bool NormalizeSetCivilizationEffect(XElement effect)
     {
         var changed = SetAttribute(effect, "amount", "1");

@@ -619,7 +619,8 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("new[] { \"Unit\", \"Tech\", \"Command\" }", techCode, StringComparison.Ordinal);
         Assert.Contains("_protoUnitCommandNames", techCode, StringComparison.Ordinal);
         Assert.Contains("GetAvailableCommandNames(),", windowCode, StringComparison.Ordinal);
-        Assert.Contains("_iconPreviewService);", windowCode, StringComparison.Ordinal);
+        Assert.Contains("_iconPreviewService,", windowCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyGodPowerNames());", windowCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"row\"", techCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"column\"", techCode, StringComparison.Ordinal);
         Assert.Contains("AddDamageByCostDataEffectEditor", techCode, StringComparison.Ordinal);

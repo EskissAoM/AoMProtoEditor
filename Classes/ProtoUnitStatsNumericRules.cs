@@ -4,6 +4,7 @@ namespace AoMDivineDataEditor.Classes;
 
 public enum ProtoUnitNumericKind
 {
+    SignedInteger,
     UnsignedInteger,
     PositiveInteger,
     UnsignedFloat,
@@ -174,7 +175,8 @@ public static class ProtoUnitStatsNumericRules
                 ? new(true, "", "")
                 : Invalid($"{rule.Label} requires a value.");
 
-        if (rule.Kind is ProtoUnitNumericKind.UnsignedInteger or
+        if (rule.Kind is ProtoUnitNumericKind.SignedInteger or
+            ProtoUnitNumericKind.UnsignedInteger or
             ProtoUnitNumericKind.PositiveInteger or
             ProtoUnitNumericKind.ClampZeroToFiveInteger or
             ProtoUnitNumericKind.ClampMinimumZeroInteger or
@@ -216,7 +218,8 @@ public static class ProtoUnitStatsNumericRules
     }
 
     public static bool IsIntegerKind(ProtoUnitNumericKind kind)
-        => kind is ProtoUnitNumericKind.UnsignedInteger or
+        => kind is ProtoUnitNumericKind.SignedInteger or
+            ProtoUnitNumericKind.UnsignedInteger or
             ProtoUnitNumericKind.PositiveInteger or
             ProtoUnitNumericKind.ClampZeroToFiveInteger or
             ProtoUnitNumericKind.ClampMinimumZeroInteger or
@@ -236,7 +239,8 @@ public static class ProtoUnitStatsNumericRules
             ProtoUnitNumericKind.ClampRgbInteger;
 
     public static bool AllowsNegativeInput(ProtoUnitNumericKind kind)
-        => kind is ProtoUnitNumericKind.SignedFloat or
+        => kind is ProtoUnitNumericKind.SignedInteger or
+            ProtoUnitNumericKind.SignedFloat or
             ProtoUnitNumericKind.ClampZeroToOne or
             ProtoUnitNumericKind.ClampZeroToFiveInteger or
             ProtoUnitNumericKind.ClampMinimumZeroInteger or

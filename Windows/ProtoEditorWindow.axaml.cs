@@ -3930,7 +3930,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetTechnologyTacticDefinitionNames(),
             GetAvailableCommandNames(),
             GetAvailableProtoActionModelAttachmentBones(),
-            _iconPreviewService);
+            _iconPreviewService,
+            GetTechnologyGodPowerNames());
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
@@ -48890,6 +48891,112 @@ public partial class ProtoEditorWindow : SimpleWindow
             catch { }
         }
         return documents;
+    }
+
+    private IReadOnlyList<string> GetTechnologyGodPowerNames()
+    {
+        var originalDocuments = new List<XDocument>();
+        var modDocuments = new List<XDocument>();
+        var gameplay = ResolveBaseGameplayDirectory();
+        var godPowersDirectory = string.IsNullOrWhiteSpace(gameplay) ? null : Path.Combine(gameplay, "god_powers");
+        if (!string.IsNullOrWhiteSpace(godPowersDirectory) && Directory.Exists(godPowersDirectory))
+        {
+            foreach (var path in Directory.EnumerateFiles(godPowersDirectory, "*.godpowers", SearchOption.TopDirectoryOnly))
+            {
+                try { originalDocuments.Add(XDocument.Load(path, LoadOptions.PreserveWhitespace)); }
+                catch { }
+            }
+        }
+
+        var loadedBarPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void LoadBarGodPowers(BarArchive? barFile, string? barPath)
+        {
+            if (barFile == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
+            var fullPath = Path.GetFullPath(barPath);
+            if (!loadedBarPaths.Add(fullPath)) return;
+            originalDocuments.AddRange(ExtractGodPowerDocumentsFromBar(barFile, fullPath));
+        }
+
+        LoadBarGodPowers(_protoDataBarFile, _protoDataBarPath);
+        var resolvedDataBarPath = ResolveDataBarPath();
+        if (!string.IsNullOrWhiteSpace(resolvedDataBarPath) && File.Exists(resolvedDataBarPath) &&
+            !loadedBarPaths.Contains(Path.GetFullPath(resolvedDataBarPath)))
+        {
+            try
+            {
+                using var stream = File.OpenRead(resolvedDataBarPath);
+                var dataBar = new BarArchive(stream);
+                if (dataBar.Load(out _)) LoadBarGodPowers(dataBar, resolvedDataBarPath);
+            }
+            catch { }
+        }
+
+        var powersModsPath = GetCurrentModGameplayFilePath("powers_mods.xml");
+        if (!string.IsNullOrWhiteSpace(powersModsPath) && File.Exists(powersModsPath))
+        {
+            try { modDocuments.Add(XDocument.Load(powersModsPath, LoadOptions.PreserveWhitespace)); }
+            catch { }
+        }
+
+        return ExtractTechnologyGodPowerNames(originalDocuments, modDocuments);
+    }
+
+    private static List<XDocument> ExtractGodPowerDocumentsFromBar(BarArchive barFile, string barPath)
+    {
+        var documents = new List<XDocument>();
+        var entries = barFile.Entries;
+        if (entries == null || !File.Exists(barPath)) return documents;
+
+        var matching = entries.Where(entry =>
+        {
+            var fileName = entry.Name.Replace('\\', '/').Split('/').LastOrDefault() ?? "";
+            return fileName.EndsWith(".godpowers.xmb", StringComparison.OrdinalIgnoreCase);
+        }).ToList();
+
+        using var stream = File.OpenRead(barPath);
+        foreach (var entry in matching)
+        {
+            try
+            {
+                var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+                var decompressed = new byte[size];
+                var readBytes = entry.ReadDataDecompressed(stream, decompressed);
+                if (readBytes <= 0) continue;
+                var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
+                if (!string.IsNullOrWhiteSpace(xml))
+                    documents.Add(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
+            }
+            catch { }
+        }
+        return documents;
+    }
+
+    internal static IReadOnlyList<string> ExtractTechnologyGodPowerNames(
+        IEnumerable<XDocument> originalDocuments,
+        IEnumerable<XDocument> modDocuments)
+        => GetPowerElements(originalDocuments)
+            .Concat(GetPowerElements(modDocuments).Where(IsModGodPower))
+            .Select(GetAbilityElementName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static IEnumerable<XElement> GetPowerElements(IEnumerable<XDocument> documents)
+        => documents
+            .SelectMany(document => document.Root?.DescendantsAndSelf() ?? [])
+            .Where(element => element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsModGodPower(XElement power)
+    {
+        var type = power.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+        if (type.Equals("UnitAction", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!type.Equals("GeneralEffect", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var godPower = power.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals("godpower", StringComparison.OrdinalIgnoreCase));
+        return godPower != null && string.IsNullOrWhiteSpace(godPower.Value);
     }
 
     private string? GetCurrentModAbilitiesFilePath(string fileName)
