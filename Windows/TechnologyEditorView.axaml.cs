@@ -288,23 +288,23 @@ public partial class TechnologyEditorView : UserControl
         "Trackrating", "TrainingRate", "TrainPoints", "TributePenalty", "UnitRegenCombatMultiplier",
         "UnitRegenRate", "VeterancyEnable", "WanderDistance", "WorkRate", "WorkRateSpecific", "ActionAdd",
         "AddContainedType", "AddGoalRewardExclusion", "AddNotContainedType", "AddSharedBuildLimitUnitType",
-        "AddTrain", "AddVeterancyExcludeType", "AddVeterancyIncludeType", "AnimationRate",
+        "AddVeterancyExcludeType", "AddVeterancyIncludeType", "AnimationRate",
         "AutoAttackType", "AutoGatherBonus", "AuxRechargeInit", "AuxRechargeType",
-        "BlockTrainCount", "BoostRadius", "ContainedHitpointBonus", "ContainedHitpointBonusUnitType",
+        "BoostRadius", "ContainedHitpointBonus", "ContainedHitpointBonusUnitType",
         "CostBuildingAll", "CostBuildingUnits", "DamageCap", "DamageForAllHandLogicActions",
         "DamageForAllRangedLogicActions", "DeadTransform", "DeadTransformBuildLimit", "DodgeChance", "EmpowerArea",
-        "EmpowerEnable", "EnableDodge", "EnableSharedBuildLimit", "FakeConversion", "FreeBuildPoints",
-        "FreeBuildRate", "FreeRepair", "GarrisonBonusDamage", "GatherRateMultiplier", "GatherResourceOverride",
+        "EmpowerEnable", "EnableDodge", "EnableSharedBuildLimit", "FakeConversion",
+        "FreeRepair", "GarrisonBonusDamage", "GatherRateMultiplier", "GatherResourceOverride",
         "InitialVeterancyRank", "InstantBallistics",
         "KillReward", "MarketReset", "MaximumResourceTrickleRate", "MaxResource", "MinimumRange",
         "MinimumResourceTrickleRate", "MovementType", "PartisanUnit", "PerfectAccuracy", "PlacementRulesOverride",
         "PopulationLimit", "ProtoActionFlag", "ResourceByKBQuery", "ResourceByUnitCount", "ResourceIfTechActive",
-        "ResourceReturnRateTotalCost", "RevealLOS", "Scale", "SendRandomCard", "SetCivilization", "SetGoalActive",
+        "ResourceReturnRateTotalCost", "RevealLOS", "SetCivilization", "SetGoalActive",
         "SetNextResearchFree", "SetVeterancyRankActive", "SharedBuildLimitUnit", "Snare",
         "SpeedModifier", "SquareAura", "StackControl", "TacticEnable", "TechCostAbsolute", "TimeShiftingAdd",
         "TurnRate", "UnitRegenRateLimit",
         "UnitShieldRegenDamageTimeout", "UnitShieldRegenIdleTimeout", "UnitShieldRegenRate",
-        "UnitShieldRegenRateLimit", "UpdateVisual", "UpgradeLevel", "VeterancyBonus", "VeterancyRankAdd",
+        "UnitShieldRegenRateLimit", "UpdateVisual", "VeterancyBonus", "VeterancyRankAdd",
         "VolleyMode", "WorkRateAll", "Yield", "YieldSpecific"
     ];
 
@@ -454,7 +454,7 @@ public partial class TechnologyEditorView : UserControl
         affectedStringIds.UnionWith(CollectReferencedTechnologyStringIds(restored));
         var prefixes = new[] { technologyName, savedName }
             .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => BuildTechnologyStringPrefix(name!))
+            .SelectMany(name => BuildTechnologyOwnedStringPrefixes(name!))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         affectedStringIds.UnionWith(_pendingStringUpdates.Keys.Where(id =>
@@ -510,7 +510,8 @@ public partial class TechnologyEditorView : UserControl
                 continue;
 
             if (CollectReferencedTechnologyStringIds(technology).Contains(stringId) ||
-                stringId.StartsWith(BuildTechnologyStringPrefix(dirtyName), StringComparison.OrdinalIgnoreCase))
+                BuildTechnologyOwnedStringPrefixes(dirtyName).Any(prefix =>
+                    stringId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                 return true;
         }
 
@@ -534,6 +535,14 @@ public partial class TechnologyEditorView : UserControl
         return displayNameId.EndsWith("_NAME", StringComparison.Ordinal)
             ? displayNameId[..^5] + "_"
             : displayNameId + "_";
+    }
+
+    private static IEnumerable<string> BuildTechnologyOwnedStringPrefixes(string technologyName)
+    {
+        var token = NormalizeTechnologyStringToken(technologyName);
+        yield return BuildTechnologyStringPrefix(technologyName);
+        yield return $"STR_BUFFICON_{token}_";
+        yield return $"STR_POWERICON_{token}_";
     }
 
     public IReadOnlyList<string> GetTechnologyNames(bool modified)
@@ -2320,7 +2329,7 @@ public partial class TechnologyEditorView : UserControl
             await AddEffectStringAttributeRowAsync(content, effect, tooltipIdAttribute, "Tooltip override", 380, removable: true, multiline: true);
 
         var structured = await AddStructuredEffectBodyAsync(effect, content, currentType);
-        if (!structured)
+        if (!structured && !string.IsNullOrWhiteSpace(currentType))
             AddRawEffectXmlEditor(effect, content);
 
         _effectsPanel.Children.Add(border);
@@ -2401,6 +2410,79 @@ public partial class TechnologyEditorView : UserControl
                 AddPlayerPowerAmountDataEffectEditor(effect, content, allowOverride: true);
                 return true;
             }
+            if (subtype.Equals("GodPowerCost", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("GodPowerCostFactor", StringComparison.OrdinalIgnoreCase))
+            {
+                AddPlayerRelativityAmountDataEffectEditor(effect, content, allowOverride: true);
+                return true;
+            }
+            if (subtype.Equals("GodPowerROF", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("GodPowerROFFactor", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("TributePenalty", StringComparison.OrdinalIgnoreCase))
+            {
+                AddPlayerRelativityAmountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("TimeShiftingConcurrentShifts", StringComparison.OrdinalIgnoreCase))
+            {
+                AddRestrictedPlayerRelativityAmountDataEffectEditor(
+                    effect, content, ["Absolute", "Assign", "Override"]);
+                return true;
+            }
+            if (subtype.Equals("Enable", StringComparison.OrdinalIgnoreCase))
+            {
+                AddEnableDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("DoubleEffect", StringComparison.OrdinalIgnoreCase))
+            {
+                AddDoubleEffectDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("Cost", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("cost", StringComparison.OrdinalIgnoreCase))
+            {
+                AddCostDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("ResearchPoints", StringComparison.OrdinalIgnoreCase))
+            {
+                AddResearchPointsDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("BuildingChainActive", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("CombatXP", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("RevealAllyUI", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("RevealEnemyUI", StringComparison.OrdinalIgnoreCase))
+            {
+                AddPlayerEnableDisableDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("GodPower", StringComparison.OrdinalIgnoreCase))
+            {
+                AddGodPowerDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("BuildingChainEffect", StringComparison.OrdinalIgnoreCase))
+            {
+                AddBuildingChainEffectDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("BuildingChainResourceFactor", StringComparison.OrdinalIgnoreCase))
+            {
+                AddBuildingChainResourceFactorDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("BuffIconOverride", StringComparison.OrdinalIgnoreCase))
+            {
+                await AddIconOverrideDataEffectEditorAsync(effect, content, subtype, includePower: false);
+                return true;
+            }
+            if (subtype.Equals("PowerIconOverride", StringComparison.OrdinalIgnoreCase))
+            {
+                await AddIconOverrideDataEffectEditorAsync(effect, content, subtype, includePower: true);
+                return true;
+            }
             if (subtype.Equals("AddGoal", StringComparison.OrdinalIgnoreCase))
             {
                 AddGoalDataEffectEditor(effect, content);
@@ -2424,6 +2506,17 @@ public partial class TechnologyEditorView : UserControl
             if (subtype.Equals("SetGoalActive", StringComparison.OrdinalIgnoreCase))
             {
                 AddSetGoalActiveDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("SetGoalFlag", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSetGoalFlagDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("SetGoalSpawnLocationLand", StringComparison.OrdinalIgnoreCase) ||
+                subtype.Equals("SetGoalSpawnLocationWater", StringComparison.OrdinalIgnoreCase))
+            {
+                AddSetGoalSpawnLocationDataEffectEditor(effect, content);
                 return true;
             }
             if (subtype.Equals("BountyResourceEarningReward", StringComparison.OrdinalIgnoreCase) ||
@@ -2479,6 +2572,16 @@ public partial class TechnologyEditorView : UserControl
             if (subtype.Equals("ResourceByUnitCount", StringComparison.OrdinalIgnoreCase))
             {
                 AddResourceByUnitCountDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("ResourceByKBQuery", StringComparison.OrdinalIgnoreCase))
+            {
+                AddResourceByKbQueryDataEffectEditor(effect, content);
+                return true;
+            }
+            if (subtype.Equals("ResourceByKBStat", StringComparison.OrdinalIgnoreCase))
+            {
+                AddResourceByKbStatDataEffectEditor(effect, content);
                 return true;
             }
             if (subtype.Equals("PopulationLimit", StringComparison.OrdinalIgnoreCase))
@@ -3085,6 +3188,159 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
+    private void AddGodPowerDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureFixedDataAttribute(effect, "relativity", "Absolute");
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsureFixedDataAttribute(effect, "cooldown", "1");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Power", CreateStrictEffectSelector(
+            _godPowerNames,
+            GetCaseInsensitiveAttribute(effect, "power")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "power", value),
+            200), leftSpacing: 8));
+        row.Children.Add(CreateRestrictedDataRelativityCombo(effect, ["Absolute", "Assign"]));
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Amount",
+            CreateSignedFloatEffectBox(effect, "amount", 80, "0")));
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Cooldown",
+            CreatePositiveFloatEffectBox(effect, "cooldown", 80, "1"),
+            leftSpacing: 8));
+        content.Children.Add(row);
+    }
+
+    private void AddBuildingChainEffectDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsureFixedDataAttribute(effect, "effecttype", "Connected");
+        EnsurePlayerTarget(effect);
+
+        var currentModifyType = ProtoConstants.GetModifyTypeValue(GetCaseInsensitiveAttribute(effect, "modifytype")?.Value ?? "");
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Unit", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "unittype", value),
+            190), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("If", CreateDataAttributeCombo(
+            effect, "effecttype", ["Connected", "Isolate", "InRange"], "Connected", 115), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Modify", CreateStrictEffectSelector(
+            ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName),
+            ProtoConstants.GetModifyTypeDisplayName(currentModifyType),
+            value =>
+            {
+                var normalized = ProtoConstants.GetModifyTypeValue(value);
+                if (string.IsNullOrWhiteSpace(normalized)) RemoveCaseInsensitiveAttribute(effect, "modifytype");
+                else SetCaseInsensitiveAttribute(effect, "modifytype", normalized);
+                if (normalized is not "DamageSpecific" and not "ArmorSpecific")
+                {
+                    RemoveCaseInsensitiveAttribute(effect, "damagetype");
+                    _openOnHitOptionalSelectors.Remove((effect, "damagetype"));
+                }
+                _ = BuildEditorAsync();
+            },
+            180), leftSpacing: 8));
+        if (currentModifyType is "DamageSpecific" or "ArmorSpecific")
+        {
+            EnsureFixedDataAttribute(effect, "damagetype", "Hack");
+            row.Children.Add(CreateLabeledEffectSegment(
+                "Damage type",
+                CreateRequiredDataTypeCombo(effect, currentModifyType == "DamageSpecific"),
+                leftSpacing: 8));
+        }
+        AddDataRelativityAndAmountEditors(effect, row);
+        AddOptionalEffectAttribute(
+            row, effect, "Damage time out", "timeout", "0", 80,
+            ProtoUnitNumericKind.UnsignedFloat, buttonLeftSpacing: 8);
+        content.Children.Add(row);
+    }
+
+    private void AddBuildingChainResourceFactorDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        content.Children.Add(row);
+    }
+
+    private async Task AddIconOverrideDataEffectEditorAsync(
+        XElement effect,
+        StackPanel content,
+        string subtype,
+        bool includePower)
+    {
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsurePlayerTarget(effect);
+
+        var pathStringId = GetCaseInsensitiveAttribute(effect, "pathstrid")?.Value.Trim() ?? "";
+        var iconPath = pathStringId.Length == 0 ? "" : await ResolveTechnologyStringValueAsync(pathStringId);
+        var iconEditor = new AssetPathEditor
+        {
+            IsEnabled = IsModifiedTab,
+            Opacity = IsModifiedTab ? 1.0 : 0.55,
+            Width = 260,
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+        iconEditor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
+        iconEditor.Configure(
+            ProtoEditorWindow.NormalizeIconCatalogValue(iconPath, _iconPaths),
+            _iconPaths,
+            async value =>
+            {
+                if (!IsModifiedTab) return;
+                var existingId = GetCaseInsensitiveAttribute(effect, "pathstrid")?.Value.Trim() ?? "";
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    if (IsOwnedIconOverrideStringId(existingId)) QueueStringForRemoval(existingId);
+                    RemoveCaseInsensitiveAttribute(effect, "pathstrid");
+                    MarkDirty();
+                    UpdatePreview();
+                    return;
+                }
+
+                var technology = effect.Ancestors().FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? _current;
+                if (technology == null) return;
+                var technologyName = GetCaseInsensitiveAttribute(technology, "name")?.Value.Trim() ?? "";
+                var stringId = IsIconOverrideStringIdForEffect(existingId, technologyName, subtype)
+                    ? existingId
+                    : BuildNextIconOverrideStringId(technology, subtype, effect);
+                if (!existingId.Equals(stringId, StringComparison.OrdinalIgnoreCase) && IsOwnedIconOverrideStringId(existingId))
+                    QueueStringForRemoval(existingId);
+                SetCaseInsensitiveAttribute(effect, "pathstrid", stringId);
+                _pendingStringRemovals.Remove(stringId);
+                _pendingStringUpdates[stringId] = value;
+                MarkDirty();
+                UpdatePreview();
+                await Task.CompletedTask;
+            });
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        if (includePower)
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Power", CreateStrictEffectSelector(
+                _godPowerNames,
+                GetCaseInsensitiveAttribute(effect, "protopower")?.Value.Trim() ?? "",
+                value => SetOptionalDataAttribute(effect, "protopower", value),
+                200), leftSpacing: 8));
+        }
+        row.Children.Add(CreateLabeledEffectSegment("New icon", iconEditor, leftSpacing: 8));
+        content.Children.Add(row);
+    }
+
     private void AddGoalDataEffectEditor(XElement effect, StackPanel content)
     {
         EnsureExactDataAttribute(effect, "relativity", "Assign");
@@ -3188,6 +3444,47 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
         row.Children.Add(CreateLabeledEffectSegment("Goal", CreateInternalNameEffectAttributeBox(effect, "goalname", 150), leftSpacing: 8));
         row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        content.Children.Add(row);
+    }
+
+    private void AddSetGoalFlagDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+        EnsurePlayerTarget(effect);
+
+        var flags = new[]
+        {
+            "AgeRestricted", "ArchaicSpawn", "CultureRestricted", "CurrentAgeOnly",
+            "DisplayOnHUD", "ForceSpawn", "NextAgeOnly", "IgnoreAgeRoll"
+        };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Goal", CreateInternalNameEffectAttributeBox(effect, "goalname", 150), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Flag", CreateStrictEffectSelector(
+            flags,
+            GetCaseInsensitiveAttribute(effect, "flagname")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "flagname", value),
+            160,
+            preserveSuggestionOrder: true), leftSpacing: 8));
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        content.Children.Add(row);
+    }
+
+    private void AddSetGoalSpawnLocationDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureExactDataAttribute(effect, "amount", "1");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Goal", CreateInternalNameEffectAttributeBox(effect, "goalname", 150), leftSpacing: 8));
+        row.Children.Add(CreateLabeledEffectSegment("Location", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "locationprotoid")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "locationprotoid", value),
+            190), leftSpacing: 8));
         content.Children.Add(row);
     }
 
@@ -3388,6 +3685,404 @@ public partial class TechnologyEditorView : UserControl
         content.Children.Add(row);
     }
 
+    private void AddRestrictedPlayerRelativityAmountDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        IReadOnlyList<string> allowedRelativities)
+    {
+        EnsureFixedDataAttribute(effect, "relativity", allowedRelativities[0]);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateRestrictedDataRelativityCombo(effect, allowedRelativities));
+        row.Children.Add(CreateLabeledEffectSegment(
+            "Amount",
+            CreateSignedFloatEffectBox(effect, "amount", 80, "0")));
+        content.Children.Add(row);
+    }
+
+    private void AddPlayerEnableDisableDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        content.Children.Add(row);
+    }
+
+    private void AddEnableDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+
+        var target = effect.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        var playerMode = string.Equals(
+            GetCaseInsensitiveAttribute(target ?? new XElement("target"), "type")?.Value,
+            "Player",
+            StringComparison.OrdinalIgnoreCase);
+        if (playerMode)
+        {
+            EnsureFixedDataAttribute(effect, "system", "BonusUnits");
+        }
+        else if (IsModifiedTab && GetCaseInsensitiveAttribute(effect, "system") != null)
+        {
+            RemoveCaseInsensitiveAttribute(effect, "system");
+            MarkDirty();
+            UpdatePreview();
+        }
+        var targetMode = playerMode ? "Player" : "Unit";
+        var targetModeCombo = new ComboBox
+        {
+            ItemsSource = new[] { "Unit", "Player" },
+            SelectedItem = targetMode,
+            IsEnabled = IsModifiedTab,
+            Width = 100,
+            Margin = new Thickness(0, 4, 8, 4)
+        };
+        targetModeCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || targetModeCombo.SelectedItem is not string selected) return;
+            var currentTarget = EnsureDataTarget(effect);
+            currentTarget.RemoveAttributes();
+            currentTarget.RemoveNodes();
+            currentTarget.SetAttributeValue("type", selected == "Player" ? "Player" : "ProtoUnit");
+            RemoveCaseInsensitiveAttribute(effect, "system");
+            SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
+            MarkDirty();
+            _ = BuildEditorAsync();
+        };
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(targetModeCombo);
+        if (playerMode)
+        {
+            row.Children.Add(CreateLabeledEffectSegment(
+                "System",
+                CreateDataAttributeCombo(
+                    effect,
+                    "system",
+                    ["BonusUnits", "BountyResourceEarning"],
+                    "BonusUnits",
+                    180),
+                leftSpacing: 0));
+        }
+        else
+        {
+            row.Children.Add(CreateStrictEffectSelector(
+                _protoUnitNames,
+                target?.Value.Trim() ?? "",
+                value =>
+                {
+                    var currentTarget = EnsureDataTarget(effect);
+                    SetCaseInsensitiveAttribute(currentTarget, "type", "ProtoUnit");
+                    currentTarget.Value = value;
+                    RemoveCaseInsensitiveAttribute(effect, "system");
+                    MarkDirty();
+                    UpdatePreview();
+                },
+                200));
+        }
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        content.Children.Add(row);
+    }
+
+    private void AddDoubleEffectDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureExactDataAttribute(effect, "relativity", "Assign");
+        EnsureFixedDataAttribute(effect, "amount", "1");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddTechnologyTargetEditor(effect, row);
+        row.Children.Add(CreateEnableDisableAmountCombo(effect));
+        content.Children.Add(row);
+    }
+
+    private void AddCostDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+
+        var target = effect.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        var targetType = GetCaseInsensitiveAttribute(target ?? new XElement("target"), "type")?.Value ?? "ProtoUnit";
+        var unitMode = targetType.Equals("ProtoUnit", StringComparison.OrdinalIgnoreCase);
+        var targetKindCombo = new ComboBox
+        {
+            ItemsSource = new[] { "Unit", "Tech" },
+            SelectedItem = unitMode ? "Unit" : "Tech",
+            IsEnabled = IsModifiedTab,
+            Width = 90,
+            Margin = new Thickness(0, 4, 8, 4)
+        };
+        targetKindCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || targetKindCombo.SelectedItem is not string selected) return;
+            SetTechnologyDataTargetMode(effect, selected == "Unit" ? "ProtoUnit" : "Tech");
+            _ = BuildEditorAsync();
+        };
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(targetKindCombo);
+        if (unitMode)
+        {
+            row.Children.Add(CreateLabeledEffectSegment("Unit", CreateStrictEffectSelector(
+                _prereqUnitNames,
+                target?.Value.Trim() ?? "",
+                value =>
+                {
+                    var currentTarget = EnsureDataTarget(effect);
+                    SetCaseInsensitiveAttribute(currentTarget, "type", "ProtoUnit");
+                    currentTarget.Value = value;
+                    MarkDirty();
+                    UpdatePreview();
+                },
+                200), leftSpacing: 0));
+        }
+        else
+        {
+            AddTechnologyTargetEditor(effect, row);
+        }
+
+        AddDataRelativityAndAmountEditors(effect, row, allowOverride: true);
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddOnHitOptionalReferenceSelector(
+            row,
+            effect,
+            "Required tech",
+            "Required tech",
+            "reqTech",
+            GetTechnologyNames(),
+            200,
+            showWhenMissing: false,
+            buttonLeftSpacing: 8);
+        content.Children.Add(row);
+    }
+
+    private void AddResearchPointsDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddTechnologyTargetEditor(effect, row);
+        AddDataRelativityAndAmountEditors(effect, row);
+        content.Children.Add(row);
+    }
+
+    private void AddTechnologyTargetEditor(XElement effect, WrapPanel row)
+    {
+        var target = effect.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
+        var targetType = GetCaseInsensitiveAttribute(target ?? new XElement("target"), "type")?.Value ?? "Tech";
+        var currentMode = TechnologyTargetTypeToDisplay(targetType);
+        var modeCombo = new ComboBox
+        {
+            ItemsSource = new[] { "Tech", "All Techs", "Tech with Flag", "Tech Type" },
+            SelectedItem = currentMode,
+            IsEnabled = IsModifiedTab,
+            Width = 125,
+            Margin = new Thickness(0, 4, 8, 4)
+        };
+        modeCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || modeCombo.SelectedItem is not string selected) return;
+            SetTechnologyDataTargetMode(effect, TechnologyTargetDisplayToType(selected));
+            _ = BuildEditorAsync();
+        };
+        row.Children.Add(modeCombo);
+
+        if (currentMode == "Tech")
+        {
+            row.Children.Add(CreateStrictEffectSelector(
+                GetTechnologyNames(),
+                target?.Value.Trim() ?? "",
+                value => SetTechnologyDataTargetValue(effect, "Tech", value),
+                200));
+            return;
+        }
+        if (currentMode == "Tech with Flag")
+        {
+            row.Children.Add(CreateStrictEffectSelector(
+                GetTechnologyFlagNames(),
+                target?.Value.Trim() ?? "",
+                value => SetTechnologyDataTargetValue(effect, "techWithFlag", value),
+                180));
+            return;
+        }
+        if (currentMode == "Tech Type")
+        {
+            row.Children.Add(CreateStrictEffectSelector(
+                _techTypeNames,
+                target?.Value.Trim() ?? "",
+                value => SetTechnologyDataTargetValue(effect, "TechType", value),
+                180));
+            return;
+        }
+
+        AddAllTechnologiesTargetOptions(effect, target, row);
+    }
+
+    private void AddAllTechnologiesTargetOptions(XElement effect, XElement? target, WrapPanel row)
+    {
+        var noAgeUp = new CheckBox
+        {
+            Content = "No age tech",
+            IsChecked = target != null && GetCaseInsensitiveAttribute(target, "ignoreageups") != null,
+            IsEnabled = IsModifiedTab,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 4, 8, 4)
+        };
+        noAgeUp.IsCheckedChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
+            if (noAgeUp.IsChecked == true) SetCaseInsensitiveAttribute(currentTarget, "ignoreageups", "");
+            else RemoveCaseInsensitiveAttribute(currentTarget, "ignoreageups");
+            MarkDirty();
+            UpdatePreview();
+        };
+        row.Children.Add(noAgeUp);
+
+        var exclusionAttribute = target == null ? null : GetCaseInsensitiveAttribute(target, "excludetypes");
+        var exclusionKey = (effect, "target.excludetypes");
+        if (exclusionAttribute == null && !_openOnHitOptionalSelectors.Contains(exclusionKey))
+        {
+            if (!IsModifiedTab) return;
+            var addExclusion = CreateOptionalPropertyButton("Exclude tech");
+            addExclusion.Click += (_, _) =>
+            {
+                _openOnHitOptionalSelectors.Add(exclusionKey);
+                _ = BuildEditorAsync();
+            };
+            row.Children.Add(addExclusion);
+            return;
+        }
+
+        var exclusions = (exclusionAttribute?.Value ?? "")
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var exclusionGroup = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 0, 0)
+        };
+        exclusionGroup.Children.Add(CreateInlineLabel("Exclude"));
+        if (IsModifiedTab)
+        {
+            exclusionGroup.Children.Add(CreateStrictEffectSelector(
+                _techTypeNames.Where(value => !exclusions.Contains(value, StringComparer.OrdinalIgnoreCase)),
+                "",
+                value =>
+                {
+                    if (string.IsNullOrWhiteSpace(value)) return;
+                    var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
+                    var currentValues = (GetCaseInsensitiveAttribute(currentTarget, "excludetypes")?.Value ?? "")
+                        .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .ToList();
+                    if (!currentValues.Contains(value, StringComparer.OrdinalIgnoreCase)) currentValues.Add(value);
+                    SetCaseInsensitiveAttribute(currentTarget, "excludetypes", string.Join('|', currentValues));
+                    _openOnHitOptionalSelectors.Remove(exclusionKey);
+                    MarkDirty();
+                    _ = BuildEditorAsync();
+                },
+                50));
+        }
+
+        foreach (var exclusion in exclusions)
+        {
+            var captured = exclusion;
+            exclusionGroup.Children.Add(EditorChipService.CreateBlueChip(
+                captured,
+                IsModifiedTab ? () =>
+                {
+                    var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
+                    var remaining = (GetCaseInsensitiveAttribute(currentTarget, "excludetypes")?.Value ?? "")
+                        .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(value => !value.Equals(captured, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    SetCaseInsensitiveAttribute(currentTarget, "excludetypes", string.Join('|', remaining));
+                    MarkDirty();
+                    _ = BuildEditorAsync();
+                } : null,
+                readOnly: !IsModifiedTab));
+        }
+        if (IsModifiedTab)
+        {
+            exclusionGroup.Children.Add(CreateRemoveButton(() =>
+            {
+                var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
+                RemoveCaseInsensitiveAttribute(currentTarget, "excludetypes");
+                _openOnHitOptionalSelectors.Remove(exclusionKey);
+            }));
+        }
+        row.Children.Add(exclusionGroup);
+    }
+
+    private IEnumerable<string> GetTechnologyNames()
+        => _original.Keys.Concat(_modified.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
+
+    private IEnumerable<string> GetTechnologyFlagNames()
+        => _original.Values.Concat(_modified.Values)
+            .SelectMany(technology => technology.Elements()
+                .Where(element => element.Name.LocalName.Equals("flag", StringComparison.OrdinalIgnoreCase)))
+            .Select(element => element.Value.Trim())
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
+
+    private void SetTechnologyDataTargetMode(XElement effect, string type)
+    {
+        var target = EnsureDataTarget(effect);
+        target.RemoveAttributes();
+        target.RemoveNodes();
+        target.SetAttributeValue("type", type);
+        MarkDirty();
+        UpdatePreview();
+    }
+
+    private void SetTechnologyDataTargetValue(XElement effect, string type, string value)
+    {
+        var target = EnsureTechnologyDataTarget(effect, type);
+        target.Value = value;
+        MarkDirty();
+        UpdatePreview();
+    }
+
+    private XElement EnsureTechnologyDataTarget(XElement effect, string type)
+    {
+        var target = EnsureDataTarget(effect);
+        SetCaseInsensitiveAttribute(target, "type", type);
+        return target;
+    }
+
+    private static string TechnologyTargetTypeToDisplay(string type)
+        => type.ToLowerInvariant() switch
+        {
+            "techall" => "All Techs",
+            "techwithflag" => "Tech with Flag",
+            "techtype" => "Tech Type",
+            _ => "Tech"
+        };
+
+    private static string TechnologyTargetDisplayToType(string display)
+        => display switch
+        {
+            "All Techs" => "techAll",
+            "Tech with Flag" => "techWithFlag",
+            "Tech Type" => "TechType",
+            _ => "Tech"
+        };
+
     private void AddResourceIfTechActiveDataEffectEditor(XElement effect, StackPanel content)
     {
         MigrateDataAttribute(effect, "active", "tech");
@@ -3440,6 +4135,70 @@ public partial class TechnologyEditorView : UserControl
             UpdatePreview();
         };
         row.Children.Add(includeDead);
+        content.Children.Add(row);
+    }
+
+    private void AddResourceByKbQueryDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsureFixedDataAttribute(effect, "querystate", "Any");
+        EnsurePlayerTarget(effect);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("For each", CreateStrictEffectSelector(
+            _prereqUnitNames,
+            GetCaseInsensitiveAttribute(effect, "queryunittype")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "queryunittype", value),
+            190), leftSpacing: 8));
+        row.Children.Add(CreateDataAttributeCombo(
+            effect, "querystate", ["Building", "Alive", "Dead", "Queued", "Any"], "Any", 110));
+        AddOptionalEffectAttribute(
+            row, effect, "Resource cap", "resourcecap", "1", 80,
+            ProtoUnitNumericKind.PositiveInteger, requirePositive: true, buttonLeftSpacing: 8);
+        content.Children.Add(row);
+    }
+
+    private void AddResourceByKbStatDataEffectEditor(XElement effect, StackPanel content)
+    {
+        EnsureDefaultDataRelativity(effect);
+        EnsureFixedDataAttribute(effect, "amount", "0");
+        EnsurePlayerTarget(effect);
+
+        var currentStat = GetCaseInsensitiveAttribute(effect, "kbstat")?.Value.Trim() ?? "";
+        var currentUsesResource = KbStatsUsingResourceParameter.Contains(currentStat);
+        var statSelector = CreateStrictEffectSelector(
+            KbStatNames,
+            currentStat,
+            value =>
+            {
+                var newUsesResource = KbStatsUsingResourceParameter.Contains(value);
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "kbstat");
+                else SetCaseInsensitiveAttribute(effect, "kbstat", value);
+                if (!newUsesResource) RemoveCaseInsensitiveAttribute(effect, "kbparamresource");
+                if (currentUsesResource != newUsesResource) _ = BuildEditorAsync();
+            },
+            180,
+            preserveSuggestionOrder: true);
+
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
+        row.Children.Add(CreateLabeledEffectSegment("Resource", CreateResourceCombo(effect, "resource"), leftSpacing: 8));
+        AddDataRelativityAndAmountEditors(effect, row);
+        row.Children.Add(CreateLabeledEffectSegment("Stat", statSelector, leftSpacing: 8));
+        if (currentUsesResource)
+        {
+            row.Children.Add(CreateLabeledEffectSegment(
+                "Resource",
+                CreateResourceCombo(effect, "kbparamresource"),
+                leftSpacing: 8));
+        }
+        AddOptionalEffectAttribute(
+            row, effect, "Resource cap", "resourcecap", "1", 80,
+            ProtoUnitNumericKind.PositiveInteger, requirePositive: true, buttonLeftSpacing: 8);
         content.Children.Add(row);
     }
 
@@ -4965,6 +5724,24 @@ public partial class TechnologyEditorView : UserControl
         return box;
     }
 
+    private TextBox CreatePositiveFloatEffectBox(XElement effect, string attributeName, double width, string defaultValue)
+    {
+        var box = CreateNumericTextBox(
+            FormatNumericForDisplay(GetCaseInsensitiveAttribute(effect, attributeName)?.Value ?? defaultValue),
+            width);
+        EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.PositiveFloat);
+        box.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab) return;
+            var value = box.Text ?? "";
+            if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) || number <= 0) return;
+            SetCaseInsensitiveAttribute(effect, attributeName, value);
+            MarkDirty();
+            UpdatePreview();
+        };
+        return box;
+    }
+
     private TextBox CreateInternalNameEffectAttributeBox(XElement effect, string attributeName, double width)
     {
         var stored = GetCaseInsensitiveAttribute(effect, attributeName)?.Value.Trim() ?? "";
@@ -5682,6 +6459,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void ResetDataEffectForSubtype(XElement effect, string subtype)
     {
+        QueueDataIconOverrideStringForRemoval(effect);
         var metadata = effect.Attributes()
             .Where(a => a.Name.LocalName.Equals("hideTooltip", StringComparison.OrdinalIgnoreCase)
                      || a.Name.LocalName.Equals("delay", StringComparison.OrdinalIgnoreCase)
@@ -6070,24 +6848,11 @@ public partial class TechnologyEditorView : UserControl
     private void AddCreatePowerEffectEditor(XElement effect, StackPanel content)
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(CreateInlineLabel("Power"));
-        var attribute = GetCaseInsensitiveAttribute(effect, "protoPower");
-        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
-        {
-            Text = attribute?.Value ?? "",
-            IsEnabled = IsModifiedTab,
-            Width = 200,
-            MaxWidth = 200,
-            Margin = new Thickness(0, 4, 0, 4)
-        });
-        box.Width = box.MaxWidth = 200;
-        box.TextChanged += (_, _) =>
-        {
-            if (_loadingUi || !IsModifiedTab) return;
-            SetCaseInsensitiveAttribute(effect, "protoPower", box.Text ?? "");
-            MarkDirty(); UpdatePreview();
-        };
-        row.Children.Add(box);
+        row.Children.Add(CreateLabeledEffectSegment("Power", CreateStrictEffectSelector(
+            _godPowerNames,
+            GetCaseInsensitiveAttribute(effect, "protoPower")?.Value.Trim() ?? "",
+            value => SetOptionalDataAttribute(effect, "protoPower", value),
+            200)));
         content.Children.Add(row);
     }
 
@@ -6848,6 +7613,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void QueueEffectOwnedStringsForRemoval(XElement effect)
     {
+        QueueDataIconOverrideStringForRemoval(effect);
         foreach (var attrName in new[] { "tooltipID", "newName", "newRollover", "newShortRollover", "selfMsg", "playerMsg" })
         {
             var id = GetCaseInsensitiveAttribute(effect, attrName)?.Value.Trim();
@@ -6997,6 +7763,57 @@ public partial class TechnologyEditorView : UserControl
         {
             _technologyNameCommitGate.Release();
         }
+    }
+
+    private void QueueDataIconOverrideStringForRemoval(XElement effect)
+    {
+        var type = GetCaseInsensitiveAttribute(effect, "type")?.Value ?? "";
+        var subtype = GetCaseInsensitiveAttribute(effect, "subtype")?.Value ?? "";
+        if (!type.Equals("Data", StringComparison.OrdinalIgnoreCase) ||
+            (!subtype.Equals("BuffIconOverride", StringComparison.OrdinalIgnoreCase) &&
+             !subtype.Equals("PowerIconOverride", StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        var id = GetCaseInsensitiveAttribute(effect, "pathstrid")?.Value.Trim() ?? "";
+        if (IsOwnedIconOverrideStringId(id)) QueueStringForRemoval(id);
+    }
+
+    internal static bool IsOwnedIconOverrideStringId(string id)
+        => Regex.IsMatch(id, @"^STR_(?:BUFFICON|POWERICON)_.+_OVERRIDE\d*$", RegexOptions.IgnoreCase);
+
+    private static bool IsIconOverrideStringIdForEffect(string id, string technologyName, string subtype)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return false;
+        var baseId = BuildIconOverrideStringBase(technologyName, subtype);
+        if (!id.StartsWith(baseId, StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = id[baseId.Length..];
+        return suffix.Length == 0 || suffix.All(char.IsDigit);
+    }
+
+    private string BuildNextIconOverrideStringId(XElement technology, string subtype, XElement excludingEffect)
+    {
+        var technologyName = GetCaseInsensitiveAttribute(technology, "name")?.Value.Trim() ?? "";
+        var used = CollectTechnologyStringIds(technology, excludingEffect);
+        return BuildNextIconOverrideStringId(technologyName, subtype, used);
+    }
+
+    internal static string BuildNextIconOverrideStringId(string technologyName, string subtype, ISet<string> used)
+    {
+        var baseId = BuildIconOverrideStringBase(technologyName, subtype);
+        if (!used.Contains(baseId)) return baseId;
+        for (var index = 1; ; index++)
+        {
+            var candidate = baseId + index.ToString(CultureInfo.InvariantCulture);
+            if (!used.Contains(candidate)) return candidate;
+        }
+    }
+
+    internal static string BuildIconOverrideStringBase(string technologyName, string subtype)
+    {
+        var kind = subtype.Equals("PowerIconOverride", StringComparison.OrdinalIgnoreCase)
+            ? "POWERICON"
+            : "BUFFICON";
+        return $"STR_{kind}_{NormalizeTechnologyStringToken(technologyName)}_OVERRIDE";
     }
 
     private async Task<bool> CommitPendingTechnologyNameAsync()
@@ -7223,6 +8040,27 @@ public partial class TechnologyEditorView : UserControl
                     _pendingStringRemovals.Remove(newId);
                     _pendingStringUpdates[newId] = text;
                 }
+            }
+            else if (type.Equals("Data", StringComparison.OrdinalIgnoreCase))
+            {
+                var subtype = GetCaseInsensitiveAttribute(effect, "subtype")?.Value ?? "";
+                if (!subtype.Equals("BuffIconOverride", StringComparison.OrdinalIgnoreCase) &&
+                    !subtype.Equals("PowerIconOverride", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var attribute = GetCaseInsensitiveAttribute(effect, "pathstrid");
+                if (attribute == null || string.IsNullOrWhiteSpace(attribute.Value)) continue;
+                var oldId = attribute.Value.Trim();
+                var text = await ResolveTechnologyStringValueAsync(oldId);
+                used.Remove(oldId);
+                var newId = BuildNextIconOverrideStringId(technologyName, subtype, used);
+                used.Add(newId);
+                if (removeOldIds && !oldId.Equals(newId, StringComparison.OrdinalIgnoreCase) &&
+                    IsOwnedIconOverrideStringId(oldId))
+                    QueueStringForRemoval(oldId);
+                attribute.Value = newId;
+                _pendingStringRemovals.Remove(newId);
+                _pendingStringUpdates[newId] = text;
             }
         }
     }

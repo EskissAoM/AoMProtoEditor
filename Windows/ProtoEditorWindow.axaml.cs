@@ -309,6 +309,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private string _lastProtoUnitTransformReadErrorSignature = "";
     private List<string>? _cachedBuildLimitTargets;
     private List<UnitTypeDefinition>? _cachedUnitTypeDefinitions;
+    private List<TechTypeDefinition>? _cachedTechTypeDefinitions;
     private List<string>? _cachedResourceSubtypeNames;
     private List<string>? _cachedPlacementFileNames;
     private List<string>? _cachedPathabilityFlags;
@@ -3103,6 +3104,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _cachedCommandNames = null;
         _cachedBuildLimitTargets = null;
         _cachedUnitTypeDefinitions = null;
+        _cachedTechTypeDefinitions = null;
         _cachedHotkeyContexts = null;
 
         if (includeTechNames)
@@ -6349,63 +6351,39 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private IReadOnlyList<string> GetTechnologyTechTypeNames()
+        => GetTechTypeDefinitions().Select(definition => definition.Name).ToList();
+
+    private IReadOnlyList<TechTypeDefinition> GetTechTypeDefinitions()
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_protoDataBarFile?.Entries != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
+        if (_cachedTechTypeDefinitions != null)
+            return _cachedTechTypeDefinitions;
+
+        IReadOnlyList<TechTypeDefinition> baseDefinitions =
+            TechTypeCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
+        if (baseDefinitions.Count == 0)
         {
-            using var stream = File.OpenRead(_protoDataBarPath);
-            foreach (var entry in _protoDataBarFile.Entries.Where(entry =>
-                         entry.Name.Contains("tech_types", StringComparison.OrdinalIgnoreCase) &&
-                         entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)))
+            try
             {
-                try
+                var dataBarPath = ResolveDataBarPath();
+                if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
                 {
-                    var xml = ReadBarXmbXml(entry, stream);
-                    if (string.IsNullOrWhiteSpace(xml)) continue;
-                    AddTechTypeNames(XDocument.Parse(xml), names);
-                }
-                catch
-                {
-                    // Keep names already found if one BAR entry is malformed.
+                    using var stream = File.OpenRead(dataBarPath);
+                    var barFile = new BarArchive(stream);
+                    if (barFile.Load(out _))
+                        baseDefinitions = TechTypeCatalog.ExtractBaseDefinitionsFromBar(barFile, dataBarPath);
                 }
             }
-        }
-
-        var modPath = GetCurrentModGameplayFilePath("tech_types_mods.xml");
-        if (File.Exists(modPath))
-        {
-            try { AddTechTypeNames(XDocument.Load(modPath), names); }
             catch
             {
-                // A malformed optional mod file should not prevent opening technologies.
+                // Fall back to loose gameplay XML when Data.bar is unavailable.
             }
         }
 
-        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    private static void AddTechTypeNames(XDocument document, ISet<string> names)
-    {
-        foreach (var element in document.Descendants())
-        {
-            var localName = element.Name.LocalName;
-            if (!localName.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
-                !localName.Equals("type", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var named = ((string?)element.Attribute("name"))?.Trim();
-            if (!string.IsNullOrWhiteSpace(named))
-            {
-                names.Add(named);
-                continue;
-            }
-
-            if (!element.HasElements)
-            {
-                var value = element.Value.Trim();
-                if (value.Length > 0) names.Add(value);
-            }
-        }
+        if (baseDefinitions.Count == 0)
+            baseDefinitions = TechTypeCatalog.ReadBaseFile(ResolveBaseGameplayXmlPath("tech_types.xml"));
+        var modDefinitions = TechTypeCatalog.ReadModFile(GetCurrentModGameplayFilePath("tech_types_mods.xml"));
+        _cachedTechTypeDefinitions = TechTypeCatalog.Merge(baseDefinitions, modDefinitions).ToList();
+        return _cachedTechTypeDefinitions;
     }
 
     private IReadOnlyList<XDocument> GetBaseTechtreeDocumentsFromLoadedBar()
@@ -14212,16 +14190,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(0, 4, 10, 4)
                     });
-                    var castPowerEditor = new TextBox
+                    var castPowerEditor = new AutoCompleteBox
                     {
                         Text = currentValues.TryGetValue("castpower", out var currentCastPower)
                             ? currentCastPower
                             : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "castpower"),
+                        FilterMode = AutoCompleteFilterMode.Contains,
                         IsEnabled = !_isReadOnly,
                         Width = 200,
                         VerticalAlignment = VerticalAlignment.Center
                     };
-                    EditorTextFieldStyle.ConfigureTextBox(castPowerEditor);
+                    EditorTextFieldStyle.ConfigureSelector(castPowerEditor);
+                    ConfigureStrictSuggestionAutoComplete(
+                        castPowerEditor,
+                        GetTechnologyGodPowerNames(),
+                        castPowerEditor.Text ?? "");
                     ApplyProtoActionFieldWidth(castPowerEditor, "castpower");
                     castPowerEditor.TextChanged += async (_, _) =>
                     {
@@ -33449,6 +33432,56 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private async Task OpenTechTypeManagerAsync()
+    {
+        if (_modXmlRoot == null && !await EnsureLocalModAsync())
+            return;
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
+            return;
+
+        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+            return;
+
+        _cachedTechTypeDefinitions = null;
+        var items = GetTechTypeDefinitions()
+            .Select(definition => new TechTypeManagerItem(
+                definition.Name,
+                definition.IsBuiltIn,
+                ResolveTechTypeUsage(definition.Name)))
+            .ToList();
+        var manager = new TechTypeManagerWindow(
+            items,
+            CreateTechTypeAsync,
+            RenameTechTypeAsync,
+            DeleteTechTypeAsync,
+            ResolveTechTypeUsage);
+        await manager.ShowDialog(this);
+
+        _cachedTechTypeDefinitions = null;
+        RefreshTechnologyViewAfterTechTypeChanges();
+    }
+
+    private void RefreshTechnologyViewAfterTechTypeChanges()
+    {
+        if (_technologyView == null)
+            return;
+
+        var modified = _technologyView.IsModifiedMode;
+        var selectedTechnology = _technologyView.CurrentTechnologyName;
+        _technologyView.BrowserStateChanged -= TechnologyView_BrowserStateChanged;
+        _technologyView.DirtyStateChanged -= TechnologyView_DirtyStateChanged;
+        if (ReferenceEquals(_technologyHost.Content, _technologyView))
+            _technologyHost.Content = null;
+        _technologyView = null;
+
+        if (_activeEntityKind != EditorEntityKind.Technologies)
+            return;
+
+        EnsureTechnologyView();
+        _technologyView!.SetModifiedMode(modified);
+        _technologyView.SelectTechnology(selectedTechnology);
+    }
+
     private static void KeepAutoCompleteTextStartVisible(AutoCompleteBox autoCompleteBox)
     {
         void ResetTextViewport()
@@ -33878,6 +33911,156 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             throw new InvalidOperationException($"Unit Type '{name}' already exists.");
         }
+    }
+
+    private TechTypeUsage ResolveTechTypeUsage(string techTypeName)
+    {
+        var usage = default(TechTypeUsage);
+        foreach (var document in GetBaseTechtreeDocumentsFromLoadedBar())
+            usage += TechTypeCatalog.GetTechnologyUsage(document, techTypeName);
+        try
+        {
+            var modDocument = LoadExistingTechtreeModsDocument(GetCurrentModGameplayFilePath("techtree_mods.xml"));
+            if (modDocument != null)
+                usage += TechTypeCatalog.GetTechnologyUsage(modDocument, techTypeName);
+        }
+        catch
+        {
+            // The manager remains usable for the original catalog; mutations surface malformed mod XML separately.
+        }
+        return usage;
+    }
+
+    private async Task<bool> CreateTechTypeAsync(string name)
+        => await MutateTechTypeDocumentAsync("create Tech Type", document =>
+        {
+            EnsureTechTypeNameAvailable(name);
+            TechTypeCatalog.AddDefinition(document, name);
+        });
+
+    private async Task<bool> RenameTechTypeAsync(string oldName, string newName)
+    {
+        var techTypePath = GetCurrentModGameplayFilePath("tech_types_mods.xml");
+        var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (string.IsNullOrWhiteSpace(techTypePath) || string.IsNullOrWhiteSpace(techtreePath))
+            return false;
+
+        try
+        {
+            EnsureTechTypeNameAvailable(newName, oldName);
+            var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
+            if (!TechTypeCatalog.RenameDefinition(techTypeDocument, oldName, newName))
+                throw new InvalidOperationException($"Custom Tech Type '{oldName}' was not found.");
+
+            var techtreeDocument = LoadExistingTechtreeModsDocument(techtreePath) ??
+                                   new XDocument(new XElement("techtreemods"));
+            var renamedAssignments = TechTypeCatalog.RenameTechnologyAssignments(techtreeDocument, oldName, newName);
+            var renamedEffects = TechTypeCatalog.RenameTechnologyEffectReferences(techtreeDocument, oldName, newName);
+            var renamedReferences = renamedAssignments + renamedEffects;
+            var paths = renamedReferences > 0 ? new[] { techTypePath, techtreePath } : new[] { techTypePath };
+            FileIntegrityTransaction.Execute(paths, () =>
+            {
+                SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
+                if (renamedReferences > 0)
+                    SaveXmlDocumentAtomic(techtreeDocument, techtreePath);
+            });
+
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Tech Type '{oldName}' renamed to '{newName}'.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await new Prompt(PromptType.Error, "Unable to rename Tech Type", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DeleteTechTypeAsync(string name)
+    {
+        var techTypePath = GetCurrentModGameplayFilePath("tech_types_mods.xml");
+        var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (string.IsNullOrWhiteSpace(techTypePath) || string.IsNullOrWhiteSpace(techtreePath))
+            return false;
+
+        try
+        {
+            var currentUsage = ResolveTechTypeUsage(name);
+            if (currentUsage.EffectUsageCount > 0)
+                throw new InvalidOperationException(
+                    $"'{name}' is used by {currentUsage.EffectUsageCount} technology effect(s) and cannot be removed. Remove or change those effect references first.");
+
+            var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
+            if (!TechTypeCatalog.DeleteDefinition(techTypeDocument, name))
+                throw new InvalidOperationException($"Custom Tech Type '{name}' was not found.");
+
+            var techtreeDocument = LoadExistingTechtreeModsDocument(techtreePath) ??
+                                   new XDocument(new XElement("techtreemods"));
+            var removedAssignments = TechTypeCatalog.RemoveTechnologyAssignments(techtreeDocument, name);
+            var paths = removedAssignments > 0 ? new[] { techTypePath, techtreePath } : new[] { techTypePath };
+            FileIntegrityTransaction.Execute(paths, () =>
+            {
+                SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
+                if (removedAssignments > 0)
+                    SaveXmlDocumentAtomic(techtreeDocument, techtreePath);
+            });
+
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = removedAssignments == 0
+                ? $"Tech Type '{name}' removed."
+                : $"Tech Type '{name}' and {removedAssignments} technology assignment(s) removed.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await new Prompt(PromptType.Error, "Unable to remove Tech Type", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> MutateTechTypeDocumentAsync(string operation, Action<XDocument> mutation)
+    {
+        var path = GetCurrentModGameplayFilePath("tech_types_mods.xml");
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        try
+        {
+            var document = TechTypeCatalog.LoadOrCreateModDocument(path);
+            mutation(document);
+            FileIntegrityTransaction.Execute([path], () => SaveTechTypeXmlDocument(document, path));
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = "Tech Type changes saved.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await new Prompt(PromptType.Error, $"Unable to {operation}", ex.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private void EnsureTechTypeNameAvailable(string name, string? ignoredCustomName = null)
+    {
+        if (!TechTypeCatalog.IsValidName(name))
+            throw new InvalidOperationException("Tech Type names can contain only letters, digits, '_' and '-'.");
+        if (GetTechTypeDefinitions().Any(definition =>
+                !definition.Name.Equals(ignoredCustomName, StringComparison.OrdinalIgnoreCase) &&
+                definition.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"Tech Type '{name}' already exists.");
+        }
+    }
+
+    private static XDocument? LoadExistingTechtreeModsDocument(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+        var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+        if (document.Root == null ||
+            !document.Root.Name.LocalName.Equals("techtreemods", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Expected <techtreemods> in '{path}'.");
+        return document;
     }
 
     private bool IsCustomProtoUnitCommand(string name)
@@ -47792,6 +47975,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     internal static void SaveUnitTypeXmlDocument(XDocument document, string path)
         => SaveAbilityXmlDocument(document, path);
 
+    internal static void SaveTechTypeXmlDocument(XDocument document, string path)
+        => SaveAbilityXmlDocument(document, path);
+
     private static string GetRechargeModeDisplayValue(string? value)
         => string.Equals(value?.Trim(), "resourceDropoff", StringComparison.OrdinalIgnoreCase)
             ? "ResourceDropoff"
@@ -52873,6 +53059,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async void TechnologyEditView_Click(object? sender, RoutedEventArgs e)
     {
         await ShowEntityKindAsync(EditorEntityKind.Technologies);
+    }
+
+    private async void TechnologyTechTypes_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenTechTypeManagerAsync();
     }
 
     private async void Gods_Click(object? sender, RoutedEventArgs e)

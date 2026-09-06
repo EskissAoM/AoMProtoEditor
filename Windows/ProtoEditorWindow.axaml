@@ -175,7 +175,7 @@
                                             Click="TechnologyEditView_Click" />
                                     <Button Classes="topMenuItem"
                                             Content="Tech Types"
-                                            IsEnabled="False" />
+                                            Click="TechnologyTechTypes_Click" />
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>

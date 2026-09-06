@@ -7,14 +7,14 @@ namespace AoMDivineDataEditor.Tests;
 public sealed class TechnologyPhase1RegressionTests
 {
     [Fact]
-    public void TechnologyMenu_ExposesEditViewAndDisabledTechTypes()
+    public void TechnologyMenu_ExposesEditViewAndTechTypeManager()
     {
         var root = FindProjectRoot();
         var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
         var buttons = xaml.Descendants().Where(e => e.Name.LocalName == "Button").ToList();
 
         Assert.Contains(buttons, b => (string?)b.Attribute("Content") == "Edit / View" && (string?)b.Attribute("Click") == "TechnologyEditView_Click");
-        Assert.Contains(buttons, b => (string?)b.Attribute("Content") == "Tech Types" && string.Equals((string?)b.Attribute("IsEnabled"), "False", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(buttons, b => (string?)b.Attribute("Content") == "Tech Types" && (string?)b.Attribute("Click") == "TechnologyTechTypes_Click");
     }
 
     [Fact]
@@ -474,7 +474,7 @@ public sealed class TechnologyPhase1RegressionTests
         var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
         Assert.Contains("GetTechnologyTechTypeNames()", windowCode, StringComparison.Ordinal);
-        Assert.Contains("entry.Name.Contains(\"tech_types\"", windowCode, StringComparison.Ordinal);
+        Assert.Contains("TechTypeCatalog.ExtractBaseDefinitionsFromBar", windowCode, StringComparison.Ordinal);
         Assert.Contains("GetCurrentModGameplayFilePath(\"tech_types_mods.xml\")", windowCode, StringComparison.Ordinal);
         Assert.Contains("_techTypeNames", techCode, StringComparison.Ordinal);
         Assert.Contains("AddForbidTechEffectEditor", techCode, StringComparison.Ordinal);

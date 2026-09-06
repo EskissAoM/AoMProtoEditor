@@ -490,7 +490,9 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.Contains("castPowerTargetValue = \"Unit\";", source, StringComparison.Ordinal);
         Assert.Contains("Content = \"Area Sort\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Content = \"+ Area Sort\"", source, StringComparison.Ordinal);
-        Assert.Contains("EditorTextFieldStyle.ConfigureTextBox(castPowerEditor);\n                    ApplyProtoActionFieldWidth(castPowerEditor, \"castpower\");", source, StringComparison.Ordinal);
+        Assert.Contains("EditorTextFieldStyle.ConfigureSelector(castPowerEditor);", source, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyGodPowerNames(),\n                        castPowerEditor.Text ?? \"\"", source.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("ApplyProtoActionFieldWidth(castPowerEditor, \"castpower\");", source, StringComparison.Ordinal);
         Assert.Contains("ConfigureStrictSuggestionAutoComplete(castPowerTargetEditor, castPowerTargetSuggestions, castPowerTargetEditor.Text ?? \"\");\n                        ApplyProtoActionFieldWidth(castPowerTargetEditor, \"castpower\");", source, StringComparison.Ordinal);
         Assert.Contains("modifyProtoAcb.MinWidth = 200;\n                modifyProtoAcb.MaxWidth = 200;", source, StringComparison.Ordinal);
         Assert.Contains("[\"selfdestructprotoaction\"] = \"Self Destruct Action\"", source, StringComparison.Ordinal);
