@@ -8,6 +8,22 @@ namespace AoMDivineDataEditor.Tests;
 public sealed class ProtoUnitCommandRegressionTests
 {
     [Fact]
+    public void TrainEntry_WithBlankPosition_OmitsRowAndColumnAttributes()
+    {
+        var unit = new XElement("unit", new XAttribute("name", "Temple"));
+
+        ProtoXmlHandler.SetTrainEntries(unit,
+        [
+            new ProtoCommandEntry { Value = "TempleOvergrown" }
+        ]);
+
+        var train = Assert.Single(unit.Elements("train"));
+        Assert.Equal("TempleOvergrown", train.Value);
+        Assert.Null(train.Attribute("row"));
+        Assert.Null(train.Attribute("column"));
+    }
+
+    [Fact]
     public void CommandDefinition_PreservesUnknownChildrenWhileUpdatingKnownFields()
     {
         var source = XElement.Parse("""

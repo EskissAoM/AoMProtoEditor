@@ -11,6 +11,7 @@ using Avalonia.Media;
 using AvaloniaEdit;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
+using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Windows;
 
@@ -54,23 +55,6 @@ public partial class TechnologyEditorView : UserControl
     [
         "TechStatus", "SpecificAge", "TypeCount", "Culture", "Civilization", "KBStat"
     ];
-
-    private static readonly string[] TechnologyEffectTypes =
-    [
-        "Data", "CreatePower", "CreateUnit", "ForbidTech", "ModifyProtoUnit", "SetAge", "SetName",
-        "SetOnTechResearchedTech", "SharedLOS", "TechStatus", "TextOutput", "TransformUnit",
-        "AddTrickleByResource", "ConsoleCommand", "RandomTech", "ReplaceUnit", "ResourceExchange",
-        "ResourceExchange2", "ResourceInventoryExchange", "SetOnBuildingDeathTech",
-        "Sound", "TextEffectOutput", "TextOutputAll", "TextOutputTechName", "UIAlert"
-    ];
-
-    private static readonly HashSet<string> StructuredTechnologyEffectTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "SetName", "Sound", "TextOutput", "TextOutputAll", "TextOutputTechName", "SetAge", "TechStatus",
-        "SharedLOS", "ModifyProtoUnit", "TransformUnit", "ResourceExchange", "SetOnBuildingDeathTech",
-        "ConsoleCommand", "CreatePower", "RandomTech", "TextEffectOutput", "ResourceInventoryExchange",
-        "AddTrickleByResource", "ResourceExchange2", "ReplaceUnit", "ForbidTech", "SetOnTechResearchedTech", "UIAlert", "CreateUnit"
-    };
 
     private static readonly HashSet<string> SimpleUnitAmountDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -146,7 +130,7 @@ public partial class TechnologyEditorView : UserControl
 
     private static readonly HashSet<string> EnableDisableActionUnitDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "HomingBallistics", "InstantBallistics", "PerfectAccuracy", "VolleyMode", "Snare"
+        "ActionEnable", "HomingBallistics", "InstantBallistics", "PerfectAccuracy", "VolleyMode", "Snare"
     };
 
     private static readonly HashSet<string> MovementTypeDataSubtypes = new(StringComparer.OrdinalIgnoreCase)
@@ -261,53 +245,6 @@ public partial class TechnologyEditorView : UserControl
         "AddVeterancyExcludeType", "AddVeterancyIncludeType"
     };
 
-    private static readonly string[] TechnologyDataEffectSubtypes =
-    [
-        "Accuracy", "ActionAddAttachingUnit", "ActionEnable", "AddAttackType", "AddDependentUnit", "AddGoal",
-        "AddGoalContributor", "AddGoalReward", "AdditionalScale", "ArmorVulnerability", "AutoBuildRate",
-        "AuxRechargeTime", "BountyResourceEarningMultiplier", "BountyResourceEarningReward", "BuffIconOverride",
-        "BuildingChainActive", "BuildingChainEffect", "BuildingChainResourceFactor", "BuildingWorkRate", "BuildLimit",
-        "BuildPoints", "CarryCapacity", "ChargedModifyAdjust", "CombatXP", "CommandAdd", "CommandRemove", "Cost",
-        "cost", "CostBuildingTechs", "Damage", "DamageArea", "DamageBonus", "DamageByCost",
-        "DamageFlags", "DamageShading", "DisplayedNumberProjectiles", "DisplayedRange", "DoubleEffect", "DropoffHeal",
-        "EmpowerModify", "Enable", "FullCapacityMultiplier", "GathererLimit", "GodPower",
-        "GodPowerBlockRadius", "GodPowerCost", "GodPowerCostFactor", "GodPowerROF", "GodPowerROFFactor",
-        "Hitpoints", "HomingBallistics", "InitialResource", "InventoryAmount", "Lifespan", "LOS", "Market",
-        "MaximumContained", "MaximumRange", "MaximumVelocity", "MinWorkRate", "ModifyDuration", "ModifyRate",
-        "ModifyRateCap", "ModifyReplacement", "ModifySpawn", "ModifyStackLimit", "NumberBounces",
-        "NumberProjectiles", "ObstructionRadiusX", "ObstructionRadiusZ", "OnDamageModify", "OnDeathCombatXP",
-        "OnHitEffect", "OnHitEffectActive", "OnHitEffectAttachBone", "OnHitEffectDuration",
-        "OnHitEffectProbability", "OnHitEffectRate", "OnHitEffectStatModify", "PopulationCap",
-        "PopulationCapAddition", "PopulationCount", "PowerCost", "PowerIconOverride", "PowerMaxUses", "PowerROF",
-        "Projectile", "ProtoActionAdd", "ProtoUnitFlag", "RateOfFire", "RechargeInit", "RechargeTime",
-        "RechargeType", "RepairCostFactor", "ResearchPoints", "ResearchRate", "Resource", "ResourceByKBStat",
-        "ResourceReturn", "ResourceReturnRate", "ResourceTrickleRate", "RespawnTrainActive", "RevealAllyUI",
-        "RevealEnemyUI", "SelfDestructProtoAction", "SetAge", "SetGoalFlag", "SetGoalSpawnLocationLand",
-        "SetGoalSpawnLocationWater", "SetUnitType", "ShieldPoints", "StealthDetectionRadius",
-        "TargetedSpeedMultiplier", "TimeShiftingConcurrentShifts", "TimeShiftingCost", "TimeShiftingTimeRatio",
-        "Trackrating", "TrainingRate", "TrainPoints", "TributePenalty", "UnitRegenCombatMultiplier",
-        "UnitRegenRate", "VeterancyEnable", "WanderDistance", "WorkRate", "WorkRateSpecific", "ActionAdd",
-        "AddContainedType", "AddGoalRewardExclusion", "AddNotContainedType", "AddSharedBuildLimitUnitType",
-        "AddVeterancyExcludeType", "AddVeterancyIncludeType", "AnimationRate",
-        "AutoAttackType", "AutoGatherBonus", "AuxRechargeInit", "AuxRechargeType",
-        "BoostRadius", "ContainedHitpointBonus", "ContainedHitpointBonusUnitType",
-        "CostBuildingAll", "CostBuildingUnits", "DamageCap", "DamageForAllHandLogicActions",
-        "DamageForAllRangedLogicActions", "DeadTransform", "DeadTransformBuildLimit", "DodgeChance", "EmpowerArea",
-        "EmpowerEnable", "EnableDodge", "EnableSharedBuildLimit", "FakeConversion",
-        "FreeRepair", "GarrisonBonusDamage", "GatherRateMultiplier", "GatherResourceOverride",
-        "InitialVeterancyRank", "InstantBallistics",
-        "KillReward", "MarketReset", "MaximumResourceTrickleRate", "MaxResource", "MinimumRange",
-        "MinimumResourceTrickleRate", "MovementType", "PartisanUnit", "PerfectAccuracy", "PlacementRulesOverride",
-        "PopulationLimit", "ProtoActionFlag", "ResourceByKBQuery", "ResourceByUnitCount", "ResourceIfTechActive",
-        "ResourceReturnRateTotalCost", "RevealLOS", "SetCivilization", "SetGoalActive",
-        "SetNextResearchFree", "SetVeterancyRankActive", "SharedBuildLimitUnit", "Snare",
-        "SpeedModifier", "SquareAura", "StackControl", "TacticEnable", "TechCostAbsolute", "TimeShiftingAdd",
-        "TurnRate", "UnitRegenRateLimit",
-        "UnitShieldRegenDamageTimeout", "UnitShieldRegenIdleTimeout", "UnitShieldRegenRate",
-        "UnitShieldRegenRateLimit", "UpdateVisual", "VeterancyBonus", "VeterancyRankAdd",
-        "VolleyMode", "WorkRateAll", "Yield", "YieldSpecific"
-    ];
-
     private static readonly string[] KbStatNames =
     [
         "enemyMythUnitsKilled",
@@ -333,11 +270,17 @@ public partial class TechnologyEditorView : UserControl
     private readonly IReadOnlyList<XDocument> _originalBarDocuments = [];
     private readonly string? _baseGameplayDirectory;
     private readonly string? _modTechtreePath;
+    private readonly string? _modStringsPath;
     private readonly Func<string, Task<string?>>? _resolveStringAsync;
     private readonly Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? _saveStringsAsync;
+    private readonly Action? _reloadStringsFromDisk;
+    private readonly Func<IReadOnlyList<TechnologyReferenceUsage>>? _externalTechnologyReferenceProvider;
+    private readonly Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? _prepareTechnologyReferenceMigration;
+    private readonly Action<TechnologyReferenceMigrationPlan>? _adoptTechnologyReferenceMigration;
     private readonly IconPreviewService? _iconPreviewService;
     private readonly Dictionary<string, string> _pendingStringUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingStringRemovals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _loadedStringValues = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyList<string> _iconPaths = [];
     private readonly IReadOnlyList<string> _prereqUnitNames = [];
     private readonly IReadOnlyList<string> _protoUnitNames = [];
@@ -351,6 +294,7 @@ public partial class TechnologyEditorView : UserControl
     private readonly IReadOnlyList<string> _godPowerNames = [];
     private readonly Dictionary<string, XElement> _original = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, XElement> _modified = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _savedModifiedTechnologyXml = new(StringComparer.OrdinalIgnoreCase);
     private XDocument _modDocument = new(new XElement("techtreemods"));
     private XElement? _current;
     private string? _currentOriginalName;
@@ -358,18 +302,58 @@ public partial class TechnologyEditorView : UserControl
     private int _editorBuildGeneration;
     private readonly SemaphoreSlim _editorBuildGate = new(1, 1);
     private readonly SemaphoreSlim _technologyNameCommitGate = new(1, 1);
+    private CancellationTokenSource? _activeEditorBuildCancellation;
+    private readonly AsyncLocal<CancellationToken> _editorBuildCancellationContext = new();
+    private Task _activeEditorBuildTask = Task.CompletedTask;
+    private readonly HashSet<Task> _activeUiOperations = [];
     private bool _dirty;
     private readonly HashSet<string> _dirtyTechnologyNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<TechnologyRenameOperation> _pendingTechnologyRenames = [];
+    private IReadOnlyList<TechnologyReferenceUsage> _technologyReferenceUsages = [];
+    private string? _technologyReferenceIndexError;
     private readonly HashSet<(XElement Effect, string Attribute)> _openOnHitOptionalSelectors = [];
+    private readonly HashSet<XElement> _effectsPendingDefaultInitialization = new(ReferenceEqualityComparer.Instance);
+    private bool _initializingEffectDefaults;
+    private string? _modDocumentSafetyError;
+    private FileIntegrityTransaction.FileState? _loadedTechtreeFileState;
+    private FileIntegrityTransaction.FileState? _loadedStringsFileState;
     private bool _controlsReady;
     private bool _isXmlPreviewCollapsed;
     private IconPreviewControl? _iconPreviewControl;
+    private int _savedStatusGeneration;
+    private bool _documentSafetyPromptShown;
 
     public TechnologyEditorView()
     {
         InitializeComponent();
         _controlsReady = true;
         XmlSyntaxEditorService.Configure(_xmlPreview);
+        AttachedToVisualTree += TechnologyEditorView_AttachedToVisualTree;
+    }
+
+    private void TechnologyEditorView_AttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (_documentSafetyPromptShown || string.IsNullOrWhiteSpace(_modDocumentSafetyError) ||
+            TopLevel.GetTopLevel(this) is not Window owner)
+            return;
+
+        _documentSafetyPromptShown = true;
+        ObserveUiOperation(ShowDocumentSafetyPromptAsync(owner), "show the technology safety warning");
+    }
+
+    private async Task ShowDocumentSafetyPromptAsync(Window owner)
+    {
+        var prompt = new Prompt(
+            PromptType.Error,
+            "Technology file cannot be edited",
+            _modDocumentSafetyError ?? "The technology file cannot be edited safely.")
+        {
+            Width = 700,
+            Height = 300,
+            MinWidth = 580,
+            MinHeight = 240
+        };
+        await prompt.ShowDialog(owner);
     }
 
     public TechnologyEditorView(
@@ -389,14 +373,24 @@ public partial class TechnologyEditorView : UserControl
         IEnumerable<string>? protoUnitCommandNames = null,
         IEnumerable<string>? boneNames = null,
         IconPreviewService? iconPreviewService = null,
-        IEnumerable<string>? godPowerNames = null)
+        IEnumerable<string>? godPowerNames = null,
+        string? modStringsPath = null,
+        Action? reloadStringsFromDisk = null,
+        Func<IReadOnlyList<TechnologyReferenceUsage>>? externalTechnologyReferenceProvider = null,
+        Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? prepareTechnologyReferenceMigration = null,
+        Action<TechnologyReferenceMigrationPlan>? adoptTechnologyReferenceMigration = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
         _baseGameplayDirectory = baseGameplayDirectory;
         _modTechtreePath = modTechtreePath;
+        _modStringsPath = modStringsPath;
         _resolveStringAsync = resolveStringAsync;
         _saveStringsAsync = saveStringsAsync;
+        _reloadStringsFromDisk = reloadStringsFromDisk;
+        _externalTechnologyReferenceProvider = externalTechnologyReferenceProvider;
+        _prepareTechnologyReferenceMigration = prepareTechnologyReferenceMigration;
+        _adoptTechnologyReferenceMigration = adoptTechnologyReferenceMigration;
         _iconPreviewService = iconPreviewService;
         _iconPaths = iconPaths?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _prereqUnitNames = prereqUnitNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
@@ -411,17 +405,49 @@ public partial class TechnologyEditorView : UserControl
         _godPowerNames = godPowerNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _techTabs.SelectedIndex = 0;
         LoadAll();
+        RefreshTechnologyReferenceUsage();
         RefreshList();
     }
 
     private bool IsModifiedTab => _techTabs.SelectedIndex == 1;
 
+    private bool CanEditModifiedDocument => IsModifiedTab && _modDocumentSafetyError == null;
+
     public bool IsModifiedMode => IsModifiedTab;
+
+    public bool CanModifyTechnologyDocument => _modDocumentSafetyError == null;
+
+    public string? ModificationBlockReason => _modDocumentSafetyError;
+
+    public void AcknowledgeStringFileSavedByEditor()
+    {
+        if (string.IsNullOrWhiteSpace(_modStringsPath))
+            return;
+        try
+        {
+            _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+            ReplaceLoadedStringValues(ReadModStringValuesFromDisk());
+        }
+        catch (Exception exception)
+        {
+            _modDocumentSafetyError =
+                $"The updated string file could not be fingerprinted safely. Further technology modifications are disabled. {exception.Message}";
+            _statusMessage.Text = _modDocumentSafetyError;
+        }
+    }
 
     public string? CurrentTechnologyName => _currentOriginalName;
 
     public bool IsTechnologyDirty(string technologyName)
-        => _dirtyTechnologyNames.Contains(technologyName);
+    {
+        var isDirty = TechnologyHasUnsavedChanges(technologyName);
+        if (isDirty)
+            _dirtyTechnologyNames.Add(technologyName);
+        else
+            _dirtyTechnologyNames.Remove(technologyName);
+        RecalculateDirtyState();
+        return isDirty;
+    }
 
     public XElement? LoadSavedTechnologyElement(string technologyName)
     {
@@ -433,7 +459,7 @@ public partial class TechnologyEditorView : UserControl
             var document = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace);
             var technology = document.Descendants().FirstOrDefault(element =>
                 element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals((string?)element.Attribute("name"), technologyName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(GetCaseInsensitiveAttribute(element, "name")?.Value, technologyName, StringComparison.OrdinalIgnoreCase));
             return technology == null ? null : new XElement(technology);
         }
         catch
@@ -449,6 +475,11 @@ public partial class TechnologyEditorView : UserControl
         var savedName = ((string?)restored?.Attribute("name"))?.Trim();
         if (string.IsNullOrWhiteSpace(savedName))
             savedName = technologyName;
+        _pendingTechnologyRenames.RemoveAll(rename =>
+            rename.OldName.Equals(technologyName, StringComparison.OrdinalIgnoreCase) ||
+            rename.NewName.Equals(technologyName, StringComparison.OrdinalIgnoreCase) ||
+            rename.OldName.Equals(savedName, StringComparison.OrdinalIgnoreCase) ||
+            rename.NewName.Equals(savedName, StringComparison.OrdinalIgnoreCase));
 
         var affectedStringIds = CollectReferencedTechnologyStringIds(current);
         affectedStringIds.UnionWith(CollectReferencedTechnologyStringIds(restored));
@@ -476,7 +507,14 @@ public partial class TechnologyEditorView : UserControl
 
         _modified.Remove(technologyName);
         if (restored != null)
+        {
             _modified[savedName] = restored;
+            _savedModifiedTechnologyXml[savedName] = SerializeTechnologyForComparison(restored);
+        }
+        else
+        {
+            _savedModifiedTechnologyXml.Remove(technologyName);
+        }
 
         foreach (var id in affectedStringIds)
         {
@@ -487,7 +525,7 @@ public partial class TechnologyEditorView : UserControl
         }
         _dirtyTechnologyNames.Remove(technologyName);
         _dirtyTechnologyNames.Remove(savedName);
-        _dirty = _dirtyTechnologyNames.Count > 0 || _pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0;
+        RecalculateDirtyState();
 
         if (string.Equals(_currentOriginalName, technologyName, StringComparison.OrdinalIgnoreCase))
             ClearEditor();
@@ -551,6 +589,58 @@ public partial class TechnologyEditorView : UserControl
         return source.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    public void RefreshTechnologyReferenceUsage()
+    {
+        try
+        {
+            var knownNames = _original.Keys.Concat(_modified.Keys).ToList();
+            var originalDocument = new XDocument(new XElement("techtree",
+                _original.Values.Select(technology => new XElement(technology))));
+            var sources = new List<TechnologyReferenceSource>
+            {
+                new("Base techtree", originalDocument, TechnologyReferenceDocumentKind.Techtree, IsBuiltIn: true),
+                new("Mod techtree", _modDocument, TechnologyReferenceDocumentKind.Techtree,
+                    _modTechtreePath, CanMigrate: true)
+            };
+            var usages = TechnologyReferenceIndex.Build(sources, knownNames).ToList();
+            if (_externalTechnologyReferenceProvider != null)
+                usages.AddRange(_externalTechnologyReferenceProvider());
+
+            _technologyReferenceUsages = usages
+                .Select(MapUsageThroughPendingRenames)
+                .ToList();
+            _technologyReferenceIndexError = null;
+        }
+        catch (Exception exception)
+        {
+            _technologyReferenceUsages = [];
+            _technologyReferenceIndexError = exception.Message;
+        }
+    }
+
+    private TechnologyReferenceUsage MapUsageThroughPendingRenames(TechnologyReferenceUsage usage)
+    {
+        var mappedName = usage.TechnologyName;
+        foreach (var rename in _pendingTechnologyRenames)
+        {
+            if (usage.IsBuiltIn && _original.ContainsKey(rename.OldName))
+                continue;
+            if (mappedName.Equals(rename.OldName, StringComparison.OrdinalIgnoreCase))
+                mappedName = rename.NewName;
+        }
+        return mappedName.Equals(usage.TechnologyName, StringComparison.Ordinal)
+            ? usage
+            : usage with { TechnologyName = mappedName };
+    }
+
+    private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyReferences(string technologyName)
+    {
+        RefreshTechnologyReferenceUsage();
+        return _technologyReferenceUsages
+            .Where(usage => usage.TechnologyName.Equals(technologyName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
     public void SetModifiedMode(bool modified)
     {
         var selectedIndex = modified ? 1 : 0;
@@ -598,24 +688,56 @@ public partial class TechnologyEditorView : UserControl
 
     private void LoadModified()
     {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_modTechtreePath))
+                _loadedTechtreeFileState = FileIntegrityTransaction.CaptureState(_modTechtreePath);
+            if (!string.IsNullOrWhiteSpace(_modStringsPath))
+            {
+                _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+                ReplaceLoadedStringValues(ReadModStringValuesFromDisk());
+            }
+        }
+        catch (Exception exception)
+        {
+            _modDocumentSafetyError =
+                $"The technology files could not be fingerprinted safely. Technology modifications are disabled. {exception.Message}";
+        }
+
         if (!string.IsNullOrWhiteSpace(_modTechtreePath) && File.Exists(_modTechtreePath))
         {
-            try { _modDocument = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace); }
-            catch { _modDocument = new XDocument(new XElement("techtreemods")); }
+            try
+            {
+                var document = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace);
+                var validation = TechnologyDocumentSafety.ValidateModDocument(document);
+                _modDocument = document;
+                if (!validation.IsValid)
+                    _modDocumentSafetyError = validation.ToDisplayMessage(_modTechtreePath);
+            }
+            catch (Exception exception)
+            {
+                _modDocument = new XDocument(new XElement("techtreemods"));
+                _modDocumentSafetyError =
+                    $"'{_modTechtreePath}' could not be read safely. Technology modifications are disabled and the file will not be overwritten. {exception.Message}";
+            }
         }
         else
         {
             _modDocument = new XDocument(new XElement("techtreemods"));
         }
-        if (_modDocument.Root == null) _modDocument.Add(new XElement("techtreemods"));
+
         MergeTechs(_modDocument, _modified, overwrite: true, clone: false);
+        foreach (var (name, technology) in _modified)
+            _savedModifiedTechnologyXml[name] = SerializeTechnologyForComparison(technology);
+        if (_modDocumentSafetyError != null)
+            _statusMessage.Text = _modDocumentSafetyError;
     }
 
     private static void MergeTechs(XDocument doc, Dictionary<string, XElement> destination, bool overwrite, bool clone = true)
     {
         foreach (var tech in doc.Descendants().Where(e => e.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)))
         {
-            var name = (string?)tech.Attribute("name");
+            var name = GetCaseInsensitiveAttribute(tech, "name")?.Value;
             if (string.IsNullOrWhiteSpace(name)) continue;
             if (overwrite || !destination.ContainsKey(name)) destination[name] = clone ? new XElement(tech) : tech;
         }
@@ -657,6 +779,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void ClearEditor()
     {
+        _activeEditorBuildCancellation?.Cancel();
         _editorBuildGeneration++;
         _loadingUi = true;
         _current = null;
@@ -672,12 +795,29 @@ public partial class TechnologyEditorView : UserControl
         _loadingUi = false;
     }
 
-    private async Task BuildEditorAsync()
+    private Task BuildEditorAsync()
     {
+        var task = BuildEditorCoreAsync();
+        _activeEditorBuildTask = task;
+        return task;
+    }
+
+    private async Task BuildEditorCoreAsync()
+    {
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = Interlocked.Exchange(ref _activeEditorBuildCancellation, cancellation);
+        previousCancellation?.Cancel();
+        previousCancellation?.Dispose();
+        var cancellationToken = cancellation.Token;
         var generation = ++_editorBuildGeneration;
-        await _editorBuildGate.WaitAsync();
+        var gateEntered = false;
+        var previousContext = _editorBuildCancellationContext.Value;
         try
         {
+            await _editorBuildGate.WaitAsync(cancellationToken);
+            gateEntered = true;
+            _editorBuildCancellationContext.Value = cancellationToken;
+            cancellationToken.ThrowIfCancellationRequested();
             if (_current == null || generation != _editorBuildGeneration) return;
             var tech = _current;
             _loadingUi = true;
@@ -686,11 +826,12 @@ public partial class TechnologyEditorView : UserControl
             _prereqsPanel.Children.Clear();
             _effectsPanel.Children.Clear();
             _techNameBox.Text = (string?)tech.Attribute("name") ?? "";
-            _techNameBox.IsReadOnly = !IsModifiedTab;
-            _techNameBox.IsEnabled = IsModifiedTab;
+            _techNameBox.IsReadOnly = !CanEditModifiedDocument;
+            _techNameBox.IsEnabled = CanEditModifiedDocument;
 
             AddSectionHeader("Properties");
             await AddKnownPropertyEditorsAsync(tech);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!IsEditorBuildCurrent(tech, generation)) return;
 
             foreach (var attr in tech.Attributes().Where(a =>
@@ -727,6 +868,10 @@ public partial class TechnologyEditorView : UserControl
             AddCostsEditor(tech);
             AddChipListEditor(tech, "techtype", "Technology Types");
             AddChipListEditor(tech, "flag", "Flags");
+            AddPreservedXmlSection(
+                _propertiesPanel,
+                TechnologyXmlShapePolicy.FindUnhandledNestedTechnologyChildren(tech, handled),
+                "Preserved technology XML");
 
             AddPrerequisiteHeader(tech);
             AddPrerequisiteButton(tech);
@@ -734,29 +879,70 @@ public partial class TechnologyEditorView : UserControl
             var prereqs = prereqsContainer?.Elements().ToList() ?? [];
             if (prereqs.Count == 0 && !IsModifiedTab)
                 _prereqsPanel.Children.Add(new TextBlock { Text = "No prerequisites.", Foreground = Brushes.Gray });
-            foreach (var prereq in prereqs) AddPrereqEditor(tech, prereq);
+            foreach (var prereq in prereqs)
+            {
+                if (PrerequisiteTypes.Contains(GetPrereqTypeName(prereq), StringComparer.OrdinalIgnoreCase))
+                    AddPrereqEditor(tech, prereq);
+                else
+                    AddPreservedXmlSection(_prereqsPanel, [prereq], "Imported prerequisite XML");
+            }
 
             AddEffectsHeader();
-            var effectsContainer = tech.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase));
-            var effects = effectsContainer?.Elements().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)).ToList()
-                          ?? tech.Elements().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)).ToList();
+            var effects = TechnologyXmlShapePolicy.EnumerateEffectsInDocumentOrder(tech);
             if (!IsModifiedTab && effects.Count == 0)
                 _effectsPanel.Children.Add(new TextBlock { Text = "No effects.", Foreground = Brushes.Gray });
             foreach (var effect in effects)
             {
                 await AddEffectEditorAsync(effect);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!IsEditorBuildCurrent(tech, generation)) return;
             }
-            if (IsModifiedTab) AddEffectButton(tech);
+            AddPreservedXmlSection(
+                _effectsPanel,
+                TechnologyXmlShapePolicy.FindNonEffectContainerChildren(tech),
+                "Preserved effects-container XML");
+            if (CanEditModifiedDocument) AddEffectButton(tech);
 
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsEditorBuildCurrent(tech, generation)) return;
             ApplyReadOnlyVisualState();
             UpdatePreview();
         }
-        finally
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A newer selection/build owns the editor now.
+        }
+        catch (Exception exception)
         {
             if (generation == _editorBuildGeneration)
+            {
+                _statusMessage.Text = "Technology editor could not be built: " + exception.Message;
+                if (TopLevel.GetTopLevel(this) is Window owner)
+                {
+                    var prompt = new Prompt(
+                        PromptType.Error,
+                        "Unable to display technology",
+                        $"The technology editor could not be built. No data was changed.\n\n{exception.Message}")
+                    {
+                        Width = 620,
+                        Height = 260,
+                        MinWidth = 520,
+                        MinHeight = 220
+                    };
+                    await prompt.ShowDialog(owner);
+                }
+            }
+        }
+        finally
+        {
+            _editorBuildCancellationContext.Value = previousContext;
+            if (generation == _editorBuildGeneration)
                 _loadingUi = false;
-            _editorBuildGate.Release();
+            if (gateEntered)
+                _editorBuildGate.Release();
+            if (ReferenceEquals(Interlocked.CompareExchange(
+                    ref _activeEditorBuildCancellation, null, cancellation), cancellation))
+                cancellation.Dispose();
         }
     }
 
@@ -812,12 +998,13 @@ public partial class TechnologyEditorView : UserControl
         {
             if (_iconPreviewControl == null)
                 return;
-            _ = _iconPreviewControl.ShowOptionsAsync(
+            ObserveUiOperation(_iconPreviewControl.ShowOptionsAsync(
                 tech.Elements()
                     .Where(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase))
                     .Select(element => (
                         element.Value,
-                        (string?)element.Attribute("culture"))));
+                        (string?)element.Attribute("culture")))),
+                "refresh the technology icon preview");
         }
 
         var researchPoints = FindVisible("researchpoints");
@@ -830,11 +1017,28 @@ public partial class TechnologyEditorView : UserControl
 
     private async Task<string> ResolveTechnologyStringValueAsync(string stringId)
     {
+        var cancellationToken = _editorBuildCancellationContext.Value;
+        cancellationToken.ThrowIfCancellationRequested();
         if (_pendingStringUpdates.TryGetValue(stringId, out var pendingText))
             return pendingText;
         if (_resolveStringAsync != null && !string.IsNullOrWhiteSpace(stringId))
-            return await _resolveStringAsync(stringId) ?? stringId;
+        {
+            var value = await _resolveStringAsync(stringId) ?? stringId;
+            cancellationToken.ThrowIfCancellationRequested();
+            return value;
+        }
         return stringId;
+    }
+
+    private void SetPendingTechnologyStringValue(string stringId, string value)
+    {
+        if (_loadedStringValues.TryGetValue(stringId, out var savedValue) &&
+            savedValue.Equals(value, StringComparison.Ordinal))
+        {
+            _pendingStringUpdates.Remove(stringId);
+            return;
+        }
+        _pendingStringUpdates[stringId] = value;
     }
 
     private async Task AddPrimaryTechnologyRowAsync(XElement tech, XElement? displayNameElement, Panel target)
@@ -867,11 +1071,15 @@ public partial class TechnologyEditorView : UserControl
                 IsEnabled = IsModifiedTab,
                 Margin = new Thickness(0, 4, 8, 4)
             });
+            var lastDisplayText = text;
             displayBox.TextChanged += (_, _) =>
             {
                 if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(stringId)) return;
+                var value = displayBox.Text ?? "";
+                if (value.Equals(lastDisplayText, StringComparison.Ordinal)) return;
+                lastDisplayText = value;
                 _pendingStringRemovals.Remove(stringId);
-                _pendingStringUpdates[stringId] = displayBox.Text ?? "";
+                SetPendingTechnologyStringValue(stringId, value);
                 MarkDirty();
             };
             displayRow.Children.Add(displayBox);
@@ -1183,6 +1391,7 @@ public partial class TechnologyEditorView : UserControl
             box.AcceptsReturn = true;
             box.TextWrapping = TextWrapping.Wrap;
         }
+        var lastText = text;
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(box);
         if (removable && IsModifiedTab)
@@ -1190,9 +1399,12 @@ public partial class TechnologyEditorView : UserControl
         Grid.SetColumn(row, 1);
         box.TextChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(stringId)) return;
+            if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrWhiteSpace(stringId)) return;
+            var value = box.Text ?? "";
+            if (value.Equals(lastText, StringComparison.Ordinal)) return;
+            lastText = value;
             _pendingStringRemovals.Remove(stringId);
-            _pendingStringUpdates[stringId] = box.Text ?? "";
+            SetPendingTechnologyStringValue(stringId, value);
             MarkDirty();
         };
         grid.Children.Add(row);
@@ -1313,9 +1525,10 @@ public partial class TechnologyEditorView : UserControl
     private void AddCostsEditor(XElement tech)
     {
         AddSectionHeader("Costs");
-        var costs = tech.Elements().Where(e => e.Name.LocalName.Equals("cost", StringComparison.OrdinalIgnoreCase))
-            .Where(e => e.Attribute("resourcetype") != null)
-            .GroupBy(e => (string?)e.Attribute("resourcetype") ?? "", StringComparer.OrdinalIgnoreCase)
+        var allCosts = tech.Elements().Where(e => e.Name.LocalName.Equals("cost", StringComparison.OrdinalIgnoreCase)).ToList();
+        var costs = allCosts
+            .Where(e => GetCaseInsensitiveAttribute(e, "resourcetype") != null)
+            .GroupBy(e => GetCaseInsensitiveAttribute(e, "resourcetype")?.Value ?? "", StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
@@ -1354,6 +1567,18 @@ public partial class TechnologyEditorView : UserControl
             grid.Children.Add(box);
         }
         _propertiesPanel.Children.Add(grid);
+
+        var primaryCosts = costs.Values.ToHashSet(ReferenceEqualityComparer.Instance);
+        var preservedCosts = allCosts.Where(cost =>
+                !primaryCosts.Contains(cost) ||
+                !ProtoConstants.KnownResourceTypes.Contains(
+                    GetCaseInsensitiveAttribute(cost, "resourcetype")?.Value ?? "",
+                    StringComparer.OrdinalIgnoreCase) ||
+                cost.HasElements ||
+                cost.Attributes().Any(attribute =>
+                    !attribute.Name.LocalName.Equals("resourcetype", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        AddPreservedXmlSection(_propertiesPanel, preservedCosts, "Additional cost XML");
     }
 
     private void AddStatusEditor(XElement status, Panel? target = null)
@@ -1399,23 +1624,28 @@ public partial class TechnologyEditorView : UserControl
             Margin = new Thickness(0, 4, 0, 4)
         };
         editor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
-        editor.Configure(initial, _iconPaths, async value =>
+        editor.Configure(initial, _iconPaths, value =>
         {
-            if (!IsModifiedTab) return;
+            if (!CanEditModifiedDocument || value.Equals(initial, StringComparison.OrdinalIgnoreCase))
+                return Task.CompletedTask;
+            var owningTechnology = icon.Parent;
+            var previewControl = _iconPreviewControl;
+            initial = value;
+            if (value.Equals(icon.Value, StringComparison.Ordinal))
+                return Task.CompletedTask;
             icon.Value = value;
             MarkDirty();
             UpdatePreview();
-            await Task.CompletedTask;
-        });
-        editor.FullValueChanged += (_, _) =>
-        {
-            if (_iconPreviewControl != null)
-                _ = _iconPreviewControl.ShowOptionsAsync(
-                    icon.Parent?.Elements()
+            if (previewControl != null && ReferenceEquals(_current, owningTechnology))
+                ObserveUiOperation(
+                    previewControl.ShowOptionsAsync(
+                        owningTechnology?.Elements()
                         .Where(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase))
                         .Select(element => (element.Value, (string?)element.Attribute("culture")))
-                    ?? []);
-        };
+                        ?? []),
+                    "refresh the technology icon preview");
+            return Task.CompletedTask;
+        });
         Grid.SetColumn(editor, 1);
         grid.Children.Add(editor);
         (target ?? _propertiesPanel).Children.Add(grid);
@@ -1589,9 +1819,53 @@ public partial class TechnologyEditorView : UserControl
         });
     }
 
+    private static void AddPreservedXmlSection(
+        Panel target,
+        IEnumerable<XElement> elements,
+        string title)
+    {
+        var preserved = elements.ToList();
+        if (preserved.Count == 0) return;
+
+        target.Children.Add(new TextBlock
+        {
+            Text = $"──── {title} ────",
+            FontWeight = FontWeight.Bold,
+            FontSize = 14,
+            Foreground = Brush.Parse("#C59A52"),
+            Margin = new Thickness(0, 15, 0, 5)
+        });
+        target.Children.Add(new TextBlock
+        {
+            Text = "This XML is not owned by a structured editor and will be preserved unchanged.",
+            Foreground = Brushes.Gray,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4)
+        });
+        foreach (var element in preserved)
+        {
+            var box = new TextEditor
+            {
+                Text = element.ToString(),
+                FontFamily = new FontFamily("Consolas"),
+                MinHeight = 42,
+                MaxHeight = 180,
+                IsReadOnly = true,
+                Focusable = true,
+                IsTabStop = false,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            XmlSyntaxEditorService.Configure(box);
+            XmlSyntaxEditorService.SetReadOnly(box, isReadOnly: true);
+            target.Children.Add(box);
+        }
+    }
+
     private void ApplyReadOnlyVisualState()
     {
-        var canEdit = IsModifiedTab;
+        var canEdit = CanEditModifiedDocument;
         // Keep the preview's culture-cycle button interactive for original technologies.
         // Every actual property editor still applies its own modified-tab guard.
         _propertiesPanel.IsEnabled = _current != null;
@@ -1607,6 +1881,8 @@ public partial class TechnologyEditorView : UserControl
         _xmlPreview.Opacity = _current != null ? 1.0 : 0.55;
         _xmlPreview.Background = Brush.Parse(canEdit ? "#090C0B" : "#090C0B");
         _xmlPreview.Foreground = Brush.Parse(_current != null ? "#E8DECC" : "#8a8a8a");
+        if (_modDocumentSafetyError != null)
+            _statusMessage.Text = _modDocumentSafetyError;
     }
 
     private static void InsertBeforeEffectsOrAppend(XElement tech, XElement element)
@@ -1633,7 +1909,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddPrerequisiteButton(XElement tech)
     {
-        if (!IsModifiedTab) return;
+        if (!CanEditModifiedDocument) return;
 
         var add = CreateOptionalPropertyButton("Add prerequisite");
         add.Margin = new Thickness(0, 0, 0, 6);
@@ -1902,29 +2178,27 @@ public partial class TechnologyEditorView : UserControl
     {
         var entries = prereq.Elements().Where(e => e.Name.LocalName.Equals(childName, StringComparison.OrdinalIgnoreCase)).ToList();
         if (entries.Count == 0 && !string.IsNullOrWhiteSpace(prereq.Value))
-        {
-            if (IsModifiedTab)
-            {
-                var converted = new XElement(childName, prereq.Value.Trim());
-                prereq.RemoveNodes();
-                prereq.Add(converted);
-                entries.Add(converted);
-            }
-            else
-            {
-                entries.Add(new XElement(childName, prereq.Value.Trim()));
-            }
-        }
+            entries.Add(new XElement(childName, prereq.Value.Trim()));
 
         foreach (var entry in entries)
         {
-            var isAttached = entry.Parent == prereq;
+            var activeEntry = entry;
+            var isAttached = activeEntry.Parent == prereq;
             var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(158, 0, 0, 0) };
             row.Children.Add(CreateInlineLabel(label));
-            var entrySelector = CreateStrictPrereqSelector(options, entry.Value.Trim(), 150, value =>
+            var entrySelector = CreateStrictPrereqSelector(options, activeEntry.Value.Trim(), 150, value =>
             {
-                if (!isAttached) return;
-                entry.Value = value;
+                if (!isAttached)
+                {
+                    activeEntry = new XElement(childName, value);
+                    prereq.RemoveNodes();
+                    prereq.Add(activeEntry);
+                    isAttached = true;
+                }
+                else
+                {
+                    activeEntry.Value = value;
+                }
                 MarkDirty();
                 UpdatePreview();
             });
@@ -1976,6 +2250,7 @@ public partial class TechnologyEditorView : UserControl
         // intentionally use compact widths, so enforce the requested width afterwards.
         selector.Width = width;
         selector.MaxWidth = width;
+        var lastCommittedValue = current.Trim();
         EditorAutoCompleteService.ConfigureStrict(
             selector,
             values,
@@ -1989,6 +2264,9 @@ public partial class TechnologyEditorView : UserControl
             valueCommitted: value =>
             {
                 if (_loadingUi || !IsModifiedTab) return;
+                var normalized = value.Trim();
+                if (normalized.Equals(lastCommittedValue, StringComparison.OrdinalIgnoreCase)) return;
+                lastCommittedValue = normalized;
                 committed(value);
             });
         return selector;
@@ -2024,6 +2302,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void SetPrereqAttribute(XElement prereq, string name, string value, bool rebuild = false)
     {
+        if (string.Equals(GetCaseInsensitiveAttribute(prereq, name)?.Value, value, StringComparison.Ordinal)) return;
         prereq.SetAttributeValue(name, value);
         MarkDirty();
         UpdatePreview();
@@ -2141,13 +2420,22 @@ public partial class TechnologyEditorView : UserControl
         add.Margin = new Thickness(0, 0, 0, 6);
         add.Click += (_, _) =>
         {
+            if (!CanEditModifiedDocument) return;
             var container = tech.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase));
-            if (container == null)
+            var effect = new XElement("effect");
+            if (container != null)
             {
-                container = new XElement("effects");
+                container.Add(effect);
+            }
+            else if (tech.Elements().Any(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
+            {
+                tech.Add(effect);
+            }
+            else
+            {
+                container = new XElement("effects", effect);
                 tech.Add(container);
             }
-            container.Add(new XElement("effect"));
             MarkDirty();
             _ = BuildEditorAsync();
         };
@@ -2156,6 +2444,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void ResetEffectForType(XElement effect, string type)
     {
+        _effectsPendingDefaultInitialization.Remove(effect);
         QueueEffectOwnedStringsForRemoval(effect);
         effect.RemoveAttributes();
         effect.RemoveNodes();
@@ -2164,6 +2453,7 @@ public partial class TechnologyEditorView : UserControl
             return;
 
         effect.SetAttributeValue("type", type);
+        _effectsPendingDefaultInitialization.Add(effect);
         if (type.Equals("TechStatus", StringComparison.OrdinalIgnoreCase))
             effect.SetAttributeValue("status", "obtainable");
         else if (type.Equals("RandomTech", StringComparison.OrdinalIgnoreCase))
@@ -2208,6 +2498,7 @@ public partial class TechnologyEditorView : UserControl
         {
             var removeEffect = CreateRemoveButton(() =>
             {
+                _effectsPendingDefaultInitialization.Remove(effect);
                 QueueEffectOwnedStringsForRemoval(effect);
                 var parent = effect.Parent;
                 effect.Remove();
@@ -2224,7 +2515,7 @@ public partial class TechnologyEditorView : UserControl
         selectorRow.Children.Add(CreateInlineLabel("Type"));
 
         var currentType = ((string?)effect.Attribute("type") ?? "").Trim();
-        var typeSelector = CreateStrictEffectSelector(TechnologyEffectTypes, currentType, value =>
+        var typeSelector = CreateStrictEffectSelector(TechnologyEffectCatalogInventory.CreatableEffectTypes, currentType, value =>
         {
             if (value.Equals(currentType, StringComparison.OrdinalIgnoreCase)) return;
             ResetEffectForType(effect, value);
@@ -2237,7 +2528,7 @@ public partial class TechnologyEditorView : UserControl
         {
             var currentSubtype = ((string?)effect.Attribute("subtype") ?? "").Trim();
             var displayedSubtype = currentSubtype.Equals("Damagebonus", StringComparison.OrdinalIgnoreCase) ? "DamageBonus" : currentSubtype;
-            var subtypeSelector = CreateStrictEffectSelector(TechnologyDataEffectSubtypes, displayedSubtype, value =>
+            var subtypeSelector = CreateStrictEffectSelector(TechnologyEffectCatalogInventory.CreatableDataSubtypes, displayedSubtype, value =>
             {
                 if (value.Equals(currentSubtype, StringComparison.OrdinalIgnoreCase)) return;
                 ResetDataEffectForSubtype(effect, value);
@@ -2328,11 +2619,35 @@ public partial class TechnologyEditorView : UserControl
         if (tooltipIdAttribute != null)
             await AddEffectStringAttributeRowAsync(content, effect, tooltipIdAttribute, "Tooltip override", 380, removable: true, multiline: true);
 
-        var structured = await AddStructuredEffectBodyAsync(effect, content, currentType);
-        if (!structured && !string.IsNullOrWhiteSpace(currentType))
-            AddRawEffectXmlEditor(effect, content);
+        var initializeDefaults = CanEditModifiedDocument && _effectsPendingDefaultInitialization.Remove(effect);
+        var previousInitializationState = _initializingEffectDefaults;
+        _initializingEffectDefaults = initializeDefaults;
+        try
+        {
+            var structured = await AddStructuredEffectBodyAsync(effect, content, currentType);
+            if (ShouldShowRawEffectXmlEditor(effect, currentType, structured))
+                AddRawEffectXmlEditor(effect, content);
+        }
+        catch
+        {
+            if (initializeDefaults)
+                _effectsPendingDefaultInitialization.Add(effect);
+            throw;
+        }
+        finally
+        {
+            _initializingEffectDefaults = previousInitializationState;
+        }
 
         _effectsPanel.Children.Add(border);
+    }
+
+    internal static bool ShouldShowRawEffectXmlEditor(XElement effect, string currentType, bool structured)
+    {
+        if (structured || string.IsNullOrWhiteSpace(currentType))
+            return false;
+        return !currentType.Equals("Data", StringComparison.OrdinalIgnoreCase) ||
+               !string.IsNullOrWhiteSpace(GetCaseInsensitiveAttribute(effect, "subtype")?.Value);
     }
 
     private async Task<bool> AddStructuredEffectBodyAsync(XElement effect, StackPanel content, string currentType)
@@ -2340,6 +2655,8 @@ public partial class TechnologyEditorView : UserControl
         if (currentType.Equals("Data", StringComparison.OrdinalIgnoreCase))
         {
             var subtype = GetCaseInsensitiveAttribute(effect, "subtype")?.Value ?? "";
+            if (!TechnologyEffectCatalogInventory.IsStructuredDataSubtype(subtype))
+                return false;
             if (SimpleUnitAmountDataSubtypes.Contains(subtype))
             {
                 if (subtype.Equals("BuildingWorkRate", StringComparison.OrdinalIgnoreCase))
@@ -2722,7 +3039,11 @@ public partial class TechnologyEditorView : UserControl
             }
             if (EnableDisableActionUnitDataSubtypes.Contains(subtype))
             {
-                AddEnableDisableUnitDataEffectEditor(effect, content, includeAction: true);
+                AddEnableDisableUnitDataEffectEditor(
+                    effect,
+                    content,
+                    includeAction: true,
+                    allowAllActions: !subtype.Equals("ActionEnable", StringComparison.OrdinalIgnoreCase));
                 return true;
             }
             if (MovementTypeDataSubtypes.Contains(subtype))
@@ -2858,7 +3179,7 @@ public partial class TechnologyEditorView : UserControl
             return false;
         }
 
-        if (!StructuredTechnologyEffectTypes.Contains(currentType)) return false;
+        if (!TechnologyEffectCatalogInventory.IsStructuredEffectType(currentType)) return false;
 
         switch (currentType.ToLowerInvariant())
         {
@@ -3043,7 +3364,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddPlayerResourceDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeResourceEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizeResourceEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3086,7 +3407,7 @@ public partial class TechnologyEditorView : UserControl
     {
         EnsureDefaultDataRelativity(effect);
         EnsureFixedDataAttribute(effect, "amount", "0");
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3131,7 +3452,7 @@ public partial class TechnologyEditorView : UserControl
             EnsureExactDataAttribute(effect, "amount", "1");
             currentAmount = "1";
         }
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3165,7 +3486,7 @@ public partial class TechnologyEditorView : UserControl
         MigrateDataAttribute(effect, "power", "protopower");
         EnsureDefaultDataRelativity(effect);
         EnsureFixedDataAttribute(effect, "amount", "0");
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3175,9 +3496,11 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateForcedPlayerTargetCombo(effect, TechnologyDataEffectRules.NormalizePlayerTargetEffect));
         row.Children.Add(CreateLabeledEffectSegment("Power", CreateStrictEffectSelector(
             _godPowerNames,
-            GetCaseInsensitiveAttribute(effect, "protopower")?.Value.Trim() ?? "",
+            GetCaseInsensitiveAttribute(effect, "protopower")?.Value.Trim() ??
+            GetCaseInsensitiveAttribute(effect, "power")?.Value.Trim() ?? "",
             value =>
             {
+                RemoveCaseInsensitiveAttribute(effect, "power");
                 if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "protopower");
                 else SetCaseInsensitiveAttribute(effect, "protopower", value);
                 MarkDirty();
@@ -3294,12 +3617,14 @@ public partial class TechnologyEditorView : UserControl
             Margin = new Thickness(0, 4, 0, 4)
         };
         iconEditor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
+        var configuredIconPath = ProtoEditorWindow.NormalizeIconCatalogValue(iconPath, _iconPaths);
         iconEditor.Configure(
-            ProtoEditorWindow.NormalizeIconCatalogValue(iconPath, _iconPaths),
+            configuredIconPath,
             _iconPaths,
             async value =>
             {
-                if (!IsModifiedTab) return;
+                if (!IsModifiedTab || value.Equals(configuredIconPath, StringComparison.OrdinalIgnoreCase)) return;
+                configuredIconPath = value;
                 var existingId = GetCaseInsensitiveAttribute(effect, "pathstrid")?.Value.Trim() ?? "";
                 if (string.IsNullOrWhiteSpace(value))
                 {
@@ -3564,7 +3889,7 @@ public partial class TechnologyEditorView : UserControl
         EnsureDefaultDataRelativity(effect);
         EnsureFixedDataAttribute(effect, "amount", "0");
         EnsureFixedDataAttribute(effect, "component", "BuyFactor");
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3613,7 +3938,7 @@ public partial class TechnologyEditorView : UserControl
     {
         EnsureExactDataAttribute(effect, "amount", "1");
         EnsureExactDataAttribute(effect, "relativity", "Assign");
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -3730,7 +4055,7 @@ public partial class TechnologyEditorView : UserControl
         {
             EnsureFixedDataAttribute(effect, "system", "BonusUnits");
         }
-        else if (IsModifiedTab && GetCaseInsensitiveAttribute(effect, "system") != null)
+        else if (_initializingEffectDefaults && GetCaseInsensitiveAttribute(effect, "system") != null)
         {
             RemoveCaseInsensitiveAttribute(effect, "system");
             MarkDirty();
@@ -3975,7 +4300,7 @@ public partial class TechnologyEditorView : UserControl
             Margin = new Thickness(0, 0, 0, 0)
         };
         exclusionGroup.Children.Add(CreateInlineLabel("Exclude"));
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             exclusionGroup.Children.Add(CreateStrictEffectSelector(
                 _techTypeNames.Where(value => !exclusions.Contains(value, StringComparer.OrdinalIgnoreCase)),
@@ -4096,8 +4421,13 @@ public partial class TechnologyEditorView : UserControl
         AddDataRelativityAndAmountEditors(effect, row);
         row.Children.Add(CreateLabeledEffectSegment("If", CreateStrictEffectSelector(
             _original.Keys.Concat(_modified.Keys),
-            GetCaseInsensitiveAttribute(effect, "tech")?.Value.Trim() ?? "",
-            value => SetOptionalDataAttribute(effect, "tech", value),
+            GetCaseInsensitiveAttribute(effect, "tech")?.Value.Trim() ??
+            GetCaseInsensitiveAttribute(effect, "active")?.Value.Trim() ?? "",
+            value =>
+            {
+                RemoveCaseInsensitiveAttribute(effect, "active");
+                SetOptionalDataAttribute(effect, "tech", value);
+            },
             200), leftSpacing: 8));
         content.Children.Add(row);
     }
@@ -4235,7 +4565,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void EnsurePlayerTarget(XElement effect)
     {
-        if (!IsModifiedTab || !TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect)) return;
+        if (!_initializingEffectDefaults || !TechnologyDataEffectRules.NormalizePlayerTargetEffect(effect)) return;
         MarkDirty();
         UpdatePreview();
     }
@@ -4250,7 +4580,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void MigrateDataAttribute(XElement effect, string oldName, string newName)
     {
-        if (!IsModifiedTab) return;
+        if (!_initializingEffectDefaults) return;
         var oldAttribute = GetCaseInsensitiveAttribute(effect, oldName);
         if (oldAttribute == null) return;
         if (GetCaseInsensitiveAttribute(effect, newName) == null)
@@ -4262,7 +4592,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddMaxResourceDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeMaxResourceEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizeMaxResourceEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -4280,7 +4610,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddPopulationCapDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizePopulationCapEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizePopulationCapEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -4294,7 +4624,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddSetCivilizationDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeSetCivilizationEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizeSetCivilizationEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -4397,7 +4727,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddProtoActionAddDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyDataEffectRules.NormalizeProtoActionAddEffect(effect))
+        if (_initializingEffectDefaults && TechnologyDataEffectRules.NormalizeProtoActionAddEffect(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -5073,7 +5403,7 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateLabeledEffectSegment("Action", CreateDataActionSelector(effect), leftSpacing: 8));
         row.Children.Add(CreateEnableDisableAmountCombo(effect));
         row.Children.Add(CreateLabeledEffectSegment("Flag", CreateStrictEffectSelector(
-            ProtoActionMetadataCatalog.GetKnownFlagTags(),
+            ProtoActionMetadataCatalog.GetSuggestedFlagTags(),
             GetCaseInsensitiveAttribute(effect, "flag")?.Value.Trim() ?? "",
             value =>
             {
@@ -5141,7 +5471,7 @@ public partial class TechnologyEditorView : UserControl
         var target = effect.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase));
         var playerMode = target != null &&
             GetCaseInsensitiveAttribute(target, "type")?.Value.Equals("Player", StringComparison.OrdinalIgnoreCase) == true;
-        if (IsModifiedTab && playerMode && target != null)
+        if (_initializingEffectDefaults && playerMode && target != null)
         {
             var misplacedUnitType = GetCaseInsensitiveAttribute(target, "unittype")?.Value.Trim() ?? "";
             if (GetCaseInsensitiveAttribute(effect, "unittype") == null && !string.IsNullOrWhiteSpace(misplacedUnitType))
@@ -5479,7 +5809,7 @@ public partial class TechnologyEditorView : UserControl
 
         if (currentModifyType is "DamageSpecific" or "ArmorSpecific")
         {
-            if (IsModifiedTab && GetCaseInsensitiveAttribute(effect, "damagetype") == null)
+            if (_initializingEffectDefaults && GetCaseInsensitiveAttribute(effect, "damagetype") == null)
                 EnsureFixedDataAttribute(effect, "damagetype", "Hack");
             row.Children.Add(CreateLabeledEffectSegment(
                 "Damage type",
@@ -5677,14 +6007,14 @@ public partial class TechnologyEditorView : UserControl
 
     private void EnsureExactDataAttribute(XElement effect, string attributeName, string value)
     {
-        if (!IsModifiedTab || string.Equals(GetCaseInsensitiveAttribute(effect, attributeName)?.Value, value, StringComparison.OrdinalIgnoreCase)) return;
+        if (!_initializingEffectDefaults || string.Equals(GetCaseInsensitiveAttribute(effect, attributeName)?.Value, value, StringComparison.OrdinalIgnoreCase)) return;
         SetCaseInsensitiveAttribute(effect, attributeName, value);
         MarkDirty(); UpdatePreview();
     }
 
     private void EnsureFixedDataAttribute(XElement effect, string attributeName, string defaultValue)
     {
-        if (!IsModifiedTab || GetCaseInsensitiveAttribute(effect, attributeName) != null) return;
+        if (!_initializingEffectDefaults || GetCaseInsensitiveAttribute(effect, attributeName) != null) return;
         SetCaseInsensitiveAttribute(effect, attributeName, defaultValue);
         MarkDirty(); UpdatePreview();
     }
@@ -5746,7 +6076,7 @@ public partial class TechnologyEditorView : UserControl
     {
         var stored = GetCaseInsensitiveAttribute(effect, attributeName)?.Value.Trim() ?? "";
         var current = new string(stored.Where(InternalNamePolicy.IsAllowedCharacter).ToArray());
-        if (IsModifiedTab && !current.Equals(stored, StringComparison.Ordinal))
+        if (_initializingEffectDefaults && !current.Equals(stored, StringComparison.Ordinal))
         {
             if (current.Length == 0) RemoveCaseInsensitiveAttribute(effect, attributeName);
             else SetCaseInsensitiveAttribute(effect, attributeName, current);
@@ -5782,10 +6112,14 @@ public partial class TechnologyEditorView : UserControl
         return box;
     }
 
-    private void AddEnableDisableUnitDataEffectEditor(XElement effect, StackPanel content, bool includeAction)
+    private void AddEnableDisableUnitDataEffectEditor(
+        XElement effect,
+        StackPanel content,
+        bool includeAction,
+        bool allowAllActions = true)
     {
         EnsureDefaultEnableDisableDataState(effect);
-        if (includeAction) EnsureDefaultDataAction(effect);
+        if (includeAction && allowAllActions) EnsureDefaultDataAction(effect);
 
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         AddDataTargetEditor(effect, row);
@@ -5794,7 +6128,7 @@ public partial class TechnologyEditorView : UserControl
             var actionLabel = CreateInlineLabel("Action");
             actionLabel.Margin = new Thickness(8, 4, 8, 4);
             row.Children.Add(actionLabel);
-            row.Children.Add(CreateDataActionSelector(effect));
+            row.Children.Add(CreateDataActionSelector(effect, allowAllActions));
         }
 
         var currentAmount = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() ?? "1";
@@ -5844,7 +6178,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddOnHitEffectDataEffectEditor(XElement effect, StackPanel content)
     {
-        if (IsModifiedTab && TechnologyOnHitEffectRules.Normalize(effect))
+        if (_initializingEffectDefaults && TechnologyOnHitEffectRules.Normalize(effect))
         {
             MarkDirty();
             UpdatePreview();
@@ -5936,7 +6270,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddOnHitEffectAttributeDataEffectEditor(XElement effect, StackPanel content, string subtype)
     {
-        if (IsModifiedTab && TechnologyOnHitEffectRules.NormalizeAttributeSubtype(effect, subtype))
+        if (_initializingEffectDefaults && TechnologyOnHitEffectRules.NormalizeAttributeSubtype(effect, subtype))
         {
             MarkDirty();
             UpdatePreview();
@@ -6325,7 +6659,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void EnsureDefaultEnableDisableDataState(XElement effect)
     {
-        if (!IsModifiedTab) return;
+        if (!_initializingEffectDefaults) return;
         var changed = false;
         if (GetCaseInsensitiveAttribute(effect, "amount") == null)
         {
@@ -6459,6 +6793,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void ResetDataEffectForSubtype(XElement effect, string subtype)
     {
+        _effectsPendingDefaultInitialization.Remove(effect);
         QueueDataIconOverrideStringForRemoval(effect);
         var metadata = effect.Attributes()
             .Where(a => a.Name.LocalName.Equals("hideTooltip", StringComparison.OrdinalIgnoreCase)
@@ -6471,14 +6806,17 @@ public partial class TechnologyEditorView : UserControl
         effect.RemoveNodes();
         effect.SetAttributeValue("type", "Data");
         if (!string.IsNullOrWhiteSpace(subtype))
+        {
             effect.SetAttributeValue("subtype", subtype);
+            _effectsPendingDefaultInitialization.Add(effect);
+        }
         foreach (var attribute in metadata)
             effect.Add(attribute);
     }
 
     private void EnsureDefaultDataRelativity(XElement effect)
     {
-        if (!IsModifiedTab || GetCaseInsensitiveAttribute(effect, "relativity") != null) return;
+        if (!_initializingEffectDefaults || GetCaseInsensitiveAttribute(effect, "relativity") != null) return;
         SetCaseInsensitiveAttribute(effect, "relativity", "BasePercent");
         MarkDirty();
         UpdatePreview();
@@ -6486,7 +6824,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void EnsureDefaultDataAction(XElement effect, string? defaultAction = null)
     {
-        if (!IsModifiedTab) return;
+        if (!_initializingEffectDefaults) return;
         if (GetCaseInsensitiveAttribute(effect, "action") != null || GetCaseInsensitiveAttribute(effect, "allactions") != null) return;
         if (string.IsNullOrWhiteSpace(defaultAction)) SetCaseInsensitiveAttribute(effect, "allactions", "1");
         else SetCaseInsensitiveAttribute(effect, "action", defaultAction);
@@ -6494,21 +6832,21 @@ public partial class TechnologyEditorView : UserControl
         UpdatePreview();
     }
 
-    private AutoCompleteBox CreateDataActionSelector(XElement effect)
+    private AutoCompleteBox CreateDataActionSelector(XElement effect, bool allowAllActions = true)
     {
         var actionAttribute = GetCaseInsensitiveAttribute(effect, "action")?.Value.Trim() ?? "";
         var allActions = GetCaseInsensitiveAttribute(effect, "allactions")?.Value.Trim();
-        var current = string.IsNullOrWhiteSpace(actionAttribute) && !string.Equals(allActions, "0", StringComparison.OrdinalIgnoreCase)
+        var current = allowAllActions && string.IsNullOrWhiteSpace(actionAttribute) && !string.Equals(allActions, "0", StringComparison.OrdinalIgnoreCase)
             ? "All"
             : actionAttribute;
-        var suggestions = new[] { "All" }
+        var suggestions = (allowAllActions ? new[] { "All" } : [])
             .Concat(_protoActionNames.Where(value => !value.Equals("All", StringComparison.OrdinalIgnoreCase)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var selector = CreateStrictEffectSelector(suggestions, current, value =>
         {
-            if (value.Equals("All", StringComparison.OrdinalIgnoreCase))
+            if (allowAllActions && value.Equals("All", StringComparison.OrdinalIgnoreCase))
             {
                 RemoveCaseInsensitiveAttribute(effect, "action");
                 SetCaseInsensitiveAttribute(effect, "allactions", "1");
@@ -6516,7 +6854,8 @@ public partial class TechnologyEditorView : UserControl
             else
             {
                 RemoveCaseInsensitiveAttribute(effect, "allactions");
-                SetCaseInsensitiveAttribute(effect, "action", value);
+                if (string.IsNullOrWhiteSpace(value)) RemoveCaseInsensitiveAttribute(effect, "action");
+                else SetCaseInsensitiveAttribute(effect, "action", value);
             }
             MarkDirty();
             UpdatePreview();
@@ -6570,7 +6909,9 @@ public partial class TechnologyEditorView : UserControl
         var targetSelector = CreateStrictEffectSelector(targetOptions, targetValue, value =>
         {
             var kind = targetKindCombo.SelectedItem?.ToString() ?? targetKind;
-            _ = HandleSetNameTargetChangedAsync(effect, kind, value);
+            ObserveUiOperation(
+                HandleSetNameTargetChangedAsync(effect, kind, value),
+                "change the SetName target");
         }, targetKind == "Tech" ? 200 : 150);
         row.Children.Add(targetSelector);
 
@@ -6629,15 +6970,12 @@ public partial class TechnologyEditorView : UserControl
             if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "reqTech")));
         }
 
-        targetKindCombo.SelectionChanged += async (_, _) =>
+        targetKindCombo.SelectionChanged += (_, _) =>
         {
             if (_loadingUi || !IsModifiedTab || targetKindCombo.SelectedItem is not string kind) return;
-            RemoveCaseInsensitiveAttribute(effect, "proto");
-            RemoveCaseInsensitiveAttribute(effect, "tech");
-            SetCaseInsensitiveAttribute(effect, kind == "Tech" ? "tech" : "proto", "");
-            await RegenerateSetNameEffectStringIdsAsync(effect, removeOldIds: true);
-            MarkDirty();
-            _ = BuildEditorAsync();
+            ObserveUiOperation(
+                ChangeSetNameTargetKindAsync(effect, kind),
+                "change the SetName target type");
         };
 
         content.Children.Add(row);
@@ -6647,6 +6985,35 @@ public partial class TechnologyEditorView : UserControl
             var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
             if (attribute != null)
                 await AddEffectStringAttributeRowAsync(content, effect, attribute, label, 380, removable: true);
+        }
+    }
+
+    private async Task ChangeSetNameTargetKindAsync(XElement effect, string kind)
+    {
+        var effectBackup = new XElement(effect);
+        var updatesBackup = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
+        var removalsBackup = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            RemoveCaseInsensitiveAttribute(effect, "proto");
+            RemoveCaseInsensitiveAttribute(effect, "tech");
+            SetCaseInsensitiveAttribute(effect, kind == "Tech" ? "tech" : "proto", "");
+            await RegenerateSetNameEffectStringIdsAsync(effect, removeOldIds: true);
+            MarkDirty();
+            if (IsCurrentEffect(effect))
+                await BuildEditorAsync();
+        }
+        catch
+        {
+            effect.ReplaceAttributes(effectBackup.Attributes());
+            effect.ReplaceNodes(effectBackup.Nodes());
+            _pendingStringUpdates.Clear();
+            foreach (var (id, value) in updatesBackup)
+                _pendingStringUpdates[id] = value;
+            _pendingStringRemovals.Clear();
+            foreach (var id in removalsBackup)
+                _pendingStringRemovals.Add(id);
+            throw;
         }
     }
 
@@ -6679,7 +7046,7 @@ public partial class TechnologyEditorView : UserControl
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(CreateInlineLabel("Message"));
         var stringId = effect.Value.Trim();
-        if (string.IsNullOrWhiteSpace(stringId) && IsModifiedTab && _current != null)
+        if (string.IsNullOrWhiteSpace(stringId) && _initializingEffectDefaults && _current != null)
         {
             stringId = BuildNextTextOutputStringId(_current, allIsIntrinsic ? "OUTPUTALL" : "OUTPUT");
             effect.Value = stringId;
@@ -6698,12 +7065,23 @@ public partial class TechnologyEditorView : UserControl
             Margin = new Thickness(0, 4, 8, 4)
         });
         box.Width = box.MaxWidth = 380;
+        var lastText = text;
         box.TextChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(stringId)) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
+            var value = box.Text ?? "";
+            if (value.Equals(lastText, StringComparison.Ordinal)) return;
+            lastText = value;
+            if (string.IsNullOrWhiteSpace(stringId))
+            {
+                if (_current == null || string.IsNullOrEmpty(value)) return;
+                stringId = BuildNextTextOutputStringId(_current, allIsIntrinsic ? "OUTPUTALL" : "OUTPUT");
+                effect.Value = stringId;
+            }
             _pendingStringRemovals.Remove(stringId);
-            _pendingStringUpdates[stringId] = box.Text ?? "";
+            SetPendingTechnologyStringValue(stringId, value);
             MarkDirty();
+            UpdatePreview();
         };
         row.Children.Add(box);
         if (!allIsIntrinsic)
@@ -6961,7 +7339,7 @@ public partial class TechnologyEditorView : UserControl
     private async Task AddTextEffectOutputStringFieldAsync(XElement effect, StackPanel content, string label, string attributeName, string suffix)
     {
         var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
-        if (attribute == null && IsModifiedTab && _current != null)
+        if (attribute == null && _initializingEffectDefaults && _current != null)
         {
             var id = BuildUniqueTechnologyEffectStringId(_current, suffix, effect);
             SetCaseInsensitiveAttribute(effect, attributeName, id);
@@ -6969,40 +7347,45 @@ public partial class TechnologyEditorView : UserControl
             _pendingStringRemovals.Remove(id);
             _pendingStringUpdates[id] = "";
         }
-        if (attribute == null) return;
-
-        var idValue = attribute.Value.Trim();
+        var idValue = attribute?.Value.Trim() ?? "";
         var text = await ResolveTechnologyStringValueAsync(idValue);
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(CreateInlineLabel(label));
-        var box = CreateMultilineEffectStringTextBox(attribute, text, 380);
-        row.Children.Add(box);
-        content.Children.Add(row);
-    }
-
-    private TextBox CreateMultilineEffectStringTextBox(XAttribute attribute, string text, double width)
-    {
-        var id = attribute.Value.Trim();
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = text,
-            IsEnabled = IsModifiedTab,
-            Width = width,
-            MaxWidth = width,
+            IsEnabled = CanEditModifiedDocument,
+            Width = 380,
+            MaxWidth = 380,
             MinHeight = 32,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 4)
         });
-        box.Width = box.MaxWidth = width;
+        box.Width = box.MaxWidth = 380;
+        var lastText = text;
         box.TextChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(id)) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
+            var value = box.Text ?? "";
+            if (value.Equals(lastText, StringComparison.Ordinal)) return;
+            lastText = value;
+            if (attribute == null)
+            {
+                if (_current == null || string.IsNullOrEmpty(value)) return;
+                var generatedId = BuildUniqueTechnologyEffectStringId(_current, suffix, effect);
+                SetCaseInsensitiveAttribute(effect, attributeName, generatedId);
+                attribute = GetCaseInsensitiveAttribute(effect, attributeName);
+            }
+            if (attribute == null) return;
+            var id = attribute.Value.Trim();
             _pendingStringRemovals.Remove(id);
-            _pendingStringUpdates[id] = box.Text ?? "";
+            SetPendingTechnologyStringValue(id, value);
             MarkDirty();
+            UpdatePreview();
         };
-        return box;
+        row.Children.Add(box);
+        content.Children.Add(row);
     }
 
     private void AddForbidTechEffectEditor(XElement effect, StackPanel content)
@@ -7533,7 +7916,17 @@ public partial class TechnologyEditorView : UserControl
             Margin = new Thickness(0, 4, 0, 4)
         });
         box.Width = box.MaxWidth = width;
-        box.TextChanged += (_, _) => { if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(id)) return; _pendingStringRemovals.Remove(id); _pendingStringUpdates[id] = box.Text ?? ""; MarkDirty(); };
+        var lastText = text;
+        box.TextChanged += (_, _) =>
+        {
+            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(id)) return;
+            var value = box.Text ?? "";
+            if (value.Equals(lastText, StringComparison.Ordinal)) return;
+            lastText = value;
+            _pendingStringRemovals.Remove(id);
+            SetPendingTechnologyStringValue(id, value);
+            MarkDirty();
+        };
         return box;
     }
 
@@ -7578,7 +7971,7 @@ public partial class TechnologyEditorView : UserControl
         double width = 150,
         bool preserveSuggestionOrder = false)
     {
-        var selector = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox { Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedTab, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 4) });
+        var selector = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox { Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = CanEditModifiedDocument, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 4) });
         selector.Width = selector.MaxWidth = width;
         var lastCommittedValue = value.Trim();
         EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: true, keepStartVisibleAfterCommit: true, preserveSuggestionOrder: preserveSuggestionOrder, valueCommitted: v =>
@@ -7592,6 +7985,37 @@ public partial class TechnologyEditorView : UserControl
             UpdatePreview();
         });
         return selector;
+    }
+
+    private bool IsCurrentEffect(XElement effect)
+        => _current != null && effect.Ancestors().Any(ancestor => ReferenceEquals(ancestor, _current));
+
+    private void ObserveUiOperation(Task operation, string description)
+    {
+        _activeUiOperations.Add(operation);
+        _ = CompleteObservedUiOperationAsync(operation, description);
+    }
+
+    private async Task CompleteObservedUiOperationAsync(Task operation, string description)
+    {
+        try
+        {
+            await operation;
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded editor work is expected.
+        }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = $"Unable to {description}: {exception.Message}";
+            if (TopLevel.GetTopLevel(this) is Window owner)
+                await new Prompt(PromptType.Error, "Technology editor operation failed", _statusMessage.Text).ShowDialog(owner);
+        }
+        finally
+        {
+            _activeUiOperations.Remove(operation);
+        }
     }
 
     private static XAttribute? GetCaseInsensitiveAttribute(XElement element, string name)
@@ -7675,14 +8099,7 @@ public partial class TechnologyEditorView : UserControl
     }
 
     private static string NormalizeTechnologyStringToken(string value)
-    {
-        var token = value.Trim();
-        token = Regex.Replace(token, "([A-Z]+)([A-Z][a-z])", "$1_$2");
-        token = Regex.Replace(token, "([a-z0-9])([A-Z])", "$1_$2");
-        var normalized = new string(token.ToUpperInvariant().Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
-        while (normalized.Contains("__", StringComparison.Ordinal)) normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
-        return normalized.Trim('_');
-    }
+        => TechnologyStringIdPolicy.NormalizeToken(value);
 
     private static string BuildTechnologyEffectStringId(string technologyName, string suffix)
     {
@@ -7740,16 +8157,17 @@ public partial class TechnologyEditorView : UserControl
 
     private void TechNameBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (!_controlsReady || _loadingUi || !IsModifiedTab || _current == null || _currentOriginalName == null) return;
+        if (!_controlsReady || _loadingUi || !CanEditModifiedDocument || _current == null || _currentOriginalName == null) return;
         var newName = (_techNameBox.Text ?? "").Trim();
+        if (newName.Equals(_currentOriginalName, StringComparison.Ordinal)) return;
         if (InternalNamePolicy.IsValidOrUnchangedLegacy(newName, _currentOriginalName))
             _statusMessage.Text = "";
         MarkDirty();
     }
 
-    private async void TechNameBox_LostFocus(object? sender, RoutedEventArgs e)
+    private void TechNameBox_LostFocus(object? sender, RoutedEventArgs e)
     {
-        await CommitCurrentTechnologyAsync();
+        ObserveUiOperation(CommitCurrentTechnologyAsync(), "commit the technology name");
     }
 
     public async Task<bool> CommitCurrentTechnologyAsync()
@@ -7818,7 +8236,7 @@ public partial class TechnologyEditorView : UserControl
 
     private async Task<bool> CommitPendingTechnologyNameAsync()
     {
-        if (_loadingUi || !IsModifiedTab || _current == null || _currentOriginalName == null) return true;
+        if (_loadingUi || !CanEditModifiedDocument || _current == null || _currentOriginalName == null) return true;
         var technology = _current;
         var oldName = _currentOriginalName;
         var newName = (_techNameBox.Text ?? "").Trim();
@@ -7845,6 +8263,55 @@ public partial class TechnologyEditorView : UserControl
             await ShowTechnologyNameErrorAsync(
                 "Duplicate technology name",
                 $"Technology '{newName}' already exists in the base game or this mod. The previous name was kept.");
+            return false;
+        }
+
+        var stringNamespaceOwner = TechnologyStringIdPolicy.FindNamespaceCollision(
+            newName,
+            _original.Keys.Concat(_modified.Keys),
+            oldName);
+        if (stringNamespaceOwner != null)
+        {
+            _statusMessage.Text = $"Technology '{newName}' would reuse strings owned by '{stringNamespaceOwner}'.";
+            _loadingUi = true;
+            _techNameBox.Text = oldName;
+            _loadingUi = false;
+            await ShowTechnologyNameErrorAsync(
+                "Technology string ID collision",
+                $"Technology '{newName}' and '{stringNamespaceOwner}' generate the same string ID namespace. The previous name was kept to prevent shared strings from being overwritten.");
+            return false;
+        }
+
+        var references = GetTechnologyReferences(oldName);
+        if (_original.ContainsKey(oldName))
+        {
+            // Renaming a mod override reveals the still-valid base technology
+            // under the old name. Base references continue to resolve to that
+            // definition and must not be rewritten to the new custom name.
+            references = references.Where(reference => !reference.IsBuiltIn).ToList();
+        }
+        if (_technologyReferenceIndexError != null)
+        {
+            await ShowTechnologyNameErrorAsync(
+                "Technology reference check failed",
+                $"'{oldName}' was not renamed because its references could not be checked safely. {_technologyReferenceIndexError}");
+            _loadingUi = true;
+            _techNameBox.Text = oldName;
+            _loadingUi = false;
+            return false;
+        }
+
+        var unsafeReferences = references.Where(reference =>
+            !reference.IsRecognized || !reference.CanMigrate).ToList();
+        if (unsafeReferences.Count > 0)
+        {
+            await ShowTechnologyNameErrorAsync(
+                "Technology rename blocked",
+                $"'{oldName}' has {unsafeReferences.Count} reference(s) that the editor cannot migrate safely. The name was kept.\n\n" +
+                FormatTechnologyReferenceList(unsafeReferences));
+            _loadingUi = true;
+            _techNameBox.Text = oldName;
+            _loadingUi = false;
             return false;
         }
 
@@ -7895,6 +8362,10 @@ public partial class TechnologyEditorView : UserControl
         _modified.Remove(oldName);
         _modified[newName] = technology;
         _currentOriginalName = newName;
+        var collapsedRenames = TechnologyReferenceIndex.AddOrCollapseRename(
+            _pendingTechnologyRenames, oldName, newName);
+        _pendingTechnologyRenames.Clear();
+        _pendingTechnologyRenames.AddRange(collapsedRenames);
         _dirtyTechnologyNames.Remove(oldName);
         _dirtyTechnologyNames.Add(newName);
         MarkDirty();
@@ -7903,6 +8374,18 @@ public partial class TechnologyEditorView : UserControl
         _statusMessage.Text = "";
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
         return true;
+    }
+
+    private static string FormatTechnologyReferenceList(IEnumerable<TechnologyReferenceUsage> references)
+    {
+        var items = references.Take(10).Select(reference =>
+            $"• {reference.DisplayLocation}" +
+            (!reference.IsRecognized ? " (unknown reference form)" :
+                !reference.CanMigrate ? " (read-only)" : "")).ToList();
+        var total = references.Count();
+        if (total > items.Count)
+            items.Add($"• …and {total - items.Count} more");
+        return string.Join("\n", items);
     }
 
     private async Task ShowTechnologyNameErrorAsync(string title, string message)
@@ -7928,27 +8411,7 @@ public partial class TechnologyEditorView : UserControl
     }
 
     internal static string BuildTechnologyStringId(string technologyName, string tag)
-    {
-        var token = technologyName.Trim();
-        token = Regex.Replace(token, "([A-Z]+)([A-Z][a-z])", "$1_$2");
-        token = Regex.Replace(token, "([a-z0-9])([A-Z])", "$1_$2");
-        var normalized = new string(token
-            .ToUpperInvariant()
-            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')
-            .ToArray());
-        while (normalized.Contains("__", StringComparison.Ordinal))
-            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
-        normalized = normalized.Trim('_');
-
-        var suffix = tag.ToLowerInvariant() switch
-        {
-            "displaynameid" => "NAME",
-            "rollovertextid" => "LR",
-            "advancedrollovertextoverrideid" => "OVERRIDE",
-            _ => "TEXT"
-        };
-        return $"STR_TECH_{normalized}_{suffix}";
-    }
+        => TechnologyStringIdPolicy.BuildId(technologyName, tag);
 
     private async Task RegenerateDuplicatedTechnologyStringsAsync(XElement tech, string newName)
     {
@@ -7968,11 +8431,47 @@ public partial class TechnologyEditorView : UserControl
         await RegenerateAllEffectStringsAsync(tech, newName, removeOldIds: false);
     }
 
+    private void EnsureDuplicatedTechnologyCoreProperties(XElement tech, string newName)
+    {
+        var displayName = tech.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("displaynameid", StringComparison.OrdinalIgnoreCase));
+        if (displayName == null)
+        {
+            var displayId = BuildTechnologyStringId(newName, "displaynameid");
+            InsertBeforeEffectsOrAppend(tech, new XElement("displaynameid", displayId));
+            _pendingStringRemovals.Remove(displayId);
+            _pendingStringUpdates[displayId] = newName;
+        }
+
+        var rollover = tech.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("rollovertextid", StringComparison.OrdinalIgnoreCase));
+        if (rollover == null)
+        {
+            var rolloverId = BuildTechnologyStringId(newName, "rollovertextid");
+            InsertBeforeEffectsOrAppend(tech, new XElement("rollovertextid", rolloverId));
+            _pendingStringRemovals.Remove(rolloverId);
+            _pendingStringUpdates[rolloverId] = "";
+        }
+
+        EnsureCoreProperty("icon", "");
+        EnsureCoreProperty("status", "UNOBTAINABLE");
+        EnsureCoreProperty("researchpoints", "0");
+        return;
+
+        void EnsureCoreProperty(string elementName, string defaultValue)
+        {
+            if (tech.Elements().Any(element =>
+                    element.Name.LocalName.Equals(elementName, StringComparison.OrdinalIgnoreCase)))
+                return;
+            InsertBeforeEffectsOrAppend(tech, new XElement(elementName, defaultValue));
+        }
+    }
+
     private async Task RegenerateAllEffectStringsAsync(XElement tech, string technologyName, bool removeOldIds)
     {
         await RegenerateEffectTooltipStringsAsync(tech, technologyName, removeOldIds);
         var used = CollectTechnologyStringIds(tech);
-        foreach (var effect in tech.Descendants().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)).ToList())
+        foreach (var effect in TechnologyXmlShapePolicy.EnumerateEffectsInDocumentOrder(tech))
         {
             var type = GetCaseInsensitiveAttribute(effect, "type")?.Value ?? "";
             if (type.Equals("SetName", StringComparison.OrdinalIgnoreCase))
@@ -8067,8 +8566,7 @@ public partial class TechnologyEditorView : UserControl
 
     private async Task RegenerateEffectTooltipStringsAsync(XElement tech, string technologyName, bool removeOldIds = true)
     {
-        var tooltipAttributes = tech.Descendants()
-            .Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase))
+        var tooltipAttributes = TechnologyXmlShapePolicy.EnumerateEffectsInDocumentOrder(tech)
             .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("tooltipID", StringComparison.OrdinalIgnoreCase)))
             .Where(a => a != null)
             .Cast<XAttribute>()
@@ -8100,30 +8598,29 @@ public partial class TechnologyEditorView : UserControl
         }
     }
 
-    private async void AddTech_Click(object? sender, RoutedEventArgs e)
+    private void AddTech_Click(object? sender, RoutedEventArgs e)
     {
-        await AddTechnologyAsync();
+        ObserveUiOperation(AddTechnologyAsync(), "add the technology");
     }
 
     public async Task AddTechnologyAsync(bool duplicateSelected = false)
     {
+        if (!CanModifyTechnologyDocument)
+        {
+            _statusMessage.Text = _modDocumentSafetyError ?? "Technology modifications are disabled.";
+            return;
+        }
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
 
         XElement? source = null;
-        string? selected = _techList.SelectedItem as string;
-        if (!string.IsNullOrWhiteSpace(selected))
-            (IsModifiedTab ? _modified : _original).TryGetValue(selected, out source);
-
-        var duplicate = duplicateSelected && source != null && !string.IsNullOrWhiteSpace(selected);
-        if (!duplicateSelected && source != null && !string.IsNullOrWhiteSpace(selected))
+        string? selected = null;
+        if (duplicateSelected)
         {
-            var choice = new Prompt(
-                PromptType.Confirm,
-                "Add Technology",
-                $"Do you want to DUPLICATE the selected technology '{selected}'?\n(Click Confirm to duplicate, or Cancel to create a blank technology instead.)");
-            await choice.ShowDialog(owner);
-            duplicate = choice.Confirmed;
+            selected = _techList.SelectedItem as string;
+            if (!string.IsNullOrWhiteSpace(selected))
+                (IsModifiedTab ? _modified : _original).TryGetValue(selected, out source);
         }
+        var duplicate = source != null && !string.IsNullOrWhiteSpace(selected);
 
         var input = new InputPromptWindow(duplicate ? "Enter duplicate technology name:" : "Enter new technology name:", allowWhitespace: false);
         await input.ShowDialog(owner);
@@ -8145,12 +8642,39 @@ public partial class TechnologyEditorView : UserControl
             return;
         }
 
+        var stringNamespaceOwner = TechnologyStringIdPolicy.FindNamespaceCollision(
+            name,
+            _original.Keys.Concat(_modified.Keys));
+        if (stringNamespaceOwner != null)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Technology string ID collision",
+                $"Technology '{name}' and '{stringNamespaceOwner}' generate the same string ID namespace. Choose a different name so existing strings cannot be overwritten.").ShowDialog(owner);
+            return;
+        }
+
         XElement tech;
         if (duplicate && source != null)
         {
             tech = new XElement(source);
             tech.SetAttributeValue("name", name);
-            await RegenerateDuplicatedTechnologyStringsAsync(tech, name);
+            var stringUpdatesBackup = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
+            var stringRemovalsBackup = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                await RegenerateDuplicatedTechnologyStringsAsync(tech, name);
+                EnsureDuplicatedTechnologyCoreProperties(tech, name);
+            }
+            catch (Exception exception)
+            {
+                RestorePendingStringState(stringUpdatesBackup, stringRemovalsBackup);
+                await new Prompt(
+                    PromptType.Error,
+                    "Unable to duplicate technology",
+                    $"The technology and its strings were not duplicated. {exception.Message}").ShowDialog(owner);
+                return;
+            }
         }
         else
         {
@@ -8178,15 +8702,61 @@ public partial class TechnologyEditorView : UserControl
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private async void DeleteTech_Click(object? sender, RoutedEventArgs e)
+    private void RestorePendingStringState(
+        IReadOnlyDictionary<string, string> stringUpdates,
+        IReadOnlyCollection<string> stringRemovals)
     {
-        await DeleteTechnologyAsync();
+        _pendingStringUpdates.Clear();
+        foreach (var update in stringUpdates)
+            _pendingStringUpdates[update.Key] = update.Value;
+        _pendingStringRemovals.Clear();
+        foreach (var removal in stringRemovals)
+            _pendingStringRemovals.Add(removal);
+    }
+
+    private void DeleteTech_Click(object? sender, RoutedEventArgs e)
+    {
+        ObserveUiOperation(DeleteTechnologyAsync(), "delete the technology");
     }
 
     public async Task DeleteTechnologyAsync()
     {
-        if (!IsModifiedTab || _techList.SelectedItem is not string name || !_modified.TryGetValue(name, out var tech)) return;
+        if (!CanEditModifiedDocument || _techList.SelectedItem is not string name || !_modified.TryGetValue(name, out var tech))
+        {
+            if (_modDocumentSafetyError != null)
+                _statusMessage.Text = _modDocumentSafetyError;
+            return;
+        }
+
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
+
+        var references = _original.ContainsKey(name)
+            ? []
+            : GetTechnologyReferences(name);
+        if (_technologyReferenceIndexError != null)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Technology reference check failed",
+                $"'{name}' was not deleted because its references could not be checked safely. {_technologyReferenceIndexError}").ShowDialog(owner);
+            return;
+        }
+        if (references.Count > 0)
+        {
+            var blocked = new Prompt(
+                PromptType.Error,
+                "Technology is still in use",
+                $"'{name}' is used by {references.Count} reference(s) and cannot be deleted. Remove those references first.\n\n" +
+                FormatTechnologyReferenceList(references))
+            {
+                Width = 680,
+                Height = 360,
+                MinWidth = 560,
+                MinHeight = 260
+            };
+            await blocked.ShowDialog(owner);
+            return;
+        }
 
         var confirm = new Prompt(PromptType.Confirm, "Delete Technology", $"Are you sure you want to delete '{name}'?");
         await confirm.ShowDialog(owner);
@@ -8211,6 +8781,9 @@ public partial class TechnologyEditorView : UserControl
 
         tech.Remove();
         _modified.Remove(name);
+        _pendingTechnologyRenames.RemoveAll(rename =>
+            rename.OldName.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+            rename.NewName.Equals(name, StringComparison.OrdinalIgnoreCase));
         _dirtyTechnologyNames.Add(name);
         MarkDirty();
         ClearEditor();
@@ -8265,25 +8838,26 @@ public partial class TechnologyEditorView : UserControl
         foreach (var attribute in ordered) effect.Add(attribute);
     }
 
-    private static void NormalizeTechnologyChildOrder(XElement tech)
+    private void NormalizeChangedEffectAttributeOrder(XElement technology)
     {
-        foreach (var effect in tech.Descendants().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
+        var savedTechnology = FindSavedTechnologySnapshot(technology);
+        foreach (var effect in TechnologyXmlShapePolicy.FindChangedEffects(technology, savedTechnology))
             NormalizeEffectAttributeOrder(effect);
+    }
 
-        var children = tech.Elements().ToList();
-        if (children.Count < 2) return;
-        var properties = children.Where(e => !e.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase)
-                                             && !e.Name.LocalName.Equals("flag", StringComparison.OrdinalIgnoreCase)
-                                             && !e.Name.LocalName.Equals("prereqs", StringComparison.OrdinalIgnoreCase)
-                                             && !e.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase)).ToList();
-        var techTypes = children.Where(e => e.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase)).ToList();
-        var flags = children.Where(e => e.Name.LocalName.Equals("flag", StringComparison.OrdinalIgnoreCase)).ToList();
-        var prereqs = children.Where(e => e.Name.LocalName.Equals("prereqs", StringComparison.OrdinalIgnoreCase)).ToList();
-        var effects = children.Where(e => e.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase)).ToList();
-        var ordered = properties.Concat(techTypes).Concat(flags).Concat(prereqs).Concat(effects).ToList();
-        if (children.SequenceEqual(ordered)) return;
-        foreach (var child in ordered) child.Remove();
-        tech.Add(ordered);
+    private XElement? FindSavedTechnologySnapshot(XElement technology)
+    {
+        var currentName = GetCaseInsensitiveAttribute(technology, "name")?.Value.Trim() ?? "";
+        if (_savedModifiedTechnologyXml.TryGetValue(currentName, out var savedXml))
+            return XElement.Parse(savedXml, LoadOptions.PreserveWhitespace);
+
+        var originalName = _pendingTechnologyRenames
+            .LastOrDefault(rename => rename.NewName.Equals(currentName, StringComparison.OrdinalIgnoreCase))
+            ?.OldName;
+        return !string.IsNullOrWhiteSpace(originalName) &&
+               _savedModifiedTechnologyXml.TryGetValue(originalName, out savedXml)
+            ? XElement.Parse(savedXml, LoadOptions.PreserveWhitespace)
+            : null;
     }
 
     private static string ToDisplayStatus(string status)
@@ -8322,10 +8896,23 @@ public partial class TechnologyEditorView : UserControl
         return value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
     }
 
-    public bool IsDirty => _dirty;
+    public bool IsDirty
+    {
+        get
+        {
+            RecalculateDirtyState();
+            return _dirty;
+        }
+    }
 
     public async Task<bool> SaveAsync()
     {
+        await AwaitActiveEditorBuildCompletionAsync();
+        if (_modDocumentSafetyError != null)
+        {
+            _statusMessage.Text = _modDocumentSafetyError;
+            return false;
+        }
         if (!await CommitCurrentTechnologyAsync())
             return false;
 
@@ -8335,38 +8922,515 @@ public partial class TechnologyEditorView : UserControl
             return false;
         }
 
+        if (!await ReloadExternallyChangedTechtreeAsync())
+            return false;
+        if (!await ReloadExternallyChangedStringsAsync())
+            return false;
+
         try
         {
-            var directory = Path.GetDirectoryName(_modTechtreePath);
-            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
-            foreach (var technology in _modDocument.Root?.Elements().Where(e => e.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? [])
-                NormalizeTechnologyChildOrder(technology);
-            ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modTechtreePath);
-            if (_saveStringsAsync != null && (_pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0))
-                await _saveStringsAsync(_pendingStringUpdates, _pendingStringRemovals);
-            _pendingStringUpdates.Clear();
-            _pendingStringRemovals.Clear();
-            _dirty = false;
+            var stringUpdatesToSave = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
+            var requestedStringRemovals = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
+            var stringRemovalsToSave = requestedStringRemovals
+                .Where(id => !IsStringIdReferencedByAnyTechnology(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var candidateDocument = new XDocument(_modDocument);
+            var renamesToSave = _pendingTechnologyRenames.ToList();
+            var candidateSource = new TechnologyReferenceSource(
+                "Mod techtree",
+                candidateDocument,
+                TechnologyReferenceDocumentKind.Techtree,
+                _modTechtreePath,
+                CanMigrate: true);
+            foreach (var rename in renamesToSave)
+            {
+                var unknown = TechnologyReferenceIndex.Build([candidateSource], [rename.OldName])
+                    .Where(reference =>
+                        reference.TechnologyName.Equals(rename.OldName, StringComparison.OrdinalIgnoreCase) &&
+                        !reference.IsRecognized)
+                    .ToList();
+                if (unknown.Count > 0)
+                {
+                    await ShowTechnologyNameErrorAsync(
+                        "Technology rename blocked",
+                        $"The rename from '{rename.OldName}' to '{rename.NewName}' was not saved because an unknown reference form was found.\n\n" +
+                        FormatTechnologyReferenceList(unknown));
+                    return false;
+                }
+                TechnologyReferenceIndex.RenameRecognizedReferences(candidateSource, rename.OldName, rename.NewName);
+            }
+
+            TechnologyReferenceMigrationPlan? externalMigration = null;
+            if (renamesToSave.Count > 0 && _prepareTechnologyReferenceMigration != null)
+            {
+                externalMigration = _prepareTechnologyReferenceMigration(renamesToSave);
+                if (externalMigration.UnknownReferences.Count > 0)
+                {
+                    await ShowTechnologyNameErrorAsync(
+                        "Technology rename blocked",
+                        "No files were written because an unknown external technology-reference form was found.\n\n" +
+                        FormatTechnologyReferenceList(externalMigration.UnknownReferences));
+                    return false;
+                }
+            }
+
+            foreach (var technology in candidateDocument.Root?.Elements().Where(e => e.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? [])
+                NormalizeChangedEffectAttributeOrder(technology);
+
+            var savedTechnologyXml = (candidateDocument.Root?.Elements().Where(element =>
+                    element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? [])
+                .Where(element => !string.IsNullOrWhiteSpace(GetCaseInsensitiveAttribute(element, "name")?.Value))
+                .ToDictionary(
+                    element => GetCaseInsensitiveAttribute(element, "name")!.Value.Trim(),
+                    SerializeTechnologyForComparison,
+                    StringComparer.OrdinalIgnoreCase);
+
+            var validation = TechnologySaveValidator.Validate(candidateDocument, CreateSaveValidationCatalogs());
+            if (!validation.IsValid)
+            {
+                await ShowSaveValidationErrorsAsync(validation.Errors);
+                return false;
+            }
+
+            var writesStrings = stringUpdatesToSave.Count > 0 || stringRemovalsToSave.Count > 0;
+            if (writesStrings && (_saveStringsAsync == null || string.IsNullOrWhiteSpace(_modStringsPath)))
+                throw new InvalidOperationException("Technology strings cannot be saved because the active mod string file is unavailable.");
+
+            var paths = new List<string?> { _modTechtreePath };
+            var expectedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+            if (_loadedTechtreeFileState != null)
+                expectedStates[Path.GetFullPath(_modTechtreePath)] = _loadedTechtreeFileState;
+            if (writesStrings)
+            {
+                paths.Add(_modStringsPath);
+                if (_loadedStringsFileState != null)
+                    expectedStates[Path.GetFullPath(_modStringsPath!)] = _loadedStringsFileState;
+            }
+            if (externalMigration != null)
+            {
+                paths.AddRange(externalMigration.Paths);
+                foreach (var state in externalMigration.ExpectedStates)
+                    expectedStates[state.Key] = state.Value;
+            }
+
+            await FileIntegrityTransaction.ExecuteAsync(paths, expectedStates, async () =>
+            {
+                ProtoEditorWindow.SaveAbilityXmlDocument(new XDocument(candidateDocument), _modTechtreePath);
+                if (writesStrings)
+                    await _saveStringsAsync!(stringUpdatesToSave, stringRemovalsToSave);
+                externalMigration?.Save((document, path) =>
+                    ProtoEditorWindow.SaveAbilityXmlDocument(document, path));
+            });
+
+            if (externalMigration != null && _adoptTechnologyReferenceMigration != null)
+                _adoptTechnologyReferenceMigration(externalMigration);
+            var selectedTechnologyName = _currentOriginalName;
+            _modDocument = candidateDocument;
+            _modified.Clear();
+            MergeTechs(_modDocument, _modified, overwrite: true, clone: false);
+            _current = !string.IsNullOrWhiteSpace(selectedTechnologyName)
+                ? _modified.GetValueOrDefault(selectedTechnologyName)
+                : null;
+            _effectsPendingDefaultInitialization.Clear();
+            _openOnHitOptionalSelectors.Clear();
+
+            try
+            {
+                _loadedTechtreeFileState = FileIntegrityTransaction.CaptureState(_modTechtreePath);
+                if (writesStrings)
+                {
+                    _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath!);
+                    ReplaceLoadedStringValues(ReadModStringValuesFromDisk());
+                }
+            }
+            catch (Exception exception)
+            {
+                _modDocumentSafetyError =
+                    $"The saved technology files could not be fingerprinted safely. Further technology modifications are disabled. {exception.Message}";
+            }
+            foreach (var update in stringUpdatesToSave)
+            {
+                if (_pendingStringUpdates.TryGetValue(update.Key, out var currentValue) &&
+                    currentValue.Equals(update.Value, StringComparison.Ordinal))
+                    _pendingStringUpdates.Remove(update.Key);
+            }
+            foreach (var removal in requestedStringRemovals)
+                _pendingStringRemovals.Remove(removal);
+            foreach (var rename in renamesToSave)
+                _pendingTechnologyRenames.Remove(rename);
+            _savedModifiedTechnologyXml.Clear();
+            foreach (var (name, xml) in savedTechnologyXml)
+                _savedModifiedTechnologyXml[name] = xml;
             _dirtyTechnologyNames.Clear();
+            RefreshTechnologyReferenceUsage();
+            RecalculateDirtyState();
+            RefreshList(selectedTechnologyName);
+            if (_current != null)
+                await BuildEditorAsync();
             DirtyStateChanged?.Invoke(this, EventArgs.Empty);
-            _statusMessage.Text = "Saved successfully.";
+            BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+            if (_modDocumentSafetyError != null)
+                _statusMessage.Text = _modDocumentSafetyError;
+            else
+                ShowSavedStatus(_dirty
+                    ? "Saved successfully; newer edits remain unsaved."
+                    : "Saved successfully.", clearAutomatically: !_dirty);
             return true;
         }
         catch (Exception ex)
         {
             _statusMessage.Text = "Save failed: " + ex.Message;
+            if (TopLevel.GetTopLevel(this) is Window owner)
+                await new Prompt(PromptType.Error, "Technology save failed", ex.Message).ShowDialog(owner);
             return false;
         }
     }
 
+    private async Task AwaitActiveEditorBuildCompletionAsync()
+    {
+        while (true)
+        {
+            var build = _activeEditorBuildTask;
+            await build;
+            if (ReferenceEquals(build, _activeEditorBuildTask))
+                return;
+        }
+    }
+
+    private TechnologySaveCatalogs CreateSaveValidationCatalogs()
+        => new(
+            TechnologyEffectCatalogInventory.CreatableDataSubtypes,
+            TechnologyEffectCatalogInventory.StructuredEffectTypes,
+            _original.Keys.Concat(_modified.Keys).ToList(),
+            _prereqUnitNames,
+            _protoUnitNames,
+            _techTypeNames,
+            _protoActionNames,
+            _tacticNames,
+            _godPowerNames,
+            _cultureNames,
+            _majorGodNames,
+            _boneNames,
+            _protoUnitCommandNames);
+
+    internal static TechnologyEffectCatalogRuntimeSnapshot GetEffectCatalogRuntimeSnapshot()
+        => TechnologyEffectCatalogInventory.CreateSnapshot();
+
+    internal Task<bool> ProbeStructuredEffectEditorForAuditAsync(string effectType, string? dataSubtype = null)
+    {
+        var effect = new XElement("effect", new XAttribute("type", effectType));
+        if (!string.IsNullOrWhiteSpace(dataSubtype))
+            effect.SetAttributeValue("subtype", dataSubtype);
+        return AddStructuredEffectBodyAsync(effect, new StackPanel(), effectType);
+    }
+
+    private async Task<bool> ReloadExternallyChangedTechtreeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_modTechtreePath) || _loadedTechtreeFileState == null)
+            return true;
+
+        FileIntegrityTransaction.FileState currentState;
+        try
+        {
+            currentState = FileIntegrityTransaction.CaptureState(_modTechtreePath);
+        }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = "The external technology file could not be checked safely: " + exception.Message;
+            return false;
+        }
+
+        if (currentState == _loadedTechtreeFileState)
+            return true;
+
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            _statusMessage.Text = "techtree_mods.xml changed outside the editor. Reload it before saving.";
+            return false;
+        }
+
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Technologies changed outside the editor",
+            "techtree_mods.xml changed after the Technology editor loaded. Reload those external changes and merge them with unsaved editor changes?\n\n" +
+            "If the same technology changed both externally and in the editor, Reload uses the external technology. Unsaved edits to other technologies and strings are kept. Saving is paused after reload so you can review the result.",
+            confirmButtonText: "Reload")
+        {
+            Width = 620,
+            Height = 260,
+            MinWidth = 560,
+            MinHeight = 230
+        };
+        await prompt.ShowDialog(owner);
+        if (!prompt.Confirmed)
+        {
+            _statusMessage.Text = "Save cancelled; external technology changes were not overwritten.";
+            return false;
+        }
+
+        try
+        {
+            var externalDocument = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace);
+            var validation = TechnologyDocumentSafety.ValidateModDocument(externalDocument);
+            if (!validation.IsValid)
+            {
+                var message = validation.ToDisplayMessage(_modTechtreePath);
+                _statusMessage.Text = message;
+                var invalidPrompt = new Prompt(
+                    PromptType.Error,
+                    "Unable to reload technologies",
+                    message)
+                {
+                    Width = 700,
+                    Height = 320,
+                    MinWidth = 580,
+                    MinHeight = 250
+                };
+                await invalidPrompt.ShowDialog(owner);
+                return false;
+            }
+
+            var externalBaseline = TechnologyExternalDocumentMergePolicy.CaptureTechnologyXml(externalDocument);
+            var merge = TechnologyExternalDocumentMergePolicy.Merge(
+                _savedModifiedTechnologyXml,
+                _modDocument,
+                externalDocument);
+            var renamedConflict = _pendingTechnologyRenames.FirstOrDefault(rename =>
+                merge.ExternallyChangedTechnologies.Contains(rename.OldName, StringComparer.OrdinalIgnoreCase) ||
+                merge.ExternallyChangedTechnologies.Contains(rename.NewName, StringComparer.OrdinalIgnoreCase));
+            if (renamedConflict != null)
+            {
+                await new Prompt(
+                    PromptType.Error,
+                    "Unable to merge technology rename",
+                    $"'{renamedConflict.OldName}' was renamed in the editor while that technology also changed externally. The files were not overwritten because this rename cannot be merged without risking its references. Reopen the editor to use the external version.")
+                    .ShowDialog(owner);
+                return false;
+            }
+
+            var selectedName = _currentOriginalName;
+            _modDocument = merge.Document;
+            _modified.Clear();
+            MergeTechs(_modDocument, _modified, overwrite: true, clone: false);
+            _savedModifiedTechnologyXml.Clear();
+            foreach (var (name, xml) in externalBaseline)
+                _savedModifiedTechnologyXml[name] = xml;
+            _loadedTechtreeFileState = FileIntegrityTransaction.CaptureState(_modTechtreePath);
+            _effectsPendingDefaultInitialization.Clear();
+            _openOnHitOptionalSelectors.Clear();
+            _dirtyTechnologyNames.Clear();
+            _current = !string.IsNullOrWhiteSpace(selectedName)
+                ? _modified.GetValueOrDefault(selectedName)
+                : null;
+            _currentOriginalName = _current == null ? null : selectedName;
+            RefreshTechnologyReferenceUsage();
+            RecalculateDirtyState();
+            RefreshList(selectedName);
+            if (_current != null)
+                await BuildEditorAsync();
+            else
+                ClearEditor();
+            DirtyStateChanged?.Invoke(this, EventArgs.Empty);
+            BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+            _statusMessage.Text = merge.ReplacedEditorChanges.Count > 0
+                ? $"External technologies reloaded. {merge.ReplacedEditorChanges.Count} conflicting editor technology edit(s) were replaced; review, then save again."
+                : "External technologies reloaded and merged. Review the changes, then save again.";
+            return false;
+        }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = "The external technology file could not be reloaded safely: " + exception.Message;
+            await new Prompt(
+                PromptType.Error,
+                "Unable to reload technologies",
+                $"No files were written. {exception.Message}").ShowDialog(owner);
+            return false;
+        }
+    }
+
+    private async Task<bool> ReloadExternallyChangedStringsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_modStringsPath) || _loadedStringsFileState == null)
+            return true;
+
+        FileIntegrityTransaction.FileState currentState;
+        try
+        {
+            currentState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+        }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = "The external string file could not be checked safely: " + exception.Message;
+            return false;
+        }
+
+        if (currentState == _loadedStringsFileState)
+            return true;
+
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            _statusMessage.Text = "stringmods.txt changed outside the editor. Reload it before saving.";
+            return false;
+        }
+
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Strings changed outside the editor",
+            "stringmods.txt changed after the Technology editor loaded. Reload those external changes and merge them with the unsaved technology edits?\n\n" +
+            "For strings changed both externally and in the editor, Reload uses the external value. Unsaved edits to other strings and the Technology XML are kept. Saving is paused after reload so you can review the result.",
+            confirmButtonText: "Reload");
+        prompt.Width = 560;
+        prompt.Height = 220;
+        await prompt.ShowDialog(owner);
+        if (!prompt.Confirmed)
+        {
+            _statusMessage.Text = "Save cancelled; external string changes were not overwritten.";
+            return false;
+        }
+
+        try
+        {
+            var externalValues = ReadModStringValuesFromDisk();
+            var externallyChangedIds = TechnologyStringMergePolicy.GetExternallyChangedIds(
+                _loadedStringValues,
+                externalValues);
+            var replacedLocalChanges = TechnologyStringMergePolicy.UseExternalVersionsForChangedIds(
+                externallyChangedIds,
+                _pendingStringUpdates,
+                _pendingStringRemovals);
+
+            _reloadStringsFromDisk?.Invoke();
+            _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+            ReplaceLoadedStringValues(externalValues);
+            RecalculateDirtyState();
+            DirtyStateChanged?.Invoke(this, EventArgs.Empty);
+            await BuildEditorAsync();
+            _statusMessage.Text = replacedLocalChanges.Count > 0
+                ? $"External strings reloaded. {replacedLocalChanges.Count} conflicting editor string edit(s) were replaced; review, then save again."
+                : "External strings reloaded and merged. Review the values, then save again.";
+            return false;
+        }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = "The external string file could not be reloaded safely: " + exception.Message;
+            await new Prompt(
+                PromptType.Error,
+                "Unable to reload strings",
+                $"No technology files were written. {exception.Message}").ShowDialog(owner);
+            return false;
+        }
+    }
+
+    private Dictionary<string, string> ReadModStringValuesFromDisk()
+    {
+        if (string.IsNullOrWhiteSpace(_modStringsPath) || !File.Exists(_modStringsPath))
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var source = PreservedTextEncoding.Decode(File.ReadAllBytes(_modStringsPath));
+        return StringTableDocument.Parse(source.Text).ToDictionary();
+    }
+
+    private void ReplaceLoadedStringValues(IReadOnlyDictionary<string, string> values)
+    {
+        _loadedStringValues.Clear();
+        foreach (var value in values)
+            _loadedStringValues[value.Key] = value.Value;
+    }
+
+    private bool IsStringIdReferencedByAnyTechnology(string stringId)
+        => TechnologyStringIdPolicy.IsReferencedByTechnologies(
+            stringId,
+            _original.Values.Concat(_modified.Values));
+
+    private async Task ShowSaveValidationErrorsAsync(IReadOnlyList<string> errors)
+    {
+        var visibleErrors = errors.Take(12).ToList();
+        var message = "Technology changes were not saved:\n\n" + string.Join("\n", visibleErrors.Select(error => "• " + error));
+        if (errors.Count > visibleErrors.Count)
+            message += $"\n• …and {errors.Count - visibleErrors.Count} more error(s).";
+        _statusMessage.Text = errors[0];
+        if (TopLevel.GetTopLevel(this) is Window owner)
+            await new Prompt(PromptType.Error, "Technology validation failed", message).ShowDialog(owner);
+    }
+
     private void MarkDirty()
     {
-        _dirty = true;
+        if (_modDocumentSafetyError != null)
+            return;
         if (IsModifiedTab && !string.IsNullOrWhiteSpace(_currentOriginalName))
-            _dirtyTechnologyNames.Add(_currentOriginalName);
-        _statusMessage.Text = "Modified";
+        {
+            if (TechnologyHasUnsavedChanges(_currentOriginalName))
+                _dirtyTechnologyNames.Add(_currentOriginalName);
+            else
+                _dirtyTechnologyNames.Remove(_currentOriginalName);
+        }
+        RecalculateDirtyState();
+        if (_dirty)
+        {
+            _savedStatusGeneration++;
+            _statusMessage.Text = "Modified";
+        }
+        else if (_statusMessage.Text == "Modified")
+        {
+            _statusMessage.Text = "";
+        }
         DirtyStateChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private void ShowSavedStatus(string message, bool clearAutomatically)
+    {
+        var generation = ++_savedStatusGeneration;
+        _statusMessage.Text = message;
+        if (!clearAutomatically)
+            return;
+
+        _ = Task.Delay(2000).ContinueWith(_ => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_savedStatusGeneration == generation &&
+                _statusMessage.Text.Equals(message, StringComparison.Ordinal))
+                _statusMessage.Text = "";
+        }));
+    }
+
+    private void RecalculateDirtyState()
+    {
+        var technologyNames = _savedModifiedTechnologyXml.Keys
+            .Concat(_modified.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _dirtyTechnologyNames.RemoveWhere(name => !TechnologyHasUnsavedChanges(name));
+        foreach (var name in technologyNames.Where(TechnologyHasUnsavedChanges))
+            _dirtyTechnologyNames.Add(name);
+        _dirty = _dirtyTechnologyNames.Count > 0 ||
+                 _pendingStringUpdates.Count > 0 ||
+                 _pendingStringRemovals.Count > 0;
+    }
+
+    private bool TechnologyHasUnsavedChanges(string technologyName)
+    {
+        var hasSavedTechnology = _savedModifiedTechnologyXml.TryGetValue(technologyName, out var savedXml);
+        var hasCurrentTechnology = _modified.TryGetValue(technologyName, out var currentTechnology);
+        if (hasSavedTechnology != hasCurrentTechnology)
+            return true;
+        if (!hasCurrentTechnology || currentTechnology == null)
+            return false;
+        if (!string.Equals(savedXml, SerializeTechnologyForComparison(currentTechnology), StringComparison.Ordinal))
+            return true;
+
+        var referencedStringIds = CollectReferencedTechnologyStringIds(currentTechnology);
+        return _pendingStringUpdates.Keys.Any(referencedStringIds.Contains) ||
+               _pendingStringRemovals.Any(referencedStringIds.Contains);
+    }
+
+    internal static string SerializeTechnologyForComparison(XElement technology)
+    {
+        var comparable = new XElement(technology);
+        foreach (var whitespace in comparable.DescendantNodes().OfType<XText>()
+                     .Where(text => string.IsNullOrWhiteSpace(text.Value)).ToList())
+            whitespace.Remove();
+        return comparable.ToString(SaveOptions.DisableFormatting);
+    }
+
     private void UpdatePreview()
     {
         if (_current == null)
@@ -8378,7 +9442,9 @@ public partial class TechnologyEditorView : UserControl
         // Reparse a compact copy for preview only so source whitespace cannot
         // leave the closing </tech> over-indented. The backing XML is untouched.
         var previewTech = XElement.Parse(_current.ToString(SaveOptions.DisableFormatting), LoadOptions.None);
-        NormalizeTechnologyChildOrder(previewTech);
+        var savedTechnology = FindSavedTechnologySnapshot(_current);
+        foreach (var effect in TechnologyXmlShapePolicy.FindChangedEffects(previewTech, savedTechnology))
+            NormalizeEffectAttributeOrder(effect);
         _xmlPreview.Text = previewTech.ToString();
     }
 }

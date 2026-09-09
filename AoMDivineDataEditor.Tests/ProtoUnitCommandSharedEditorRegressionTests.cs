@@ -59,6 +59,19 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
         Assert.Contains("sharedTransformEditor.ValidateRequired(currentTransformUnitName)", inline, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AllCommandPositions_UseStrictNonNegativeIntegerFields()
+    {
+        var root = FindProjectRoot();
+        var inline = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("EditorNumericInputBehavior.AttachRule(textBox, ProtoUnitNumericKind.UnsignedInteger)", inline, StringComparison.Ordinal);
+        Assert.Contains("_trainCommandRows, useNumericPositionFields: true", inline, StringComparison.Ordinal);
+        Assert.Contains("_techCommandRows, useNumericPositionFields: true", inline, StringComparison.Ordinal);
+        Assert.Contains("regularCommandNames, _unitCommandRows, useNumericPositionFields: true);", inline, StringComparison.Ordinal);
+        Assert.Contains("regularCommandNames, _optionalCommandRows, useNumericPositionFields: true);", inline, StringComparison.Ordinal);
+    }
+
     private static string FindProjectRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

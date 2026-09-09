@@ -1,5 +1,3 @@
-using Avalonia;
-using Avalonia.Headless;
 using Avalonia.Platform;
 using AoMDivineDataEditor.Classes;
 using System.Xml.Linq;
@@ -121,14 +119,7 @@ public sealed class ApplicationResourceTests
     }
 
     private static void EnsureHeadlessApplication()
-    {
-        if (Application.Current is not null)
-            return;
-
-        AppBuilder.Configure<App>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions())
-            .SetupWithoutStarting();
-    }
+        => AvaloniaTestHost.EnsureStarted();
 
     private static void AssertButtonClass(string source, string content, string expectedClass)
     {

@@ -193,15 +193,17 @@ public sealed class TechnologyPhase1RegressionTests
     }
 
     [Fact]
-    public void TechnologyEditor_AddFlowMatchesProtoUnitDuplicateOrBlankChoice()
+    public void TechnologyEditor_NewButtonAlwaysCreatesBlankWhileContextCopyStillDuplicates()
     {
         var root = FindProjectRoot();
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
 
-        Assert.Contains("Do you want to DUPLICATE the selected technology", techCode, StringComparison.Ordinal);
-        Assert.Contains("Cancel to create a blank technology instead", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do you want to DUPLICATE the selected technology", techCode, StringComparison.Ordinal);
+        Assert.Contains("if (duplicateSelected)", techCode, StringComparison.Ordinal);
+        Assert.Contains("var duplicate = source != null", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(source)", techCode, StringComparison.Ordinal);
         Assert.Contains("RegenerateDuplicatedTechnologyStringsAsync", techCode, StringComparison.Ordinal);
+        Assert.Contains("EnsureDuplicatedTechnologyCoreProperties(tech, name)", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(\"displaynameid\", displayId)", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(\"rollovertextid\", rolloverId)", techCode, StringComparison.Ordinal);
     }
@@ -236,9 +238,9 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("knownValues.Where(value => !present.Contains(value))", techCode, StringComparison.Ordinal);
         Assert.Contains("PromptType.Confirm, \"Delete Technology\"", techCode, StringComparison.Ordinal);
         Assert.Contains("_pendingStringRemovals.Add(stringId)", techCode, StringComparison.Ordinal);
-        Assert.Contains("_saveStringsAsync(_pendingStringUpdates, _pendingStringRemovals)", techCode, StringComparison.Ordinal);
-        Assert.Contains("foreach (var removal in removals)", mainCode, StringComparison.Ordinal);
-        Assert.Contains("entries.Remove(removal)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("_saveStringsAsync!(stringUpdatesToSave, stringRemovalsToSave)", techCode, StringComparison.Ordinal);
+        Assert.Contains("FilterUnreferencedStringIdsInCurrentMod(removals)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("StringTableDocument.Parse(encodedSource.Text).Apply(updates, safeRemovals)", mainCode, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -248,7 +250,7 @@ public sealed class TechnologyPhase1RegressionTests
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
         var mainCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modTechtreePath)", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoEditorWindow.SaveAbilityXmlDocument(new XDocument(candidateDocument), _modTechtreePath)", techCode, StringComparison.Ordinal);
         Assert.Contains("OmitXmlDeclaration = true", mainCode, StringComparison.Ordinal);
         Assert.Contains("IndentChars = \"\\t\"", mainCode, StringComparison.Ordinal);
     }
@@ -302,7 +304,7 @@ public sealed class TechnologyPhase1RegressionTests
 
         Assert.Contains("CreateInlineLabel(\"Unit\")", techCode, StringComparison.Ordinal);
         Assert.Contains("prereq.Value.Trim(),\n            200,", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        Assert.Contains("CreateStrictPrereqSelector(options, entry.Value.Trim(), 150", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateStrictPrereqSelector(options, activeEntry.Value.Trim(), 150", techCode, StringComparison.Ordinal);
         Assert.Contains("AddPrerequisiteButton(tech);", techCode, StringComparison.Ordinal);
         Assert.Contains("if (prereqs.Count == 0 && !IsModifiedTab)", techCode, StringComparison.Ordinal);
         Assert.Contains("Classes = { \"remove-button\" }", techCode, StringComparison.Ordinal);
@@ -342,8 +344,8 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("_pendingStringUpdates[newId] = text", techCode, StringComparison.Ordinal);
 
         Assert.Contains("Text = \"──── Effects ────\"", techCode, StringComparison.Ordinal);
-        Assert.Contains("TechnologyEffectTypes", techCode, StringComparison.Ordinal);
-        Assert.Contains("TechnologyDataEffectSubtypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyEffectCatalogInventory.CreatableEffectTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyEffectCatalogInventory.CreatableDataSubtypes", techCode, StringComparison.Ordinal);
         Assert.Contains("CreateStrictEffectSelector", techCode, StringComparison.Ordinal);
         Assert.Contains("if (currentType.Equals(\"Data\", StringComparison.OrdinalIgnoreCase))", techCode, StringComparison.Ordinal);
         Assert.Contains("Text = effect.ToString(SaveOptions.DisableFormatting)", techCode, StringComparison.Ordinal);
@@ -393,15 +395,15 @@ public sealed class TechnologyPhase1RegressionTests
     }
 
     [Fact]
-    public void TechnologyEditor_OrdersTechTypesBeforeFlagsAndStructuresFirstNonDataEffects()
+    public void TechnologyEditor_PreservesTechnologyChildOrderAndStructuresFirstNonDataEffects()
     {
         var root = FindProjectRoot();
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
 
-        Assert.Contains("NormalizeTechnologyChildOrder", techCode, StringComparison.Ordinal);
-        Assert.Contains("properties.Concat(techTypes).Concat(flags).Concat(prereqs).Concat(effects)", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("NormalizeTechnologyChildOrder", techCode, StringComparison.Ordinal);
+        Assert.Contains("NormalizeChangedEffectAttributeOrder", techCode, StringComparison.Ordinal);
         Assert.Contains("if (IsModifiedTab || hideTooltipAttribute != null)", techCode, StringComparison.Ordinal);
-        Assert.Contains("StructuredTechnologyEffectTypes", techCode, StringComparison.Ordinal);
+        Assert.Contains("TechnologyEffectCatalogInventory.IsStructuredEffectType", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSetNameEffectEditorAsync", techCode, StringComparison.Ordinal);
         Assert.Contains("AddTextOutputEffectEditorAsync", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSetAgeEffectEditor", techCode, StringComparison.Ordinal);
@@ -448,7 +450,8 @@ public sealed class TechnologyPhase1RegressionTests
         var techCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
         var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("container.Add(new XElement(\"effect\"))", techCode, StringComparison.Ordinal);
+        Assert.Contains("container.Add(effect)", techCode, StringComparison.Ordinal);
+        Assert.Contains("tech.Add(effect)", techCode, StringComparison.Ordinal);
         Assert.Contains("ResetEffectForType(effect, value)", techCode, StringComparison.Ordinal);
         Assert.Contains("effect.RemoveAttributes()", techCode, StringComparison.Ordinal);
         Assert.Contains("effect.RemoveNodes()", techCode, StringComparison.Ordinal);
@@ -620,7 +623,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("_protoUnitCommandNames", techCode, StringComparison.Ordinal);
         Assert.Contains("GetAvailableCommandNames(),", windowCode, StringComparison.Ordinal);
         Assert.Contains("_iconPreviewService,", windowCode, StringComparison.Ordinal);
-        Assert.Contains("GetTechnologyGodPowerNames());", windowCode, StringComparison.Ordinal);
+        Assert.Contains("GetTechnologyGodPowerNames(),", windowCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"row\"", techCode, StringComparison.Ordinal);
         Assert.Contains("CreateUnsignedIntegerEffectBox(effect, \"column\"", techCode, StringComparison.Ordinal);
         Assert.Contains("AddDamageByCostDataEffectEditor", techCode, StringComparison.Ordinal);
@@ -680,7 +683,7 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("\"ProtoUnitFlag\", \"Flag\"", techCode, StringComparison.Ordinal);
         Assert.Contains("ProtoConstants.KnownFlags", techCode, StringComparison.Ordinal);
         Assert.Contains("ProtoActionFlagDataSubtypes", techCode, StringComparison.Ordinal);
-        Assert.Contains("ProtoActionMetadataCatalog.GetKnownFlagTags()", techCode, StringComparison.Ordinal);
+        Assert.Contains("ProtoActionMetadataCatalog.GetSuggestedFlagTags()", techCode, StringComparison.Ordinal);
         Assert.Contains("Update lifespan as percent", techCode, StringComparison.Ordinal);
         Assert.Contains("updateLifespanAsPercent", techCode, StringComparison.Ordinal);
         Assert.Contains("AddMinWorkRateDataEffectEditor", techCode, StringComparison.Ordinal);

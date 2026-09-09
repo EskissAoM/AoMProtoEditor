@@ -403,6 +403,15 @@ public static class ProtoActionMetadataCatalog
         "workonstoneunits",
     ];
 
+    // These remain known so existing XML is recognized, displayed, and preserved,
+    // but they must not be offered when choosing a new protoaction flag.
+    private static readonly HashSet<string> NonSuggestedFlagTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "disableautoattack",
+        "firechallengepacket",
+        "handattackdisplayrange",
+    };
+
     private static readonly Dictionary<string, string> KnownFlagLabels = new(StringComparer.OrdinalIgnoreCase)
     {
         ["attackaction"] = "AttackAction",
@@ -708,6 +717,11 @@ public static class ProtoActionMetadataCatalog
 
     public static IReadOnlyList<string> GetKnownFlagTags()
         => KnownFlagTags;
+
+    public static IReadOnlyList<string> GetSuggestedFlagTags()
+        => KnownFlagTags
+            .Where(tag => !NonSuggestedFlagTags.Contains(tag))
+            .ToList();
 
     public static string GetKnownFlagLabel(string tag)
     {

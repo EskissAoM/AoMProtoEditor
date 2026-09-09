@@ -1,10 +1,7 @@
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
-using AoMDivineDataEditor;
 using AoMDivineDataEditor.Classes;
 using Xunit;
 
@@ -12,8 +9,6 @@ namespace AoMDivineDataEditor.Tests;
 
 public sealed class EditorNumericFieldStyleTests
 {
-    private static bool _avaloniaInitialized;
-
     public static IEnumerable<object[]> FormattingCases =>
     [
         ["10.0000", "10"],
@@ -61,70 +56,64 @@ public sealed class EditorNumericFieldStyleTests
     [Fact]
     public void ConfigureNumericTextBox_IsCompact_PreservesLongText_AndFormatsOnLostFocus()
     {
-        EnsureAvalonia();
-        var textBox = new TextBox { Text = "123456789.2500" };
+        AvaloniaTestHost.Run(() =>
+        {
+            var textBox = new TextBox { Text = "123456789.2500" };
 
-        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+            EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
 
-        Assert.Equal(EditorNumericFieldStyle.CompactWidth, textBox.Width);
-        Assert.Equal("123456789.25", textBox.Text);
+            Assert.Equal(EditorNumericFieldStyle.CompactWidth, textBox.Width);
+            Assert.Equal("123456789.25", textBox.Text);
 
-        textBox.Text = "10.2500";
-        textBox.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
+            textBox.Text = "10.2500";
+            textBox.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
 
-        Assert.Equal("10.25", textBox.Text);
+            Assert.Equal("10.25", textBox.Text);
+        });
     }
 
     [Fact]
     public void UnsignedDecimalBehavior_RemovesLettersSignsAndExtraDecimalPoints()
     {
-        EnsureAvalonia();
-        var textBox = new TextBox();
-        EditorNumericInputBehavior.AttachUnsignedDecimal(textBox);
+        AvaloniaTestHost.Run(() =>
+        {
+            var textBox = new TextBox();
+            EditorNumericInputBehavior.AttachUnsignedDecimal(textBox);
 
-        textBox.Text = "a-12.3.4z";
-        Dispatcher.UIThread.RunJobs();
+            textBox.Text = "a-12.3.4z";
+            Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal("12.34", textBox.Text);
+            Assert.Equal("12.34", textBox.Text);
+        });
     }
 
     [Fact]
     public void SignedDecimalBehavior_PreservesOneLeadingMinusAndDecimalPoint()
     {
-        EnsureAvalonia();
-        var textBox = new TextBox();
-        EditorNumericInputBehavior.AttachSignedDecimal(textBox);
+        AvaloniaTestHost.Run(() =>
+        {
+            var textBox = new TextBox();
+            EditorNumericInputBehavior.AttachSignedDecimal(textBox);
 
-        textBox.Text = "a1-2.3.4z";
-        Dispatcher.UIThread.RunJobs();
+            textBox.Text = "a1-2.3.4z";
+            Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal("-12.34", textBox.Text);
+            Assert.Equal("-12.34", textBox.Text);
+        });
     }
 
     [Fact]
     public void IntegerRuleBehavior_RejectsDecimalPasteWithoutTurningItIntoAnotherInteger()
     {
-        EnsureAvalonia();
-        var textBox = new TextBox { Text = "12" };
-        EditorNumericInputBehavior.AttachRule(textBox, ProtoUnitNumericKind.UnsignedInteger);
-
-        textBox.Text = "12.7";
-        Dispatcher.UIThread.RunJobs();
-
-        Assert.Equal("12", textBox.Text);
-    }
-
-    private static void EnsureAvalonia()
-    {
-        if (_avaloniaInitialized || Application.Current != null)
+        AvaloniaTestHost.Run(() =>
         {
-            _avaloniaInitialized = true;
-            return;
-        }
+            var textBox = new TextBox { Text = "12" };
+            EditorNumericInputBehavior.AttachRule(textBox, ProtoUnitNumericKind.UnsignedInteger);
 
-        AppBuilder.Configure<App>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions())
-            .SetupWithoutStarting();
-        _avaloniaInitialized = true;
+            textBox.Text = "12.7";
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal("12", textBox.Text);
+        });
     }
 }

@@ -38,7 +38,7 @@ public sealed class TechnologyDataRound25RegressionTests
         Assert.Contains("EditorChipService.CreateBlueChip", allTechMethod, StringComparison.Ordinal);
         var normalizedAllTechMethod = allTechMethod.Replace("\r\n", "\n");
         var labelIndex = normalizedAllTechMethod.IndexOf("exclusionGroup.Children.Add(CreateInlineLabel(\"Exclude\"))", StringComparison.Ordinal);
-        var editableIndex = normalizedAllTechMethod.IndexOf("if (IsModifiedTab)", labelIndex, StringComparison.Ordinal);
+        var editableIndex = normalizedAllTechMethod.IndexOf("if (CanEditModifiedDocument)", labelIndex, StringComparison.Ordinal);
         var selectorIndex = normalizedAllTechMethod.IndexOf("exclusionGroup.Children.Add(CreateStrictEffectSelector", editableIndex, StringComparison.Ordinal);
         Assert.True(labelIndex >= 0 && editableIndex > labelIndex && selectorIndex > editableIndex);
     }

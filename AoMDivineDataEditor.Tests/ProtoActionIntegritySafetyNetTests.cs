@@ -325,6 +325,43 @@ public sealed class ProtoActionIntegritySafetyNetTests
         AssertXmlEqual(first, second);
     }
 
+    [Fact]
+    public void ObsoleteProtoActionNames_RemainSupportedButAreNotSuggested()
+    {
+        var knownFlags = ProtoActionMetadataCatalog.GetKnownFlagTags();
+        var suggestedFlags = ProtoActionMetadataCatalog.GetSuggestedFlagTags();
+
+        foreach (var supportedButHiddenFlag in new[]
+                 {
+                     "DisableAutoAttack", "HandAttackDisplayRange", "FireChallengePacket"
+                 })
+        {
+            Assert.Contains(supportedButHiddenFlag, knownFlags, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain(supportedButHiddenFlag, suggestedFlags, StringComparer.OrdinalIgnoreCase);
+        }
+
+        foreach (var alreadyUncataloguedFlag in new[]
+                 {
+                     "CastWhenAnimationFinished", "DontKillWhenExpired", "AttackBoost", "TerrainAnimVariation"
+                 })
+        {
+            Assert.DoesNotContain(alreadyUncataloguedFlag, knownFlags, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain(alreadyUncataloguedFlag, suggestedFlags, StringComparer.OrdinalIgnoreCase);
+        }
+
+        var proposedAttributes = ProtoActionMetadataCatalog.GetKnownFieldDefinitions()
+            .Select(definition => definition.Tag)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var alreadyUncataloguedAttribute in new[]
+                 {
+                     "JogAnim", "HeightBonusMultiplier", "ImpactForceMin", "ImpactForceMax",
+                     "ImpactLaunchAngle", "FreeBuildRate", "RevealAreaRadius", "RevealAreachain"
+                 })
+        {
+            Assert.DoesNotContain(alreadyUncataloguedAttribute, proposedAttributes);
+        }
+    }
+
     private static void AddAdditional(ProtoAction action, params string[] elements)
     {
         foreach (var element in elements)

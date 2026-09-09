@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
 
 namespace AoMDivineDataEditor.Classes;
 
@@ -11,20 +12,32 @@ public static class FileIntegrityTransaction
 {
     private sealed record Snapshot(string Path, bool Existed, byte[] Contents);
 
+    public sealed record FileState(bool Exists, long Length, string Sha256);
+
+    public static FileState CaptureState(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
+            return new FileState(false, 0, "");
+
+        var contents = File.ReadAllBytes(fullPath);
+        return CreateState(contents);
+    }
+
     public static void Execute(IEnumerable<string?> paths, Action commit)
+        => Execute(paths, expectedStates: null, commit);
+
+    public static void Execute(
+        IEnumerable<string?> paths,
+        IReadOnlyDictionary<string, FileState>? expectedStates,
+        Action commit)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(commit);
 
-        var snapshots = paths
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path!))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(path => new Snapshot(
-                path,
-                File.Exists(path),
-                File.Exists(path) ? File.ReadAllBytes(path) : []))
-            .ToList();
+        var snapshots = CaptureSnapshots(paths);
+        EnsureExpectedStatesMatch(snapshots, expectedStates);
 
         try
         {
@@ -32,34 +45,98 @@ public static class FileIntegrityTransaction
         }
         catch (Exception commitException)
         {
-            var rollbackErrors = new List<Exception>();
-            foreach (var snapshot in snapshots.AsEnumerable().Reverse())
-            {
-                try
-                {
-                    if (snapshot.Existed)
-                        AtomicWriteAllBytes(snapshot.Path, snapshot.Contents);
-                    else if (File.Exists(snapshot.Path))
-                        File.Delete(snapshot.Path);
-                }
-                catch (Exception rollbackException)
-                {
-                    rollbackErrors.Add(new IOException(
-                        $"Could not restore '{snapshot.Path}' after the failed save.",
-                        rollbackException));
-                }
-            }
-
-            if (rollbackErrors.Count > 0)
-            {
-                throw new AggregateException(
-                    "The save failed and one or more files could not be restored. Restore the affected mod files from backup before continuing.",
-                    new[] { commitException }.Concat(rollbackErrors));
-            }
-
-            ExceptionDispatchInfo.Capture(commitException).Throw();
-            throw;
+            RollBack(snapshots, commitException);
         }
+    }
+
+    public static async Task ExecuteAsync(
+        IEnumerable<string?> paths,
+        IReadOnlyDictionary<string, FileState>? expectedStates,
+        Func<Task> commit)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(commit);
+
+        var snapshots = CaptureSnapshots(paths);
+        EnsureExpectedStatesMatch(snapshots, expectedStates);
+
+        try
+        {
+            await commit();
+        }
+        catch (Exception commitException)
+        {
+            RollBack(snapshots, commitException);
+        }
+    }
+
+    private static List<Snapshot> CaptureSnapshots(IEnumerable<string?> paths)
+        => paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(CaptureSnapshot)
+            .ToList();
+
+    private static Snapshot CaptureSnapshot(string path)
+    {
+        var existed = File.Exists(path);
+        return new Snapshot(path, existed, existed ? File.ReadAllBytes(path) : []);
+    }
+
+    private static void EnsureExpectedStatesMatch(
+        IReadOnlyList<Snapshot> snapshots,
+        IReadOnlyDictionary<string, FileState>? expectedStates)
+    {
+        if (expectedStates == null || expectedStates.Count == 0)
+            return;
+
+        foreach (var snapshot in snapshots)
+        {
+            if (!expectedStates.TryGetValue(snapshot.Path, out var expected))
+                continue;
+            var actual = snapshot.Existed ? CreateState(snapshot.Contents) : new FileState(false, 0, "");
+            if (actual == expected)
+                continue;
+
+            throw new IOException(
+                $"'{snapshot.Path}' changed outside the editor after it was loaded. No files were written. " +
+                "Reload the mod before saving so those external changes are not overwritten.");
+        }
+    }
+
+    private static FileState CreateState(byte[] contents)
+        => new(true, contents.LongLength, Convert.ToHexString(SHA256.HashData(contents)));
+
+    private static void RollBack(IReadOnlyList<Snapshot> snapshots, Exception commitException)
+    {
+        var rollbackErrors = new List<Exception>();
+        foreach (var snapshot in snapshots.Reverse())
+        {
+            try
+            {
+                if (snapshot.Existed)
+                    AtomicWriteAllBytes(snapshot.Path, snapshot.Contents);
+                else if (File.Exists(snapshot.Path))
+                    File.Delete(snapshot.Path);
+            }
+            catch (Exception rollbackException)
+            {
+                rollbackErrors.Add(new IOException(
+                    $"Could not restore '{snapshot.Path}' after the failed save.",
+                    rollbackException));
+            }
+        }
+
+        if (rollbackErrors.Count > 0)
+        {
+            throw new AggregateException(
+                "The save failed and one or more files could not be restored. Restore the affected mod files from backup before continuing.",
+                new[] { commitException }.Concat(rollbackErrors));
+        }
+
+        ExceptionDispatchInfo.Capture(commitException).Throw();
+        throw new InvalidOperationException("Unreachable rollback path.");
     }
 
     private static void AtomicWriteAllBytes(string path, byte[] contents)

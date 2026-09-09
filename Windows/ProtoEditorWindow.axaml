@@ -231,7 +231,7 @@
                     </TabStrip>
                     
                     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-                        <Button x:Name="_entityAddButton" Grid.Column="0" Classes="add-item" Content="Add" Click="EntityAdd_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <Button x:Name="_entityAddButton" Grid.Column="0" Classes="add-item" Content="New" Click="EntityAdd_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                         <Button x:Name="_entityDeleteButton" Grid.Column="1" Classes="danger" Content="🗑 Delete" Click="EntityDelete_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                     

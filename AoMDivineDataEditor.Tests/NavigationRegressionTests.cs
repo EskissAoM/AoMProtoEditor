@@ -100,6 +100,7 @@ public sealed class NavigationRegressionTests
     {
         var root = FindProjectRoot();
         var xaml = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
+        var technologyXaml = XDocument.Load(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
         var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
         var technologyCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
 
@@ -114,6 +115,9 @@ public sealed class NavigationRegressionTests
         Assert.Null((string?)entityList.Attribute("Tapped"));
         Assert.Null((string?)entityList.Attribute("DoubleTapped"));
         Assert.Equal("UnitList_ContextRequested", (string?)entityList.Attribute("ContextRequested"));
+        var entityAddButton = xaml.Descendants().Single(element =>
+            element.Name.LocalName == "Button" &&
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_entityAddButton"));
 
         Assert.Contains("CreateDocumentTab(isMain: true", code, StringComparison.Ordinal);
         Assert.Contains("if (_documentTabs is null || _suppressDocumentTabSelection", code, StringComparison.Ordinal);
@@ -135,6 +139,11 @@ public sealed class NavigationRegressionTests
         Assert.Contains("ActivateContextEntityAsync", code, StringComparison.Ordinal);
         Assert.Contains("AddUnitAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
         Assert.Contains("AddTechnologyAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do you want to DUPLICATE the selected unit", code, StringComparison.Ordinal);
+        Assert.Equal("New", (string?)entityAddButton.Attribute("Content"));
+        var standaloneTechnologyAdd = technologyXaml.Descendants()
+            .Single(element => (string?)element.Attribute("Click") == "AddTech_Click");
+        Assert.Equal("New", (string?)standaloneTechnologyAdd.Attribute("Content"));
         Assert.Contains("DeleteSelectedUnitAsync", code, StringComparison.Ordinal);
         Assert.Contains("DeleteSelectedTechnologyAsync", code, StringComparison.Ordinal);
         Assert.Contains("public async Task AddTechnologyAsync(bool duplicateSelected = false)", technologyCode, StringComparison.Ordinal);

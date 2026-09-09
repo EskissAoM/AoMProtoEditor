@@ -25,7 +25,7 @@
           <TabStripItem FontSize="14" Padding="8,4">Modified</TabStripItem>
         </TabStrip>
         <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
-          <Button Grid.Column="0" Classes="add-item" Content="Add" Click="AddTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+          <Button Grid.Column="0" Classes="add-item" Content="New" Click="AddTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
           <Button Grid.Column="1" Classes="danger" Content="Delete" Click="DeleteTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
         </Grid>
         <ListBox x:Name="_techList" SelectionChanged="TechList_SelectionChanged"/>
