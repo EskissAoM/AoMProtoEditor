@@ -29,9 +29,9 @@
                     </Grid>
                 </StackPanel>
                 <StackPanel>
-                    <TextBlock Text="User Folder Path (Mods local output)" FontWeight="Bold" Margin="0,0,0,4" />
+                    <TextBlock Text="Steam User Folder or mods\local Folder" FontWeight="Bold" Margin="0,0,0,4" />
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding UserFolderPath, Mode=TwoWay}" PlaceholderText="C:\Users\...\Age of Mythology Retold\&lt;SteamID&gt;" />
+                        <TextBox Grid.Column="0" Text="{Binding UserFolderPath, Mode=TwoWay}" PlaceholderText="...\&lt;SteamID&gt; or ...\mods\local" />
                         <Button Grid.Column="1" Content="Browse..." Click="BrowseUser_Click" Margin="8,0,0,0" />
                     </Grid>
                 </StackPanel>

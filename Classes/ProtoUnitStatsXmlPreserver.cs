@@ -100,6 +100,7 @@ public static class ProtoUnitStatsXmlPreserver
         PreserveAdditionalMapEntries(originalUnit, updatedUnit, "ResourceReturnRate", "resourceType", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
         PreserveAdditionalMapEntries(originalUnit, updatedUnit, "carrycapacity", "resourcetype", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
         PreserveAdditionalMapEntries(originalUnit, updatedUnit, "initialresource", "resourcetype", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
+        XmlTriviaPreserver.Preserve(originalUnit, updatedUnit);
     }
 
     private static void MergeElement(XElement original, XElement updated)

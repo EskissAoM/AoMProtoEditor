@@ -10,7 +10,9 @@ public enum TechnologyReferenceDocumentKind
     Abilities,
     UnitTransforms,
     Powers,
-    MajorGods
+    MajorGods,
+    Tactics,
+    Other
 }
 
 public sealed record TechnologyReferenceSource(

@@ -1,0 +1,96 @@
+using AoMDivineDataEditor.Classes;
+using Xunit;
+
+namespace AoMDivineDataEditor.Tests;
+
+public sealed class ProtoUnitCommandHardeningPass678Tests
+{
+    [Fact]
+    public void NamePolicy_RejectsDataBarOrCustomDuplicateNames()
+    {
+        var existing = new[] { "OriginalCommand", "CustomCommand" };
+
+        Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("OriginalCommand", existing));
+        Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("customcommand", existing));
+        Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("Bad.Command", existing));
+        Assert.True(ProtoUnitCommandNamePolicy.IsAvailable("NewCommand", existing));
+    }
+
+    [Fact]
+    public void NamePolicy_AllowsCurrentNameDuringRenameOnly()
+    {
+        var existing = new[] { "CommandA", "CommandB" };
+
+        Assert.True(ProtoUnitCommandNamePolicy.IsAvailable("CommandA", existing, "CommandA"));
+        Assert.False(ProtoUnitCommandNamePolicy.IsAvailable("CommandB", existing, "CommandA"));
+    }
+
+    [Fact]
+    public void ManagerCreationAndDuplication_UseGlobalNamePolicy()
+    {
+        var root = ProjectSource.RootPath;
+        var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("IsProtoUnitCommandNameAvailable(name)", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitCommandNamePolicy.IsAvailable(newName, _protoUnitCommandCatalog.Keys)", protoEditor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TransformAssignmentController_BuildsUniqueAndMultipleCommandEntries()
+    {
+        var controller = new ProtoUnitTransformAssignmentController
+        {
+            new TransformCommandAssignmentState { CommandName = "UniqueTransform", IsMultiple = false, Row = "1", Column = "2" },
+            new TransformCommandAssignmentState { CommandName = "MultipleTransform", IsMultiple = true, Row = "3", Column = "4" },
+            new TransformCommandAssignmentState { CommandName = "WrongKind", IsMultiple = true, Row = "5", Column = "6" }
+        };
+
+        var entries = controller.BuildCommandEntries(
+            name => name.Equals("UniqueTransform", StringComparison.OrdinalIgnoreCase),
+            name => name.Equals("MultipleTransform", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(entries, entry => entry.Value == "UniqueTransform" && entry.Row == "1" && entry.Column == "2");
+        Assert.Contains(entries, entry => entry.Value == "MultipleTransform" && entry.Row == "3" && entry.Column == "4");
+        Assert.DoesNotContain(entries, entry => entry.Value == "WrongKind");
+        Assert.Equal("UniqueTransform", controller.UniqueAssignment?.CommandName);
+    }
+
+    [Fact]
+    public void TransformAssignmentStateAndRemovalDialog_AreExtractedFromProtoEditorWindow()
+    {
+        var root = ProjectSource.RootPath;
+        var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.DoesNotContain("private sealed class TransformCommandAssignmentState", protoEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("ShowTransformRemovalChoiceAsync", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitTransformAssignmentController", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitTransformRemovalDialog.ShowAsync", protoEditor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UniqueTransformAssignment_IsShownAsAnImmediateManagedStatsReference()
+    {
+        var root = ProjectSource.RootPath;
+        var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("[\"transformcommand\"] = \"Transform Command\"", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("RefreshTransformCommandStatsReference", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("SyncManagedProtoActionStatsEditor(\"transformcommand\", uniqueCommandName);", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("tag.Equals(\"transformcommand\", StringComparison.OrdinalIgnoreCase)", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("This reference is managed automatically by the unique Transform command.", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("!x.Equals(\"transformcommand\", StringComparison.OrdinalIgnoreCase)", protoEditor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CommandStringCleanupFailures_AreReportedInsteadOfSilentlyIgnored()
+    {
+        var root = ProjectSource.RootPath;
+        var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("CleanupProtoUnitCommandStringsWithWarningAsync", protoEditor, StringComparison.Ordinal);
+        Assert.Contains("String cleanup incomplete", protoEditor, StringComparison.Ordinal);
+        Assert.DoesNotContain("try { CleanupUnreferencedProtoUnitCommandStrings", protoEditor, StringComparison.Ordinal);
+    }
+
+}

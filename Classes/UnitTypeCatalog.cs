@@ -101,15 +101,7 @@ public static class UnitTypeCatalog
     }
 
     public static XDocument LoadOrCreateModDocument(string path)
-    {
-        if (!File.Exists(path))
-            return new XDocument(new XElement(ModRootName));
-
-        var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
-        if (document.Root == null || !document.Root.Name.LocalName.Equals(ModRootName, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"Expected <{ModRootName}> in '{path}'.");
-        return document;
-    }
+        => ModXmlDocumentSafety.LoadOrCreate(path, ModXmlDocumentKind.UnitTypes).Document;
 
     public static XElement AddDefinition(XDocument document, string name, XElement? template = null)
     {

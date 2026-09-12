@@ -12,6 +12,11 @@ public static class MajorGodCatalog
     public const string ModFileName = "major_gods_mods.xml";
     public const string ModRootName = "civsmods";
     public const string EntryName = "civ";
+    public static readonly string[] Pass1FieldOrder =
+    [
+        "name", "statsid", "key", "culture", "displaynameid", "rollovernameid", "titleid",
+        "icon", "portrait", "breakoutportrait", "minimapborderimage", "backgroundscenario"
+    ];
 
     public static IReadOnlyList<MajorGodDefinition> ExtractDefinitions(XContainer container, bool isBuiltIn)
         => container.Descendants()
@@ -91,6 +96,93 @@ public static class MajorGodCatalog
         => container.Descendants().FirstOrDefault(element =>
             element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase) &&
             GetName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    public static XElement CreatePass1Entry(string name, string culture = "Greek")
+    {
+        var normalizedName = name.Trim();
+        return new XElement(EntryName,
+            new XElement("name", normalizedName),
+            new XElement("statsid", "SP"),
+            new XElement("key", culture.Length == 0 ? "G" : char.ToUpperInvariant(culture[0]).ToString()),
+            new XElement("culture", culture),
+            new XElement("displaynameid", BuildStringId(normalizedName, "displaynameid")),
+            new XElement("rollovernameid", BuildStringId(normalizedName, "rollovernameid")),
+            new XElement("titleid", BuildStringId(normalizedName, "titleid")),
+            new XElement("icon"),
+            new XElement("portrait"),
+            new XElement("breakoutportrait"),
+            new XElement("minimapborderimage"),
+            new XElement("backgroundscenario"));
+    }
+
+    public static void EnsureStatsId(XElement entry)
+    {
+        var statsId = FindDirectChild(entry, "statsid");
+        if (statsId != null)
+        {
+            statsId.Value = "SP";
+            return;
+        }
+
+        var element = new XElement("statsid", "SP");
+        var name = FindDirectChild(entry, "name");
+        if (name != null)
+            name.AddAfterSelf(element);
+        else
+            entry.AddFirst(element);
+    }
+
+    public static XElement SetPass1Value(XElement entry, string tag, string? value)
+    {
+        if (!Pass1FieldOrder.Contains(tag, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentOutOfRangeException(nameof(tag), tag, "Not a Pass 1 Major God field.");
+
+        var existing = FindDirectChild(entry, tag);
+        if (existing != null)
+        {
+            existing.Value = value ?? "";
+            return existing;
+        }
+
+        var created = new XElement(tag, value ?? "");
+        var targetIndex = Array.FindIndex(Pass1FieldOrder, candidate =>
+            candidate.Equals(tag, StringComparison.OrdinalIgnoreCase));
+        var followingKnown = entry.Elements().FirstOrDefault(child =>
+        {
+            var childIndex = Array.FindIndex(Pass1FieldOrder, candidate =>
+                candidate.Equals(child.Name.LocalName, StringComparison.OrdinalIgnoreCase));
+            return childIndex > targetIndex;
+        });
+        if (followingKnown != null)
+            followingKnown.AddBeforeSelf(created);
+        else
+            entry.Add(created);
+        return created;
+    }
+
+    public static XElement? FindDirectChild(XElement entry, string tag)
+        => entry.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+
+    public static string BuildStringId(string majorGodName, string tag)
+    {
+        var token = new string(majorGodName.Trim()
+            .Select(character => char.IsLetterOrDigit(character) ? char.ToUpperInvariant(character) : '_')
+            .ToArray());
+        while (token.Contains("__", StringComparison.Ordinal))
+            token = token.Replace("__", "_", StringComparison.Ordinal);
+        token = token.Trim('_');
+        var suffix = tag.ToLowerInvariant() switch
+        {
+            "rollovernameid" => "_LR",
+            "titleid" => "_T",
+            _ => ""
+        };
+        return $"STR_CIV_{token}{suffix}";
+    }
+
+    public static bool IsValidKey(string? value)
+        => value is { Length: 1 } && value[0] is >= 'A' and <= 'Z';
 
     public static XElement RequireModRoot(XDocument document)
     {

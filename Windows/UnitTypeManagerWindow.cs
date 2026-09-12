@@ -21,24 +21,27 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
     private readonly List<EditableItem> _items;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
-    private readonly StackPanel _itemsPanel;
+    private readonly ListBox _itemsList;
     private readonly TextBlock _footerText;
     private readonly Func<string, Task<bool>> _createAsync;
     private readonly Func<string, string, Task<bool>> _renameAsync;
     private readonly Func<string, Task<bool>> _deleteAsync;
     private readonly Func<string, int> _resolveUsageCount;
+    private readonly Func<Window, string, Task<bool>>? _validateDeleteAsync;
 
     public UnitTypeManagerWindow(
         IEnumerable<UnitTypeManagerItem> items,
         Func<string, Task<bool>> createAsync,
         Func<string, string, Task<bool>> renameAsync,
         Func<string, Task<bool>> deleteAsync,
-        Func<string, int> resolveUsageCount)
+        Func<string, int> resolveUsageCount,
+        Func<Window, string, Task<bool>>? validateDeleteAsync = null)
     {
         _createAsync = createAsync;
         _renameAsync = renameAsync;
         _deleteAsync = deleteAsync;
         _resolveUsageCount = resolveUsageCount;
+        _validateDeleteAsync = validateDeleteAsync;
         _items = items.Select(item => new EditableItem
         {
             Name = item.Name,
@@ -60,11 +63,11 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
             ["All", "Original", "Custom"],
             "Double-click a custom Unit Type name to rename it.");
         _searchBox = shell.SearchBox;
-        _searchBox.TextChanged += (_, _) => RefreshList();
         _filterComboBox = shell.FilterComboBox;
-        _filterComboBox.SelectionChanged += (_, _) => RefreshList();
+        shell.BindFiltering(RefreshList);
         shell.AddButton.Click += async (_, _) => await AddAsync();
-        _itemsPanel = shell.ItemsPanel;
+        _itemsList = ManagerListShell.CreateVirtualizedList<EditableItem>(CreateRow);
+        shell.ReplaceItemsHost(_itemsList);
         _footerText = shell.FooterTextBlock;
         Content = shell;
         RefreshList();
@@ -105,9 +108,21 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
     {
         if (item.IsBuiltIn) return;
         item.UsageCount = _resolveUsageCount(item.Name);
-        var message = item.UsageCount > 0
-            ? $"'{item.Name}' is used by {item.UsageCount} unit(s). Removing it will also remove it from those units. Continue?"
-            : $"Are you sure you want to remove '{item.Name}'?";
+        if (_validateDeleteAsync != null)
+        {
+            if (!await _validateDeleteAsync(this, item.Name))
+                return;
+        }
+        else if (item.UsageCount > 0)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unit Type is in use",
+                $"'{item.Name}' is used by {item.UsageCount} unit(s) and cannot be removed. Remove or change those references first.")
+                .ShowDialog(this);
+            return;
+        }
+        var message = $"Are you sure you want to remove '{item.Name}'?";
         var confirm = new Prompt(PromptType.Confirm, "Remove Unit Type?", message, confirmButtonText: "Remove");
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed || !await _deleteAsync(item.Name)) return;
@@ -137,16 +152,18 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
             _items.Count(item => item.IsBuiltIn),
             _items.Count(item => !item.IsBuiltIn),
             "Double-click a custom Unit Type name to rename it.");
-        _itemsPanel.Children.Clear();
-        var search = _searchBox.Text?.Trim() ?? "";
-        var filter = _filterComboBox.SelectedItem as string ?? "All";
-        foreach (var item in _items
-                     .Where(item => filter == "All" || filter == "Original" && item.IsBuiltIn || filter == "Custom" && !item.IsBuiltIn)
-                     .Where(item => search.Length == 0 || item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!item.IsBuiltIn) item.UsageCount = _resolveUsageCount(item.Name);
-            var row = ManagerListShell.CreateRow("*,Auto,Auto");
+        _itemsList.ItemsSource = ManagerListShell.FilterItems(
+            _items,
+            item => item.Name,
+            item => item.IsBuiltIn,
+            _searchBox.Text,
+            _filterComboBox.SelectedItem as string);
+    }
+
+    private Control CreateRow(EditableItem item)
+    {
+        var row = ManagerListShell.CreateRow("*,Auto,Auto");
+        row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
             row.Children.Add(new TextBlock
             {
                 Text = item.Name,
@@ -182,7 +199,6 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
                 row.Children.Add(deleteButton);
                 row.DoubleTapped += async (_, _) => await RenameAsync(item);
             }
-            _itemsPanel.Children.Add(row);
-        }
+        return row;
     }
 }

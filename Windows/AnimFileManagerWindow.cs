@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
@@ -39,10 +38,6 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
     private readonly string? _customArtDirectory;
     private readonly Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? _moveAsync;
     private readonly XmlAssetManagerProfile _profile;
-    private readonly DispatcherTimer _searchDebounceTimer = new()
-    {
-        Interval = TimeSpan.FromMilliseconds(200)
-    };
 
     public AnimFileManagerWindow(
         IEnumerable<AnimFileCatalogEntry> animFiles,
@@ -82,22 +77,9 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         _itemsList = ManagerListShell.CreateVirtualizedList<AnimFileCatalogEntry>(CreateRow);
         shell.ReplaceItemsHost(_itemsList);
         _footerText = shell.FooterTextBlock;
-        _searchBox.TextChanged += (_, _) => ScheduleRefresh();
-        _filterComboBox.SelectionChanged += (_, _) => RefreshList();
-        _searchDebounceTimer.Tick += (_, _) =>
-        {
-            _searchDebounceTimer.Stop();
-            RefreshList();
-        };
-        Closed += (_, _) => _searchDebounceTimer.Stop();
+        shell.BindFiltering(RefreshList);
         Content = shell;
         RefreshList();
-    }
-
-    private void ScheduleRefresh()
-    {
-        _searchDebounceTimer.Stop();
-        _searchDebounceTimer.Start();
     }
 
     private void RefreshList()
@@ -107,15 +89,12 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
             _items.Count(item => !item.IsCustom),
             _items.Count(item => item.IsCustom),
             $"Double-click a custom {_profile.ItemLabel} name to rename or move it.");
-        var search = _searchBox.Text?.Trim() ?? "";
-        var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
-        _itemsList.ItemsSource = _items
-            .Where(item => sourceFilter == "All" ||
-                           (sourceFilter == "Original" && !item.IsCustom) ||
-                           (sourceFilter == "Custom" && item.IsCustom))
-            .Where(item => string.IsNullOrWhiteSpace(search) ||
-                           GetFileName(item.Path).Contains(search, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        _itemsList.ItemsSource = ManagerListShell.FilterItems(
+            _items,
+            item => GetFileName(item.Path),
+            item => !item.IsCustom,
+            _searchBox.Text,
+            _filterComboBox.SelectedItem as string);
     }
 
     private Control CreateRow(AnimFileCatalogEntry item)

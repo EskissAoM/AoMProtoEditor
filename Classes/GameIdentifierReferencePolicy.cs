@@ -5,13 +5,31 @@ namespace AoMDivineDataEditor.Classes;
 public enum GameIdentifierKind
 {
     ProtoUnit,
-    UnitType
+    UnitType,
+    TechType,
+    Ability,
+    ProtoUnitCommand,
+    Tactics
 }
 
 public sealed record ProtoActionRenameOperation(
     string UnitName,
     string OldName,
     string NewName);
+
+public sealed record GameIdentifierReferenceUsage(
+    string Identifier,
+    string SourceLabel,
+    string Path,
+    string Field)
+{
+    public string DisplayLocation => $"{SourceLabel}: {Field}";
+}
+
+public sealed record GameIdentifierReferenceLocation(
+    string Owner,
+    string Field,
+    bool IsRecognized);
 
 /// <summary>
 /// Central, conservative rename policy for identifiers shared by the ProtoUnit
@@ -61,6 +79,17 @@ public static class GameIdentifierReferencePolicy
         "stackaddaction", "stacksubaction"
     };
 
+    private static readonly HashSet<string> AbilityReferenceElements = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ability", "castpower", "power", "protopower"
+    };
+
+    private static readonly HashSet<string> CommandReferenceElements = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "command", "optionalcommand", "transformcommand", "prereqcommand", "sharedcommand",
+        "removecommandprequeueonprequeue"
+    };
+
     public static int RenameReferences(
         XContainer document,
         GameIdentifierKind kind,
@@ -79,23 +108,178 @@ public static class GameIdentifierReferencePolicy
             changed += RenameProtoActionDynamicUnitTypeElements(document, oldValue, newValue);
         foreach (var element in document.Descendants())
         {
-            if (IsReferenceElement(element, kind) && EqualsIdentifier(element.Value, oldValue))
+            if (IsReferenceElement(element, kind) && EqualsIdentifier(element.Value, oldValue, kind))
             {
-                element.Value = newValue;
+                element.Value = NormalizeReplacement(newValue, kind);
                 changed++;
             }
 
             foreach (var attribute in element.Attributes())
             {
                 if (!IsReferenceAttribute(element, attribute, kind) ||
-                    !EqualsIdentifier(attribute.Value, oldValue))
+                    !EqualsIdentifier(attribute.Value, oldValue, kind))
                     continue;
-                attribute.Value = newValue;
+                attribute.Value = NormalizeReplacement(newValue, kind);
                 changed++;
+            }
+
+            if (kind == GameIdentifierKind.TechType)
+            {
+                foreach (var attribute in element.Attributes().Where(attribute =>
+                             attribute.Name.LocalName.Equals("excludetypes", StringComparison.OrdinalIgnoreCase)))
+                    changed += RenamePipeSeparatedIdentifier(attribute, oldValue, newValue);
             }
         }
 
         return changed;
+    }
+
+    public static IReadOnlyList<string> FindRecognizedReferences(
+        XContainer document,
+        GameIdentifierKind kind,
+        string identifier)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var value = identifier.Trim();
+        if (value.Length == 0)
+            return [];
+
+        var result = new List<string>();
+        if (kind == GameIdentifierKind.UnitType)
+        {
+            var empowerSectionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "empowerdata", "enemyempowerdata", "natureempowerdata"
+            };
+            result.AddRange(document.Descendants().Where(element =>
+                    element.Parent != null &&
+                    empowerSectionNames.Contains(element.Parent.Name.LocalName) &&
+                    element.Name.LocalName.Equals(value, StringComparison.OrdinalIgnoreCase))
+                .Select(element => $"<{element.Parent!.Name.LocalName}>/<{element.Name.LocalName}>"));
+        }
+
+        foreach (var element in document.Descendants())
+        {
+            if (IsReferenceElement(element, kind) && EqualsIdentifier(element.Value, value, kind))
+                result.Add($"<{element.Name.LocalName}>");
+            result.AddRange(element.Attributes().Where(attribute =>
+                    IsReferenceAttribute(element, attribute, kind) && EqualsIdentifier(attribute.Value, value, kind))
+                .Select(attribute => $"<{element.Name.LocalName}>/@{attribute.Name.LocalName}"));
+            if (kind == GameIdentifierKind.TechType)
+            {
+                result.AddRange(element.Attributes().Where(attribute =>
+                        attribute.Name.LocalName.Equals("excludetypes", StringComparison.OrdinalIgnoreCase) &&
+                        PipeSeparatedContains(attribute.Value, value))
+                    .Select(_ => $"<{element.Name.LocalName}>/@excludetypes"));
+            }
+        }
+        return result;
+    }
+
+    public static IReadOnlyList<GameIdentifierReferenceLocation> FindDeletionReferenceLocations(
+        XContainer document,
+        GameIdentifierKind kind,
+        string identifier)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var value = identifier.Trim();
+        if (value.Length == 0)
+            return [];
+
+        var result = new List<GameIdentifierReferenceLocation>();
+        if (kind == GameIdentifierKind.UnitType)
+        {
+            var empowerSectionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "empowerdata", "enemyempowerdata", "natureempowerdata"
+            };
+            result.AddRange(document.Descendants().Where(element =>
+                    element.Parent != null &&
+                    empowerSectionNames.Contains(element.Parent.Name.LocalName) &&
+                    element.Name.LocalName.Equals(value, StringComparison.OrdinalIgnoreCase))
+                .Select(element => new GameIdentifierReferenceLocation(
+                    FindReferenceOwner(element),
+                    $"<{element.Parent!.Name.LocalName}>/<{element.Name.LocalName}>",
+                    true)));
+        }
+
+        foreach (var element in document.Descendants())
+        {
+            var recognizedElement = IsReferenceElement(element, kind) &&
+                                    EqualsIdentifier(element.Value, value, kind);
+            if (recognizedElement)
+            {
+                result.Add(new GameIdentifierReferenceLocation(
+                    FindReferenceOwner(element), $"<{element.Name.LocalName}>", true));
+            }
+            else if (!element.HasElements &&
+                     EqualsIdentifier(element.Value, value, kind) &&
+                     !IsDefinitionElement(element, kind))
+            {
+                result.Add(new GameIdentifierReferenceLocation(
+                    FindReferenceOwner(element),
+                    $"possible <{element.Name.LocalName}> reference",
+                    false));
+            }
+
+            foreach (var attribute in element.Attributes())
+            {
+                var recognizedAttribute = IsReferenceAttribute(element, attribute, kind) &&
+                                          EqualsIdentifier(attribute.Value, value, kind);
+                var recognizedExclusion = kind == GameIdentifierKind.TechType &&
+                                          attribute.Name.LocalName.Equals("excludetypes", StringComparison.OrdinalIgnoreCase) &&
+                                          PipeSeparatedContains(attribute.Value, value);
+                if (recognizedAttribute || recognizedExclusion)
+                {
+                    result.Add(new GameIdentifierReferenceLocation(
+                        FindReferenceOwner(element),
+                        recognizedExclusion
+                            ? $"<{element.Name.LocalName}>/@excludetypes"
+                            : $"<{element.Name.LocalName}>/@{attribute.Name.LocalName}",
+                        true));
+                }
+                else if (EqualsIdentifier(attribute.Value, value, kind) &&
+                         !IsDefinitionAttribute(element, attribute, kind))
+                {
+                    result.Add(new GameIdentifierReferenceLocation(
+                        FindReferenceOwner(element),
+                        $"possible <{element.Name.LocalName}>/@{attribute.Name.LocalName} reference",
+                        false));
+                }
+
+            }
+        }
+
+        return result;
+    }
+
+    private static string FindReferenceOwner(XElement element)
+    {
+        foreach (var candidate in element.AncestorsAndSelf())
+        {
+            var elementName = candidate.Name.LocalName;
+            if (elementName.Equals("unit", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("tech", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("power", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("majorgod", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = GetAttribute(candidate, "name")?.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                    return name;
+            }
+
+            if (elementName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("transform", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("action", StringComparison.OrdinalIgnoreCase))
+            {
+                var name = candidate.Elements().FirstOrDefault(child =>
+                    child.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) ||
+                    child.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase))?.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                    return name;
+            }
+        }
+        return "";
     }
 
     public static int RenameProtoActionReferences(XElement unit, string oldName, string newName)
@@ -289,6 +473,42 @@ public static class GameIdentifierReferencePolicy
         return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>
+    /// Finds exact identifier values in XML fields which are not definitions and
+    /// are not part of the known schema. Deletion uses this stricter check because
+    /// an unknown exact match must be treated as a possible dependency, never as
+    /// evidence that an object is unused.
+    /// </summary>
+    public static IReadOnlyList<string> FindPotentialUnrecognizedReferences(
+        XContainer document,
+        GameIdentifierKind kind,
+        string identifier)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var result = new List<string>();
+        foreach (var element in document.Descendants())
+        {
+            if (!element.HasElements &&
+                EqualsIdentifier(element.Value, identifier, kind) &&
+                !IsReferenceElement(element, kind) &&
+                !IsDefinitionElement(element, kind))
+            {
+                result.Add($"possible <{element.Name.LocalName}> reference");
+            }
+
+            foreach (var attribute in element.Attributes())
+            {
+                if (EqualsIdentifier(attribute.Value, identifier, kind) &&
+                    !IsReferenceAttribute(element, attribute, kind) &&
+                    !IsDefinitionAttribute(element, attribute, kind))
+                {
+                    result.Add($"possible <{element.Name.LocalName}>/@{attribute.Name.LocalName} reference");
+                }
+            }
+        }
+        return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private static bool IsReferenceElement(XElement element, GameIdentifierKind kind)
     {
         if (element.HasElements)
@@ -300,9 +520,22 @@ public static class GameIdentifierReferencePolicy
             return true;
         if (kind == GameIdentifierKind.UnitType && UnitTypeElementNames.Contains(name))
             return true;
+        if (kind == GameIdentifierKind.TechType &&
+            name.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
+            !IsDefinitionElement(element, kind))
+            return true;
+        if (kind == GameIdentifierKind.Ability && AbilityReferenceElements.Contains(name))
+            return !(name.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                     GetAttribute(element, "name") != null);
+        if (kind == GameIdentifierKind.ProtoUnitCommand && CommandReferenceElements.Contains(name))
+            return !IsDefinitionElement(element, kind);
+        if (kind == GameIdentifierKind.Tactics && name.Equals("tactics", StringComparison.OrdinalIgnoreCase))
+            return true;
 
         if (!name.Equals("target", StringComparison.OrdinalIgnoreCase))
             return false;
+        if (kind == GameIdentifierKind.TechType)
+            return GetAttribute(element, "type")?.Value.Equals("TechType", StringComparison.OrdinalIgnoreCase) == true;
         if (kind == GameIdentifierKind.UnitType && element.Ancestors().Any(ancestor =>
                 ancestor.Name.LocalName.Equals("protoaction", StringComparison.OrdinalIgnoreCase)))
             return true;
@@ -322,6 +555,17 @@ public static class GameIdentifierReferencePolicy
         if (kind == GameIdentifierKind.ProtoUnit && UnitTypeAttributeNames.Contains(name) && IsTechnologyField(owner))
             return true;
         if (kind == GameIdentifierKind.UnitType && UnitTypeAttributeNames.Contains(name))
+            return true;
+        if (kind == GameIdentifierKind.TechType && name.Equals("techtype", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (kind == GameIdentifierKind.Ability &&
+            (name.Equals("ability", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("power", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("protopower", StringComparison.OrdinalIgnoreCase)))
+            return !IsDefinitionAttribute(owner, attribute, kind);
+        if (kind == GameIdentifierKind.ProtoUnitCommand && name.Equals("command", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (kind == GameIdentifierKind.Tactics && name.Equals("tactic", StringComparison.OrdinalIgnoreCase))
             return true;
         if (kind == GameIdentifierKind.UnitType &&
             name.Equals("unit", StringComparison.OrdinalIgnoreCase) &&
@@ -377,8 +621,25 @@ public static class GameIdentifierReferencePolicy
             GetAttribute(candidate, "name") != null);
 
     private static bool IsDefinitionElement(XElement element, GameIdentifierKind kind)
-        => kind == GameIdentifierKind.UnitType &&
-           element.Name.LocalName.Equals("abstractunittype", StringComparison.OrdinalIgnoreCase);
+    {
+        // Definition catalogs occupy a separate identifier namespace. A Unit and
+        // an abstract Unit Type may legitimately share a name, so catalog entries
+        // must not be reported as suspicious ProtoUnit references.
+        if (element.Name.LocalName.Equals("abstractunittype", StringComparison.OrdinalIgnoreCase) &&
+            element.Parent?.Name.LocalName.Equals("abstractunittypesmods", StringComparison.OrdinalIgnoreCase) == true)
+            return true;
+        if (element.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
+            element.Parent?.Name.LocalName.Equals("techtypesmods", StringComparison.OrdinalIgnoreCase) == true)
+            return true;
+
+        return kind switch
+        {
+            GameIdentifierKind.UnitType => element.Name.LocalName.Equals("abstractunittype", StringComparison.OrdinalIgnoreCase),
+            GameIdentifierKind.ProtoUnitCommand => element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+                                                   element.Parent?.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) == true,
+            _ => false
+        };
+    }
 
     private static bool IsDefinitionAttribute(
         XElement owner,
@@ -386,6 +647,9 @@ public static class GameIdentifierReferencePolicy
         GameIdentifierKind kind)
         => kind == GameIdentifierKind.ProtoUnit &&
            owner.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase) &&
+           attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) ||
+           kind == GameIdentifierKind.Ability &&
+           owner.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
            attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksLikeReferenceField(string name, GameIdentifierKind kind)
@@ -395,10 +659,50 @@ public static class GameIdentifierReferencePolicy
               name.Contains("projectile", StringComparison.OrdinalIgnoreCase) ||
               name.Contains("spawn", StringComparison.OrdinalIgnoreCase) ||
               name.Contains("generator", StringComparison.OrdinalIgnoreCase)
-            : name.Contains("unittype", StringComparison.OrdinalIgnoreCase) ||
-              name.Contains("abstracttype", StringComparison.OrdinalIgnoreCase) ||
-              name.Equals("type", StringComparison.OrdinalIgnoreCase) ||
-              name.Equals("unit", StringComparison.OrdinalIgnoreCase);
+            : kind == GameIdentifierKind.UnitType
+                ? name.Contains("unittype", StringComparison.OrdinalIgnoreCase) ||
+                  name.Contains("abstracttype", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("type", StringComparison.OrdinalIgnoreCase) ||
+                  name.Equals("unit", StringComparison.OrdinalIgnoreCase)
+                : kind == GameIdentifierKind.TechType
+                    ? name.Contains("techtype", StringComparison.OrdinalIgnoreCase)
+                    : kind == GameIdentifierKind.Ability
+                        ? name.Contains("ability", StringComparison.OrdinalIgnoreCase) ||
+                          name.Contains("power", StringComparison.OrdinalIgnoreCase)
+                        : kind == GameIdentifierKind.ProtoUnitCommand
+                            ? name.Contains("command", StringComparison.OrdinalIgnoreCase)
+                            : name.Contains("tactic", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeReplacement(string value, GameIdentifierKind kind)
+        => kind == GameIdentifierKind.Tactics && value.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase)
+            ? value[..^".tactics".Length]
+            : value;
+
+    private static bool EqualsIdentifier(string? value, string expected, GameIdentifierKind kind)
+        => kind == GameIdentifierKind.Tactics
+            ? NormalizeReplacement(value?.Trim() ?? "", kind)
+                .Equals(NormalizeReplacement(expected.Trim(), kind), StringComparison.OrdinalIgnoreCase)
+            : EqualsIdentifier(value, expected);
+
+    private static bool PipeSeparatedContains(string value, string expected)
+        => value.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Contains(expected.Trim(), StringComparer.OrdinalIgnoreCase);
+
+    private static int RenamePipeSeparatedIdentifier(XAttribute attribute, string oldName, string newName)
+    {
+        var values = attribute.Value.Split('|', StringSplitOptions.TrimEntries);
+        var changed = false;
+        for (var index = 0; index < values.Length; index++)
+        {
+            if (!values[index].Equals(oldName.Trim(), StringComparison.OrdinalIgnoreCase))
+                continue;
+            values[index] = newName.Trim();
+            changed = true;
+        }
+        if (changed)
+            attribute.Value = string.Join("|", values);
+        return changed ? 1 : 0;
+    }
 
     private static bool EqualsIdentifier(string? value, string expected)
         => value?.Trim().Equals(expected.Trim(), StringComparison.OrdinalIgnoreCase) == true;

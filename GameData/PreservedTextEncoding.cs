@@ -42,6 +42,18 @@ public sealed record PreservedTextEncoding(string Text, Encoding Encoding, byte[
             return (new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true), 2);
         if (StartsWith(bytes, [0xFF, 0xFE]))
             return (new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true), 2);
+
+        // XML and string-table files occasionally declare UTF-16/UTF-32 without
+        // writing a BOM. Detect only the unambiguous leading '<' byte layouts;
+        // ordinary UTF-8 remains the fallback for every other BOM-less file.
+        if (StartsWith(bytes, [0x3C, 0x00, 0x00, 0x00]))
+            return (new UTF32Encoding(bigEndian: false, byteOrderMark: false, throwOnInvalidCharacters: true), 0);
+        if (StartsWith(bytes, [0x00, 0x00, 0x00, 0x3C]))
+            return (new UTF32Encoding(bigEndian: true, byteOrderMark: false, throwOnInvalidCharacters: true), 0);
+        if (StartsWith(bytes, [0x3C, 0x00]))
+            return (new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true), 0);
+        if (StartsWith(bytes, [0x00, 0x3C]))
+            return (new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true), 0);
         return (new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true), 0);
     }
 

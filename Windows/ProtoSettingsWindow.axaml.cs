@@ -72,7 +72,7 @@ public partial class ProtoSettingsWindow : SimpleWindow
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Title = "Select Steam User Folder",
+            Title = "Select Steam User Folder or mods\\local Folder",
             AllowMultiple = false
         });
 

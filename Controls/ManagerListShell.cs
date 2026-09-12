@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace AoMDivineDataEditor.Controls;
 
@@ -19,6 +20,7 @@ internal sealed class ManagerListShell : UserControl
     public TextBlock FooterTextBlock { get; }
     private readonly Grid _root;
     private readonly Control _itemsHost;
+    private DispatcherTimer? _searchDebounceTimer;
 
     public ManagerListShell(
         string searchPlaceholder,
@@ -105,6 +107,32 @@ internal sealed class ManagerListShell : UserControl
         _root.Children.Add(host);
     }
 
+    public void BindFiltering(Action refresh, int searchDebounceMilliseconds = 175)
+    {
+        ArgumentNullException.ThrowIfNull(refresh);
+        _searchDebounceTimer?.Stop();
+        _searchDebounceTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(searchDebounceMilliseconds)
+        };
+        _searchDebounceTimer.Tick += (_, _) =>
+        {
+            _searchDebounceTimer.Stop();
+            refresh();
+        };
+        SearchBox.TextChanged += (_, _) =>
+        {
+            _searchDebounceTimer.Stop();
+            _searchDebounceTimer.Start();
+        };
+        FilterComboBox.SelectionChanged += (_, _) =>
+        {
+            _searchDebounceTimer.Stop();
+            refresh();
+        };
+        DetachedFromVisualTree += (_, _) => _searchDebounceTimer.Stop();
+    }
+
     public static ListBox CreateVirtualizedList<T>(Func<T, Control> createRow)
         where T : class
     {
@@ -131,6 +159,28 @@ internal sealed class ManagerListShell : UserControl
             Background = Brush.Parse("#191C1A"),
             Margin = new Thickness(0, 1)
         };
+
+    public static IReadOnlyList<T> FilterItems<T>(
+        IEnumerable<T> items,
+        Func<T, string> nameSelector,
+        Func<T, bool> isOriginalSelector,
+        string? search,
+        string? sourceFilter)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(nameSelector);
+        ArgumentNullException.ThrowIfNull(isOriginalSelector);
+        var query = search?.Trim() ?? "";
+        var filter = sourceFilter ?? "All";
+        return items
+            .Where(item => filter == "All" ||
+                           filter == "Original" && isOriginalSelector(item) ||
+                           filter == "Custom" && !isOriginalSelector(item))
+            .Where(item => query.Length == 0 ||
+                           nameSelector(item).Contains(query, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(nameSelector, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     public static string FormatEntityCountFooter(int total, int original, int custom, string hint)
         => $"{total:N0} items: {original:N0} original, {custom:N0} customs. {hint}";

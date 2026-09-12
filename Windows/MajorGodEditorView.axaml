@@ -1,30 +1,97 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+             xmlns:controls="using:AoMDivineDataEditor.Controls"
              x:Class="AoMDivineDataEditor.Windows.MajorGodEditorView"
              Background="{DynamicResource AppBackgroundBrush}"
              Foreground="{DynamicResource PrimaryTextBrush}">
-  <Border Classes="MainPanel" Padding="18">
-    <Grid RowDefinitions="Auto,*,Auto">
-      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,12">
-        <TextBlock Text="Major god:" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
-        <TextBlock Grid.Column="1" x:Name="_nameText" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
-      </Grid>
-      <Border Grid.Row="1" Classes="XmlPanel" BorderThickness="1">
-        <Grid RowDefinitions="Auto,*" Margin="12">
-          <TextBlock Classes="XmlHeader" Text="Raw XML" Margin="0,0,0,8"/>
-          <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
-                                   FontFamily="Consolas" FontSize="12"
-                                   Background="{DynamicResource XmlEditorBrush}"
-                                   Foreground="{DynamicResource PrimaryTextBrush}"
-                                   BorderBrush="{DynamicResource NormalBorderBrush}"
-                                   HorizontalScrollBarVisibility="Auto"
-                                   VerticalScrollBarVisibility="Auto"
-                                   TextChanged="RawXmlEditor_TextChanged"/>
+  <Grid ColumnDefinitions="3*,5,2*" RowDefinitions="*,Auto">
+    <Border Grid.Column="0" Classes="MainPanel" Padding="18,18,10,18">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="4" Margin="0,0,12,0">
+          <TextBlock Text="Shared fields" FontSize="17" FontWeight="Bold" Margin="0,0,0,8"/>
+
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Name" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="_nameBox" TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Key" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="_keyBox" Width="70" MaxWidth="70" MaxLength="1"
+                     HorizontalAlignment="Left" TextChanged="KeyBox_TextChanged"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Culture" VerticalAlignment="Center"/>
+            <ComboBox Grid.Column="1" x:Name="_cultureBox" Width="380" MaxWidth="380"
+                      HorizontalAlignment="Left" SelectionChanged="CultureBox_SelectionChanged"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Display Name" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="_displayNameBox" TextChanged="ResolvedStringBox_TextChanged" Tag="displaynameid"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Rollover Name" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="_rolloverNameBox" TextChanged="ResolvedStringBox_TextChanged" Tag="rollovernameid"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Title" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" x:Name="_titleBox" TextChanged="ResolvedStringBox_TextChanged" Tag="titleid"/>
+          </Grid>
+
+          <Grid x:Name="_iconFieldsLayout" Margin="0,7,0,0">
+            <StackPanel Spacing="4">
+              <Grid ColumnDefinitions="170,*" Margin="0,3">
+                <TextBlock Text="Icon" VerticalAlignment="Center"/>
+                <controls:AssetPathEditor Grid.Column="1" x:Name="_iconEditor"/>
+              </Grid>
+              <Grid ColumnDefinitions="170,*" Margin="0,3">
+                <TextBlock Text="Portrait" VerticalAlignment="Center"/>
+                <controls:AssetPathEditor Grid.Column="1" x:Name="_portraitEditor"/>
+              </Grid>
+              <Grid ColumnDefinitions="170,*" Margin="0,3">
+                <TextBlock Text="Breakout Portrait" VerticalAlignment="Center"/>
+                <controls:AssetPathEditor Grid.Column="1" x:Name="_breakoutPortraitEditor"/>
+              </Grid>
+            </StackPanel>
+            <Border x:Name="_iconPreviewHost" Margin="558,3,0,0" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+          </Grid>
+
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Minimap Border Image" VerticalAlignment="Center"/>
+            <AutoCompleteBox Grid.Column="1" x:Name="_minimapBorderBox" FilterMode="Contains" MinimumPrefixLength="0"
+                             TextChanged="CatalogValueBox_TextChanged" Tag="minimapborderimage"/>
+          </Grid>
+          <Grid ColumnDefinitions="170,*" Margin="0,3">
+            <TextBlock Text="Background Scenario" VerticalAlignment="Center"/>
+            <AutoCompleteBox Grid.Column="1" x:Name="_backgroundScenarioBox" FilterMode="Contains" MinimumPrefixLength="0"
+                             TextChanged="CatalogValueBox_TextChanged" Tag="backgroundscenario"/>
+          </Grid>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <GridSplitter Grid.Column="1" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns"/>
+
+    <Border Grid.Column="2" Classes="XmlPanel" BorderThickness="1,0,0,0">
+      <Grid RowDefinitions="Auto,*" Margin="12">
+        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+          <TextBlock Classes="XmlHeader" Text="Raw XML" VerticalAlignment="Center"/>
+          <Button Grid.Column="1" x:Name="_applyRawXmlButton" Classes="positive" Content="Apply"
+                  Padding="12,4" IsVisible="False" Click="ApplyRawXml_Click"/>
         </Grid>
-      </Border>
-      <TextBlock Grid.Row="2" x:Name="_statusMessage" Foreground="{DynamicResource MainGoldBrush}"
-                 FontWeight="SemiBold" Margin="0,8,0,0" HorizontalAlignment="Center"/>
-    </Grid>
-  </Border>
+        <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
+                                 FontFamily="Consolas" FontSize="12"
+                                 Background="{DynamicResource XmlEditorBrush}"
+                                 Foreground="{DynamicResource PrimaryTextBrush}"
+                                 BorderBrush="{DynamicResource NormalBorderBrush}"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 VerticalScrollBarVisibility="Auto"
+                                 TextChanged="RawXmlEditor_TextChanged"/>
+      </Grid>
+    </Border>
+
+    <TextBlock Grid.Row="1" Grid.ColumnSpan="3" x:Name="_statusMessage"
+               Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
+               Margin="0,8,0,8" HorizontalAlignment="Center"/>
+  </Grid>
 </UserControl>

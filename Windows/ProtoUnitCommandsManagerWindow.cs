@@ -26,7 +26,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
     private readonly List<EditableProtoUnitCommandItem> _items;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
-    private readonly StackPanel _itemsPanel;
+    private readonly ListBox _itemsList;
     private readonly TextBlock _footerHint;
     private readonly Func<Window, string, bool, Task<string?>>? _openEditorAsync;
     private readonly Func<string, Task<bool>>? _createCommandAsync;
@@ -34,6 +34,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
     private readonly Func<string, string, Task<bool>>? _renameCommandAsync;
     private readonly Func<string, Task<bool>>? _deleteCommandAsync;
     private readonly Func<string, int>? _resolveUsageCount;
+    private readonly Func<Window, string, Task<bool>>? _validateDeleteAsync;
 
     public ProtoUnitCommandsManagerWindow(
         IEnumerable<ProtoUnitCommandManagerItem> items,
@@ -42,7 +43,8 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
         Func<string, bool, string, Task<bool>>? duplicateCommandAsync = null,
         Func<string, string, Task<bool>>? renameCommandAsync = null,
         Func<string, Task<bool>>? deleteCommandAsync = null,
-        Func<string, int>? resolveUsageCount = null)
+        Func<string, int>? resolveUsageCount = null,
+        Func<Window, string, Task<bool>>? validateDeleteAsync = null)
     {
         _openEditorAsync = openEditorAsync;
         _createCommandAsync = createCommandAsync;
@@ -50,6 +52,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
         _renameCommandAsync = renameCommandAsync;
         _deleteCommandAsync = deleteCommandAsync;
         _resolveUsageCount = resolveUsageCount;
+        _validateDeleteAsync = validateDeleteAsync;
         Title = "Manage ProtoUnit Commands";
         Width = 700;
         Height = 650;
@@ -70,83 +73,18 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
             })
             .ToList();
 
-        var root = new Grid
-        {
-            Margin = new Thickness(16),
-            RowDefinitions = new RowDefinitions("Auto,*,Auto")
-        };
-
-        var topPanel = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,120,Auto"),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        _searchBox = new TextBox
-        {
-            PlaceholderText = "Search commands...",
-            Height = ManagerListShell.HeaderControlHeight,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        _searchBox.TextChanged += (_, _) => RefreshList();
-        topPanel.Children.Add(_searchBox);
-
-        _filterComboBox = new ComboBox
-        {
-            ItemsSource = new[] { "All", "Original", "Custom" },
-            SelectedIndex = 0,
-            Height = ManagerListShell.HeaderControlHeight,
-            Margin = new Thickness(0, 0, 8, 0),
-            HorizontalAlignment = HorizontalAlignment.Stretch
-        };
-        _filterComboBox.SelectionChanged += (_, _) => RefreshList();
-        Grid.SetColumn(_filterComboBox, 1);
-        topPanel.Children.Add(_filterComboBox);
-
-        var addButton = new Button
-        {
-            Content = "+",
-            FontSize = 22,
-            Width = 40,
-            Height = ManagerListShell.HeaderControlHeight,
-            Padding = new Thickness(0),
-            Classes = { "add-item" },
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        addButton.Click += async (_, _) => await AddCommandAsync();
-        Grid.SetColumn(addButton, 2);
-        topPanel.Children.Add(addButton);
-        root.Children.Add(topPanel);
-
-        _itemsPanel = new StackPanel
-        {
-            Spacing = 4,
-            Margin = new Thickness(0, 0, ManagerListShell.ScrollBarClearance, 0)
-        };
-        var scroll = new ScrollViewer
-        {
-            Content = _itemsPanel,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
-        };
-        Grid.SetRow(scroll, 1);
-        root.Children.Add(scroll);
-
-        var footer = new Grid
-        {
-            Margin = new Thickness(0, 12, 0, 0)
-        };
-        _footerHint = new TextBlock
-        {
-            Text = "",
-            Foreground = Brushes.Gray,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        footer.Children.Add(_footerHint);
-        Grid.SetRow(footer, 2);
-        root.Children.Add(footer);
-
-        Content = root;
+        var shell = new ManagerListShell(
+            "Search commands...",
+            ["All", "Original", "Custom"],
+            "");
+        _searchBox = shell.SearchBox;
+        _filterComboBox = shell.FilterComboBox;
+        _footerHint = shell.FooterTextBlock;
+        _itemsList = ManagerListShell.CreateVirtualizedList<EditableProtoUnitCommandItem>(CreateRow);
+        shell.ReplaceItemsHost(_itemsList);
+        shell.BindFiltering(RefreshList);
+        shell.AddButton.Click += async (_, _) => await AddCommandAsync();
+        Content = shell;
         RefreshList();
     }
 
@@ -236,7 +174,12 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
     {
         if (item.IsBuiltIn) return;
         item.UsageCount = Math.Max(item.UsageCount, _resolveUsageCount?.Invoke(item.Name) ?? 0);
-        if (item.UsageCount > 0)
+        if (_validateDeleteAsync != null)
+        {
+            if (!await _validateDeleteAsync(this, item.Name))
+                return;
+        }
+        else if (item.UsageCount > 0)
         {
             await ShowErrorAsync("Command is in use", $"'{item.Name}' is used by {item.UsageCount} unit(s) and cannot be removed.");
             return;
@@ -265,21 +208,18 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
             _items.Count(item => item.IsBuiltIn),
             _items.Count(item => !item.IsBuiltIn),
             "Double-click a custom command name to rename it.");
-        _itemsPanel.Children.Clear();
-        var filter = _searchBox.Text?.Trim() ?? "";
-        var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
-        foreach (var item in _items
-                     .Where(item => sourceFilter == "All" || (sourceFilter == "Original" && item.IsBuiltIn) || (sourceFilter == "Custom" && !item.IsBuiltIn))
-                     .Where(item => string.IsNullOrWhiteSpace(filter) || item.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!item.IsBuiltIn && _resolveUsageCount != null) item.UsageCount = Math.Max(item.UsageCount, _resolveUsageCount(item.Name));
-            var row = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-                Background = Brush.Parse("#191C1A"),
-                Margin = new Thickness(0, 1)
-            };
+        _itemsList.ItemsSource = ManagerListShell.FilterItems(
+            _items,
+            item => item.Name,
+            item => item.IsBuiltIn,
+            _searchBox.Text,
+            _filterComboBox.SelectedItem as string);
+    }
+
+    private Control CreateRow(EditableProtoUnitCommandItem item)
+    {
+            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto,Auto");
+            row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
             row.Children.Add(new TextBlock
             {
                 Text = item.Name,
@@ -370,8 +310,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
                 row.Children.Add(deleteButton);
                 row.DoubleTapped += async (_, _) => await RenameCommandAsync(item);
             }
-            _itemsPanel.Children.Add(row);
-        }
+        return row;
     }
 
     private async Task ShowErrorAsync(string title, string message)

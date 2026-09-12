@@ -25,6 +25,20 @@ public static class FileIntegrityTransaction
         return CreateState(contents);
     }
 
+    public static IReadOnlyDictionary<string, FileState> CaptureStates(IEnumerable<string?> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        return paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                path => path,
+                CaptureState,
+                StringComparer.OrdinalIgnoreCase);
+    }
+
     public static void Execute(IEnumerable<string?> paths, Action commit)
         => Execute(paths, expectedStates: null, commit);
 
@@ -38,6 +52,7 @@ public static class FileIntegrityTransaction
 
         var snapshots = CaptureSnapshots(paths);
         EnsureExpectedStatesMatch(snapshots, expectedStates);
+        EnsureSnapshotsStillCurrent(snapshots);
 
         try
         {
@@ -59,6 +74,7 @@ public static class FileIntegrityTransaction
 
         var snapshots = CaptureSnapshots(paths);
         EnsureExpectedStatesMatch(snapshots, expectedStates);
+        EnsureSnapshotsStillCurrent(snapshots);
 
         try
         {
@@ -108,6 +124,21 @@ public static class FileIntegrityTransaction
     private static FileState CreateState(byte[] contents)
         => new(true, contents.LongLength, Convert.ToHexString(SHA256.HashData(contents)));
 
+    private static void EnsureSnapshotsStillCurrent(IReadOnlyList<Snapshot> snapshots)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            var current = CaptureState(snapshot.Path);
+            var captured = snapshot.Existed ? CreateState(snapshot.Contents) : new FileState(false, 0, "");
+            if (current == captured)
+                continue;
+
+            throw new IOException(
+                $"'{snapshot.Path}' changed while the save transaction was being prepared. No files were written. " +
+                "Retry after the other program has finished writing the mod.");
+        }
+    }
+
     private static void RollBack(IReadOnlyList<Snapshot> snapshots, Exception commitException)
     {
         var rollbackErrors = new List<Exception>();
@@ -116,7 +147,13 @@ public static class FileIntegrityTransaction
             try
             {
                 if (snapshot.Existed)
-                    AtomicWriteAllBytes(snapshot.Path, snapshot.Contents);
+                {
+                    if (!File.Exists(snapshot.Path) ||
+                        !File.ReadAllBytes(snapshot.Path).AsSpan().SequenceEqual(snapshot.Contents))
+                    {
+                        AtomicWriteAllBytes(snapshot.Path, snapshot.Contents);
+                    }
+                }
                 else if (File.Exists(snapshot.Path))
                     File.Delete(snapshot.Path);
             }

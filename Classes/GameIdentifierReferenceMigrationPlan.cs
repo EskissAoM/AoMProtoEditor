@@ -13,14 +13,17 @@ public sealed class GameIdentifierReferenceMigrationPlan
 
     private GameIdentifierReferenceMigrationPlan(
         IReadOnlyDictionary<string, XDocument> documents,
-        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> expectedStates)
+        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> expectedStates,
+        IReadOnlyList<GameIdentifierReferenceUsage> affectedReferences)
     {
         _documents = documents;
         ExpectedStates = expectedStates;
+        AffectedReferences = affectedReferences;
     }
 
     public IReadOnlyList<string> Paths => _documents.Keys.ToList();
     public IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> ExpectedStates { get; }
+    public IReadOnlyList<GameIdentifierReferenceUsage> AffectedReferences { get; }
 
     public static GameIdentifierReferenceMigrationPlan Prepare(
         IEnumerable<TechnologyReferenceFile> files,
@@ -36,6 +39,7 @@ public sealed class GameIdentifierReferenceMigrationPlan
         var actionOperations = protoActionRenames?.ToList() ?? [];
         var documents = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
         var expectedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+        var affectedReferences = new List<GameIdentifierReferenceUsage>();
 
         foreach (var file in files
                      .Where(file => !string.IsNullOrWhiteSpace(file.Path) && File.Exists(file.Path))
@@ -58,12 +62,31 @@ public sealed class GameIdentifierReferenceMigrationPlan
                         $"'{rename.Key}' was not renamed because '{path}' contains unsupported reference field(s): " +
                         string.Join(", ", unknown) + ". No files were written.");
                 }
+                affectedReferences.AddRange(
+                    GameIdentifierReferencePolicy.FindRecognizedReferences(document, kind, rename.Key)
+                        .Select(field => new GameIdentifierReferenceUsage(rename.Key, file.Label, path, field)));
                 changed += GameIdentifierReferencePolicy.RenameReferences(document, kind, rename.Key, rename.Value);
+                if (GameIdentifierReferencePolicy.FindRecognizedReferences(document, kind, rename.Key).Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"The rename verification still found a recognized reference to '{rename.Key}' in '{path}'. No files were written.");
+                }
             }
             if (file.Kind == TechnologyReferenceDocumentKind.Techtree)
             {
                 foreach (var operation in actionOperations)
-                    changed += GameIdentifierReferencePolicy.RenameTechnologyProtoActionReferences(document, operation);
+                {
+                    var actionChanges = GameIdentifierReferencePolicy.RenameTechnologyProtoActionReferences(document, operation);
+                    changed += actionChanges;
+                    for (var index = 0; index < actionChanges; index++)
+                    {
+                        affectedReferences.Add(new GameIdentifierReferenceUsage(
+                            operation.OldName,
+                            file.Label,
+                            path,
+                            $"ProtoAction reference for '{operation.UnitName}'"));
+                    }
+                }
             }
 
             if (changed > 0)
@@ -73,7 +96,7 @@ public sealed class GameIdentifierReferenceMigrationPlan
             }
         }
 
-        return new GameIdentifierReferenceMigrationPlan(documents, expectedStates);
+        return new GameIdentifierReferenceMigrationPlan(documents, expectedStates, affectedReferences);
     }
 
     public void Save(Action<XDocument, string> writer)

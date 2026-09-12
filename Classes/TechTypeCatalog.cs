@@ -93,13 +93,7 @@ public static class TechTypeCatalog
     }
 
     public static XDocument LoadOrCreateModDocument(string path)
-    {
-        if (!File.Exists(path)) return new XDocument(new XElement(ModRootName));
-        var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
-        if (document.Root == null || !document.Root.Name.LocalName.Equals(ModRootName, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"Expected <{ModRootName}> in '{path}'.");
-        return document;
-    }
+        => ModXmlDocumentSafety.LoadOrCreate(path, ModXmlDocumentKind.TechTypes).Document;
 
     public static XElement AddDefinition(XDocument document, string name)
     {
@@ -196,9 +190,42 @@ public static class TechTypeCatalog
                 element.Value.Trim().Equals(name.Trim(), StringComparison.OrdinalIgnoreCase)));
 
     public static TechTypeUsage GetTechnologyUsage(XContainer container, string name)
-        => new(
-            CountTechnologyUsage(container, name),
-            GetTechnologyEffects(container).Count(effect => EffectReferencesTechType(effect, name)));
+        => GetTechnologyUsageCounts(container).GetValueOrDefault(name.Trim());
+
+    public static IReadOnlyDictionary<string, TechTypeUsage> GetTechnologyUsageCounts(XContainer container)
+    {
+        var propertyCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var effectCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var technology in container.Descendants().Where(element =>
+                     element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var name in technology.Elements()
+                         .Where(element => element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase))
+                         .Select(element => element.Value.Trim())
+                         .Where(name => name.Length > 0)
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                propertyCounts[name] = propertyCounts.GetValueOrDefault(name) + 1;
+            }
+
+            foreach (var effect in technology.Descendants().Where(element =>
+                         element.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var name in GetReferencedTechTypes(effect))
+                    effectCounts[name] = effectCounts.GetValueOrDefault(name) + 1;
+            }
+        }
+
+        return propertyCounts.Keys
+            .Union(effectCounts.Keys, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                name => name,
+                name => new TechTypeUsage(
+                    propertyCounts.GetValueOrDefault(name),
+                    effectCounts.GetValueOrDefault(name)),
+                StringComparer.OrdinalIgnoreCase);
+    }
 
     public static bool IsValidName(string? name) => InternalNamePolicy.IsValid(name);
 
@@ -241,32 +268,43 @@ public static class TechTypeCatalog
                 element.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)));
 
     private static bool EffectReferencesTechType(XElement effect, string name)
-    {
-        if (effect.Attributes().Any(attribute =>
-                attribute.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
-                attribute.Value.Trim().Equals(name.Trim(), StringComparison.OrdinalIgnoreCase)))
-            return true;
+        => GetReferencedTechTypes(effect).Contains(name.Trim());
 
-        if (effect.Descendants().Any(element =>
-                element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase) &&
-                element.Value.Trim().Equals(name.Trim(), StringComparison.OrdinalIgnoreCase)))
-            return true;
+    private static HashSet<string> GetReferencedTechTypes(XElement effect)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var attribute in effect.Attributes().Where(attribute =>
+                     attribute.Name.LocalName.Equals("techtype", StringComparison.OrdinalIgnoreCase)))
+        {
+            var value = attribute.Value.Trim();
+            if (value.Length > 0) result.Add(value);
+        }
+
+        foreach (var element in effect.Descendants().Where(element =>
+                     element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase)))
+        {
+            var value = element.Value.Trim();
+            if (value.Length > 0) result.Add(value);
+        }
 
         foreach (var target in effect.Elements().Where(element =>
                      element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase)))
         {
             var type = target.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.Trim();
-            if (string.Equals(type, "TechType", StringComparison.OrdinalIgnoreCase) &&
-                target.Value.Trim().Equals(name.Trim(), StringComparison.OrdinalIgnoreCase))
-                return true;
+            if (string.Equals(type, "TechType", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = target.Value.Trim();
+                if (value.Length > 0) result.Add(value);
+            }
 
             var exclusions = target.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName.Equals("excludetypes", StringComparison.OrdinalIgnoreCase))?.Value;
-            if (ContainsPipeSeparatedValue(exclusions, name))
-                return true;
+            foreach (var value in (exclusions ?? "").Split(
+                         '|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                result.Add(value);
         }
-        return false;
+        return result;
     }
 
     private static bool ContainsPipeSeparatedValue(string? values, string name)

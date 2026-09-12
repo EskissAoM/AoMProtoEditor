@@ -275,6 +275,7 @@ public partial class TechnologyEditorView : UserControl
     private readonly Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? _saveStringsAsync;
     private readonly Action? _reloadStringsFromDisk;
     private readonly Func<IReadOnlyList<TechnologyReferenceUsage>>? _externalTechnologyReferenceProvider;
+    private readonly Func<string, IReadOnlyList<TechnologyReferenceUsage>>? _technologyDeletionReferenceProvider;
     private readonly Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? _prepareTechnologyReferenceMigration;
     private readonly Action<TechnologyReferenceMigrationPlan>? _adoptTechnologyReferenceMigration;
     private readonly IconPreviewService? _iconPreviewService;
@@ -343,17 +344,10 @@ public partial class TechnologyEditorView : UserControl
 
     private async Task ShowDocumentSafetyPromptAsync(Window owner)
     {
-        var prompt = new Prompt(
-            PromptType.Error,
-            "Technology file cannot be edited",
-            _modDocumentSafetyError ?? "The technology file cannot be edited safely.")
-        {
-            Width = 700,
-            Height = 300,
-            MinWidth = 580,
-            MinHeight = 240
-        };
-        await prompt.ShowDialog(owner);
+        await DocumentSafetyDialog.ShowAsync(
+            owner,
+            "Technology",
+            _modDocumentSafetyError ?? "The technology file cannot be edited safely.");
     }
 
     public TechnologyEditorView(
@@ -378,7 +372,8 @@ public partial class TechnologyEditorView : UserControl
         Action? reloadStringsFromDisk = null,
         Func<IReadOnlyList<TechnologyReferenceUsage>>? externalTechnologyReferenceProvider = null,
         Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? prepareTechnologyReferenceMigration = null,
-        Action<TechnologyReferenceMigrationPlan>? adoptTechnologyReferenceMigration = null)
+        Action<TechnologyReferenceMigrationPlan>? adoptTechnologyReferenceMigration = null,
+        Func<string, IReadOnlyList<TechnologyReferenceUsage>>? technologyDeletionReferenceProvider = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
@@ -391,6 +386,7 @@ public partial class TechnologyEditorView : UserControl
         _externalTechnologyReferenceProvider = externalTechnologyReferenceProvider;
         _prepareTechnologyReferenceMigration = prepareTechnologyReferenceMigration;
         _adoptTechnologyReferenceMigration = adoptTechnologyReferenceMigration;
+        _technologyDeletionReferenceProvider = technologyDeletionReferenceProvider;
         _iconPreviewService = iconPreviewService;
         _iconPaths = iconPaths?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _prereqUnitNames = prereqUnitNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
@@ -967,7 +963,11 @@ public partial class TechnologyEditorView : UserControl
         identityLayout.Children.Add(identityFields);
         _iconPreviewControl = new IconPreviewControl(_iconPreviewService)
         {
-            Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset, 4, 12, 4),
+            Margin = new Thickness(
+                IconPreviewControl.PropertyGridLeftOffset + (IsModifiedTab ? 40 : 0),
+                4,
+                12,
+                4),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top
         };
@@ -8730,9 +8730,27 @@ public partial class TechnologyEditorView : UserControl
 
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
 
-        var references = _original.ContainsKey(name)
-            ? []
-            : GetTechnologyReferences(name);
+        IReadOnlyList<TechnologyReferenceUsage> references;
+        try
+        {
+            references = _original.ContainsKey(name)
+                ? []
+                : GetTechnologyReferences(name)
+                    .Concat(_technologyDeletionReferenceProvider?.Invoke(name) ?? [])
+                    .DistinctBy(reference =>
+                        $"{reference.Path}\0{reference.Owner}\0{reference.Field}",
+                        StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Technology reference check failed",
+                $"'{name}' was not deleted because its references could not be checked safely. {exception.Message}")
+                .ShowDialog(owner);
+            return;
+        }
         if (_technologyReferenceIndexError != null)
         {
             await new Prompt(
@@ -8743,18 +8761,11 @@ public partial class TechnologyEditorView : UserControl
         }
         if (references.Count > 0)
         {
-            var blocked = new Prompt(
-                PromptType.Error,
-                "Technology is still in use",
-                $"'{name}' is used by {references.Count} reference(s) and cannot be deleted. Remove those references first.\n\n" +
-                FormatTechnologyReferenceList(references))
-            {
-                Width = 680,
-                Height = 360,
-                MinWidth = 560,
-                MinHeight = 260
-            };
-            await blocked.ShowDialog(owner);
+            await DeletionBlockedDialog.ShowAsync(
+                owner,
+                "Technology",
+                name,
+                references.Select(reference => reference.DisplayLocation));
             return;
         }
 
@@ -8931,7 +8942,16 @@ public partial class TechnologyEditorView : UserControl
         {
             var stringUpdatesToSave = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
             var requestedStringRemovals = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
-            var stringRemovalsToSave = requestedStringRemovals
+            IReadOnlySet<string> approvedStringRemovals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (requestedStringRemovals.Count > 0 && TopLevel.GetTopLevel(this) is Window stringReviewOwner)
+            {
+                var review = new OrphanCleanupReviewWindow(
+                    requestedStringRemovals,
+                    "Saving the current Technology changes");
+                await review.ShowDialog(stringReviewOwner);
+                approvedStringRemovals = review.SelectedIds;
+            }
+            var stringRemovalsToSave = approvedStringRemovals
                 .Where(id => !IsStringIdReferencedByAnyTechnology(id))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var candidateDocument = new XDocument(_modDocument);
@@ -8944,11 +8964,11 @@ public partial class TechnologyEditorView : UserControl
                 CanMigrate: true);
             foreach (var rename in renamesToSave)
             {
-                var unknown = TechnologyReferenceIndex.Build([candidateSource], [rename.OldName])
+                var localReferences = TechnologyReferenceIndex.Build([candidateSource], [rename.OldName])
                     .Where(reference =>
-                        reference.TechnologyName.Equals(rename.OldName, StringComparison.OrdinalIgnoreCase) &&
-                        !reference.IsRecognized)
+                        reference.TechnologyName.Equals(rename.OldName, StringComparison.OrdinalIgnoreCase))
                     .ToList();
+                var unknown = localReferences.Where(reference => !reference.IsRecognized).ToList();
                 if (unknown.Count > 0)
                 {
                     await ShowTechnologyNameErrorAsync(

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Classes;
 
@@ -88,9 +88,9 @@ public static class ProtoXmlHandler
         "damagebonus",
     };
 
-    private sealed class Utf8StringWriter : StringWriter
+    private sealed class EncodingStringWriter(Encoding encoding) : StringWriter
     {
-        public override Encoding Encoding => new UTF8Encoding(false);
+        public override Encoding Encoding { get; } = encoding;
     }
 
     // ─── Load / Save ──────────────────────────────────────────────────────────
@@ -98,21 +98,8 @@ public static class ProtoXmlHandler
     /// <summary>Parse a proto XML file from disk.</summary>
     public static (XDocument Doc, XElement Root) ParseProtoXml(string path)
     {
-        try
-        {
-            var doc = XDocument.Load(path, LoadOptions.PreserveWhitespace);
-            var root = doc.Root ?? throw new InvalidOperationException("Empty XML document.");
-            return (doc, root);
-        }
-        catch (XmlException)
-        {
-            var xml = File.ReadAllText(path, Encoding.UTF8);
-            var doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-            if (doc.Declaration != null)
-                doc.Declaration.Encoding = "utf-8";
-            var root = doc.Root ?? throw new InvalidOperationException("Empty XML document.");
-            return (doc, root);
-        }
+        var result = ModXmlDocumentSafety.LoadExisting(path, ModXmlDocumentKind.ProtoUnits);
+        return (result.Document, result.Document.Root!);
     }
 
     /// <summary>Parse a proto XML string (from BAR / cache).</summary>
@@ -123,32 +110,96 @@ public static class ProtoXmlHandler
         return (doc, root);
     }
 
-    /// <summary>Save a proto XDocument to disk with standard indentation.</summary>
-    public static void SaveProtoXml(XDocument doc, string path)
+    /// <summary>
+    /// Save a proto XML document without rebuilding its node tree. Existing comments,
+    /// processing instructions, unknown elements, whitespace, encoding, and newline
+    /// convention are retained. A separate formatting source can be supplied when
+    /// the destination is an atomic temporary file.
+    /// </summary>
+    public static void SaveProtoXml(XDocument doc, string path, string? formattingSourcePath = null)
     {
-        NormalizeProtoDocument(doc);
-        doc.Declaration = null;
+        ArgumentNullException.ThrowIfNull(doc);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var sourcePath = string.IsNullOrWhiteSpace(formattingSourcePath)
+            ? path
+            : formattingSourcePath;
+        var format = ReadDocumentFormat(sourcePath, doc);
+        var serializable = new XDocument(doc);
+        EnsureExplicitArmorClosingTags(serializable);
 
         var settings = new XmlWriterSettings
         {
             Indent      = true,
             IndentChars = "  ",
-            NewLineChars = "\n",
+            NewLineChars = format.Newline,
+            // LINQ to XML normalizes parsed CRLF characters to LF in text nodes.
+            // Replace them with the source document convention while serializing.
             NewLineHandling = NewLineHandling.Replace,
-            OmitXmlDeclaration = true,
-            Encoding = new UTF8Encoding(false),
+            OmitXmlDeclaration = serializable.Declaration == null,
+            Encoding = format.TextEncoding.Encoding,
         };
-        using var stringWriter = new Utf8StringWriter();
+        using var stringWriter = new EncodingStringWriter(format.TextEncoding.Encoding);
         using (var writer = XmlWriter.Create(stringWriter, settings))
-            doc.Save(writer);
+            serializable.Save(writer);
 
         var xml = stringWriter.ToString();
-        // Expand only the exact armor-family tags that the game/editor expects with
-        // explicit closing tags. Requiring whitespace before attributes prevents the old
-        // "armor" prefix match from turning <armoroverride ... /> into </armor>.
-        xml = Regex.Replace(xml, @"<(armor|directionalarmor|armoroverride)(\s[^>]*)?\s*/>", "<$1$2></$1>");
-        File.WriteAllText(path, xml, new UTF8Encoding(false));
+        File.WriteAllBytes(path, format.TextEncoding.Encode(xml));
     }
+
+    private static ProtoXmlDocumentFormat ReadDocumentFormat(string path, XDocument document)
+    {
+        if (File.Exists(path))
+        {
+            var encoded = PreservedTextEncoding.Decode(File.ReadAllBytes(path));
+            return new ProtoXmlDocumentFormat(encoded, DetectNewline(encoded.Text));
+        }
+
+        var encoding = CreateEncodingForDeclaration(document.Declaration?.Encoding);
+        return new ProtoXmlDocumentFormat(
+            new PreservedTextEncoding("", encoding, encoding.GetPreamble()),
+            DetectNewline(document.ToString(SaveOptions.DisableFormatting)));
+    }
+
+    private static Encoding CreateEncodingForDeclaration(string? declarationEncoding)
+    {
+        if (declarationEncoding?.Equals("utf-16", StringComparison.OrdinalIgnoreCase) == true ||
+            declarationEncoding?.Equals("utf-16le", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
+        }
+        if (declarationEncoding?.Equals("utf-16be", StringComparison.OrdinalIgnoreCase) == true)
+            return new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
+        if (declarationEncoding?.Equals("utf-32", StringComparison.OrdinalIgnoreCase) == true ||
+            declarationEncoding?.Equals("utf-32le", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return new UTF32Encoding(bigEndian: false, byteOrderMark: true, throwOnInvalidCharacters: true);
+        }
+        if (declarationEncoding?.Equals("utf-32be", StringComparison.OrdinalIgnoreCase) == true)
+            return new UTF32Encoding(bigEndian: true, byteOrderMark: true, throwOnInvalidCharacters: true);
+
+        return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    }
+
+    private static string DetectNewline(string content)
+    {
+        var newline = content.IndexOf('\n');
+        if (newline < 0)
+            return Environment.NewLine;
+        return newline > 0 && content[newline - 1] == '\r' ? "\r\n" : "\n";
+    }
+
+    private static void EnsureExplicitArmorClosingTags(XDocument document)
+    {
+        foreach (var element in document.Descendants().Where(element =>
+                     element.Name.LocalName is "armor" or "directionalarmor" or "armoroverride" &&
+                     !element.Nodes().Any()))
+        {
+            element.Add(new XText(""));
+        }
+    }
+
+    private sealed record ProtoXmlDocumentFormat(PreservedTextEncoding TextEncoding, string Newline);
 
     /// <summary>Create a new proto_mods XML file with a minimal skeleton.</summary>
     public static (XDocument Doc, XElement Root) CreateNewProtoFile(string path)
@@ -188,7 +239,11 @@ public static class ProtoXmlHandler
         if (el == null)
             unit.Add(new XElement(tag, value));
         else
+        {
+            var original = new XElement(el);
             el.Value = value;
+            XmlTriviaPreserver.Preserve(original, el);
+        }
     }
 
     /// <summary>Remove a direct child element entirely.</summary>
@@ -497,6 +552,8 @@ public static class ProtoXmlHandler
                 pa.Add(new XElement("damagebonus", new XAttribute("type", ut), mult));
             foreach (var extra in a.AdditionalElements.Where(element => !ReferenceEquals(element, minRange)))
                 pa.Add(new XElement(extra));
+            if (a.SourceElement != null)
+                XmlTriviaPreserver.Preserve(a.SourceElement, pa);
             unit.Add(pa);
         }
     }
@@ -706,161 +763,4 @@ public static class ProtoXmlHandler
         }
     }
 
-    static void NormalizeProtoDocument(XDocument doc)
-    {
-        var root = doc.Root;
-        if (root == null) return;
-
-        foreach (var unit in root.Descendants("unit").ToList())
-            NormalizeUnit(unit);
-
-        if (root.Name.LocalName.Equals("protomods", StringComparison.OrdinalIgnoreCase))
-        {
-            var units = root.Elements("unit").ToList();
-            root.ReplaceNodes(units);
-        }
-    }
-
-    static void NormalizeUnit(XElement unit)
-    {
-        var knownSimpleTags = new HashSet<string>(
-            ProtoConstants.SimpleFields.Select(f => f.Tag),
-            StringComparer.OrdinalIgnoreCase);
-
-        var simpleFields = new List<XElement>();
-        XElement? unitRegen = null;
-        XElement? directionalArmor = null;
-        XElement? initialShieldPoints = null;
-        XElement? maxShieldPoints = null;
-        XElement? unitShieldRegen = null;
-        XElement? tactics = null;
-        var costs = new List<XElement>();
-        var resourceConversions = new List<XElement>();
-        var armors = new List<XElement>();
-        var unitTypes = new List<XElement>();
-        var flags = new List<XElement>();
-        var contains = new List<XElement>();
-        var notContains = new List<XElement>();
-        XElement? dynamicBuildLimitUnitTypes = null;
-        XElement? sharedBuildLimitUnit = null;
-        XElement? sharedBuildLimitUnitTypes = null;
-        var trains = new List<XElement>();
-        var techs = new List<XElement>();
-        var commands = new List<XElement>();
-        var optionalCommands = new List<XElement>();
-        XElement? transformCommand = null;
-        var protoActions = new List<XElement>();
-        var others = new List<XElement>();
-
-        foreach (var child in unit.Elements().ToList())
-        {
-            var clone = new XElement(child);
-            var name = child.Name.LocalName;
-
-            if (name.Equals("cost", StringComparison.OrdinalIgnoreCase))
-                costs.Add(clone);
-            else if (name.Equals("armor", StringComparison.OrdinalIgnoreCase))
-                armors.Add(clone);
-            else if (name.Equals("unittype", StringComparison.OrdinalIgnoreCase))
-                unitTypes.Add(clone);
-            else if (name.Equals("flag", StringComparison.OrdinalIgnoreCase))
-                flags.Add(clone);
-            else if (name.Equals("contain", StringComparison.OrdinalIgnoreCase))
-                contains.Add(clone);
-            else if (name.Equals("notcontain", StringComparison.OrdinalIgnoreCase))
-                notContains.Add(clone);
-            else if (name.Equals("dynamicbuildlimitunittypes", StringComparison.OrdinalIgnoreCase))
-                dynamicBuildLimitUnitTypes = clone;
-            else if (name.Equals("sharedbuildlimitunit", StringComparison.OrdinalIgnoreCase))
-                sharedBuildLimitUnit = clone;
-            else if (name.Equals("sharedbuildlimitunittypes", StringComparison.OrdinalIgnoreCase))
-                sharedBuildLimitUnitTypes = clone;
-            else if (name.Equals("train", StringComparison.OrdinalIgnoreCase))
-                trains.Add(clone);
-            else if (name.Equals("tech", StringComparison.OrdinalIgnoreCase))
-                techs.Add(clone);
-            else if (name.Equals("command", StringComparison.OrdinalIgnoreCase))
-                commands.Add(clone);
-            else if (name.Equals("optionalcommand", StringComparison.OrdinalIgnoreCase))
-                optionalCommands.Add(clone);
-            else if (name.Equals("transformcommand", StringComparison.OrdinalIgnoreCase))
-                transformCommand = clone;
-            else if (name.Equals("protoaction", StringComparison.OrdinalIgnoreCase))
-                protoActions.Add(clone);
-            else if (name.Equals("tactics", StringComparison.OrdinalIgnoreCase))
-                tactics = clone;
-            else if (name.Equals("unitregen", StringComparison.OrdinalIgnoreCase))
-                unitRegen = clone;
-            else if (name.Equals("directionalarmor", StringComparison.OrdinalIgnoreCase))
-                directionalArmor = clone;
-            else if (name.Equals("resourceconversion", StringComparison.OrdinalIgnoreCase))
-                resourceConversions.Add(clone);
-            else if (name.Equals("initialshieldpoints", StringComparison.OrdinalIgnoreCase))
-                initialShieldPoints = clone;
-            else if (name.Equals("maxshieldpoints", StringComparison.OrdinalIgnoreCase))
-                maxShieldPoints = clone;
-            else if (name.Equals("unitshieldregen", StringComparison.OrdinalIgnoreCase))
-                unitShieldRegen = clone;
-            else if (knownSimpleTags.Contains(name))
-                simpleFields.Add(clone);
-            else
-                others.Add(clone);
-        }
-
-        var ordered = new List<object>();
-
-        foreach (var field in ProtoConstants.SimpleFields)
-        {
-            if (field.Tag.Equals("tactics", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            ordered.AddRange(simpleFields.Where(x => x.Name.LocalName.Equals(field.Tag, StringComparison.OrdinalIgnoreCase)));
-
-            if (field.Tag.Equals("maxhitpoints", StringComparison.OrdinalIgnoreCase))
-            {
-                if (unitRegen != null)
-                    ordered.Add(unitRegen);
-                if (maxShieldPoints != null)
-                    ordered.Add(maxShieldPoints);
-                if (initialShieldPoints != null)
-                    ordered.Add(initialShieldPoints);
-                if (unitShieldRegen != null)
-                    ordered.Add(unitShieldRegen);
-            }
-
-            if (field.Tag.Equals("buildlimit", StringComparison.OrdinalIgnoreCase))
-            {
-                if (sharedBuildLimitUnit != null)
-                    ordered.Add(sharedBuildLimitUnit);
-                if (dynamicBuildLimitUnitTypes != null)
-                    ordered.Add(dynamicBuildLimitUnitTypes);
-                if (sharedBuildLimitUnitTypes != null)
-                    ordered.Add(sharedBuildLimitUnitTypes);
-            }
-        }
-
-        ordered.AddRange(costs);
-        ordered.AddRange(resourceConversions);
-        if (directionalArmor != null)
-            ordered.Add(directionalArmor);
-        ordered.AddRange(armors);
-        ordered.AddRange(unitTypes);
-        ordered.AddRange(flags);
-        ordered.AddRange(contains);
-        ordered.AddRange(notContains);
-        ordered.AddRange(trains);
-        ordered.AddRange(techs);
-        ordered.AddRange(commands);
-        ordered.AddRange(optionalCommands);
-        if (transformCommand != null)
-            ordered.Add(transformCommand);
-        ordered.AddRange(others);
-
-        if (tactics != null)
-            ordered.Add(tactics);
-
-        ordered.AddRange(protoActions);
-
-        unit.ReplaceNodes(ordered);
-    }
 }

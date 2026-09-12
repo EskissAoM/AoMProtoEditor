@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
-using Avalonia.Threading;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
 
@@ -20,10 +19,6 @@ internal sealed class IconManagerWindow : SimpleWindow
     private readonly TextBlock _footerText;
     private readonly string? _resourcesDirectory;
     private readonly Func<IconManagerItem, AssetDestination, Task<bool>>? _moveAsync;
-    private readonly DispatcherTimer _searchDebounceTimer = new()
-    {
-        Interval = TimeSpan.FromMilliseconds(200)
-    };
 
     public IconManagerWindow(
         IEnumerable<string> originalIconPaths,
@@ -65,18 +60,11 @@ internal sealed class IconManagerWindow : SimpleWindow
             disabledAddToolTip: "Select or create a mod before importing icons.");
         _searchBox = shell.SearchBox;
         _filterComboBox = shell.FilterComboBox;
-        _searchBox.TextChanged += (_, _) => ScheduleRefresh();
-        _filterComboBox.SelectionChanged += (_, _) => RefreshList();
+        shell.BindFiltering(RefreshList);
         shell.AddButton.Click += async (_, _) => await ImportIconAsync();
         _itemsList = ManagerListShell.CreateVirtualizedList<IconManagerItem>(CreateRow);
         shell.ReplaceItemsHost(_itemsList);
         _footerText = shell.FooterTextBlock;
-        _searchDebounceTimer.Tick += (_, _) =>
-        {
-            _searchDebounceTimer.Stop();
-            RefreshList();
-        };
-        Closed += (_, _) => _searchDebounceTimer.Stop();
         Content = shell;
         RefreshList();
     }
@@ -119,12 +107,6 @@ internal sealed class IconManagerWindow : SimpleWindow
         { await new Prompt(PromptType.Error, "Import failed", exception.Message).ShowDialog(this); }
     }
 
-    private void ScheduleRefresh()
-    {
-        _searchDebounceTimer.Stop();
-        _searchDebounceTimer.Start();
-    }
-
     private void RefreshList()
     {
         _footerText.Text = ManagerListShell.FormatEntityCountFooter(
@@ -132,15 +114,12 @@ internal sealed class IconManagerWindow : SimpleWindow
             _items.Count(item => !item.IsCustom),
             _items.Count(item => item.IsCustom),
             "Double-click a custom icon name to rename or move it.");
-        var search = _searchBox.Text?.Trim() ?? "";
-        var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
-        _itemsList.ItemsSource = _items
-            .Where(item => sourceFilter == "All" ||
-                           (sourceFilter == "Original" && !item.IsCustom) ||
-                           (sourceFilter == "Custom" && item.IsCustom))
-            .Where(item => string.IsNullOrWhiteSpace(search) ||
-                           item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        _itemsList.ItemsSource = ManagerListShell.FilterItems(
+            _items,
+            item => item.Name,
+            item => !item.IsCustom,
+            _searchBox.Text,
+            _filterComboBox.SelectedItem as string);
     }
 
     private Control CreateRow(IconManagerItem item)

@@ -5,7 +5,8 @@ namespace AoMDivineDataEditor.Windows;
 internal enum TacticsDocumentSaveOutcome
 {
     Saved,
-    Cancelled
+    Cancelled,
+    Reloaded
 }
 
 internal enum TacticsEditorSaveResult
@@ -13,7 +14,8 @@ internal enum TacticsEditorSaveResult
     Saved,
     Cancelled,
     Busy,
-    Unavailable
+    Unavailable,
+    Reloaded
 }
 
 /// <summary>
@@ -58,7 +60,10 @@ internal sealed class TacticsActionEditorSession
         try
         {
             var saveSnapshot = new XDocument(document);
-            if (await _saveDocumentAsync(saveSnapshot) != TacticsDocumentSaveOutcome.Saved)
+            var outcome = await _saveDocumentAsync(saveSnapshot);
+            if (outcome == TacticsDocumentSaveOutcome.Reloaded)
+                return TacticsEditorSaveResult.Reloaded;
+            if (outcome != TacticsDocumentSaveOutcome.Saved)
                 return TacticsEditorSaveResult.Cancelled;
 
             // Commit exactly the snapshot supplied to the successful callback.
@@ -103,4 +108,10 @@ internal sealed class TacticsActionEditorSession
 
     public void AllowClose()
         => IsCloseAllowed = true;
+
+    public void ReplaceCommittedDocument(XDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        _committedDocument = new XDocument(document);
+    }
 }

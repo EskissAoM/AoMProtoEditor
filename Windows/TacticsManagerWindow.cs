@@ -36,13 +36,14 @@ internal sealed class TacticsManagerWindow : SimpleWindow
     private readonly List<EditableTacticsItem> _items;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
-    private readonly StackPanel _itemsPanel;
+    private readonly ListBox _itemsList;
     private readonly TextBlock _footerHint;
     private readonly Func<Window, string, bool, Task>? _openEditorAsync;
     private readonly Func<string, Task<bool>>? _createTacticsAsync;
     private readonly Func<string, bool, string, Task<bool>>? _duplicateTacticsAsync;
     private readonly Func<string, string, Task<bool>>? _renameTacticsAsync;
     private readonly Func<string, Task<bool>>? _deleteTacticsAsync;
+    private readonly Func<Window, string, Task<bool>>? _validateDeleteAsync;
 
     public TacticsManagerWindow(
         IEnumerable<TacticsManagerItem> items,
@@ -50,13 +51,15 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         Func<string, Task<bool>>? createTacticsAsync = null,
         Func<string, bool, string, Task<bool>>? duplicateTacticsAsync = null,
         Func<string, string, Task<bool>>? renameTacticsAsync = null,
-        Func<string, Task<bool>>? deleteTacticsAsync = null)
+        Func<string, Task<bool>>? deleteTacticsAsync = null,
+        Func<Window, string, Task<bool>>? validateDeleteAsync = null)
     {
         _openEditorAsync = openEditorAsync;
         _createTacticsAsync = createTacticsAsync;
         _duplicateTacticsAsync = duplicateTacticsAsync;
         _renameTacticsAsync = renameTacticsAsync;
         _deleteTacticsAsync = deleteTacticsAsync;
+        _validateDeleteAsync = validateDeleteAsync;
         Title = "Manage Tactics";
         Width = 700;
         Height = 650;
@@ -76,85 +79,18 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             })
             .ToList();
 
-        var root = new Grid
-        {
-            Margin = new Thickness(16),
-            RowDefinitions = new RowDefinitions("Auto,*,Auto")
-        };
-
-        var topPanel = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,120,Auto"),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        _searchBox = new TextBox
-        {
-            PlaceholderText = "Search tactics...",
-            Height = ManagerListShell.HeaderControlHeight,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        _searchBox.TextChanged += (_, _) => RefreshList();
-        topPanel.Children.Add(_searchBox);
-
-        _filterComboBox = new ComboBox
-        {
-            ItemsSource = new[] { "All", "Original", "Custom" },
-            SelectedIndex = 0,
-            Height = ManagerListShell.HeaderControlHeight,
-            Margin = new Thickness(0, 0, 8, 0),
-            HorizontalAlignment = HorizontalAlignment.Stretch
-        };
-        _filterComboBox.SelectionChanged += (_, _) => RefreshList();
-        Grid.SetColumn(_filterComboBox, 1);
-        topPanel.Children.Add(_filterComboBox);
-
-        var addButton = new Button
-        {
-            Content = "+",
-            FontSize = 22,
-            Width = 40,
-            Height = ManagerListShell.HeaderControlHeight,
-            Padding = new Thickness(0),
-            Classes = { "add-item" },
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        addButton.Click += async (_, _) => await AddTacticsAsync();
-        Grid.SetColumn(addButton, 2);
-        topPanel.Children.Add(addButton);
-        root.Children.Add(topPanel);
-
-        // Keep row actions comfortably clear of the ScrollViewer's vertical
-        // scrollbar hit area. This shifts the whole row content slightly left.
-        _itemsPanel = new StackPanel
-        {
-            Spacing = 4,
-            Margin = new Thickness(0, 0, ManagerListShell.ScrollBarClearance, 0)
-        };
-        var scroll = new ScrollViewer
-        {
-            Content = _itemsPanel,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
-        };
-        Grid.SetRow(scroll, 1);
-        root.Children.Add(scroll);
-
-        var footer = new Grid
-        {
-            Margin = new Thickness(0, 12, 0, 0)
-        };
-        _footerHint = new TextBlock
-        {
-            Text = "",
-            Foreground = Brushes.Gray,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        footer.Children.Add(_footerHint);
-        Grid.SetRow(footer, 2);
-        root.Children.Add(footer);
-
-        Content = root;
+        var shell = new ManagerListShell(
+            "Search tactics...",
+            ["All", "Original", "Custom"],
+            "");
+        _searchBox = shell.SearchBox;
+        _filterComboBox = shell.FilterComboBox;
+        _footerHint = shell.FooterTextBlock;
+        _itemsList = ManagerListShell.CreateVirtualizedList<EditableTacticsItem>(CreateRow);
+        shell.ReplaceItemsHost(_itemsList);
+        shell.BindFiltering(RefreshList);
+        shell.AddButton.Click += async (_, _) => await AddTacticsAsync();
+        Content = shell;
         RefreshList();
     }
 
@@ -264,7 +200,12 @@ internal sealed class TacticsManagerWindow : SimpleWindow
     {
         if (item.IsBuiltIn)
             return;
-        if (item.UsageCount > 0)
+        if (_validateDeleteAsync != null)
+        {
+            if (!await _validateDeleteAsync(this, item.Name))
+                return;
+        }
+        else if (item.UsageCount > 0)
         {
             await ShowErrorAsync(
                 "Tactics is in use",
@@ -301,24 +242,18 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             _items.Count(item => item.IsBuiltIn),
             _items.Count(item => !item.IsBuiltIn),
             "Double-click a custom tactics name to rename it.");
-        _itemsPanel.Children.Clear();
-        var filter = _searchBox.Text?.Trim() ?? "";
-        var sourceFilter = _filterComboBox.SelectedItem as string ?? "All";
+        _itemsList.ItemsSource = ManagerListShell.FilterItems(
+            _items,
+            item => item.Name,
+            item => item.IsBuiltIn,
+            _searchBox.Text,
+            _filterComboBox.SelectedItem as string);
+    }
 
-        foreach (var item in _items
-                     .Where(item => sourceFilter == "All" ||
-                                    (sourceFilter == "Original" && item.IsBuiltIn) ||
-                                    (sourceFilter == "Custom" && !item.IsBuiltIn))
-                     .Where(item => string.IsNullOrWhiteSpace(filter) ||
-                                    item.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
-        {
-            var row = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"),
-                Background = Brush.Parse("#191C1A"),
-                Margin = new Thickness(0, 1)
-            };
+    private Control CreateRow(EditableTacticsItem item)
+    {
+            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto,Auto");
+            row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
 
             var nameBlock = new TextBlock
             {
@@ -427,8 +362,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                 row.DoubleTapped += async (_, _) => await RenameTacticsAsync(item);
             }
 
-            _itemsPanel.Children.Add(row);
-        }
+        return row;
     }
 
     private async Task OpenTacticsEditorAsync(EditableTacticsItem item)

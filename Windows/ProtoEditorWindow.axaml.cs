@@ -5,7 +5,6 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Globalization;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -64,7 +63,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static readonly HashSet<string> ProtoActionAnimationValueTags = new(StringComparer.OrdinalIgnoreCase)
     {
         "anim", "walkanim", "idleanim", "landanim", "wateranim", "reloadanim",
-        "typedanim", "sizeclassanim", "splashvfxproto"
+        "typedanim", "sizeclassanim"
     };
     private static readonly HashSet<string> GlobalAnimationValueTags = new(
         ProtoActionAnimationValueTags.Concat(["boredanim", "deathanim", "moveanim", "runanim"]),
@@ -123,9 +122,16 @@ public partial class ProtoEditorWindow : SimpleWindow
     private BarArchive? _protoDataBarFile;
     private string? _protoDataBarPath;
     private List<XDocument>? _cachedBaseTechtreeDocuments;
+    private List<XDocument>? _cachedBaseAbilityDocuments;
     private XDocument? _modXmlDoc;
     private XElement? _modXmlRoot;
     private string? _modFilePath;
+    private FileIntegrityTransaction.FileState? _loadedModXmlFileState;
+    private FileIntegrityTransaction.FileState? _loadedModStringsFileState;
+    private XDocument? _loadedModXmlBaseline;
+    private string? _lastModLoadError;
+    private string? _modDocumentSafetyError;
+    private readonly Dictionary<string, string> _loadedModStringValues = new(StringComparer.OrdinalIgnoreCase);
     private TechnologyEditorView? _technologyView;
     private MajorGodEditorView? _majorGodView;
     private ProtoBarData? _barData;
@@ -157,7 +163,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private bool _abilityDefinitionEditorClosePromptOpen;
     private string? _abilityDefinitionEditorOriginalName;
     private readonly Dictionary<string, List<XElement>> _duplicatedUnitRechargeFallbacks = new(StringComparer.OrdinalIgnoreCase);
-    private Func<string, XElement, Task>? _saveAbilityDefinitionAsync;
+    private Func<string, XElement, Dictionary<string, string>, FileIntegrityTransaction.FileState?, Task>? _saveAbilityDefinitionAsync;
     private Action? _captureAbilityEditorCurrent;
     private Action? _refreshAbilityUnitActionValidity;
     private AutoCompleteBox? _currentAbilityNameEditor;
@@ -317,6 +323,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedHotkeyContexts;
     private List<string>? _cachedBloodGroupNames;
     private List<string>? _cachedMinimapIcons;
+    private List<string>? _cachedTacticsNames;
     private IReadOnlyList<string> _baseGameIconPaths = [];
     private IReadOnlyList<AnimFileCatalogEntry> _baseGameAnimFiles = [];
     private IReadOnlyList<AnimFileCatalogEntry> _baseGameSoundSets = [];
@@ -413,6 +420,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private bool _suppressUnitListSelectionChange;
     private int _editorBuildGeneration;
     private int _selectedProtoActionIndex;
+    private readonly DispatcherTimer _entitySearchRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(125) };
     private readonly DispatcherTimer _editorTabSettleTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private bool _suppressEditorChangeTracking;
     private bool _editorTabsInitialized;
@@ -879,6 +887,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         InitializeEditorTabs();
         InitializeDocumentTabs();
 
+        _entitySearchRefreshTimer.Tick += (_, _) =>
+        {
+            _entitySearchRefreshTimer.Stop();
+            FilterUnitList();
+            RestoreEntityBrowserSelection();
+        };
+
         _unitList.ItemsSource = _filteredUnitNames;
         // Detect the second click from raw pointer timestamps. Unit editor loading can
         // delay higher-level tap gestures, while technology loading is nearly instant.
@@ -995,7 +1010,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         bool isBuiltIn,
         XElement powerElement,
         string? modFilePath,
-        Func<string, XElement, Task>? saveAbilityDefinitionAsync,
+        Func<string, XElement, Dictionary<string, string>, FileIntegrityTransaction.FileState?, Task>? saveAbilityDefinitionAsync,
         IEnumerable<string>? knownAbilityNames = null)
     {
         _isAbilityDefinitionEditorMode = true;
@@ -1303,20 +1318,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void ReplaceTacticElements(XElement tacticsRoot)
     {
         var serialized = _tacticsEditorTacticDefinitions.Select(SerializeTacticDefinition).ToList();
-        var existing = tacticsRoot.Elements()
-            .Where(element => element.Name.LocalName.Equals("tactic", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (existing.Count > 0)
-        {
-            existing[0].AddBeforeSelf(serialized);
-            foreach (var element in existing)
-                element.Remove();
-        }
-        else
-        {
-            foreach (var tactic in serialized)
-                tacticsRoot.Add(tactic);
-        }
+        ManagedXmlChildren.Replace(
+            tacticsRoot,
+            "tactic",
+            serialized,
+            element => element.Nodes().OfType<XText>()
+                .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text.Value))?.Value);
     }
 
     private void RefreshBasicTacticPreview()
@@ -2481,10 +2488,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 stringEntries[id] = text;
             }
-            SaveCurrentModStringEntries(stringEntries);
-
             var power = BuildAbilityPowerElement(draft);
-            await _saveAbilityDefinitionAsync(_abilityDefinitionEditorOriginalName ?? draft.Name, power);
+            await _saveAbilityDefinitionAsync(
+                _abilityDefinitionEditorOriginalName ?? draft.Name,
+                power,
+                stringEntries,
+                _loadedModStringsFileState);
+            var savedStringsPath = GetCurrentModStringsPath();
+            if (!string.IsNullOrWhiteSpace(savedStringsPath))
+            {
+                _cachedModStringEntriesPath = savedStringsPath;
+                _cachedModStringEntries = new Dictionary<string, string>(stringEntries, StringComparer.OrdinalIgnoreCase);
+                _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(savedStringsPath);
+                ReplaceLoadedModStringValues(stringEntries);
+            }
             _abilityDefinitionEditorOriginalName = draft.Name;
             draft.PowerSource = new XElement(power);
             draft.Modified = false;
@@ -2560,10 +2577,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (updated.Root == null)
             updated.Add(root);
 
-        var existingActions = root.Elements()
-            .Where(element => element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        var insertionAnchor = existingActions.FirstOrDefault();
         var serializedActions = serializedUnit.Elements()
             .Where(element =>
                 element.Name.LocalName.Equals("protoaction", StringComparison.OrdinalIgnoreCase) ||
@@ -2584,16 +2597,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "The tactics actions could not be serialized. The existing tactics file was not changed.");
         }
 
-        if (insertionAnchor != null)
-        {
-            insertionAnchor.AddBeforeSelf(serializedActions);
-            foreach (var element in existingActions)
-                element.Remove();
-        }
-        else
-        {
-            root.AddFirst(serializedActions);
-        }
+        ManagedXmlChildren.Replace(
+            root,
+            "action",
+            serializedActions,
+            element => element.Elements().FirstOrDefault(child =>
+                child.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value);
 
         ReplaceTacticElements(root);
         return updated;
@@ -2724,6 +2733,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 return;
             }
+            if (saveResult == TacticsEditorSaveResult.Reloaded)
+                return;
             if (saveResult == TacticsEditorSaveResult.Cancelled)
             {
                 _statusMessage.Text = "Tactics save cancelled.";
@@ -2772,6 +2783,35 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    internal void ReloadTacticsActionEditorDocument(XDocument document)
+    {
+        if (_tacticsEditorSession == null || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
+            return;
+
+        _tacticsEditorSession.ReplaceCommittedDocument(document);
+        _tacticsEditorTacticDefinitions.Clear();
+        _tacticsEditorTacticDefinitions.AddRange(ParseTacticDefinitions(document));
+        if (_tacticsEditorTacticDefinitions.Count == 0)
+            _tacticsEditorTacticDefinitions.Add(new TacticDefinition());
+        _tacticsEditorTacticDefinition = _tacticsEditorTacticDefinitions[0];
+
+        var actions = document.Root?.Elements()
+            .Where(element => element.Name.LocalName.Equals("action", StringComparison.OrdinalIgnoreCase))
+            .Select(ProtoXmlHandler.ParseProtoActionLikeElement)
+            .ToList() ?? [];
+        var backingUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
+        if (backingUnit != null)
+            ProtoXmlHandler.SetProtoActions(backingUnit, actions.Select(CloneForSyntheticProtoAction));
+
+        _tacticsEditorSeedActions.Clear();
+        _tacticsEditorSeedActions.AddRange(actions);
+        _tacticsEditorSeedActionsConsumed = true;
+        _isDirty = false;
+        BuildEditorPanel(_currentUnitName, resetScroll: false);
+        UpdateXmlPreview(force: true);
+        _statusMessage.Text = "External tactics reloaded. Review the file before saving again.";
+    }
+
     private bool HasUnsavedTacticsEditorChanges()
     {
         // Delayed UI notifications may mark a just-saved editor dirty. The
@@ -2817,8 +2857,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             await LoadProtoDataFromBar();
 
-            await ShowStartupLoadingAsync("Loading unit list...");
+            await ShowStartupLoadingAsync("Loading selected mod...");
             await EnsureInitialModSelectionAsync();
+
+            await ShowStartupLoadingAsync("Preparing unit editor data...");
+            WarmInitialUnitEditorData();
+
+            await ShowStartupLoadingAsync("Preparing technology editor...");
+            EnsureTechnologyView();
+
+            await ShowStartupLoadingAsync("Loading unit list...");
             RefreshUnitList();
             ShowEmptyDocumentState(EditorEntityKind.Units);
         }
@@ -2840,12 +2888,31 @@ public partial class ProtoEditorWindow : SimpleWindow
         _startupLoadingOverlay.IsVisible = false;
     }
 
+    private void WarmInitialUnitEditorData()
+    {
+        _ = GetAvailableBuildLimitTargets();
+        _ = GetAvailableTrainUnitNames();
+        _ = GetAvailableTechNames();
+        _ = GetAvailableCommandNames();
+        _ = GetKnownResourceSubtypeNames();
+        _ = GetKnownPlacementFileNames();
+        _ = GetKnownPathabilityFlags();
+        _ = GetKnownHotkeyContexts();
+        _ = GetKnownMinimapIcons();
+        _ = GetKnownBloodGroupNames();
+        _ = GetGlobalProtoActionAnimationNames();
+        _ = GetAvailableProtoActionAttachmentPaths();
+        _ = GetAvailableProtoActionModelAttachmentBones();
+        _ = GetAvailableTacticsNames();
+        EnsureAbilityCatalogLoadedForManager();
+    }
+
     private async Task EnsureInitialModSelectionAsync()
     {
         var config = ProtoEditorSettings.LoadSettings();
         if (!string.IsNullOrEmpty(config.LastModFilePath) && File.Exists(config.LastModFilePath))
         {
-            if (TryLoadModFile(config.LastModFilePath, showErrors: false))
+            if (await TryLoadModFileWithFeedbackAsync(config.LastModFilePath))
             {
                 return;
             }
@@ -2860,6 +2927,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _protoDataBarFile = null;
         _protoDataBarPath = null;
         _cachedBaseTechtreeDocuments = null;
+        _cachedBaseAbilityDocuments = null;
         _baseGameIconPaths = [];
         _baseGameAnimFiles = [];
         _baseGameSoundSets = [];
@@ -3107,6 +3175,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _cachedUnitTypeDefinitions = null;
         _cachedTechTypeDefinitions = null;
         _cachedHotkeyContexts = null;
+        _cachedTacticsNames = null;
 
         if (includeTechNames)
             _cachedTechNames = null;
@@ -3146,6 +3215,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         _cachedModStringEntriesPath = null;
         _cachedModStringEntries = null;
+    }
+
+    private void ReplaceLoadedModStringValues(IReadOnlyDictionary<string, string> values)
+    {
+        _loadedModStringValues.Clear();
+        foreach (var entry in values)
+            _loadedModStringValues[entry.Key] = entry.Value;
     }
 
     private void ClearPendingUnitDrafts()
@@ -3354,6 +3430,18 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         return false;
+    }
+
+    private bool IsUnitStringIdOwnedByAnyDirtyDocument(string stringId)
+    {
+        if (_modXmlRoot == null)
+            return false;
+
+        return _dirtyUnitNames.Any(dirtyName =>
+        {
+            var unit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, dirtyName);
+            return CollectUnitOwnedStringIds(dirtyName, unit).Contains(stringId);
+        });
     }
 
     private void SetMainDocumentTarget(EditorEntityKind entityKind, bool isModified, string? entityName)
@@ -3699,6 +3787,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_unitTabs is null)
             return;
 
+        _entitySearchRefreshTimer.Stop();
         var names = new List<string>();
         int selectedIndex = _unitTabs.SelectedIndex;
 
@@ -3744,14 +3833,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void FilterUnitList()
     {
-        var query = _searchBox.Text?.Trim().ToLower();
+        var query = _searchBox.Text?.Trim() ?? "";
         _filteredUnitNames.Clear();
 
-        var names = string.IsNullOrEmpty(query)
-            ? _allCurrentNames
-            : _allCurrentNames.Where(name => GetDisplayedUnitName(name).Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-
-        _filteredUnitNames.AddItems(names.Select(name => new UnitListItem(name, GetDisplayedUnitName(name))));
+        var items = _allCurrentNames.Select(name => new UnitListItem(name, GetDisplayedUnitName(name)));
+        if (query.Length > 0)
+            items = items.Where(item => item.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
+        _filteredUnitNames.AddItems(items);
     }
 
     private void RestoreEntityBrowserSelection()
@@ -3793,8 +3881,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void SearchBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        FilterUnitList();
-        RestoreEntityBrowserSelection();
+        _entitySearchRefreshTimer.Stop();
+        _entitySearchRefreshTimer.Start();
     }
 
     private async void UnitsEntity_Click(object? sender, RoutedEventArgs e)
@@ -3863,9 +3951,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _unitsEntityButton.Classes.Set("active", entityKind == EditorEntityKind.Units);
         _techsEntityButton.Classes.Set("active", showTechnologies);
         _godsEntityButton.Classes.Set("active", showMajorGods);
-        var technologyModificationsAllowed = !showTechnologies || _technologyView!.CanModifyTechnologyDocument;
-        _entityAddButton.IsEnabled = technologyModificationsAllowed;
-        _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && technologyModificationsAllowed;
+        var documentModificationsAllowed = showTechnologies
+            ? _technologyView!.CanModifyTechnologyDocument
+            : entityKind != EditorEntityKind.Units || _modDocumentSafetyError == null;
+        _entityAddButton.IsEnabled = documentModificationsAllowed;
+        _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && documentModificationsAllowed;
     }
 
     private void ResetEntityBrowserToUnits()
@@ -3922,7 +4012,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_technologyView != null)
             return;
 
-        LoadCurrentModAssetCatalogs();
         _technologyView = new TechnologyEditorView(
             GetBaseTechtreeDocumentsFromLoadedBar(),
             ResolveBaseGameplayDirectory(),
@@ -3945,7 +4034,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             InvalidateModStringEntriesCache,
             GetExternalTechnologyReferences,
             PrepareExternalTechnologyReferenceMigration,
-            AdoptExternalTechnologyReferenceMigration);
+            AdoptExternalTechnologyReferenceMigration,
+            GetTechnologyDeletionReferences);
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
@@ -4000,38 +4090,84 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var file in GetTechnologyReferenceFiles().Where(file =>
                      !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase) && File.Exists(file.Path)))
         {
-            sources.Add(new TechnologyReferenceSource(
-                file.Label,
-                XDocument.Load(file.Path, LoadOptions.PreserveWhitespace),
-                file.Kind,
-                file.Path,
-                CanMigrate: true));
+            try
+            {
+                sources.Add(new TechnologyReferenceSource(
+                    file.Label,
+                    XDocument.Load(file.Path, LoadOptions.PreserveWhitespace),
+                    file.Kind,
+                    file.Path,
+                    CanMigrate: true));
+            }
+            catch
+            {
+                // Reference browsing remains available when an unrelated custom
+                // XML file is malformed. A rename preflight is stricter and will
+                // identify that exact file before permitting any writes.
+            }
         }
 
         return TechnologyReferenceIndex.Build(sources, knownTechnologyNames);
     }
 
-    private IReadOnlyList<TechnologyReferenceFile> GetTechnologyReferenceFiles()
+    private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyDeletionReferences(string technologyName)
     {
-        var files = new List<TechnologyReferenceFile>();
-        void Add(string? path, TechnologyReferenceDocumentKind kind, string label)
+        var sources = new List<TechnologyReferenceSource>();
+        var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (!string.IsNullOrWhiteSpace(techtreePath))
+            excluded.Add(Path.GetFullPath(techtreePath));
+        if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
         {
-            if (!string.IsNullOrWhiteSpace(path))
-                files.Add(new TechnologyReferenceFile(Path.GetFullPath(path), kind, label));
+            excluded.Add(Path.GetFullPath(_modFilePath));
+            sources.Add(new TechnologyReferenceSource(
+                "Mod ProtoUnits",
+                _modXmlDoc,
+                TechnologyReferenceDocumentKind.ProtoUnits,
+                _modFilePath,
+                CanMigrate: true));
         }
 
-        Add(_modFilePath, TechnologyReferenceDocumentKind.ProtoUnits, "Mod ProtoUnits");
-        Add(GetCurrentModGameplayFilePath("proto_unit_command_mods.xml"),
-            TechnologyReferenceDocumentKind.ProtoUnitCommands, "Mod ProtoUnit commands");
-        Add(GetCurrentModAbilitiesFilePath("abilities_mods.xml"),
-            TechnologyReferenceDocumentKind.Abilities, "Mod abilities");
-        Add(GetCurrentModGameplayFilePath("unit_transform_mods.xml"),
-            TechnologyReferenceDocumentKind.UnitTransforms, "Mod unit transforms");
-        Add(GetCurrentModGameplayFilePath("powers_mods.xml"),
-            TechnologyReferenceDocumentKind.Powers, "Mod powers");
-        Add(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
-            TechnologyReferenceDocumentKind.MajorGods, "Mod major gods");
-        return files;
+        foreach (var file in GetTechnologyReferenceFiles().Where(file =>
+                     !excluded.Contains(Path.GetFullPath(file.Path))))
+        {
+            var before = FileIntegrityTransaction.CaptureState(file.Path);
+            XDocument document;
+            try
+            {
+                document = XDocument.Load(file.Path, LoadOptions.PreserveWhitespace);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"'{technologyName}' was not deleted because '{file.Path}' could not be inspected safely.",
+                    exception);
+            }
+            var after = FileIntegrityTransaction.CaptureState(file.Path);
+            if (before != after)
+                throw new IOException($"'{file.Path}' changed while technology deletion references were being inspected.");
+            sources.Add(new TechnologyReferenceSource(
+                file.Label, document, file.Kind, file.Path, CanMigrate: true));
+        }
+
+        var usages = TechnologyReferenceIndex.Build(sources, [technologyName]).ToList();
+        usages.AddRange(ModDeletionSafety.FindCustomFileReferences(
+                GetCurrentModRootDirectory(), technologyName, excluded)
+            .Select(reference => new TechnologyReferenceUsage(
+                technologyName,
+                reference.SourceLabel,
+                "",
+                reference.Field,
+                reference.Path,
+                IsBuiltIn: false,
+                IsRecognized: false,
+                CanMigrate: false)));
+        return usages;
+    }
+
+    private IReadOnlyList<TechnologyReferenceFile> GetTechnologyReferenceFiles()
+    {
+        return ModReferenceFileCatalog.Discover(GetCurrentModRootDirectory());
     }
 
     private IReadOnlyList<TechnologyReferenceFile> GetGameIdentifierReferenceFiles()
@@ -4047,6 +4183,80 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         return files;
     }
+
+    private ModDeletionInspection InspectIdentifierForDeletion(
+        GameIdentifierKind kind,
+        string identifier,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
+        IEnumerable<string>? excludedPaths = null)
+        => ModDeletionSafety.InspectIdentifier(
+            GetGameIdentifierReferenceFiles(),
+            kind,
+            identifier,
+            GetCurrentModRootDirectory(),
+            documentOverrides,
+            excludedPaths);
+
+    private async Task<bool> EnsureIdentifierCanBeDeletedAsync(
+        GameIdentifierKind kind,
+        string identifier,
+        string entityLabel,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
+        IEnumerable<string>? excludedPaths = null,
+        Window? owner = null)
+    {
+        try
+        {
+            var inspection = InspectIdentifierForDeletion(
+                kind, identifier, documentOverrides, excludedPaths);
+            if (!inspection.IsBlocked)
+                return true;
+
+            await DeletionBlockedDialog.ShowAsync(
+                owner ?? this,
+                entityLabel,
+                identifier,
+                inspection.References.Select(reference => reference.DisplayLocation));
+            return false;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                $"Unable to verify {entityLabel}",
+                exception.Message).ShowDialog(owner ?? this);
+            return false;
+        }
+    }
+
+    private static async Task<IReadOnlySet<string>> ReviewOrphanStringsAsync(
+        IEnumerable<string> candidateIds,
+        string operationLabel,
+        Window owner)
+    {
+        var candidates = candidateIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (candidates.Count == 0)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var review = new OrphanCleanupReviewWindow(candidates, operationLabel);
+        await review.ShowDialog(owner);
+        return review.SelectedIds;
+    }
+
+    internal static IReadOnlyList<string> GetExistingStringCleanupCandidates(
+        IEnumerable<string> candidateIds,
+        IReadOnlyDictionary<string, string> existingEntries)
+        => candidateIds
+            .Where(id => !string.IsNullOrWhiteSpace(id) && existingEntries.ContainsKey(id.Trim()))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private void AdoptGameIdentifierReferenceMigration(GameIdentifierReferenceMigrationPlan? plan)
     {
@@ -4126,7 +4336,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _majorGodView = new MajorGodEditorView(
             baseDefinitions,
-            GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName));
+            GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
+            ResolveDisplayStringAsync,
+            SaveMajorGodStringValuesAsync,
+            SupportedCultureLabels,
+            _baseGameIconPaths.Concat(_customIconPaths),
+            _iconPreviewService,
+            GetCurrentModStringsPath());
         _majorGodView.BrowserStateChanged += MajorGodView_BrowserStateChanged;
         _majorGodView.DirtyStateChanged += MajorGodView_DirtyStateChanged;
         _technologyHost.Content = _majorGodView;
@@ -4396,6 +4612,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var technologyModificationsAllowed = entityKind != EditorEntityKind.Technologies ||
                                              _technologyView?.CanModifyTechnologyDocument == true;
+        if (entityKind == EditorEntityKind.Units && _modDocumentSafetyError != null)
+            technologyModificationsAllowed = false;
         var copyItem = new MenuItem
         {
             Header = "Copy",
@@ -4528,6 +4746,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             _majorGodView?.SetModifiedMode(selectedModified);
         var technologyModificationsAllowed = _activeEntityKind != EditorEntityKind.Technologies ||
                                              _technologyView?.CanModifyTechnologyDocument == true;
+        if (_activeEntityKind == EditorEntityKind.Units && _modDocumentSafetyError != null)
+            technologyModificationsAllowed = false;
         if (_entityAddButton != null)
             _entityAddButton.IsEnabled = technologyModificationsAllowed;
         if (_entityDeleteButton != null)
@@ -5920,6 +6140,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> GetAvailableCommandNames()
     {
+        if (_cachedCommandNames != null)
+            return _cachedCommandNames;
+
         EnsureProtoUnitCommandCatalogLoaded();
         var names = new HashSet<string>(_protoUnitCommandCatalog.Keys, StringComparer.OrdinalIgnoreCase);
 
@@ -5967,8 +6190,15 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string> GetTransformCommandNames(bool multiple)
     {
         EnsureProtoUnitCommandCatalogLoaded();
-        return _protoUnitCommandCatalog.Keys
-            .Where(name => multiple ? IsTransformMultipleCommand(name) : IsTransformUniqueCommand(name))
+        return _protoUnitCommandCatalog
+            .Where(entry =>
+            {
+                var definition = ProtoUnitCommandDefinition.FromElement(entry.Value);
+                return multiple
+                    ? definition.Flags.Contains("transform")
+                    : definition.Flags.Contains("transformselected") || definition.Flags.Contains("transformvillager");
+            })
+            .Select(entry => entry.Key)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -6334,6 +6564,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         var gameplayDirectory = Path.GetDirectoryName(Path.GetFullPath(_modFilePath));
         var dataDirectory = gameplayDirectory == null ? null : Directory.GetParent(gameplayDirectory)?.FullName;
         return dataDirectory == null ? null : Directory.GetParent(dataDirectory)?.FullName;
+    }
+
+    private string? GetCurrentModRootDirectory()
+    {
+        var gameDirectory = GetCurrentModGameDirectory();
+        return string.IsNullOrWhiteSpace(gameDirectory)
+            ? null
+            : Directory.GetParent(gameDirectory)?.FullName;
     }
 
     private string? GetCurrentModIconResourcesDirectory()
@@ -9451,7 +9689,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             tag.Equals("idleanim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("landanim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("wateranim", StringComparison.OrdinalIgnoreCase) ||
-            tag.Equals("splashvfxproto", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("reloadanim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("typedanim", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("sizeclassanim", StringComparison.OrdinalIgnoreCase))
@@ -9486,6 +9723,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (tag.Equals("modifyresourcesubtype", StringComparison.OrdinalIgnoreCase))
             return GetKnownResourceSubtypeNames();
 
+        if (tag.Equals("splashvfxproto", StringComparison.OrdinalIgnoreCase))
+            return GetAvailableTrainUnitNames();
+
         if (tag.Equals("trailprotounit", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("projectile", StringComparison.OrdinalIgnoreCase) ||
             tag.Equals("conversionprotoid", StringComparison.OrdinalIgnoreCase))
@@ -9519,7 +9759,6 @@ public partial class ProtoEditorWindow : SimpleWindow
            tag.Equals("typedanim", StringComparison.OrdinalIgnoreCase) ||
            tag.Equals("landanim", StringComparison.OrdinalIgnoreCase) ||
            tag.Equals("wateranim", StringComparison.OrdinalIgnoreCase) ||
-           tag.Equals("splashvfxproto", StringComparison.OrdinalIgnoreCase) ||
            tag.Equals("sizeclassanim", StringComparison.OrdinalIgnoreCase);
 
     private List<string> GetCurrentUnitProtoActionNames()
@@ -9537,6 +9776,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         else if (tag.Equals("areaprotoaction", StringComparison.OrdinalIgnoreCase))
             ConfigureStrictSuggestionAutoComplete(editor, GetCurrentUnitProtoActionNames(), initialValue);
         else if (tag.Equals("conversionprotoid", StringComparison.OrdinalIgnoreCase))
+            ConfigureStrictSuggestionAutoComplete(editor, GetAvailableTrainUnitNames(), initialValue);
+        else if (tag.Equals("splashvfxproto", StringComparison.OrdinalIgnoreCase))
             ConfigureStrictSuggestionAutoComplete(editor, GetAvailableTrainUnitNames(), initialValue);
         else
             EnableDropdownAutoComplete(editor);
@@ -12211,7 +12452,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Width = 200
             };
-            ConfigureUnitAnimationAutoComplete(splashEditor);
+            ConfigureStrictSuggestionAutoComplete(
+                splashEditor,
+                GetAvailableTrainUnitNames(),
+                splashVfxProto);
             ApplyProtoActionFieldWidth(splashEditor, "splashvfxproto");
             splashEditor.TextChanged += async (_, _) =>
             {
@@ -20249,6 +20493,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Button? addSpawnAtTargetButton = null;
                 Button? addSpawnedUnitButton = null;
 
+                static void RefreshSpawnEntrySpacing(WrapPanel section, Button? addButton)
+                {
+                    var rows = section.Children
+                        .OfType<Control>()
+                        .Where(control => !ReferenceEquals(control, addButton))
+                        .ToList();
+                    for (var index = 0; index < rows.Count; index++)
+                        rows[index].Margin = new Thickness(index == 0 ? 0 : 12, 2, 0, 2);
+
+                    if (addButton != null)
+                        addButton.Margin = new Thickness(rows.Count == 0 ? 0 : 12, 2, 0, 2);
+                }
+
                 void AddSpawnAtTargetRow(ProtoActionStructuredFieldEntry? initialEntry = null)
                 {
                     var entry = initialEntry ?? new ProtoActionStructuredFieldEntry();
@@ -20280,6 +20537,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             if (!await CheckStartLocalMod()) return;
                             state.StructuredFieldRows["minrate"].Remove(rowState);
                             spawnAtTargetSection.Children.Remove(row);
+                            RefreshSpawnEntrySpacing(spawnAtTargetSection, addSpawnAtTargetButton);
                             MarkDirty();
                         };
                         row.Children.Add(remove);
@@ -20289,6 +20547,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         spawnAtTargetSection.Children.Insert(addButtonIndex, row);
                     else
                         spawnAtTargetSection.Children.Add(row);
+                    RefreshSpawnEntrySpacing(spawnAtTargetSection, addSpawnAtTargetButton);
                 }
 
                 void AddSpawnedUnitRow(ProtoActionStructuredFieldEntry? initialEntry = null)
@@ -20321,6 +20580,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             if (!await CheckStartLocalMod()) return;
                             state.StructuredFieldRows["rate"].Remove(rowState);
                             spawnedUnitsSection.Children.Remove(row);
+                            RefreshSpawnEntrySpacing(spawnedUnitsSection, addSpawnedUnitButton);
                             MarkDirty();
                         };
                         row.Children.Add(remove);
@@ -20330,6 +20590,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         spawnedUnitsSection.Children.Insert(addButtonIndex, row);
                     else
                         spawnedUnitsSection.Children.Add(row);
+                    RefreshSpawnEntrySpacing(spawnedUnitsSection, addSpawnedUnitButton);
                 }
 
                 foreach (var entry in minRateEntries)
@@ -20341,6 +20602,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     addSpawnAtTargetButton = new Button { Content = "Add Spawn At Target", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addSpawnAtTargetButton.Click += async (_, _) => { if (await CheckStartLocalMod()) { AddSpawnAtTargetRow(); MarkDirty(); } };
                     spawnAtTargetSection.Children.Add(addSpawnAtTargetButton);
+                    RefreshSpawnEntrySpacing(spawnAtTargetSection, addSpawnAtTargetButton);
                 }
 
                 foreach (var entry in rateEntries)
@@ -20352,6 +20614,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     addSpawnedUnitButton = new Button { Content = "Add Spawned Unit", Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left };
                     addSpawnedUnitButton.Click += async (_, _) => { if (await CheckStartLocalMod()) { AddSpawnedUnitRow(); MarkDirty(); } };
                     spawnedUnitsSection.Children.Add(addSpawnedUnitButton);
+                    RefreshSpawnEntrySpacing(spawnedUnitsSection, addSpawnedUnitButton);
                 }
 
                 state.AdditionalFieldsContainer.Children.Add(spawnedUnitsSection);
@@ -30134,7 +30397,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             else if (tag.Equals("landanim", StringComparison.OrdinalIgnoreCase) ||
                      tag.Equals("wateranim", StringComparison.OrdinalIgnoreCase) ||
-                     tag.Equals("splashvfxproto", StringComparison.OrdinalIgnoreCase) ||
                      tag.Equals("modifydamagetargettype", StringComparison.OrdinalIgnoreCase) ||
                      tag.Equals("restrictempowertype", StringComparison.OrdinalIgnoreCase) ||
                      tag.Equals("modifyciv", StringComparison.OrdinalIgnoreCase) ||
@@ -32404,7 +32666,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (!countedBase && _protoDataBarFile != null && !string.IsNullOrWhiteSpace(_protoDataBarPath) && File.Exists(_protoDataBarPath))
         {
-            foreach (var doc in ExtractAbilityDocumentsFromBar(_protoDataBarFile, _protoDataBarPath))
+            foreach (var doc in GetBaseAbilityDocumentsFromLoadedBar())
                 if (doc.Root?.Name.LocalName.Equals("abilities", StringComparison.OrdinalIgnoreCase) == true)
                     CountDocument(doc);
         }
@@ -32460,8 +32722,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private int CountProtoUnitCommandUsage(string commandName, string? ignoredUnitName)
     {
-        var count = 0;
-        if (_modXmlRoot == null) return count;
+        return GetProtoUnitCommandUsageCounts(ignoredUnitName).GetValueOrDefault(commandName);
+    }
+
+    private Dictionary<string, int> GetProtoUnitCommandUsageCounts(string? ignoredUnitName = null)
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (_modXmlRoot == null) return result;
+
         foreach (var unit in _modXmlRoot.Descendants("unit"))
         {
             if (!string.IsNullOrWhiteSpace(ignoredUnitName) &&
@@ -32470,24 +32738,33 @@ public partial class ProtoEditorWindow : SimpleWindow
                 continue;
             }
 
-            var used = ProtoXmlHandler.GetCommandEntries(unit).Any(x => x.Value.Equals(commandName, StringComparison.OrdinalIgnoreCase)) ||
-                       ProtoXmlHandler.GetOptionalCommandEntries(unit).Any(x => x.Value.Equals(commandName, StringComparison.OrdinalIgnoreCase)) ||
-                       string.Equals(ProtoXmlHandler.GetSimpleField(unit, "transformcommand"), commandName, StringComparison.OrdinalIgnoreCase);
-            if (used) count++;
+            var unitCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in ProtoXmlHandler.GetCommandEntries(unit))
+                if (!string.IsNullOrWhiteSpace(entry.Value)) unitCommands.Add(entry.Value.Trim());
+            foreach (var entry in ProtoXmlHandler.GetOptionalCommandEntries(unit))
+                if (!string.IsNullOrWhiteSpace(entry.Value)) unitCommands.Add(entry.Value.Trim());
+            var transformCommand = ProtoXmlHandler.GetSimpleField(unit, "transformcommand")?.Trim();
+            if (!string.IsNullOrWhiteSpace(transformCommand)) unitCommands.Add(transformCommand);
+            foreach (var name in unitCommands)
+                result[name] = result.GetValueOrDefault(name) + 1;
         }
         var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
         if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
         {
             try
             {
-                count += XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace)
-                    .Descendants().Attributes().Count(attribute =>
-                        attribute.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase) &&
-                        attribute.Value.Trim().Equals(commandName, StringComparison.OrdinalIgnoreCase));
+                foreach (var attribute in XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace)
+                             .Descendants().Attributes()
+                             .Where(attribute => attribute.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var name = attribute.Value.Trim();
+                    if (name.Length > 0)
+                        result[name] = result.GetValueOrDefault(name) + 1;
+                }
             }
             catch { }
         }
-        return count;
+        return result;
     }
 
     private XDocument LoadProtoUnitCommandModsForUpdate()
@@ -32504,7 +32781,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         SaveAbilityXmlDocument(doc, path, ProtoUnitCommandDefinition.ExpandEmptyFlagElements);
         _protoUnitCommandCatalogLoaded = false;
         _cachedCommandNames = null;
-        EnsureProtoUnitCommandCatalogLoaded(force: true);
     }
 
 
@@ -32744,25 +33020,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         return (entries, oldGeneratedIds);
     }
 
-    private void CleanupUnreferencedProtoUnitCommandStrings(
-        Dictionary<string, string> entries,
-        IEnumerable<string> candidateIds,
-        XDocument commandDocument)
-    {
-        var referenced = GetReferencedProtoUnitCommandStringIds(commandDocument);
-        var changed = false;
-        foreach (var id in candidateIds.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (!id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase) ||
-                referenced.Contains(id) ||
-                IsStringIdReferencedByCurrentProtoData(id))
-                continue;
-            changed |= entries.Remove(id);
-        }
-        if (changed)
-            SaveCurrentModStringEntries(entries);
-    }
-
     private async Task CleanupProtoUnitCommandStringsWithWarningAsync(
         Dictionary<string, string> entries,
         IEnumerable<string> candidateIds,
@@ -32772,7 +33029,21 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         try
         {
-            CleanupUnreferencedProtoUnitCommandStrings(entries, candidateIds, commandDocument);
+            var candidates = candidateIds
+                .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var approved = await ReviewOrphanStringsAsync(candidates, operation, owner);
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
+            var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
+                approved,
+                [commandDocument],
+                commandPath == null ? null : [commandPath]);
+            var changed = false;
+            foreach (var id in safeRemovals)
+                changed |= entries.Remove(id);
+            if (changed)
+                SaveCurrentModStringEntries(entries, StringTableSection.UnitCommands);
         }
         catch (Exception ex)
         {
@@ -32815,6 +33086,51 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         _modXmlDoc = savedDocument;
         _modXmlRoot = savedDocument.Root;
+        _loadedModXmlBaseline = new XDocument(savedDocument);
+        if (!string.IsNullOrWhiteSpace(_modFilePath))
+            _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
+    }
+
+    private static void AddExpectedState(
+        IDictionary<string, FileIntegrityTransaction.FileState> expectedStates,
+        string? path,
+        FileIntegrityTransaction.FileState? state)
+    {
+        if (!string.IsNullOrWhiteSpace(path) && state != null)
+            expectedStates[Path.GetFullPath(path)] = state;
+    }
+
+    private Dictionary<string, FileIntegrityTransaction.FileState> CaptureExpectedEditorFileStates(
+        IEnumerable<string?> paths,
+        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState>? preparedStates = null)
+    {
+        var pathList = paths.ToList();
+        var states = FileIntegrityTransaction.CaptureStates(pathList)
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+        if (preparedStates != null)
+        {
+            foreach (var state in preparedStates)
+                states[state.Key] = state.Value;
+        }
+
+        bool Includes(string? candidate) => !string.IsNullOrWhiteSpace(candidate) && pathList.Any(path =>
+            !string.IsNullOrWhiteSpace(path) &&
+            Path.GetFullPath(path!).Equals(Path.GetFullPath(candidate), StringComparison.OrdinalIgnoreCase));
+
+        if (Includes(_modFilePath))
+        {
+            if (_loadedModXmlFileState == null)
+            {
+                throw new IOException(
+                    "proto_mods.xml has not been fingerprinted for this editor session. No files were written. Reload the mod before saving.");
+            }
+            AddExpectedState(states, _modFilePath, _loadedModXmlFileState);
+        }
+
+        var stringsPath = GetCurrentModStringsPath();
+        if (Includes(stringsPath) && _loadedModStringsFileState != null)
+            AddExpectedState(states, stringsPath, _loadedModStringsFileState);
+        return states;
     }
 
     private async Task<bool> CreateProtoUnitCommandAsync(string name)
@@ -32824,9 +33140,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!IsProtoUnitCommandNameAvailable(name))
                 return false;
 
-            var doc = LoadProtoUnitCommandModsForUpdate();
-            doc.Root!.Add(new XElement("protounitcommand", new XElement("name", name)));
-            SaveProtoUnitCommandMods(doc);
+            var path = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.ProtoUnitCommands);
+            prepared.Document.Root!.Add(new XElement("protounitcommand", new XElement("name", name)));
+            ModDocumentPersistence.Execute([prepared], null, null,
+                () => SaveProtoUnitCommandMods(prepared.Document));
             return true;
         }
         catch (Exception ex)
@@ -32847,13 +33166,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!ProtoUnitCommandNamePolicy.IsAvailable(newName, _protoUnitCommandCatalog.Keys))
             return false;
 
-        Dictionary<string, string>? stringEntries = null;
-        Dictionary<string, string>? originalStringEntries = null;
-        XDocument? originalCommandDoc = null;
-        XDocument? originalTransformDoc = null;
-        var stringsSaved = false;
-        var commandSaved = false;
-        var transformSaved = false;
         try
         {
             var clone = new XElement(source);
@@ -32864,8 +33176,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             else
                 nameNode.Value = newName;
 
-            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
-            stringEntries = new Dictionary<string, string>(originalStringEntries, StringComparer.OrdinalIgnoreCase);
+            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
             foreach (var tag in ProtoUnitCommandStringTags)
             {
                 var element = clone.Elements().FirstOrDefault(child =>
@@ -32885,45 +33196,40 @@ public partial class ProtoEditorWindow : SimpleWindow
                 stringEntries[newId] = sourceText;
             }
 
-            var doc = LoadProtoUnitCommandModsForUpdate();
-            originalCommandDoc = new XDocument(doc);
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var doc = commandFile.Document;
             var sourceTransform = LoadProtoUnitTransformDefinition(sourceName);
-            XDocument? transformDoc = null;
+            PreparedModXmlDocument? transformFile = null;
             if (sourceTransform != null)
             {
-                transformDoc = LoadProtoUnitTransformModsForUpdate();
-                originalTransformDoc = new XDocument(transformDoc);
+                var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                    ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+                transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
                 sourceTransform.Command = newName;
-                FindProtoUnitTransformByCommand(transformDoc, newName)?.Remove();
-                transformDoc.Root!.Add(sourceTransform.ToElement());
+                FindProtoUnitTransformByCommand(transformFile.Document, newName)?.Remove();
+                transformFile.Document.Root!.Add(sourceTransform.ToElement());
             }
 
-            SaveCurrentModStringEntries(stringEntries);
-            stringsSaved = true;
             doc.Root!.Add(clone);
-            SaveProtoUnitCommandMods(doc);
-            commandSaved = true;
-            if (transformDoc != null)
+            var documents = new List<PreparedModXmlDocument> { commandFile };
+            if (transformFile != null)
+                documents.Add(transformFile);
+            var stringPath = GetCurrentModStringsPath();
+            var expected = CaptureExpectedEditorFileStates([stringPath]);
+            ModDocumentPersistence.Execute(documents, [stringPath], expected, () =>
             {
-                SaveProtoUnitTransformMods(transformDoc);
-                transformSaved = true;
-            }
+                SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+                SaveProtoUnitCommandMods(doc);
+                if (transformFile != null)
+                    SaveProtoUnitTransformMods(transformFile.Document);
+            });
+            AdoptSavedModStringEntries(stringEntries);
             return true;
         }
         catch (Exception ex)
         {
-            if (transformSaved && originalTransformDoc != null)
-            {
-                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
-            }
-            if (commandSaved && originalCommandDoc != null)
-            {
-                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
-            }
-            if (stringsSaved && originalStringEntries != null)
-            {
-                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
-            }
             await new Prompt(PromptType.Error, "Duplicate command", ex.Message).ShowDialog(this);
             return false;
         }
@@ -32931,23 +33237,18 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> RenameProtoUnitCommandAsync(string oldName, string newName)
     {
-        XDocument? originalCommandDoc = null;
-        XDocument? originalTransformDoc = null;
-        XDocument? originalProtoDoc = null;
-        XDocument? originalTechtreeDoc = null;
-        Dictionary<string, string>? stringEntries = null;
-        Dictionary<string, string>? originalStringEntries = null;
-        var oldGeneratedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var stringsSaved = false;
-        var commandSaved = false;
-        var transformSaved = false;
-        var protoSaved = false;
-        var techtreeSaved = false;
-
+        if (!await ReloadExternallyChangedUnitFilesAsync())
+            return false;
         try
         {
-            var doc = LoadProtoUnitCommandModsForUpdate();
-            originalCommandDoc = new XDocument(doc);
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var stringPath = GetCurrentModStringsPath();
+
+            var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var doc = commandFile.Document;
             var command = doc.Descendants().FirstOrDefault(element =>
                 element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
                 GetProtoUnitCommandName(element).Equals(oldName, StringComparison.OrdinalIgnoreCase));
@@ -32962,101 +33263,74 @@ public partial class ProtoEditorWindow : SimpleWindow
                 command.AddFirst(new XElement("name", newName));
             else
                 nameElement.Value = newName;
-            RenameProtoUnitCommandReferencesInCommandDocument(doc, oldName, newName);
+            var commandUnknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                doc, GameIdentifierKind.ProtoUnitCommand, oldName);
+            if (commandUnknown.Count > 0)
+                throw new InvalidOperationException(
+                    $"'{oldName}' was not renamed because proto_unit_command_mods.xml contains unsupported command reference field(s): " +
+                    string.Join(", ", commandUnknown) + ". No files were written.");
+            GameIdentifierReferencePolicy.RenameReferences(doc, GameIdentifierKind.ProtoUnitCommand, oldName, newName);
 
-            var transformDoc = LoadProtoUnitTransformModsForUpdate();
-            originalTransformDoc = new XDocument(transformDoc);
-            var transformChanged = FindProtoUnitTransformByCommand(transformDoc, oldName) != null;
-            RenameProtoUnitTransformCommandReference(transformDoc, oldName, newName);
+            var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var transformDoc = transformFile.Document;
+            var transformUnknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                transformDoc, GameIdentifierKind.ProtoUnitCommand, oldName);
+            if (transformUnknown.Count > 0)
+                throw new InvalidOperationException(
+                    $"'{oldName}' was not renamed because unit_transform_mods.xml contains unsupported command reference field(s): " +
+                    string.Join(", ", transformUnknown) + ". No files were written.");
+            var transformChanged = GameIdentifierReferencePolicy.RenameReferences(
+                transformDoc, GameIdentifierKind.ProtoUnitCommand, oldName, newName) > 0;
 
-            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
-            (stringEntries, oldGeneratedStringIds) = await MigrateProtoUnitCommandStringsForRenameAsync(command, oldName, newName);
+            var (stringEntries, _) = await MigrateProtoUnitCommandStringsForRenameAsync(command, oldName, newName);
 
             XDocument? updatedProtoDoc = null;
             if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
             {
-                originalProtoDoc = new XDocument(_modXmlDoc);
                 updatedProtoDoc = new XDocument(_modXmlDoc);
-                RenameProtoUnitCommandReferencesInProtoDocument(updatedProtoDoc, oldName, newName);
+                var protoUnknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                    updatedProtoDoc, GameIdentifierKind.ProtoUnitCommand, oldName);
+                if (protoUnknown.Count > 0)
+                    throw new InvalidOperationException(
+                        $"'{oldName}' was not renamed because proto_mods.xml contains unsupported command reference field(s): " +
+                        string.Join(", ", protoUnknown) + ". No files were written.");
+                GameIdentifierReferencePolicy.RenameReferences(
+                    updatedProtoDoc, GameIdentifierKind.ProtoUnitCommand, oldName, newName);
             }
 
-            var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
-            XDocument? updatedTechtreeDoc = null;
-            if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
+            var excludedPaths = new[] { commandPath, transformPath, _modFilePath }
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.GetFullPath(path!))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file => !excludedPaths.Contains(Path.GetFullPath(file.Path))),
+                GameIdentifierKind.ProtoUnitCommand,
+                [new KeyValuePair<string, string>(oldName, newName)]);
+            var paths = new List<string?> { _modFilePath, stringPath };
+            paths.AddRange(migration.Paths);
+            var expectedStates = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
+            ModDocumentPersistence.Execute([commandFile, transformFile], paths, expectedStates, () =>
             {
-                originalTechtreeDoc = XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace);
-                updatedTechtreeDoc = new XDocument(originalTechtreeDoc);
-                if (GameIdentifierReferencePolicy.RenameAttributeReferences(
-                        updatedTechtreeDoc, "command", oldName, newName) == 0)
-                    updatedTechtreeDoc = null;
-            }
+                SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+                SaveProtoUnitCommandMods(doc);
+                if (transformChanged)
+                    SaveProtoUnitTransformMods(transformDoc);
+                if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+                    SaveXmlDocumentAtomic(updatedProtoDoc, _modFilePath);
+                migration.Save(SaveXmlDocumentAtomic);
+            });
+            AdoptSavedModStringEntries(stringEntries);
 
-            SaveCurrentModStringEntries(stringEntries);
-            stringsSaved = true;
-            SaveProtoUnitCommandMods(doc);
-            commandSaved = true;
-            if (transformChanged)
-            {
-                SaveProtoUnitTransformMods(transformDoc);
-                transformSaved = true;
-            }
-
-            if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
-            {
-                ProtoXmlHandler.SaveProtoXml(updatedProtoDoc, _modFilePath);
-                protoSaved = true;
+            if (updatedProtoDoc != null)
                 AdoptSavedProtoDocument(updatedProtoDoc);
-            }
-
-            if (updatedTechtreeDoc != null && !string.IsNullOrWhiteSpace(techtreePath))
-            {
-                SaveXmlDocumentAtomic(updatedTechtreeDoc, techtreePath);
-                techtreeSaved = true;
-                RefreshTechnologyViewAfterTechTypeChanges();
-            }
-
-            if (oldGeneratedStringIds.Count > 0)
-            {
-                await CleanupProtoUnitCommandStringsWithWarningAsync(
-                    stringEntries,
-                    oldGeneratedStringIds,
-                    doc,
-                    this,
-                    "The command rename");
-            }
+            AdoptGameIdentifierReferenceMigration(migration);
+            RefreshTechnologyViewAfterTechTypeChanges();
+            _protoUnitCommandCatalogLoaded = false;
+            _statusMessage.Text = $"Command '{oldName}' renamed to '{newName}'.";
             return true;
         }
         catch (Exception ex)
         {
-            var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
-            if (techtreeSaved && originalTechtreeDoc != null && !string.IsNullOrWhiteSpace(techtreePath))
-            {
-                try
-                {
-                    SaveXmlDocumentAtomic(originalTechtreeDoc, techtreePath);
-                    RefreshTechnologyViewAfterTechTypeChanges();
-                }
-                catch { }
-            }
-            if (protoSaved && originalProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
-            {
-                try { ProtoXmlHandler.SaveProtoXml(originalProtoDoc, _modFilePath); } catch { }
-            }
-            if (transformSaved && originalTransformDoc != null)
-            {
-                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
-            }
-            if (commandSaved && originalCommandDoc != null)
-            {
-                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
-            }
-            if (stringsSaved && originalStringEntries != null)
-            {
-                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
-            }
-            if (originalProtoDoc != null)
-                AdoptSavedProtoDocument(originalProtoDoc);
-
             await new Prompt(PromptType.Error, "Rename command", ex.Message).ShowDialog(this);
             return false;
         }
@@ -33067,83 +33341,98 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> DeleteProtoUnitCommandCoreAsync(string name, string? ignoredUnitName)
     {
-        if (CountProtoUnitCommandUsage(name, ignoredUnitName) > 0)
-            return false;
-        XDocument? originalCommandDoc = null;
-        XDocument? originalTransformDoc = null;
-        var commandSaved = false;
         try
         {
-            var doc = LoadProtoUnitCommandModsForUpdate();
-            originalCommandDoc = new XDocument(doc);
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var doc = commandFile.Document;
             var command = doc.Descendants().FirstOrDefault(element =>
                 element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
                 GetProtoUnitCommandName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
             if (command == null)
                 return false;
 
-            var referrers = GetProtoUnitCommandReferrers(doc, name);
-            if (referrers.Count > 0)
-            {
-                var shown = string.Join(", ", referrers.Take(5));
-                if (referrers.Count > 5)
-                    shown += $" (+{referrers.Count - 5} more)";
-                await new Prompt(
-                    PromptType.Error,
-                    "Command is referenced",
-                    $"'{name}' is referenced by another ProtoUnit command and cannot be removed.\n\nReferenced by: {shown}").ShowDialog(this);
-                return false;
-            }
-
             var deletedStringIds = GetProtoUnitCommandStringIds(command)
                 .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            Dictionary<string, string>? stringEntries = null;
-            if (deletedStringIds.Count > 0)
-                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            command.Remove();
 
-            var transformDoc = LoadProtoUnitTransformModsForUpdate();
-            originalTransformDoc = new XDocument(transformDoc);
+            var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var transformDoc = transformFile.Document;
             var transform = FindProtoUnitTransformByCommand(transformDoc, name);
             var transformChanged = transform != null;
             transform?.Remove();
 
-            command.Remove();
-            SaveProtoUnitCommandMods(doc);
-            commandSaved = true;
-            if (transformChanged)
+            var documentOverrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
             {
-                try
-                {
-                    SaveProtoUnitTransformMods(transformDoc);
-                }
-                catch
-                {
-                    if (originalCommandDoc != null)
-                    {
-                        try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
-                    }
-                    throw;
-                }
+                [Path.GetFullPath(commandPath)] = doc,
+                [Path.GetFullPath(transformPath)] = transformDoc
+            };
+            XDocument? candidateProto = null;
+            if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+            {
+                candidateProto = new XDocument(_modXmlDoc);
+                if (!string.IsNullOrWhiteSpace(ignoredUnitName) && candidateProto.Root != null)
+                    ProtoXmlHandler.GetUnitElement(candidateProto.Root, ignoredUnitName)?.Remove();
+                documentOverrides[Path.GetFullPath(_modFilePath)] = candidateProto;
             }
 
-            if (stringEntries != null && deletedStringIds.Count > 0)
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.ProtoUnitCommand,
+                    name,
+                    "Command",
+                    documentOverrides))
+                return false;
+
+            var approvedStringIds = await ReviewOrphanStringsAsync(
+                deletedStringIds,
+                $"Deleting command '{name}'",
+                this);
+            Dictionary<string, string>? stringEntries = null;
+            var stringsChanged = false;
+            var stringPath = GetCurrentModStringsPath();
+            if (approvedStringIds.Count > 0)
             {
-                await CleanupProtoUnitCommandStringsWithWarningAsync(
-                    stringEntries,
-                    deletedStringIds,
-                    doc,
-                    this,
-                    "The command deletion");
+                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+                EnsureProtoUnitCommandCatalogLoaded(force: true);
+                var sharedCatalogStringIds = _protoUnitCommandCatalog
+                    .Where(entry => !entry.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(entry => GetProtoUnitCommandStringIds(entry.Value))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
+                    approvedStringIds.Where(id => !sharedCatalogStringIds.Contains(id)),
+                    [doc, transformDoc],
+                    [commandPath, transformPath]);
+                foreach (var id in safeRemovals)
+                    stringsChanged |= stringEntries.Remove(id);
             }
+
+            var paths = new List<string?>();
+            if (stringsChanged)
+                paths.Add(stringPath);
+            var expected = CaptureExpectedEditorFileStates(paths);
+            ModDocumentPersistence.Execute(
+                transformChanged ? [commandFile, transformFile] : [commandFile],
+                paths,
+                expected,
+                () =>
+            {
+                SaveProtoUnitCommandMods(doc);
+                if (transformChanged)
+                    SaveProtoUnitTransformMods(transformDoc);
+                if (stringsChanged && stringEntries != null)
+                    SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+            });
+            if (stringsChanged && stringEntries != null)
+                AdoptSavedModStringEntries(stringEntries);
             return true;
         }
         catch (Exception ex)
         {
-            if (commandSaved && originalTransformDoc != null)
-            {
-                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
-            }
+            _protoUnitCommandCatalogLoaded = false;
             await new Prompt(PromptType.Error, "Delete command", ex.Message).ShowDialog(this);
             return false;
         }
@@ -33254,36 +33543,44 @@ public partial class ProtoEditorWindow : SimpleWindow
         XElement? currentTransform)
     {
         var normalizedCommand = NormalizeProtoUnitCommandForComparison(currentCommand);
-        if (state.LoadedCommandSnapshot != null && !XNode.DeepEquals(normalizedCommand, state.LoadedCommandSnapshot))
-        {
-            var prompt = new Prompt(
-                PromptType.Confirm,
-                "Command changed on disk",
-                $"'{state.SourceCommandName}' changed in proto_unit_command_mods.xml after this Transform tab was loaded. Save and overwrite those external changes?",
-                confirmButtonText: "Save");
-            await prompt.ShowDialog(this);
-            if (!prompt.Confirmed)
-                return false;
-        }
+        var commandChanged = state.LoadedCommandSnapshot != null &&
+                             !XNode.DeepEquals(normalizedCommand, state.LoadedCommandSnapshot);
 
         var normalizedTransform = currentTransform == null ? null : NormalizeXmlElementForComparison(currentTransform);
         var transformChanged =
             (state.LoadedTransformSnapshot == null) != (normalizedTransform == null) ||
             (state.LoadedTransformSnapshot != null && normalizedTransform != null &&
              !XNode.DeepEquals(state.LoadedTransformSnapshot, normalizedTransform));
-        if (transformChanged)
-        {
-            var prompt = new Prompt(
-                PromptType.Confirm,
-                "Transform changed on disk",
-                $"The unit transform for '{state.SourceCommandName}' changed in unit_transform_mods.xml after this Transform tab was loaded. Save and overwrite those external changes?",
-                confirmButtonText: "Save");
-            await prompt.ShowDialog(this);
-            if (!prompt.Confirmed)
-                return false;
-        }
+        if (!commandChanged && !transformChanged)
+            return true;
 
-        return true;
+        var changedFiles = commandChanged && transformChanged
+            ? "proto_unit_command_mods.xml and unit_transform_mods.xml changed"
+            : commandChanged
+                ? "proto_unit_command_mods.xml changed"
+                : "unit_transform_mods.xml changed";
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Transform command changed on disk",
+            $"'{state.SourceCommandName}' changed outside the editor after this Transform tab was loaded ({changedFiles}). Reload the external version?\n\nCurrent unsaved edits in this Transform command will be replaced, and this save will be paused.",
+            confirmButtonText: "Reload");
+        await prompt.ShowDialog(this);
+        if (!prompt.Confirmed)
+            return false;
+
+        state.Definition = ProtoUnitCommandDefinition.FromElement(currentCommand);
+        state.TransformDefinition = currentTransform == null
+            ? new ProtoUnitTransformDefinition { Command = state.SourceCommandName }
+            : ProtoUnitTransformDefinition.FromElement(currentTransform);
+        state.LoadedCommandSnapshot = normalizedCommand;
+        state.LoadedTransformSnapshot = normalizedTransform;
+        state.DefinitionDirty = false;
+
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        if (!string.IsNullOrWhiteSpace(_currentUnitName))
+            BuildEditorPanel(_currentUnitName, resetScroll: false);
+        _statusMessage.Text = "External Transform command reloaded. Review it, then save again.";
+        return false;
     }
 
     private (Dictionary<string, string> Entries, HashSet<string> OldGeneratedIds) PrepareProtoUnitCommandStrings(
@@ -33342,20 +33639,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         }
 
-        XDocument? originalCommandDoc = null;
-        XDocument? originalTransformDoc = null;
-        Dictionary<string, string>? originalStringEntries = null;
-        var stringsSaved = false;
-        var commandSaved = false;
-        var transformSaved = false;
-
         try
         {
-            var commandDoc = LoadProtoUnitCommandModsForUpdate();
-            originalCommandDoc = new XDocument(commandDoc);
-            var transformDoc = LoadProtoUnitTransformModsForUpdate();
-            originalTransformDoc = new XDocument(transformDoc);
-            originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var commandDoc = commandFile.Document;
+            var transformDoc = transformFile.Document;
 
             ProtoUnitCommandDefinition updated;
             XElement? existingCustom = null;
@@ -33422,12 +33715,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             updatedTransform.Command = desiredName;
             transformDoc.Root!.Add(updatedTransform.ToElement());
 
-            SaveCurrentModStringEntries(prepared.Entries);
-            stringsSaved = true;
-            SaveProtoUnitCommandMods(commandDoc);
-            commandSaved = true;
-            SaveProtoUnitTransformMods(transformDoc);
-            transformSaved = true;
+            var stringPath = GetCurrentModStringsPath();
+            var expected = CaptureExpectedEditorFileStates([stringPath]);
+            ModDocumentPersistence.Execute([commandFile, transformFile], [stringPath], expected, () =>
+            {
+                SaveCurrentModStringEntries(prepared.Entries, StringTableSection.UnitCommands, updateSession: false);
+                SaveProtoUnitCommandMods(commandDoc);
+                SaveProtoUnitTransformMods(transformDoc);
+            });
+            AdoptSavedModStringEntries(prepared.Entries);
 
             if (prepared.OldGeneratedIds.Count > 0)
             {
@@ -33452,24 +33748,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             var savedTransform = FindProtoUnitTransformByCommand(transformDoc, desiredName);
             state.LoadedTransformSnapshot = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
             state.DefinitionDirty = false;
-            EnsureProtoUnitCommandCatalogLoaded(force: true);
+            EnsureProtoUnitCommandCatalogLoaded();
             _cachedCommandNames = null;
             return true;
         }
         catch (Exception ex)
         {
-            if (transformSaved && originalTransformDoc != null)
-            {
-                try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
-            }
-            if (commandSaved && originalCommandDoc != null)
-            {
-                try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
-            }
-            if (stringsSaved && originalStringEntries != null)
-            {
-                try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
-            }
             await new Prompt(PromptType.Error, "Save transform command", ex.Message).ShowDialog(this);
             return false;
         }
@@ -33512,21 +33796,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (builtIn)
                     return false;
 
-                XDocument? originalCommandDoc = null;
-                XDocument? originalTransformDoc = null;
-                XDocument? originalProtoDoc = null;
-                Dictionary<string, string>? originalStringEntries = null;
-                var stringsSaved = false;
-                var commandSaved = false;
-                var transformSaved = false;
-                var protoSaved = false;
+                GameIdentifierReferenceMigrationPlan? referenceMigration = null;
 
                 try
                 {
-                    var doc = LoadProtoUnitCommandModsForUpdate();
-                    originalCommandDoc = new XDocument(doc);
-                    var transformDoc = LoadProtoUnitTransformModsForUpdate();
-                    originalTransformDoc = new XDocument(transformDoc);
+                    var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                        ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+                    var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                        ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+                    var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+                    var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+                    var doc = commandFile.Document;
+                    var transformDoc = transformFile.Document;
                     var renamed = !updated.Name.Equals(originalName, StringComparison.OrdinalIgnoreCase);
                     if (renamed && !ProtoUnitCommandNamePolicy.IsAvailable(updated.Name, _protoUnitCommandCatalog.Keys, originalName))
                     {
@@ -33542,14 +33823,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var currentCommandElement = NormalizeProtoUnitCommandForComparison(existing);
                     if (!XNode.DeepEquals(currentCommandElement, lastSavedCommandElement))
                     {
-                        var overwritePrompt = new Prompt(
+                        var reloadPrompt = new Prompt(
                             PromptType.Confirm,
                             "Command changed on disk",
-                            $"'{originalName}' changed in proto_unit_command_mods.xml after this editor was opened. Save and overwrite those external changes?",
-                            confirmButtonText: "Save");
-                        await overwritePrompt.ShowDialog(editor!);
-                        if (!overwritePrompt.Confirmed)
-                            return false;
+                            $"'{originalName}' changed in proto_unit_command_mods.xml after this editor was opened. Reload the external version?\n\n" +
+                            "This command window will close without overwriting the file. Reopen the command to continue from the external version.",
+                            confirmButtonText: "Reload");
+                        await reloadPrompt.ShowDialog(editor!);
+                        if (reloadPrompt.Confirmed)
+                            editor!.Close();
+                        return false;
                     }
 
                     var currentTransform = FindProtoUnitTransformByCommand(transformDoc, originalName);
@@ -33560,22 +33843,39 @@ public partial class ProtoEditorWindow : SimpleWindow
                         (lastSavedTransformElement != null && currentTransformElement != null && !XNode.DeepEquals(lastSavedTransformElement, currentTransformElement));
                     if (transformChangedExternally)
                     {
-                        var overwritePrompt = new Prompt(
+                        var reloadPrompt = new Prompt(
                             PromptType.Confirm,
                             "Transform changed on disk",
-                            $"The unit transform for '{originalName}' changed in unit_transform_mods.xml after this editor was opened. Save and overwrite those external changes?",
-                            confirmButtonText: "Save");
-                        await overwritePrompt.ShowDialog(editor!);
-                        if (!overwritePrompt.Confirmed)
-                            return false;
+                            $"The unit transform for '{originalName}' changed after this editor was opened. Reload the external version?\n\n" +
+                            "This command window will close without overwriting the file. Reopen the command to continue from the external version.",
+                            confirmButtonText: "Reload");
+                        await reloadPrompt.ShowDialog(editor!);
+                        if (reloadPrompt.Confirmed)
+                            editor!.Close();
+                        return false;
                     }
 
                     var prepared = PrepareProtoUnitCommandStrings(updated, originalName, updatedStringTexts);
-                    originalStringEntries = LoadCurrentModStringEntries(requireReadable: true);
-
-                    existing.ReplaceWith(updated.ToElement());
                     if (renamed)
-                        RenameProtoUnitCommandReferencesInCommandDocument(doc, originalName, updated.Name);
+                    {
+                        var unknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                                doc, GameIdentifierKind.ProtoUnitCommand, originalName)
+                            .Concat(GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                                transformDoc, GameIdentifierKind.ProtoUnitCommand, originalName))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        if (unknown.Count > 0)
+                            throw new InvalidOperationException(
+                                $"'{originalName}' was not renamed because an unsupported command reference was found: " +
+                                string.Join(", ", unknown) + ". No files were written.");
+                    }
+
+                    var replacementCommand = updated.ToElement();
+                    XmlTriviaPreserver.Preserve(existing, replacementCommand);
+                    existing.ReplaceWith(replacementCommand);
+                    if (renamed)
+                        GameIdentifierReferencePolicy.RenameReferences(
+                            doc, GameIdentifierKind.ProtoUnitCommand, originalName, updated.Name);
 
                     currentTransform?.Remove();
                     if (renamed)
@@ -33585,31 +33885,71 @@ public partial class ProtoEditorWindow : SimpleWindow
                         updatedTransform.Command = updated.Name;
                         transformDoc.Root!.Add(updatedTransform.ToElement());
                     }
+                    if (renamed)
+                        GameIdentifierReferencePolicy.RenameReferences(
+                            transformDoc, GameIdentifierKind.ProtoUnitCommand, originalName, updated.Name);
 
                     XDocument? updatedProtoDoc = null;
                     if (renamed && _modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
                     {
-                        originalProtoDoc = new XDocument(_modXmlDoc);
                         updatedProtoDoc = new XDocument(_modXmlDoc);
-                        RenameProtoUnitCommandReferencesInProtoDocument(updatedProtoDoc, originalName, updated.Name);
+                        var unknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                            updatedProtoDoc, GameIdentifierKind.ProtoUnitCommand, originalName);
+                        if (unknown.Count > 0)
+                            throw new InvalidOperationException(
+                                $"'{originalName}' was not renamed because proto_mods.xml contains unsupported command reference field(s): " +
+                                string.Join(", ", unknown) + ". No files were written.");
+                        GameIdentifierReferencePolicy.RenameReferences(
+                            updatedProtoDoc, GameIdentifierKind.ProtoUnitCommand, originalName, updated.Name);
                     }
 
-                    SaveCurrentModStringEntries(prepared.Entries);
-                    stringsSaved = true;
-                    SaveProtoUnitCommandMods(doc);
-                    commandSaved = true;
-                    if (transformNeedsWrite)
+                    if (renamed)
                     {
-                        SaveProtoUnitTransformMods(transformDoc);
-                        transformSaved = true;
+                        var excluded = new[]
+                            {
+                                GetCurrentModGameplayFilePath("proto_unit_command_mods.xml"),
+                                GetCurrentModGameplayFilePath("unit_transform_mods.xml"),
+                                _modFilePath
+                            }
+                            .Where(path => !string.IsNullOrWhiteSpace(path))
+                            .Select(path => Path.GetFullPath(path!))
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        referenceMigration = GameIdentifierReferenceMigrationPlan.Prepare(
+                            GetGameIdentifierReferenceFiles().Where(file =>
+                                !excluded.Contains(Path.GetFullPath(file.Path))),
+                            GameIdentifierKind.ProtoUnitCommand,
+                            [new KeyValuePair<string, string>(originalName, updated.Name)]);
                     }
 
-                    if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
-                    {
-                        ProtoXmlHandler.SaveProtoXml(updatedProtoDoc, _modFilePath);
-                        protoSaved = true;
+                    var stringPath = GetCurrentModStringsPath();
+                    var additionalPaths = new List<string?> { stringPath };
+                    if (updatedProtoDoc != null)
+                        additionalPaths.Add(_modFilePath);
+                    if (referenceMigration != null)
+                        additionalPaths.AddRange(referenceMigration.Paths);
+                    var expected = CaptureExpectedEditorFileStates(
+                        additionalPaths,
+                        referenceMigration?.ExpectedStates);
+                    ModDocumentPersistence.Execute(
+                        [commandFile, transformFile],
+                        additionalPaths,
+                        expected,
+                        () =>
+                        {
+                            SaveCurrentModStringEntries(prepared.Entries, StringTableSection.UnitCommands, updateSession: false);
+                            SaveProtoUnitCommandMods(doc);
+                            if (transformNeedsWrite)
+                                SaveProtoUnitTransformMods(transformDoc);
+                            if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+                                SaveXmlDocumentAtomic(updatedProtoDoc, _modFilePath);
+                            referenceMigration?.Save(SaveXmlDocumentAtomic);
+                        });
+                    AdoptSavedModStringEntries(prepared.Entries);
+
+                    if (updatedProtoDoc != null)
                         AdoptSavedProtoDocument(updatedProtoDoc);
-                    }
+                    if (referenceMigration != null)
+                        AdoptGameIdentifierReferenceMigration(referenceMigration);
 
                     if (prepared.OldGeneratedIds.Count > 0)
                     {
@@ -33633,24 +33973,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 catch (Exception ex)
                 {
-                    if (protoSaved && originalProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
-                    {
-                        try { ProtoXmlHandler.SaveProtoXml(originalProtoDoc, _modFilePath); } catch { }
-                    }
-                    if (transformSaved && originalTransformDoc != null)
-                    {
-                        try { SaveProtoUnitTransformMods(originalTransformDoc); } catch { }
-                    }
-                    if (commandSaved && originalCommandDoc != null)
-                    {
-                        try { SaveProtoUnitCommandMods(originalCommandDoc); } catch { }
-                    }
-                    if (stringsSaved && originalStringEntries != null)
-                    {
-                        try { SaveCurrentModStringEntries(originalStringEntries); } catch { }
-                    }
-                    if (originalProtoDoc != null)
-                        AdoptSavedProtoDocument(originalProtoDoc);
                     await new Prompt(PromptType.Error, "Save command", ex.Message).ShowDialog(editor!);
                     return false;
                 }
@@ -33667,20 +33989,26 @@ public partial class ProtoEditorWindow : SimpleWindow
             await new Prompt(PromptType.Error, "Commands", "Select or create a mod before managing custom ProtoUnit commands.").ShowDialog(this);
             return;
         }
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
-        if (_isDirty)
-        {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty)
-                return;
-        }
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModGameplayFilePath("proto_unit_command_mods.xml"),
+                ModXmlDocumentKind.ProtoUnitCommands,
+                "Unable to load commands") ||
+            !await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModGameplayFilePath("unit_transform_mods.xml"),
+                ModXmlDocumentKind.UnitTransforms,
+                "Unable to load command transforms"))
+            return;
         EnsureProtoUnitCommandCatalogLoaded(force: true);
+        var usageCounts = GetProtoUnitCommandUsageCounts();
         var items = _protoUnitCommandCatalog.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .Select(name => new ProtoUnitCommandManagerItem(name, _builtInProtoUnitCommandNames.Contains(name) &&
-                !IsCustomProtoUnitCommand(name), CountProtoUnitCommandUsage(name))).ToList();
+                !IsCustomProtoUnitCommand(name), usageCounts.GetValueOrDefault(name))).ToList();
         var manager = new ProtoUnitCommandsManagerWindow(items, OpenProtoUnitCommandEditorAsync, CreateProtoUnitCommandAsync,
-            DuplicateProtoUnitCommandAsync, RenameProtoUnitCommandAsync, DeleteProtoUnitCommandAsync, CountProtoUnitCommandUsage);
+            DuplicateProtoUnitCommandAsync, RenameProtoUnitCommandAsync, DeleteProtoUnitCommandAsync, CountProtoUnitCommandUsage,
+            (owner, name) => EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.ProtoUnitCommand, name, "Command", owner: owner));
         await manager.ShowDialog(this);
         EnsureProtoUnitCommandCatalogLoaded(force: true);
         _cachedCommandNames = null;
@@ -33707,19 +34035,28 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
         }
 
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModGameplayFilePath("abstract_unit_types_mods.xml"),
+                ModXmlDocumentKind.UnitTypes,
+                "Unable to load Unit Types"))
+            return;
+
         _cachedUnitTypeDefinitions = null;
+        var usageCounts = GetUnitTypeUsageCounts();
         var items = GetUnitTypeDefinitions()
             .Select(definition => new UnitTypeManagerItem(
                 definition.Name,
                 definition.IsBuiltIn,
-                CountUnitTypeUsage(definition.Name)))
+                usageCounts.GetValueOrDefault(definition.Name)))
             .ToList();
         var manager = new UnitTypeManagerWindow(
             items,
             CreateUnitTypeAsync,
             RenameUnitTypeAsync,
             DeleteUnitTypeAsync,
-            CountUnitTypeUsage);
+            CountUnitTypeUsage,
+            (owner, name) => EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.UnitType, name, "Unit Type", owner: owner));
         await manager.ShowDialog(this);
 
         _cachedUnitTypeDefinitions = null;
@@ -33744,19 +34081,28 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
             return;
 
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModGameplayFilePath("tech_types_mods.xml"),
+                ModXmlDocumentKind.TechTypes,
+                "Unable to load Tech Types"))
+            return;
+
         _cachedTechTypeDefinitions = null;
+        var usageCounts = GetTechTypeUsageCounts();
         var items = GetTechTypeDefinitions()
             .Select(definition => new TechTypeManagerItem(
                 definition.Name,
                 definition.IsBuiltIn,
-                ResolveTechTypeUsage(definition.Name)))
+                usageCounts.GetValueOrDefault(definition.Name)))
             .ToList();
         var manager = new TechTypeManagerWindow(
             items,
             CreateTechTypeAsync,
             RenameTechTypeAsync,
             DeleteTechTypeAsync,
-            ResolveTechTypeUsage);
+            ResolveTechTypeUsage,
+            (owner, name) => EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.TechType, name, "Tech Type", owner: owner));
         await manager.ShowDialog(this);
 
         _cachedTechTypeDefinitions = null;
@@ -34012,6 +34358,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 $"Save the current ProtoUnit changes before renaming or moving this {assetLabel}. This prevents unvalidated edits from being committed by the asset migration.").ShowDialog(this);
             return false;
         }
+        if (!await ReloadExternallyChangedUnitFilesAsync())
+            return false;
         if (File.Exists(destination.AbsolutePath))
             return await ShowAssetMoveErrorAsync("Destination exists", "A file already exists at the selected destination.");
 
@@ -34037,8 +34385,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         var documentBackup = new XDocument(_modXmlDoc);
         try
         {
+            var paths = new[] { sourcePath, destination.AbsolutePath, _modFilePath };
             FileIntegrityTransaction.Execute(
-                [sourcePath, destination.AbsolutePath, _modFilePath],
+                paths,
+                CaptureExpectedEditorFileStates(paths),
                 () =>
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(destination.AbsolutePath)!);
@@ -34046,6 +34396,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ProtoUnitAssetReferenceMigration.Replace(_modXmlDoc.Root!, elementName, oldXmlValue, destination.XmlValue);
                     SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
                 });
+            _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
             InvalidateSuggestionCaches();
             _statusMessage.Text = $"Custom {assetLabel} moved and ProtoUnit references updated.";
             return true;
@@ -34066,26 +34417,36 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private int CountUnitTypeUsage(string unitTypeName)
+        => GetUnitTypeUsageCounts().GetValueOrDefault(unitTypeName);
+
+    private Dictionary<string, int> GetUnitTypeUsageCounts()
     {
-        var unitNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unitsByType = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         void Count(XElement? root)
         {
             if (root == null) return;
             foreach (var unit in root.Elements().Where(element =>
                          element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)))
             {
-                if (!unit.Elements().Any(element =>
-                        element.Name.LocalName.Equals("unittype", StringComparison.OrdinalIgnoreCase) &&
-                        element.Value.Trim().Equals(unitTypeName, StringComparison.OrdinalIgnoreCase)))
+                var unitName = unit.Attribute("name")?.Value?.Trim() ?? unit.Element("name")?.Value?.Trim() ?? "(unnamed)";
+                foreach (var typeName in unit.Elements()
+                             .Where(element => element.Name.LocalName.Equals("unittype", StringComparison.OrdinalIgnoreCase))
+                             .Select(element => element.Value.Trim())
+                             .Where(name => name.Length > 0)
+                             .Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    continue;
+                    if (!unitsByType.TryGetValue(typeName, out var unitNames))
+                        unitsByType[typeName] = unitNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    unitNames.Add(unitName);
                 }
-                unitNames.Add(unit.Attribute("name")?.Value?.Trim() ?? unit.Element("name")?.Value?.Trim() ?? "(unnamed)");
             }
         }
         Count(_barXmlRoot);
         Count(_modXmlRoot);
-        return unitNames.Count;
+        return unitsByType.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value.Count,
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<bool> CreateUnitTypeAsync(string name)
@@ -34120,6 +34481,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         var unitTypePath = GetCurrentModGameplayFilePath("abstract_unit_types_mods.xml");
         if (string.IsNullOrWhiteSpace(unitTypePath) || string.IsNullOrWhiteSpace(_modFilePath) || _modXmlDoc == null)
             return false;
+        if (!await ReloadExternallyChangedUnitFilesAsync())
+            return false;
 
         try
         {
@@ -34149,9 +34512,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GameIdentifierKind.UnitType,
                 [new KeyValuePair<string, string>(oldName, newName)]);
 
+            var paths = new List<string?> { unitTypePath, _modFilePath };
+            paths.AddRange(referenceMigration.Paths);
             FileIntegrityTransaction.Execute(
-                [unitTypePath, _modFilePath, .. referenceMigration.Paths],
-                referenceMigration.ExpectedStates,
+                paths,
+                CaptureExpectedEditorFileStates(paths, referenceMigration.ExpectedStates),
                 () =>
                 {
                     SaveUnitTypeXmlDocument(unitTypeDocument, unitTypePath);
@@ -34176,26 +34541,31 @@ public partial class ProtoEditorWindow : SimpleWindow
         var unitTypePath = GetCurrentModGameplayFilePath("abstract_unit_types_mods.xml");
         if (string.IsNullOrWhiteSpace(unitTypePath) || string.IsNullOrWhiteSpace(_modFilePath) || _modXmlDoc == null)
             return false;
+        if (!await ReloadExternallyChangedUnitFilesAsync())
+            return false;
 
         try
         {
+            var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Path.GetFullPath(_modFilePath)] = _modXmlDoc
+            };
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.UnitType, name, "Unit Type", overrides))
+                return false;
+
             var unitTypeDocument = UnitTypeCatalog.LoadOrCreateModDocument(unitTypePath);
             if (!UnitTypeCatalog.DeleteDefinition(unitTypeDocument, name))
                 throw new InvalidOperationException($"Custom Unit Type '{name}' was not found.");
 
-            var protoDocument = new XDocument(_modXmlDoc);
-            var removedAssignments = UnitTypeCatalog.RemoveUnitAssignments(protoDocument, name);
-            FileIntegrityTransaction.Execute([unitTypePath, _modFilePath], () =>
+            var paths = new[] { unitTypePath };
+            FileIntegrityTransaction.Execute(paths, CaptureExpectedEditorFileStates(paths), () =>
             {
                 SaveUnitTypeXmlDocument(unitTypeDocument, unitTypePath);
-                SaveXmlDocumentAtomic(protoDocument, _modFilePath);
             });
 
-            AdoptSavedProtoDocument(protoDocument);
             InvalidateSuggestionCaches();
-            _statusMessage.Text = removedAssignments == 0
-                ? $"Unit Type '{name}' removed."
-                : $"Unit Type '{name}' and {removedAssignments} unit assignment(s) removed.";
+            _statusMessage.Text = $"Unit Type '{name}' removed.";
             return true;
         }
         catch (Exception ex)
@@ -34239,21 +34609,30 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private TechTypeUsage ResolveTechTypeUsage(string techTypeName)
+        => GetTechTypeUsageCounts().GetValueOrDefault(techTypeName);
+
+    private Dictionary<string, TechTypeUsage> GetTechTypeUsageCounts()
     {
-        var usage = default(TechTypeUsage);
+        var result = new Dictionary<string, TechTypeUsage>(StringComparer.OrdinalIgnoreCase);
+        void Merge(XContainer container)
+        {
+            foreach (var entry in TechTypeCatalog.GetTechnologyUsageCounts(container))
+                result[entry.Key] = result.GetValueOrDefault(entry.Key) + entry.Value;
+        }
+
         foreach (var document in GetBaseTechtreeDocumentsFromLoadedBar())
-            usage += TechTypeCatalog.GetTechnologyUsage(document, techTypeName);
+            Merge(document);
         try
         {
             var modDocument = LoadExistingTechtreeModsDocument(GetCurrentModGameplayFilePath("techtree_mods.xml"));
             if (modDocument != null)
-                usage += TechTypeCatalog.GetTechnologyUsage(modDocument, techTypeName);
+                Merge(modDocument);
         }
         catch
         {
             // The manager remains usable for the original catalog; mutations surface malformed mod XML separately.
         }
-        return usage;
+        return result;
     }
 
     private async Task<bool> CreateTechTypeAsync(string name)
@@ -34273,12 +34652,20 @@ public partial class ProtoEditorWindow : SimpleWindow
         try
         {
             EnsureTechTypeNameAvailable(newName, oldName);
+            var typeStateBefore = FileIntegrityTransaction.CaptureState(techTypePath);
             var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
+            var typeStateAfter = FileIntegrityTransaction.CaptureState(techTypePath);
+            if (typeStateBefore != typeStateAfter)
+                throw new IOException($"'{techTypePath}' changed while the rename was being prepared.");
             if (!TechTypeCatalog.RenameDefinition(techTypeDocument, oldName, newName))
                 throw new InvalidOperationException($"Custom Tech Type '{oldName}' was not found.");
 
+            var treeStateBefore = FileIntegrityTransaction.CaptureState(techtreePath);
             var techtreeDocument = LoadExistingTechtreeModsDocument(techtreePath) ??
                                    new XDocument(new XElement("techtreemods"));
+            var treeStateAfter = FileIntegrityTransaction.CaptureState(techtreePath);
+            if (treeStateBefore != treeStateAfter)
+                throw new IOException($"'{techtreePath}' changed while the rename was being prepared.");
             var unsupportedReferences = GameIdentifierReferencePolicy.FindUnrecognizedTechTypeReferences(
                 techtreeDocument, oldName);
             if (unsupportedReferences.Count > 0)
@@ -34287,17 +34674,33 @@ public partial class ProtoEditorWindow : SimpleWindow
                     $"'{oldName}' was not renamed because techtree_mods.xml contains unsupported Tech Type " +
                     "reference field(s): " + string.Join(", ", unsupportedReferences) + ".");
             }
-            var renamedAssignments = TechTypeCatalog.RenameTechnologyAssignments(techtreeDocument, oldName, newName);
-            var renamedEffects = TechTypeCatalog.RenameTechnologyEffectReferences(techtreeDocument, oldName, newName);
-            var renamedReferences = renamedAssignments + renamedEffects;
-            var paths = renamedReferences > 0 ? new[] { techTypePath, techtreePath } : new[] { techTypePath };
-            FileIntegrityTransaction.Execute(paths, () =>
+            var renamedReferences = GameIdentifierReferencePolicy.RenameReferences(
+                techtreeDocument, GameIdentifierKind.TechType, oldName, newName);
+
+            var excluded = new[] { techTypePath, techtreePath }
+                .Select(Path.GetFullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file => !excluded.Contains(Path.GetFullPath(file.Path))),
+                GameIdentifierKind.TechType,
+                [new KeyValuePair<string, string>(oldName, newName)]);
+            var paths = new List<string?> { techTypePath };
+            if (renamedReferences > 0)
+                paths.Add(techtreePath);
+            paths.AddRange(migration.Paths);
+            var expected = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
+            expected[Path.GetFullPath(techTypePath)] = typeStateAfter;
+            if (renamedReferences > 0)
+                expected[Path.GetFullPath(techtreePath)] = treeStateAfter;
+            FileIntegrityTransaction.Execute(paths, expected, () =>
             {
                 SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
                 if (renamedReferences > 0)
                     SaveXmlDocumentAtomic(techtreeDocument, techtreePath);
+                migration.Save(SaveXmlDocumentAtomic);
             });
 
+            AdoptGameIdentifierReferenceMigration(migration);
             InvalidateSuggestionCaches();
             _statusMessage.Text = $"Tech Type '{oldName}' renamed to '{newName}'.";
             return true;
@@ -34318,30 +34721,22 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
-            var currentUsage = ResolveTechTypeUsage(name);
-            if (currentUsage.EffectUsageCount > 0)
-                throw new InvalidOperationException(
-                    $"'{name}' is used by {currentUsage.EffectUsageCount} technology effect(s) and cannot be removed. Remove or change those effect references first.");
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.TechType, name, "Tech Type"))
+                return false;
 
             var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
             if (!TechTypeCatalog.DeleteDefinition(techTypeDocument, name))
                 throw new InvalidOperationException($"Custom Tech Type '{name}' was not found.");
 
-            var techtreeDocument = LoadExistingTechtreeModsDocument(techtreePath) ??
-                                   new XDocument(new XElement("techtreemods"));
-            var removedAssignments = TechTypeCatalog.RemoveTechnologyAssignments(techtreeDocument, name);
-            var paths = removedAssignments > 0 ? new[] { techTypePath, techtreePath } : new[] { techTypePath };
+            var paths = new[] { techTypePath };
             FileIntegrityTransaction.Execute(paths, () =>
             {
                 SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
-                if (removedAssignments > 0)
-                    SaveXmlDocumentAtomic(techtreeDocument, techtreePath);
             });
 
             InvalidateSuggestionCaches();
-            _statusMessage.Text = removedAssignments == 0
-                ? $"Tech Type '{name}' removed."
-                : $"Tech Type '{name}' and {removedAssignments} technology assignment(s) removed.";
+            _statusMessage.Text = $"Tech Type '{name}' removed.";
             return true;
         }
         catch (Exception ex)
@@ -34417,14 +34812,18 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
-        if (_isDirty)
-        {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty)
-                return;
-        }
+
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModAbilitiesFilePath("abilities_mods.xml"),
+                ModXmlDocumentKind.Abilities,
+                "Unable to load abilities") ||
+            !await EnsureEditableXmlDocumentSafeAsync(
+                GetCurrentModGameplayFilePath("powers_mods.xml"),
+                ModXmlDocumentKind.Powers,
+                "Unable to load ability powers"))
+            return;
 
         _captureAbilityEditorCurrent?.Invoke();
         EnsureAbilityCatalogLoadedForManager();
@@ -34448,7 +34847,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             DuplicateManagedAbilityAsync,
             RenameManagedAbilityAsync,
             DeleteManagedAbilityAsync,
-            ResolveManagedAbilityUsageCount);
+            ResolveManagedAbilityUsageCount,
+            (owner, name) => EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.Ability, name, "Ability", owner: owner));
         await window.ShowDialog(this);
     }
 
@@ -34475,22 +34876,50 @@ public partial class ProtoEditorWindow : SimpleWindow
             .ToList();
     }
 
+    private async Task<bool> EnsureEditableXmlDocumentSafeAsync(
+        string? path,
+        ModXmlDocumentKind kind,
+        string promptTitle)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return true;
+
+        try
+        {
+            var result = ModXmlDocumentSafety.LoadExisting(path, kind);
+            if (result.Validation.Warnings.Count > 0)
+            {
+                _statusMessage.Text =
+                    $"Loaded '{Path.GetFileName(path)}' with {result.Validation.Warnings.Count} preserved, unmanaged element warning(s).";
+            }
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                promptTitle,
+                exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
     private async Task<bool> CreateManagedAbilityAsync(string abilityName)
     {
         var path = GetCurrentModGameplayFilePath("powers_mods.xml");
         if (string.IsNullOrWhiteSpace(path)) return false;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var doc = LoadAbilityXmlDocumentForUpdate(path, "powersmod");
-            if (doc.Root == null) doc.Add(new XElement("powersmod"));
-            doc.Root!.Name = "powersmod";
-            if (doc.Root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Powers);
+            var doc = prepared.Document;
+            var root = doc.Root!;
+            if (root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
                                              GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase)))
                 return false;
             var power = new XElement("power", new XAttribute("name", abilityName), new XAttribute("type", "UnitAction"));
-            doc.Root.Add(power);
-            SaveAbilityXmlDocument(doc, path);
+            root.Add(power);
+            ModDocumentPersistence.Execute([prepared], null, null,
+                () => SaveAbilityXmlDocument(doc, path));
             _abilityPowerCatalog[abilityName] = new XElement(power);
             RegisterAvailableAbilityName(abilityName);
             return true;
@@ -34511,6 +34940,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         clone.SetAttributeValue("name", newName);
         try
         {
+            var path = GetCurrentModGameplayFilePath("powers_mods.xml")
+                ?? throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
+            var powerFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Powers);
+            if (powerFile.Document.Root!.Elements().Any(element =>
+                    element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                    GetAbilityElementName(element).Equals(newName, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"An ability named '{newName}' already exists.");
             var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
             var stringsChanged = false;
             foreach (var tag in new[] { "displaynameid", "rolloverid" })
@@ -34532,9 +34968,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 stringEntries[newId] = sourceText;
                 stringsChanged = true;
             }
+            powerFile.Document.Root.Add(clone);
+            var stringPath = stringsChanged ? GetCurrentModStringsPath() : null;
+            var expected = CaptureExpectedEditorFileStates([stringPath]);
+            ModDocumentPersistence.Execute([powerFile], [stringPath], expected, () =>
+            {
+                if (stringsChanged)
+                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities, updateSession: false);
+                SaveAbilityXmlDocument(powerFile.Document, path);
+            });
             if (stringsChanged)
-                SaveCurrentModStringEntries(stringEntries);
-            await SaveManagedAbilityPowerAsync(newName, clone, originalName: null);
+                AdoptSavedModStringEntries(stringEntries);
             _abilityPowerCatalog[newName] = new XElement(clone);
             RegisterAvailableAbilityName(newName);
             return true;
@@ -34572,6 +35016,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> DeleteManagedAbilityAsync(string abilityName)
     {
+        if (!await EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.Ability, abilityName, "Ability"))
+            return false;
         var result = new AbilityManagerResult();
         result.DeletedNames.Add(abilityName);
         await ApplyAbilityManagerChangesAsync(result);
@@ -34588,18 +35035,26 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         var editor = new AbilityEditorWindow(_gameData);
+        var lastSavedPower = NormalizeXmlElementForComparison(power);
         await editor.InitializeAbilityDefinitionEditorAsync(
             abilityName,
             isBuiltIn,
             new XElement(power),
             _modFilePath,
-            isBuiltIn ? null : async (originalName, updatedPower) =>
+            isBuiltIn ? null : async (originalName, updatedPower, updatedStringEntries, loadedStringState) =>
             {
                 var newName = GetAbilityElementName(updatedPower);
-                await SaveManagedAbilityPowerAsync(newName, updatedPower, originalName);
+                await SaveManagedAbilityPowerAsync(
+                    newName,
+                    updatedPower,
+                    originalName,
+                    updatedStringEntries,
+                    lastSavedPower,
+                    loadedStringState);
                 if (!originalName.Equals(newName, StringComparison.OrdinalIgnoreCase))
                     _abilityPowerCatalog.Remove(originalName);
                 _abilityPowerCatalog[newName] = new XElement(updatedPower);
+                lastSavedPower = NormalizeXmlElementForComparison(updatedPower);
 
                 // The standalone ability editor has its own string cache. It may have just
                 // written Display Name/Rollover values to stringmods.txt, so never rebuild
@@ -34613,20 +35068,25 @@ public partial class ProtoEditorWindow : SimpleWindow
         return editor.CurrentAbilityDefinitionName;
     }
 
-    private async Task SaveManagedAbilityPowerAsync(string abilityName, XElement updatedPower, string? originalName)
+    private async Task SaveManagedAbilityPowerAsync(
+        string abilityName,
+        XElement updatedPower,
+        string? originalName,
+        Dictionary<string, string>? editedStringEntries = null,
+        XElement? expectedPower = null,
+        FileIntegrityTransaction.FileState? editedStringFileState = null)
     {
         var path = GetCurrentModGameplayFilePath("powers_mods.xml");
         if (string.IsNullOrWhiteSpace(path))
             throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var doc = LoadAbilityXmlDocumentForUpdate(path, "powersmod");
-        if (doc.Root == null) doc.Add(new XElement("powersmod"));
-        doc.Root!.Name = "powersmod";
+        var powerFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Powers);
+        var doc = powerFile.Document;
+        var root = doc.Root!;
 
         var oldName = string.IsNullOrWhiteSpace(originalName) ? abilityName : originalName;
         if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
         {
-            var collision = doc.Root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+            var collision = root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
                                                          GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase));
             collision |= _abilityPowerCatalog.Keys.Any(name =>
                 !name.Equals(oldName, StringComparison.OrdinalIgnoreCase) &&
@@ -34634,8 +35094,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (collision)
                 throw new InvalidOperationException($"An ability named '{abilityName}' already exists. Choose a different internal name.");
         }
-        var existing = doc.Root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+        var existing = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
                                                                 GetAbilityElementName(e).Equals(oldName, StringComparison.OrdinalIgnoreCase));
+        if (expectedPower != null &&
+            (existing == null || !XNode.DeepEquals(NormalizeXmlElementForComparison(existing), expectedPower)))
+        {
+            throw new IOException(
+                $"Ability '{oldName}' changed in powers_mods.xml after this editor was opened. " +
+                "No files were written. Close and reopen the ability to load the external version.");
+        }
         var replacement = new XElement(updatedPower);
         replacement.Name = "power";
         replacement.SetAttributeValue("name", abilityName);
@@ -34644,11 +35111,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         // from the stale PowerSource captured when the editor window was opened.
         MergeUnknownPlacementAttributes(existing, replacement);
 
-        Dictionary<string, string>? renamedStringEntries = null;
+        Dictionary<string, string>? renamedStringEntries = editedStringEntries == null
+            ? null
+            : new Dictionary<string, string>(editedStringEntries, StringComparer.OrdinalIgnoreCase);
         var oldStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
         {
-            renamedStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            renamedStringEntries ??= LoadCurrentModStringEntries(requireReadable: true);
             foreach (var tag in new[] { "displaynameid", "rolloverid" })
             {
                 var replacementElement = replacement.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
@@ -34672,98 +35141,80 @@ public partial class ProtoEditorWindow : SimpleWindow
                 oldStringIds.Add(sourceId);
             }
 
-            // Write the new IDs before changing powers_mods.xml. If the XML write then fails,
-            // the only side effect is harmless unused strings rather than a power that points
-            // at missing string IDs.
-            if (oldStringIds.Count > 0)
-                SaveCurrentModStringEntries(renamedStringEntries);
         }
 
-        if (existing != null) existing.ReplaceWith(replacement); else doc.Root.Add(replacement);
-        SaveAbilityXmlDocument(doc, path);
-        _abilityPowerCatalog[abilityName] = new XElement(replacement);
-        RegisterAvailableAbilityName(abilityName);
-
+        if (existing != null)
+        {
+            XmlTriviaPreserver.Preserve(existing, replacement);
+            existing.ReplaceWith(replacement);
+        }
+        else
+        {
+            root.Add(replacement);
+        }
         if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
         {
-            RenameAbilityReferencesInMods(oldName, abilityName);
+            var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                doc, GameIdentifierKind.Ability, oldName);
+            if (unsupported.Count > 0)
+                throw new InvalidOperationException(
+                    $"'{oldName}' was not renamed because powers_mods.xml contains unsupported ability reference field(s): " +
+                    string.Join(", ", unsupported) + ". No files were written.");
+            GameIdentifierReferencePolicy.RenameReferences(doc, GameIdentifierKind.Ability, oldName, abilityName);
 
-            // Clean the previous generated IDs only after the power rename succeeded. A
-            // cleanup failure leaves harmless orphan strings but never breaks the renamed
-            // ability's references.
-            if (renamedStringEntries != null && oldStringIds.Count > 0)
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file =>
+                    !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)),
+                GameIdentifierKind.Ability,
+                [new KeyValuePair<string, string>(oldName, abilityName)]);
+            var stringPath = GetCurrentModStringsPath();
+            var paths = new List<string?> { path };
+            if (renamedStringEntries != null)
+                paths.Add(stringPath);
+            paths.AddRange(migration.Paths);
+            var expected = CaptureExpectedEditorFileStates(paths.Where(candidate =>
+                !string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase)), migration.ExpectedStates);
+            if (editedStringFileState != null && !string.IsNullOrWhiteSpace(stringPath))
+                expected[Path.GetFullPath(stringPath)] = editedStringFileState;
+            ModDocumentPersistence.Execute([powerFile], paths.Where(candidate =>
+                !string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase)), expected, () =>
             {
-                var referencedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
-                    foreach (var id in GetAbilityDefinitionStringIds(power))
-                        referencedIds.Add(id);
-                foreach (var catalogEntry in _abilityPowerCatalog)
-                {
-                    if (catalogEntry.Key.Equals(oldName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    foreach (var id in GetAbilityDefinitionStringIds(catalogEntry.Value))
-                        referencedIds.Add(id);
-                }
-
-                var cleanupChanged = false;
-                foreach (var oldId in oldStringIds)
-                {
-                    if (oldId.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase) && !referencedIds.Contains(oldId))
-                        cleanupChanged |= renamedStringEntries.Remove(oldId);
-                }
-                if (cleanupChanged)
-                {
-                    try { SaveCurrentModStringEntries(renamedStringEntries); }
-                    catch { /* The rename is already safe; leave an orphan string rather than fail it. */ }
-                }
-            }
+                if (renamedStringEntries != null)
+                    SaveCurrentModStringEntries(
+                        renamedStringEntries,
+                        StringTableSection.Abilities,
+                        editedStringFileState,
+                        updateSession: false);
+                SaveAbilityXmlDocument(doc, path);
+                migration.Save(SaveXmlDocumentAtomic);
+            });
+            if (renamedStringEntries != null)
+                AdoptSavedModStringEntries(renamedStringEntries);
+            AdoptGameIdentifierReferenceMigration(migration);
+            RenamePendingAbilityDraftReferences(oldName, abilityName);
         }
-    }
-
-    private void RenameAbilityReferencesInMods(string oldName, string newName)
-    {
-        var path = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
-        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+        else
         {
-            var doc = LoadAbilityXmlDocumentForUpdate(path, "abilitiesmods");
-            var changed = false;
-            foreach (var ability in doc.Root?.Descendants().Where(e => e.Name.LocalName.Equals("ability", StringComparison.OrdinalIgnoreCase)) ?? [])
+            var stringPath = editedStringEntries == null ? null : GetCurrentModStringsPath();
+            var expected = CaptureExpectedEditorFileStates([stringPath]);
+            if (editedStringFileState != null && !string.IsNullOrWhiteSpace(stringPath))
+                expected[Path.GetFullPath(stringPath)] = editedStringFileState;
+            ModDocumentPersistence.Execute([powerFile], [stringPath], expected, () =>
             {
-                if (!GetAbilityElementName(ability).Equals(oldName, StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var text in ability.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).ToList()) text.Remove();
-                ability.AddFirst(new XText(newName));
-                changed = true;
-            }
-            if (changed) SaveAbilityXmlDocument(doc, path);
+                if (editedStringEntries != null)
+                    SaveCurrentModStringEntries(
+                        editedStringEntries,
+                        StringTableSection.Abilities,
+                        editedStringFileState,
+                        updateSession: false);
+                SaveAbilityXmlDocument(doc, path);
+            });
+            if (editedStringEntries != null)
+                AdoptSavedModStringEntries(editedStringEntries);
         }
 
-        if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
-        {
-            var protoDocument = new XDocument(_modXmlDoc);
-            if (GameIdentifierReferencePolicy.RenameElementReferences(
-                    protoDocument, "castpower", oldName, newName) > 0)
-            {
-                SaveXmlDocumentAtomic(protoDocument, _modFilePath);
-                AdoptSavedProtoDocument(protoDocument);
-            }
-        }
-
-        var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
-        if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
-        {
-            var techtree = XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace);
-            var changed = GameIdentifierReferencePolicy.RenameAttributeReferences(
-                techtree, "protopower", oldName, newName);
-            changed += GameIdentifierReferencePolicy.RenameAttributeReferences(
-                techtree, "power", oldName, newName);
-            if (changed > 0)
-            {
-                SaveXmlDocumentAtomic(techtree, techtreePath);
-                RefreshTechnologyViewAfterTechTypeChanges();
-            }
-        }
-
-        RenamePendingAbilityDraftReferences(oldName, newName);
+        _abilityPowerCatalog[abilityName] = new XElement(replacement);
+        RegisterAvailableAbilityName(abilityName);
     }
 
     private void RenamePendingAbilityDraftReferences(string oldName, string newName)
@@ -34819,13 +35270,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(powersPath)) return;
         try
         {
-            var doc = LoadAbilityXmlDocumentForUpdate(powersPath, "powersmod");
-            if (doc.Root == null) doc.Add(new XElement("powersmod"));
-            doc.Root!.Name = "powersmod";
+            var powerFile = ModDocumentPersistence.Prepare(powersPath, ModXmlDocumentKind.Powers);
+            var doc = powerFile.Document;
+            var root = doc.Root!;
 
             var deletedNames = result.DeletedNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var deletedName in deletedNames)
+            {
+                if (!await EnsureIdentifierCanBeDeletedAsync(
+                        GameIdentifierKind.Ability, deletedName, "Ability"))
+                    return;
+            }
             var deletedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var power in doc.Root.Elements().Where(element =>
+            foreach (var power in root.Elements().Where(element =>
                          element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
                          deletedNames.Contains(GetAbilityElementName(element))))
             {
@@ -34833,69 +35290,81 @@ public partial class ProtoEditorWindow : SimpleWindow
                     deletedStringIds.Add(id);
             }
 
-            // Read stringmods before changing powers_mods.xml. If stringmods is locked
-            // or unreadable, deletion aborts instead of leaving a partially applied change.
+            var approvedStringIds = await ReviewOrphanStringsAsync(
+                deletedStringIds.Where(id => id.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase)),
+                deletedNames.Count == 1
+                    ? $"Deleting ability '{deletedNames.First()}'"
+                    : "Deleting the selected abilities",
+                this);
             Dictionary<string, string>? stringEntries = null;
-            if (deletedStringIds.Count > 0)
+            if (approvedStringIds.Count > 0)
                 stringEntries = LoadCurrentModStringEntries(requireReadable: true);
 
             foreach (var rename in result.Renames)
             {
-                var power = doc.Root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                var power = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
                                                                     GetAbilityElementName(e).Equals(rename.OldName, StringComparison.OrdinalIgnoreCase));
                 if (power == null) continue;
                 power.SetAttributeValue("name", rename.NewName);
-                RenameAbilityReferencesInMods(rename.OldName, rename.NewName);
+            }
+
+            foreach (var deletedName in result.DeletedNames)
+            {
+                foreach (var power in root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
+                                                                      GetAbilityElementName(e).Equals(deletedName, StringComparison.OrdinalIgnoreCase)).ToList())
+                    power.Remove();
+            }
+
+            var stringsChanged = false;
+            if (stringEntries != null && approvedStringIds.Count > 0)
+            {
+                var sharedCatalogStringIds = _abilityPowerCatalog
+                    .Where(entry => !deletedNames.Contains(entry.Key))
+                    .SelectMany(entry => GetAbilityDefinitionStringIds(entry.Value))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
+                    approvedStringIds.Where(id => !sharedCatalogStringIds.Contains(id)),
+                    [doc],
+                    [powersPath]);
+                foreach (var id in safeRemovals)
+                    stringsChanged |= stringEntries.Remove(id);
+            }
+
+            var stringPath = GetCurrentModStringsPath();
+            var renames = result.Renames
+                .Select(rename => new KeyValuePair<string, string>(rename.OldName, rename.NewName))
+                .ToList();
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file =>
+                    !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(powersPath), StringComparison.OrdinalIgnoreCase)),
+                GameIdentifierKind.Ability,
+                renames);
+            var paths = new List<string?>();
+            if (stringsChanged)
+                paths.Add(stringPath);
+            paths.AddRange(migration.Paths);
+            var expected = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
+            ModDocumentPersistence.Execute([powerFile], paths, expected, () =>
+            {
+                SaveAbilityXmlDocument(doc, powersPath);
+                if (stringsChanged && stringEntries != null)
+                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities, updateSession: false);
+                migration.Save(SaveXmlDocumentAtomic);
+            });
+            if (stringsChanged && stringEntries != null)
+                AdoptSavedModStringEntries(stringEntries);
+            AdoptGameIdentifierReferenceMigration(migration);
+            foreach (var rename in result.Renames)
+            {
                 if (_abilityPowerCatalog.Remove(rename.OldName, out var cached))
                 {
                     cached.SetAttributeValue("name", rename.NewName);
                     _abilityPowerCatalog[rename.NewName] = cached;
                 }
+                RenamePendingAbilityDraftReferences(rename.OldName, rename.NewName);
             }
-
-            foreach (var deletedName in result.DeletedNames)
-            {
-                foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                                                                      GetAbilityElementName(e).Equals(deletedName, StringComparison.OrdinalIgnoreCase)).ToList())
-                    power.Remove();
+            foreach (var deletedName in deletedNames)
                 _abilityPowerCatalog.Remove(deletedName);
-            }
-
-            var stringsChanged = false;
-            if (stringEntries != null && deletedStringIds.Count > 0)
-            {
-                var remainingAbilityStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var power in doc.Root.Elements().Where(element => element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
-                    foreach (var id in GetAbilityDefinitionStringIds(power))
-                        remainingAbilityStringIds.Add(id);
-
-                // The catalog contains base-game powers too, so a string override that is
-                // still referenced by another Original/shared ability is kept.
-                foreach (var catalogEntry in _abilityPowerCatalog)
-                {
-                    if (deletedNames.Contains(catalogEntry.Key))
-                        continue;
-                    foreach (var id in GetAbilityDefinitionStringIds(catalogEntry.Value))
-                        remainingAbilityStringIds.Add(id);
-                }
-
-                foreach (var id in deletedStringIds)
-                {
-                    // Only clean ability-owned IDs, and only if nothing else we know about
-                    // still references them. This avoids deleting unrelated shared strings.
-                    if (!id.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase) ||
-                        remainingAbilityStringIds.Contains(id) ||
-                        IsStringIdReferencedByCurrentProtoData(id))
-                    {
-                        continue;
-                    }
-                    stringsChanged |= stringEntries.Remove(id);
-                }
-            }
-
-            SaveAbilityXmlDocument(doc, powersPath);
-            if (stringsChanged && stringEntries != null)
-                SaveCurrentModStringEntries(stringEntries);
             if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
                 BuildEditorPanel(_currentUnitName, resetScroll: false);
             _statusMessage.Text = "Ability changes saved.";
@@ -34914,14 +35383,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
-        if (_isDirty)
-        {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty)
-                return;
-        }
         var customNames = GetCustomTacticsNames();
         var builtInNames = GetBuiltInTacticsNames();
         var usageCounts = GetTacticsUsageCounts();
@@ -34939,8 +35402,31 @@ public partial class ProtoEditorWindow : SimpleWindow
             CreateManagedTacticsFileAsync,
             DuplicateManagedTacticsFileAsync,
             RenameManagedTacticsFileAsync,
-            DeleteManagedTacticsFileAsync);
+            DeleteManagedTacticsFileAsync,
+            ValidateManagedTacticsDeletionAsync);
         await window.ShowDialog(this);
+    }
+
+    private async Task<bool> SavePendingChangesBeforeImmediateManagerAsync()
+    {
+        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+            return false;
+        if (!_isDirty)
+            return true;
+
+        await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
+        return !_isDirty;
+    }
+
+    private Task<bool> ValidateManagedTacticsDeletionAsync(Window owner, string tacticsName)
+    {
+        var path = GetCustomTacticsPath(tacticsName);
+        return EnsureIdentifierCanBeDeletedAsync(
+            GameIdentifierKind.Tactics,
+            tacticsName,
+            "Tactics file",
+            excludedPaths: path == null ? null : [path],
+            owner: owner);
     }
 
     private async Task<bool> CreateManagedTacticsFileAsync(string tacticsName)
@@ -34961,11 +35447,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return false;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            WriteTacticsTextAtomic(path, NewTacticsTemplate);
+            var document = XDocument.Parse(NewTacticsTemplate, LoadOptions.PreserveWhitespace);
+            var prepared = new PreparedModXmlDocument(
+                Path.GetFullPath(path),
+                ModXmlDocumentKind.Tactics,
+                document,
+                FileIntegrityTransaction.CaptureState(path));
+            ModDocumentPersistence.Execute([prepared], null, null,
+                () => SaveTacticsDocumentAtomic(document, path));
             _tacticsActionCache.Clear();
             _tacticsLoadDiagnostics.Clear();
             _resolvedTacticsActionSources.Clear();
+            _cachedTacticsNames = null;
             return true;
         }
         catch (Exception ex)
@@ -34994,8 +35487,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return false;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-
             if (!sourceIsBuiltIn)
             {
                 var sourcePath = GetCustomTacticsPath(sourceName);
@@ -35009,7 +35500,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return false;
                 }
 
-                CopyTacticsFileAtomic(sourcePath, targetPath);
+                var loadedSource = ModXmlDocumentSafety.LoadExisting(sourcePath, ModXmlDocumentKind.Tactics);
+                FileIntegrityTransaction.Execute(
+                    [sourcePath, targetPath],
+                    new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [Path.GetFullPath(sourcePath)] = loadedSource.FileState,
+                        [Path.GetFullPath(targetPath)] = FileIntegrityTransaction.CaptureState(targetPath)
+                    },
+                    () => CopyTacticsFileAtomic(sourcePath, targetPath));
             }
             else
             {
@@ -35024,13 +35523,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return false;
                 }
 
-                RemoveFormattingWhitespace(document);
-                SaveTacticsDocumentAtomic(document, targetPath);
+                var prepared = new PreparedModXmlDocument(
+                    Path.GetFullPath(targetPath),
+                    ModXmlDocumentKind.Tactics,
+                    document,
+                    FileIntegrityTransaction.CaptureState(targetPath));
+                ModDocumentPersistence.Execute([prepared], null, null,
+                    () => SaveTacticsDocumentAtomic(document, targetPath));
             }
 
             _tacticsActionCache.Clear();
             _tacticsLoadDiagnostics.Clear();
             _resolvedTacticsActionSources.Clear();
+            _cachedTacticsNames = null;
             return true;
         }
         catch (Exception ex)
@@ -35054,6 +35559,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> DeleteManagedTacticsFileAsync(string tacticsName)
     {
+        var candidatePath = GetCustomTacticsPath(tacticsName);
+        if (!await EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.Tactics,
+                tacticsName,
+                "Tactics file",
+                excludedPaths: candidatePath == null ? null : [candidatePath]))
+            return false;
         var result = new TacticsManagerResult();
         result.DeletedNames.Add(tacticsName);
         await ApplyTacticsManagerChangesAsync(result);
@@ -35066,6 +35578,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         XDocument document;
         string? customPath = null;
+        FileIntegrityTransaction.FileState? expectedCustomState = null;
 
         if (!isBuiltIn)
         {
@@ -35079,37 +35592,15 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             try
             {
-                document = XDocument.Load(customPath, LoadOptions.PreserveWhitespace);
+                var loaded = ModXmlDocumentSafety.LoadExisting(customPath, ModXmlDocumentKind.Tactics);
+                document = loaded.Document;
+                expectedCustomState = loaded.FileState;
             }
-            catch (Exception originalException)
+            catch (Exception exception)
             {
-                // Repair the exact malformed armoroverride closing tag produced by older
-                // editor builds, but do not broadly "fix" unrelated invalid XML.
-                try
-                {
-                    var raw = File.ReadAllText(customPath);
-                    var repaired = Regex.Replace(
-                        raw,
-                        @"(<armoroverride\b[^>]*>[^<]*)</armor>",
-                        "$1</armoroverride>",
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-                    if (string.Equals(raw, repaired, StringComparison.Ordinal))
-                    {
-                        var prompt = new Prompt(PromptType.Error, "Unable to open tactics", originalException.Message);
-                        await prompt.ShowDialog(this);
-                        return;
-                    }
-                    document = XDocument.Parse(repaired, LoadOptions.PreserveWhitespace);
-                    // Persist the exact legacy repair immediately. Otherwise the preview is fixed
-                    // in memory while the malformed source file remains broken on disk.
-                    SaveTacticsDocumentAtomic(document, customPath);
-                }
-                catch
-                {
-                    var prompt = new Prompt(PromptType.Error, "Unable to open tactics", originalException.Message);
-                    await prompt.ShowDialog(this);
-                    return;
-                }
+                var prompt = new Prompt(PromptType.Error, "Unable to open tactics", exception.Message);
+                await prompt.ShowDialog(this);
+                return;
             }
         }
         else
@@ -35131,7 +35622,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         var editor = new TacticsEditorWindow();
-        var expectedCustomHash = customPath == null ? null : ComputeFileSha256(customPath);
         await editor.InitializeTacticsActionEditorAsync(
             tacticsName,
             isBuiltIn,
@@ -35140,22 +35630,55 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ? null
                 : async updatedDocument =>
                 {
-                    var currentHash = ComputeFileSha256(customPath);
-                    if (!string.Equals(expectedCustomHash, currentHash, StringComparison.OrdinalIgnoreCase))
+                    var currentState = FileIntegrityTransaction.CaptureState(customPath);
+                    if (expectedCustomState == null || expectedCustomState != currentState)
                     {
                         var changedPrompt = new Prompt(
                             PromptType.Confirm,
                             "Tactics changed on disk",
-                            "This tactics file changed on disk after it was opened. Saving now will overwrite those external changes. Continue?",
-                            confirmButtonText: "Save");
+                            "This tactics file changed on disk after it was opened. Reload the external version?\n\n" +
+                            "Because this editor represents one tactics document, its current unsaved edits will be replaced. Saving is paused so you can review the reloaded file.",
+                            confirmButtonText: "Reload")
+                        {
+                            Width = 610,
+                            Height = 245,
+                            MinWidth = 550,
+                            MinHeight = 215
+                        };
                         await changedPrompt.ShowDialog(editor);
                         if (!changedPrompt.Confirmed)
                             return TacticsDocumentSaveOutcome.Cancelled;
+
+                        try
+                        {
+                            var stateBeforeRead = FileIntegrityTransaction.CaptureState(customPath);
+                            var externalDocument = ModXmlDocumentSafety.LoadExisting(
+                                customPath,
+                                ModXmlDocumentKind.Tactics).Document;
+                            var stateAfterRead = FileIntegrityTransaction.CaptureState(customPath);
+                            if (stateBeforeRead != stateAfterRead)
+                                throw new IOException("The tactics file changed again while it was being reloaded.");
+                            editor.ReloadTacticsActionEditorDocument(externalDocument);
+                            expectedCustomState = stateAfterRead;
+                        }
+                        catch (Exception exception)
+                        {
+                            await new Prompt(
+                                PromptType.Error,
+                                "Unable to reload tactics",
+                                "No files were written. " + exception.Message).ShowDialog(editor);
+                        }
+                        return TacticsDocumentSaveOutcome.Reloaded;
                     }
 
-                    RemoveFormattingWhitespace(updatedDocument);
-                    SaveTacticsDocumentAtomic(updatedDocument, customPath);
-                    expectedCustomHash = ComputeFileSha256(customPath);
+                    var prepared = new PreparedModXmlDocument(
+                        Path.GetFullPath(customPath),
+                        ModXmlDocumentKind.Tactics,
+                        updatedDocument,
+                        expectedCustomState);
+                    ModDocumentPersistence.Execute([prepared], null, null,
+                        () => SaveTacticsDocumentAtomic(updatedDocument, customPath));
+                    expectedCustomState = FileIntegrityTransaction.CaptureState(customPath);
                     _tacticsActionCache.Clear();
                     _tacticsLoadDiagnostics.Clear();
                     _resolvedTacticsActionSources.Clear();
@@ -35173,32 +35696,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
 
-    private static string? ComputeFileSha256(string path)
-    {
-        if (!File.Exists(path))
-            return null;
-        using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
-
     private static void SaveXmlDocumentAtomic(XDocument document, string path)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
-        try
-        {
-            ProtoXmlHandler.SaveProtoXml(document, tempPath);
-            File.Move(tempPath, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
-    }
+        => PreservedXmlFile.SaveAtomic(document, path);
 
     private static void SaveTacticsDocumentAtomic(XDocument document, string path)
         => SaveXmlDocumentAtomic(document, path);
@@ -35238,16 +35737,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (File.Exists(tempPath))
                 File.Delete(tempPath);
-        }
-    }
-
-    private static void RemoveFormattingWhitespace(XDocument document)
-    {
-        foreach (var textNode in document.DescendantNodes().OfType<XText>()
-                     .Where(node => string.IsNullOrWhiteSpace(node.Value))
-                     .ToList())
-        {
-            textNode.Remove();
         }
     }
 
@@ -35402,6 +35891,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_modXmlRoot == null || _modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
+        if (!await ReloadExternallyChangedUnitFilesAsync())
+            return;
 
         var tacticsDirectory = GetModTacticsDirectory();
         if (tacticsDirectory == null)
@@ -35410,6 +35901,32 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
+            foreach (var deletedName in result.DeletedNames)
+            {
+                var deletedPath = GetCustomTacticsPath(deletedName);
+                if (!await EnsureIdentifierCanBeDeletedAsync(
+                        GameIdentifierKind.Tactics,
+                        deletedName,
+                        "Tactics file",
+                        excludedPaths: deletedPath == null ? null : [deletedPath]))
+                    return;
+            }
+            var candidateProtoDocument = new XDocument(_modXmlDoc);
+            var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+            XDocument? candidateTechtreeDocument = null;
+            var preparedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
+            {
+                var stateBeforeRead = FileIntegrityTransaction.CaptureState(techtreePath);
+                candidateTechtreeDocument = XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace);
+                var stateAfterRead = FileIntegrityTransaction.CaptureState(techtreePath);
+                if (stateBeforeRead != stateAfterRead)
+                    throw new IOException($"'{techtreePath}' changed while tactics references were being inspected. No files were written.");
+                preparedStates[Path.GetFullPath(techtreePath)] = stateAfterRead;
+            }
+
+            var transactionPaths = new List<string?> { _modFilePath, techtreePath };
+            var preparedRenames = new List<(string OldPath, string NewPath)>();
             foreach (var rename in result.Renames)
             {
                 var oldPath = GetCustomTacticsPath(rename.OldName);
@@ -35419,75 +35936,90 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (File.Exists(newPath))
                     throw new IOException($"A tactics file named '{rename.NewName}' already exists.");
 
-                var xmlBackup = new XDocument(_modXmlDoc);
-                var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
-                XDocument? techtreeBackup = null;
-                XDocument? updatedTechtree = null;
-                if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
+                preparedRenames.Add((oldPath, newPath));
+                transactionPaths.Add(oldPath);
+                transactionPaths.Add(newPath);
+                GameIdentifierReferencePolicy.RenameReferences(
+                    candidateProtoDocument, GameIdentifierKind.Tactics, rename.OldName, rename.NewName);
+                if (candidateTechtreeDocument != null)
                 {
-                    techtreeBackup = XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace);
-                    updatedTechtree = new XDocument(techtreeBackup);
-                    if (GameIdentifierReferencePolicy.RenameAttributeReferences(
-                            updatedTechtree,
-                            "tactic",
-                            NormalizeManagedTacticsName(rename.OldName),
-                            NormalizeManagedTacticsName(rename.NewName)) == 0)
-                        updatedTechtree = null;
-                }
-                var moved = false;
-                var techtreeSaved = false;
-                try
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
-                    File.Move(oldPath, newPath);
-                    moved = true;
-                    RenameTacticsReferences(rename.OldName, rename.NewName);
-                    SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
-                    if (updatedTechtree != null && !string.IsNullOrWhiteSpace(techtreePath))
-                    {
-                        SaveXmlDocumentAtomic(updatedTechtree, techtreePath);
-                        techtreeSaved = true;
-                        RefreshTechnologyViewAfterTechTypeChanges();
-                    }
-                }
-                catch
-                {
-                    _modXmlDoc = xmlBackup;
-                    _modXmlRoot = xmlBackup.Root;
-                    if (techtreeSaved && techtreeBackup != null && !string.IsNullOrWhiteSpace(techtreePath))
-                    {
-                        try
-                        {
-                            SaveXmlDocumentAtomic(techtreeBackup, techtreePath);
-                            RefreshTechnologyViewAfterTechTypeChanges();
-                        }
-                        catch { }
-                    }
-                    if (moved && File.Exists(newPath) && !File.Exists(oldPath))
-                        File.Move(newPath, oldPath);
-                    throw;
+                    GameIdentifierReferencePolicy.RenameReferences(
+                        candidateTechtreeDocument, GameIdentifierKind.Tactics, rename.OldName, rename.NewName);
                 }
             }
 
-            foreach (var createdName in result.CreatedNames)
-            {
-                var path = GetCustomTacticsPath(createdName);
-                if (path == null || File.Exists(path))
-                    continue;
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                WriteTacticsTextAtomic(path, NewTacticsTemplate);
-            }
+            var excludedRenamePaths = preparedRenames
+                .SelectMany(rename => new[] { rename.OldPath, rename.NewPath })
+                .Concat(new[] { _modFilePath, techtreePath })
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.GetFullPath(path!))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var tacticsOperations = result.Renames.Select(rename =>
+                    new KeyValuePair<string, string>(rename.OldName, rename.NewName))
+                .ToList();
+            var referenceMigration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file =>
+                    !excludedRenamePaths.Contains(Path.GetFullPath(file.Path))),
+                GameIdentifierKind.Tactics,
+                tacticsOperations);
+            transactionPaths.AddRange(referenceMigration.Paths);
+            foreach (var state in referenceMigration.ExpectedStates)
+                preparedStates[state.Key] = state.Value;
 
-            foreach (var deletedName in result.DeletedNames)
+            var pathsToCreate = result.CreatedNames
+                .Select(GetCustomTacticsPath)
+                .Where(path => path != null && !File.Exists(path))
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var pathsToDelete = result.DeletedNames
+                .Select(GetCustomTacticsPath)
+                .Where(path => path != null && File.Exists(path))
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            transactionPaths.AddRange(pathsToCreate);
+            transactionPaths.AddRange(pathsToDelete);
+
+            FileIntegrityTransaction.Execute(
+                transactionPaths,
+                CaptureExpectedEditorFileStates(transactionPaths, preparedStates),
+                () =>
+                {
+                    foreach (var (oldPath, newPath) in preparedRenames)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
+                        File.Move(oldPath, newPath, overwrite: false);
+                    }
+                    foreach (var path in pathsToCreate)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                        WriteTacticsTextAtomic(path, NewTacticsTemplate);
+                    }
+                    foreach (var path in pathsToDelete)
+                        File.Delete(path);
+
+                    if (preparedRenames.Count > 0)
+                    {
+                        SaveXmlDocumentAtomic(candidateProtoDocument, _modFilePath);
+                        if (candidateTechtreeDocument != null && !string.IsNullOrWhiteSpace(techtreePath))
+                            SaveXmlDocumentAtomic(candidateTechtreeDocument, techtreePath);
+                        referenceMigration.Save(SaveXmlDocumentAtomic);
+                    }
+                });
+
+            if (preparedRenames.Count > 0)
             {
-                var path = GetCustomTacticsPath(deletedName);
-                if (path != null && File.Exists(path))
-                    File.Delete(path);
+                AdoptSavedProtoDocument(candidateProtoDocument);
+                if (candidateTechtreeDocument != null)
+                    RefreshTechnologyViewAfterTechTypeChanges();
+                AdoptGameIdentifierReferenceMigration(referenceMigration);
             }
 
             _tacticsActionCache.Clear();
             _tacticsLoadDiagnostics.Clear();
             _resolvedTacticsActionSources.Clear();
+            _cachedTacticsNames = null;
             // Managing tactics writes its own files immediately, but must not
             // clear unsaved ProtoUnit drafts captured by the main editor.
             _isDirty = _dirtyUnitNames.Count > 0;
@@ -35507,13 +36039,16 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void RenameTacticsReferences(string oldName, string newName)
+        => RenameTacticsReferences(_modXmlRoot, oldName, newName);
+
+    private static void RenameTacticsReferences(XElement? root, string oldName, string newName)
     {
-        if (_modXmlRoot == null)
+        if (root == null)
             return;
 
         var normalizedOld = NormalizeManagedTacticsName(oldName);
         var normalizedNew = NormalizeManagedTacticsName(newName);
-        foreach (var tacticsElement in _modXmlRoot.Descendants()
+        foreach (var tacticsElement in root.Descendants()
                      .Where(element => element.Name.LocalName.Equals("tactics", StringComparison.OrdinalIgnoreCase)))
         {
             if (NormalizeManagedTacticsName(tacticsElement.Value)
@@ -35569,6 +36104,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> GetAvailableTacticsNames()
     {
+        if (_cachedTacticsNames != null)
+            return _cachedTacticsNames.ToList();
+
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         static string NormalizeTacticsName(string pathOrEntry, string? tacticsRoot = null)
@@ -35638,7 +36176,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         AddLooseDirectory(names, ResolveBaseGameplayDirectory());
         AddLooseDirectory(names, string.IsNullOrWhiteSpace(_modFilePath) ? null : Path.GetDirectoryName(_modFilePath));
 
-        return names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        _cachedTacticsNames = names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        return _cachedTacticsNames.ToList();
     }
 
     private IEnumerable<string> GetTacticsCandidatePaths(string tacticsName)
@@ -36071,9 +36610,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else
         {
-            _isReadOnly = _isAbilityDefinitionEditorMode
+            _isReadOnly = _modDocumentSafetyError != null || (_isAbilityDefinitionEditorMode
                 ? _abilityDefinitionEditorReadOnly
-                : _protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle && _tacticsEditorSession?.IsReadOnly == true;
+                : _protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle && _tacticsEditorSession?.IsReadOnly == true);
         }
 
         if (unit == null)
@@ -43572,7 +44111,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             }
 
-            EnsureProtoUnitCommandCatalogLoaded(force: true);
+            EnsureProtoUnitCommandCatalogLoaded();
             if (!_protoUnitCommandCatalog.TryGetValue(state.CommandName, out var element))
                 return;
 
@@ -43604,14 +44143,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return true;
 
             var dirtyBefore = _isDirty;
+            var documentBackup = new XDocument(_modXmlDoc);
             try
             {
                 var uniqueState = _transformCommandAssignments.UniqueAssignment;
-                ProtoXmlHandler.SetTransformCommandEntry(unit, uniqueState == null
-                    ? null
-                    : new ProtoCommandEntry { Value = uniqueState.CommandName.Trim() });
-                RefreshTransformCommandStatsReference();
-
                 var regularNames = GetAvailableCommandNames()
                     .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
                     .ToList();
@@ -43619,8 +44154,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 entries.AddRange(_transformCommandAssignments.BuildCommandEntries(
                     IsTransformUniqueCommand,
                     IsTransformMultipleCommand));
-                ProtoXmlHandler.SetCommandEntries(unit, entries);
-                ProtoXmlHandler.SaveProtoXml(_modXmlDoc, _modFilePath);
+                var paths = new[] { _modFilePath };
+                FileIntegrityTransaction.Execute(
+                    paths,
+                    CaptureExpectedEditorFileStates(paths),
+                    () =>
+                    {
+                        ProtoXmlHandler.SetTransformCommandEntry(unit, uniqueState == null
+                            ? null
+                            : new ProtoCommandEntry { Value = uniqueState.CommandName.Trim() });
+                        RefreshTransformCommandStatsReference();
+                        ProtoXmlHandler.SetCommandEntries(unit, entries);
+                        SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
+                    });
+                _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
                 _isDirty = dirtyBefore;
                 _statusMessage.Text = "Transform assignment removed.";
                 _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
@@ -43628,6 +44175,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             catch (Exception ex)
             {
+                _modXmlDoc = documentBackup;
+                _modXmlRoot = documentBackup.Root;
                 _isDirty = dirtyBefore;
                 await new Prompt(PromptType.Error, "Save failed", $"Could not save the Transform assignment change:\n{ex.Message}").ShowDialog(this);
                 return false;
@@ -48637,23 +49186,35 @@ public partial class ProtoEditorWindow : SimpleWindow
         return cleaned.Trim();
     }
 
-    private bool TryLoadModFile(string path, bool showErrors = true)
+    private bool TryLoadModFile(string path)
     {
+        _lastModLoadError = null;
         if (!Path.GetFileName(path).Equals("proto_mods.xml", StringComparison.OrdinalIgnoreCase))
         {
-            if (showErrors)
-            {
-                _ = new Prompt(PromptType.Error, "Wrong Mod File", "The proto editor can only write to proto_mods.xml.").ShowDialog(this);
-            }
+            _lastModLoadError =
+                $"'{Path.GetFullPath(path)}' cannot be loaded. The ProtoUnit editor only opens proto_mods.xml.";
             return false;
         }
 
         try
         {
-            var (doc, root) = ProtoXmlHandler.ParseProtoXml(path);
+            var load = ModXmlDocumentSafety.LoadExisting(
+                path,
+                ModXmlDocumentKind.ProtoUnits,
+                allowUnsafeStructureForReadOnly: true);
+            var doc = load.Document;
+            var root = doc.Root!;
+            var stateAfterRead = load.FileState;
+            _modDocumentSafetyError = load.Validation.IsSafeToEdit
+                ? null
+                : load.Validation.ToDisplayMessage(path);
             _modXmlDoc = doc;
             _modXmlRoot = root;
             _modFilePath = path;
+            _loadedModXmlFileState = stateAfterRead;
+            _loadedModXmlBaseline = new XDocument(doc);
+            _loadedModStringsFileState = null;
+            _loadedModStringValues.Clear();
             LoadCurrentModAssetCatalogs();
             _fileLabel.Text = path;
             _isDirty = false;
@@ -48665,16 +49226,35 @@ public partial class ProtoEditorWindow : SimpleWindow
             var config = ProtoEditorSettings.LoadSettings();
             config.LastModFilePath = path;
             ProtoEditorSettings.SaveSettings(config);
+            var warnings = ModXmlDocumentSafety.Validate(doc, ModXmlDocumentKind.ProtoUnits).Warnings;
+            if (warnings.Count > 0)
+            {
+                _statusMessage.Text =
+                    $"Loaded '{Path.GetFileName(path)}' with {warnings.Count} preserved, unmanaged element warning(s).";
+            }
             return true;
         }
         catch (Exception ex)
         {
-            if (showErrors)
-            {
-                _ = new Prompt(PromptType.Error, "Error", $"Failed to open proto_mods.xml:\n{ex.Message}").ShowDialog(this);
-            }
+            _lastModLoadError = ex.Message;
             return false;
         }
+    }
+
+    private async Task<bool> TryLoadModFileWithFeedbackAsync(string path)
+    {
+        if (TryLoadModFile(path))
+        {
+            if (_modDocumentSafetyError != null)
+                await DocumentSafetyDialog.ShowAsync(this, "ProtoUnit", _modDocumentSafetyError);
+            return true;
+        }
+
+        await DocumentSafetyDialog.ShowAsync(
+            this,
+            "ProtoUnit",
+            _lastModLoadError ?? $"'{Path.GetFullPath(path)}' could not be loaded safely.");
+        return false;
     }
 
     private async Task<bool> EnsureLocalModAsync(bool forceNew = false)
@@ -48692,15 +49272,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         }
 
-        var userBase = GetConfiguredUserFolderPath();
-        if (string.IsNullOrWhiteSpace(userBase))
+        var localModsDirectory = GetLocalModsDirectory();
+        if (string.IsNullOrWhiteSpace(localModsDirectory))
         {
             var pErr = new Prompt(PromptType.Error, "Settings Error", "User folder path is not configured. Set it in AoM Divine Data Editor Settings.");
             await pErr.ShowDialog(this);
             return false;
         }
 
-        var modDir = Path.Combine(userBase, "mods", "local", modName, "game", "data", "gameplay");
+        var modDir = Path.Combine(localModsDirectory, modName, "game", "data", "gameplay");
         try
         {
             Directory.CreateDirectory(modDir);
@@ -48719,23 +49299,28 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _modXmlDoc = doc;
                 _modXmlRoot = root;
                 _modFilePath = xmlPath;
+                _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(xmlPath);
+                _loadedModXmlBaseline = new XDocument(doc);
+                _modDocumentSafetyError = null;
+                _loadedModStringsFileState = null;
+                _loadedModStringValues.Clear();
                 InvalidateSuggestionCaches(includeTechNames: true);
                 InvalidateModStringEntriesCache();
                 RefreshProtoActionMetadata();
             }
-            else if (!TryLoadModFile(xmlPath))
+            else if (!await TryLoadModFileWithFeedbackAsync(xmlPath))
             {
                 return false;
             }
 
             _modFilePath = xmlPath;
+            _loadedModXmlFileState ??= FileIntegrityTransaction.CaptureState(xmlPath);
             LoadCurrentModAssetCatalogs();
             _fileLabel.Text = xmlPath;
             _isDirty = false;
             EnsureCurrentModStringFileExists();
 
             var config = ProtoEditorSettings.LoadSettings();
-            config.UserFolderPath = userBase;
             config.LastModFilePath = xmlPath;
             ProtoEditorSettings.SaveSettings(config);
             return true;
@@ -48863,6 +49448,17 @@ public partial class ProtoEditorWindow : SimpleWindow
     private Task SaveTechnologyStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Technologies);
+
+    private Task SaveMajorGodStringValuesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        IReadOnlyCollection<string> removals)
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.MajorGods);
+
+    private Task SaveResolvedStringValuesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        IReadOnlyCollection<string> removals,
+        StringTableSection section)
     {
         if (updates.Count == 0 && removals.Count == 0)
             return Task.CompletedTask;
@@ -48889,14 +49485,25 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (updates.Count == 0 && safeRemovals.Length == 0)
             return Task.CompletedTask;
 
-        var updatedText = StringTableDocument.Parse(encodedSource.Text).Apply(updates, safeRemovals);
+        var updatedText = StringTableDocument.Parse(encodedSource.Text).Apply(
+            updates,
+            safeRemovals,
+            section);
+        if (string.Equals(updatedText, encodedSource.Text, StringComparison.Ordinal))
+            return Task.CompletedTask;
+
         AtomicWriteAllBytes(path, encodedSource.Encode(updatedText));
         _cachedModStringEntriesPath = path;
         _cachedModStringEntries = StringTableParser.Parse(updatedText);
+        _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(path);
+        ReplaceLoadedModStringValues(_cachedModStringEntries);
         return Task.CompletedTask;
     }
 
-    private string[] FilterUnreferencedStringIdsInCurrentMod(IEnumerable<string> stringIds)
+    private string[] FilterUnreferencedStringIdsInCurrentMod(
+        IEnumerable<string> stringIds,
+        IEnumerable<XDocument>? currentDocuments = null,
+        IEnumerable<string>? excludedPaths = null)
     {
         var requested = stringIds
             .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -48904,72 +49511,36 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (requested.Count == 0)
             return [];
 
-        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_modXmlRoot != null)
-        {
-            foreach (var value in _modXmlRoot.DescendantsAndSelf()
-                         .SelectMany(element => element.Attributes().Select(attribute => attribute.Value)
-                             .Concat(!element.HasElements ? [element.Value] : []))
-                         .Select(value => value.Trim()))
-            {
-                if (requested.Contains(value))
-                    referenced.Add(value);
-            }
-        }
+        var documents = new List<XDocument>();
+        if (_modXmlDoc != null)
+            documents.Add(_modXmlDoc);
+        if (currentDocuments != null)
+            documents.AddRange(currentDocuments);
+        var excluded = (excludedPaths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToList();
+        if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
+            excluded.Add(_modFilePath);
 
-        var gameDirectory = GetCurrentModGameDirectory();
-        if (string.IsNullOrWhiteSpace(gameDirectory) || !Directory.Exists(gameDirectory))
-            return requested.Where(id => !referenced.Contains(id)).ToArray();
-
-        try
-        {
-            foreach (var xmlPath in Directory.EnumerateFiles(gameDirectory, "*.xml", SearchOption.AllDirectories))
-            {
-                var content = File.ReadAllText(xmlPath);
-                foreach (var id in requested.Where(id => !referenced.Contains(id)))
-                {
-                    if (ContainsWholeStringId(content, id))
-                        referenced.Add(id);
-                }
-                if (referenced.Count == requested.Count)
-                    break;
-            }
-        }
-        catch (Exception exception)
-        {
-            throw new InvalidOperationException(
-                "Technology string cleanup was cancelled because references in the active mod could not be checked safely.",
-                exception);
-        }
-
+        var referenced = ModDeletionSafety.FindReferencedStringIds(
+            GetCurrentModRootDirectory(), requested, documents, excluded);
         return requested.Where(id => !referenced.Contains(id)).ToArray();
     }
-
-    private static bool ContainsWholeStringId(string content, string stringId)
-    {
-        for (var start = 0; ;)
-        {
-            start = content.IndexOf(stringId, start, StringComparison.OrdinalIgnoreCase);
-            if (start < 0)
-                return false;
-
-            var end = start + stringId.Length;
-            var hasValidStart = start == 0 || !IsStringIdCharacter(content[start - 1]);
-            var hasValidEnd = end == content.Length || !IsStringIdCharacter(content[end]);
-            if (hasValidStart && hasValidEnd)
-                return true;
-            start = end;
-        }
-    }
-
-    private static bool IsStringIdCharacter(char character)
-        => char.IsLetterOrDigit(character) || character == '_';
 
     private Dictionary<string, string> LoadCurrentModStringEntries(bool requireReadable = false)
     {
         var path = GetCurrentModStringsPath();
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (string.IsNullOrWhiteSpace(path))
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!File.Exists(path))
+        {
+            _cachedModStringEntriesPath = path;
+            _cachedModStringEntries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(path);
+            _loadedModStringValues.Clear();
+            return _cachedModStringEntries;
+        }
 
         if (!requireReadable &&
             string.Equals(_cachedModStringEntriesPath, path, StringComparison.OrdinalIgnoreCase) &&
@@ -48980,9 +49551,16 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
-            var parsed = StringTableParser.Parse(File.ReadAllText(path));
+            var stateBeforeRead = FileIntegrityTransaction.CaptureState(path);
+            var encodedSource = PreservedTextEncoding.Decode(File.ReadAllBytes(path));
+            var stateAfterRead = FileIntegrityTransaction.CaptureState(path);
+            if (stateBeforeRead != stateAfterRead)
+                throw new IOException($"'{path}' changed while it was being read.");
+            var parsed = StringTableParser.Parse(encodedSource.Text);
             _cachedModStringEntriesPath = path;
             _cachedModStringEntries = parsed;
+            _loadedModStringsFileState = stateAfterRead;
+            ReplaceLoadedModStringValues(parsed);
             return parsed;
         }
         catch (Exception ex)
@@ -49015,25 +49593,63 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void SaveCurrentModStringEntries(Dictionary<string, string> entries)
+    private void SaveCurrentModStringEntries(
+        IReadOnlyDictionary<string, string> entries,
+        StringTableSection additionSection,
+        FileIntegrityTransaction.FileState? expectedFileState = null,
+        bool updateSession = true)
     {
         var path = GetCurrentModStringsPath();
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        using var writer = new StringWriter();
-        writer.WriteLine("Language = \"English\"");
-        writer.WriteLine();
-
-        foreach (var entry in entries.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+        PreservedTextEncoding encodedSource;
+        try
         {
-            var escaped = entry.Value.Replace("\"", "\\\"", StringComparison.Ordinal);
-            writer.WriteLine($"ID = \"{entry.Key}\"   ;   Str = \"{escaped}\"");
+            encodedSource = File.Exists(path)
+                ? PreservedTextEncoding.Decode(File.ReadAllBytes(path))
+                : PreservedTextEncoding.Utf8WithoutBom("Language = \"English\"\n\n");
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"The existing stringmods file could not be read safely: '{path}'. No string changes were written.",
+                exception);
         }
 
-        AtomicWriteAllText(path, writer.ToString());
+        var document = StringTableDocument.Parse(encodedSource.Text);
+        var updatedText = document.ApplySnapshot(entries, additionSection);
+        if (string.Equals(updatedText, encodedSource.Text, StringComparison.Ordinal))
+            return;
+
+        var expectedState = expectedFileState ?? _loadedModStringsFileState;
+        if (expectedState == null)
+        {
+            throw new IOException(
+                $"'{path}' has not been loaded into the current editor session. No string changes were written. " +
+                "Reload the mod before saving so existing strings are not overwritten.");
+        }
+
+        FileIntegrityTransaction.Execute(
+            [path],
+            new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Path.GetFullPath(path)] = expectedState
+            },
+            () => AtomicWriteAllBytes(path, encodedSource.Encode(updatedText)));
+        if (updateSession)
+            AdoptSavedModStringEntries(entries);
+    }
+
+    private void AdoptSavedModStringEntries(IReadOnlyDictionary<string, string> entries)
+    {
+        var path = GetCurrentModStringsPath();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
         _cachedModStringEntriesPath = path;
         _cachedModStringEntries = new Dictionary<string, string>(entries, StringComparer.OrdinalIgnoreCase);
+        _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(path);
+        ReplaceLoadedModStringValues(entries);
     }
 
     private static void AtomicWriteAllBytes(string path, byte[] content)
@@ -49072,10 +49688,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             AtomicWriteAllText(path, "Language = \"English\"\n\n");
             InvalidateModStringEntriesCache();
+            _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(path);
+            _loadedModStringValues.Clear();
         }
     }
 
-    private void RemoveStringEntries(IEnumerable<string> ids)
+    private void RemoveStringEntries(IEnumerable<string> ids, StringTableSection section)
     {
         var entries = LoadCurrentModStringEntries(requireReadable: true);
         var changed = false;
@@ -49084,7 +49702,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             changed |= entries.Remove(id);
 
         if (changed)
-            SaveCurrentModStringEntries(entries);
+            SaveCurrentModStringEntries(entries, section);
     }
 
     private HashSet<string> CollectUnitStringIdsForRemoval(string unitName, XElement? unit)
@@ -49093,14 +49711,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         foreach (var tag in StringBackedFieldTags)
         {
+            var generatedId = BuildStringIdForUnit(unitName, GetStringSuffixForField(tag));
             var unitId = unit != null ? ProtoXmlHandler.GetSimpleField(unit, tag) : null;
-            if (!string.IsNullOrWhiteSpace(unitId))
+            if (unitId?.Equals(generatedId, StringComparison.OrdinalIgnoreCase) == true)
                 ids.Add(unitId);
-
-            if (_currentStringFieldIds.TryGetValue(tag, out var currentId) && !string.IsNullOrWhiteSpace(currentId))
+            if (_currentStringFieldIds.TryGetValue(tag, out var currentId) &&
+                currentId.Equals(generatedId, StringComparison.OrdinalIgnoreCase))
                 ids.Add(currentId);
-
-            ids.Add(BuildStringIdForUnit(unitName, GetStringSuffixForField(tag)));
         }
 
         return ids;
@@ -49147,7 +49764,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             entries[id] = tb.Text?.Trim() ?? "";
         }
 
-        SaveCurrentModStringEntries(entries);
+        SaveCurrentModStringEntries(entries, StringTableSection.Units);
     }
 
     private void CaptureCurrentUnitStringDraft()
@@ -49215,26 +49832,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void SavePendingUnitStringDrafts()
+    private void SavePendingUnitStringDrafts(IReadOnlySet<string> approvedRemovals)
     {
         if (_pendingUnitStringUpdates.Count == 0 && _pendingUnitStringRemovals.Count == 0)
             return;
         var entries = LoadCurrentModStringEntries(requireReadable: true);
-        foreach (var id in _pendingUnitStringRemovals)
-        {
-            var isStillReferenced = _modXmlRoot?.Elements()
-                .Where(element => element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase))
-                .SelectMany(unit => unit.Descendants())
-                .Any(element =>
-                    (StringBackedFieldTags.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase) ||
-                     element.Name.LocalName.Equals("displaynameid", StringComparison.OrdinalIgnoreCase)) &&
-                    element.Value.Trim().Equals(id, StringComparison.OrdinalIgnoreCase)) == true;
-            if (!isStillReferenced)
-                entries.Remove(id);
-        }
+        var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(approvedRemovals);
+        foreach (var id in safeRemovals)
+            entries.Remove(id);
         foreach (var entry in _pendingUnitStringUpdates)
             entries[entry.Key] = entry.Value;
-        SaveCurrentModStringEntries(entries);
+        SaveCurrentModStringEntries(entries, StringTableSection.Units);
     }
 
     private void TrackPendingUnitRename(string oldName, string newName)
@@ -49337,7 +49945,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("displaynameid"))] = displayName;
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("rollovertextid"))] = longRollover;
         entries[BuildStringIdForUnit(unitName, GetStringSuffixForField("shortrollovertextid"))] = shortRollover;
-        SaveCurrentModStringEntries(entries);
+        SaveCurrentModStringEntries(entries, StringTableSection.Units);
     }
 
     private async Task<bool> CheckStartLocalMod(bool allowReadOnlyPrompt = false)
@@ -49396,7 +50004,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> PromptUnsavedChangesAsync()
     {
-        if (!_isDirty && !(_technologyView?.IsDirty ?? false)) return true;
+        var hasUnitChanges = _modXmlDoc != null &&
+                             !string.IsNullOrWhiteSpace(_modFilePath) &&
+                             (_isDirty || _dirtyUnitNames.Count > 0);
+        var hasTechnologyChanges = _technologyView?.IsDirty ?? false;
+        var hasMajorGodChanges = _majorGodView?.IsDirty ?? false;
+        if (!hasUnitChanges && !hasTechnologyChanges && !hasMajorGodChanges)
+            return true;
 
         var prompt = new Prompt(PromptType.Confirm, "Unsaved Changes", "You have unsaved changes. Do you want to discard them and continue?");
         await prompt.ShowDialog(this);
@@ -49409,7 +50023,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(userBase))
             return null;
 
-        return Path.Combine(userBase, "mods", "local");
+        return LocalModsPathResolver.Resolve(userBase);
     }
 
     private async void SwitchMod_Click(object? sender, RoutedEventArgs e)
@@ -49457,7 +50071,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!string.IsNullOrWhiteSpace(picker.PickedItem))
         {
             var path = Path.Combine(localModsDir, picker.PickedItem, "game", "data", "gameplay", "proto_mods.xml");
-            if (TryLoadModFile(path))
+            if (await TryLoadModFileWithFeedbackAsync(path))
             {
                 ResetEntityBrowserToUnits();
                 _unitTabs.SelectedIndex = 1;
@@ -49476,6 +50090,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _modXmlDoc = null;
         _modXmlRoot = null;
         _modFilePath = null;
+        _loadedModXmlFileState = null;
+        _loadedModStringsFileState = null;
+        _loadedModXmlBaseline = null;
+        _modDocumentSafetyError = null;
+        _loadedModStringValues.Clear();
         _isDirty = false;
         ClearPendingUnitDrafts();
         InvalidateSuggestionCaches(includeTechNames: true);
@@ -49649,6 +50268,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                     draft.PowerValues[tag] = child.Value;
             }
         }
+    }
+
+    private IReadOnlyList<XDocument> GetBaseAbilityDocumentsFromLoadedBar()
+    {
+        if (_cachedBaseAbilityDocuments != null)
+            return _cachedBaseAbilityDocuments;
+        if (_protoDataBarFile == null || string.IsNullOrWhiteSpace(_protoDataBarPath))
+            return _cachedBaseAbilityDocuments = [];
+
+        _cachedBaseAbilityDocuments = ExtractAbilityDocumentsFromBar(_protoDataBarFile, _protoDataBarPath);
+        return _cachedBaseAbilityDocuments;
     }
 
     private static List<XDocument> ExtractAbilityDocumentsFromBar(BarArchive barFile, string barPath)
@@ -49909,7 +50539,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (barFile == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath)) return;
             var fullPath = Path.GetFullPath(barPath);
             if (!loadedBarPaths.Add(fullPath)) return;
-            MergeAbilityDocuments(ExtractAbilityDocumentsFromBar(barFile, fullPath));
+            var documents = !string.IsNullOrWhiteSpace(_protoDataBarPath) &&
+                            fullPath.Equals(Path.GetFullPath(_protoDataBarPath), StringComparison.OrdinalIgnoreCase)
+                ? GetBaseAbilityDocumentsFromLoadedBar()
+                : ExtractAbilityDocumentsFromBar(barFile, fullPath);
+            MergeAbilityDocuments(documents);
         }
 
         // Use the same Data.bar fallback chain as the working tactics/tech loaders.
@@ -50038,63 +50672,27 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     internal static XDocument LoadAbilityXmlDocumentForUpdate(string path, string rootName)
     {
-        if (!File.Exists(path))
-            return new XDocument(new XElement(rootName));
-
         try
         {
-            var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
-            if (document.Root == null)
-                throw new InvalidDataException("The XML document has no root element.");
-            return document;
+            var kind = rootName.ToLowerInvariant() switch
+            {
+                "abilitiesmods" => ModXmlDocumentKind.Abilities,
+                "powersmod" => ModXmlDocumentKind.Powers,
+                "protounitcommandmods" => ModXmlDocumentKind.ProtoUnitCommands,
+                "unittransformmods" => ModXmlDocumentKind.UnitTransforms,
+                _ => throw new ArgumentOutOfRangeException(nameof(rootName), rootName, "Unsupported editable XML root.")
+            };
+            return ModXmlDocumentSafety.LoadOrCreate(path, kind).Document;
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"The existing XML file could not be read safely: '{path}'. No replacement file was created.", ex);
+            throw new InvalidOperationException(
+                $"The existing XML file could not be read safely: '{Path.GetFullPath(path)}'. No replacement file was created. {ex.Message}", ex);
         }
     }
 
     internal static void SaveAbilityXmlDocument(XDocument document, string path, Func<string, string>? serializedXmlTransform = null)
-    {
-        foreach (var whitespace in document.DescendantNodes().OfType<XText>()
-                     .Where(text => string.IsNullOrWhiteSpace(text.Value)).ToList())
-        {
-            whitespace.Remove();
-        }
-
-        document.Declaration = null;
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory ?? ".", $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        var settings = new System.Xml.XmlWriterSettings
-        {
-            Indent = true,
-            IndentChars = "\t",
-            NewLineChars = Environment.NewLine,
-            NewLineHandling = System.Xml.NewLineHandling.Replace,
-            OmitXmlDeclaration = true
-        };
-        try
-        {
-            using (var writer = System.Xml.XmlWriter.Create(tempPath, settings))
-                document.Save(writer);
-            if (serializedXmlTransform != null)
-            {
-                var serialized = File.ReadAllText(tempPath);
-                File.WriteAllText(tempPath, serializedXmlTransform(serialized));
-            }
-            File.Move(tempPath, path, overwrite: true);
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(tempPath)) File.Delete(tempPath);
-            }
-            catch { }
-        }
-    }
+        => PreservedXmlFile.SaveAtomic(document, path, serializedXmlTransform);
 
     private void SaveAbilityDrafts()
     {
@@ -50109,7 +50707,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var root = doc.Root!;
             root.Name = "abilitiesmods";
             var existingUnit = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase));
-            var replacementUnit = new XElement(_currentUnitName);
+            var replacementAbilities = new List<XElement>();
             foreach (var draft in _abilityDrafts.Values.Where(d => !string.IsNullOrWhiteSpace(d.Name)))
             {
                 var source = draft.GeneralSource ?? new XElement("ability", new XText(draft.Name));
@@ -50118,14 +50716,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var result = ReplaceKnownAbilityChildren(source, AbilityGeneralFlags.Concat(AbilityGeneralValueTags), children);
                 foreach (var text in result.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).ToList()) text.Remove();
                 result.AddFirst(new XText(draft.Name));
-                replacementUnit.Add(result);
+                replacementAbilities.Add(result);
             }
             if (existingUnit != null)
             {
-                if (replacementUnit.HasElements) existingUnit.ReplaceWith(replacementUnit);
-                else existingUnit.Remove();
+                ManagedXmlChildren.Replace(existingUnit, "ability", replacementAbilities, GetAbilityElementName);
+                var hasWrapperMetadata = existingUnit.HasAttributes || existingUnit.Elements().Any() ||
+                    existingUnit.Nodes().Any(node => node is XComment or XProcessingInstruction ||
+                                                     node is XText text && !string.IsNullOrWhiteSpace(text.Value));
+                if (!hasWrapperMetadata)
+                    existingUnit.Remove();
             }
-            else if (replacementUnit.HasElements) root.Add(replacementUnit);
+            else if (replacementAbilities.Count > 0)
+                root.Add(new XElement(_currentUnitName, replacementAbilities));
             SaveAbilityXmlDocument(doc, abilitiesPath);
         }
 
@@ -50219,13 +50822,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                     // Use the freshly loaded powers_mods.xml as the preservation source so
                     // unsupported placement attributes added manually after the UI opened survive.
                     MergeUnknownPlacementAttributes(existing, replacement);
-                    if (existing != null) existing.ReplaceWith(replacement); else root.Add(replacement);
+                    if (existing != null)
+                    {
+                        XmlTriviaPreserver.Preserve(existing, replacement);
+                        existing.ReplaceWith(replacement);
+                    }
+                    else
+                    {
+                        root.Add(replacement);
+                    }
                     _abilityPowerCatalog[draft.Name] = new XElement(replacement);
                     RegisterAvailableAbilityName(draft.Name);
                 }
                 SaveAbilityXmlDocument(doc, powersPath);
                 if (stringsChanged)
-                    SaveCurrentModStringEntries(stringEntries);
+                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities);
             }
         }
 
@@ -52631,6 +53242,311 @@ public partial class ProtoEditorWindow : SimpleWindow
         _abilityMainSavePointerPending = true;
     }
 
+    private async Task<bool> ReloadExternallyChangedUnitFilesAsync()
+    {
+        if (!await ReloadExternallyChangedProtoDocumentAsync())
+            return false;
+        return await ReloadExternallyChangedUnitStringsAsync();
+    }
+
+    private async Task<bool> ReloadExternallyChangedProtoDocumentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_modFilePath) ||
+            _loadedModXmlFileState == null ||
+            _loadedModXmlBaseline == null)
+        {
+            return true;
+        }
+
+        FileIntegrityTransaction.FileState currentState;
+        try
+        {
+            currentState = FileIntegrityTransaction.CaptureState(_modFilePath);
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unable to check ProtoUnits",
+                "The external ProtoUnit file could not be checked safely. No files were written.\n\n" + exception.Message)
+                .ShowDialog(this);
+            return false;
+        }
+
+        if (currentState == _loadedModXmlFileState)
+            return true;
+
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "ProtoUnits changed outside the editor",
+            "proto_mods.xml changed after the Unit editor loaded. Reload those external changes and merge them with unsaved Unit edits?\n\n" +
+            "If the same unit changed both externally and in the editor, Reload uses the external unit. Unsaved edits to other units are kept. Saving is paused after reload so you can review the result.",
+            confirmButtonText: "Reload")
+        {
+            Width = 640,
+            Height = 270,
+            MinWidth = 570,
+            MinHeight = 235
+        };
+        await prompt.ShowDialog(this);
+        if (!prompt.Confirmed)
+        {
+            _statusMessage.Text = "Save cancelled; external ProtoUnit changes were not overwritten.";
+            return false;
+        }
+
+        try
+        {
+            var stateBeforeRead = FileIntegrityTransaction.CaptureState(_modFilePath);
+            var (externalDocument, _) = ProtoXmlHandler.ParseProtoXml(_modFilePath);
+            var stateAfterRead = FileIntegrityTransaction.CaptureState(_modFilePath);
+            if (stateBeforeRead != stateAfterRead)
+                throw new IOException("proto_mods.xml changed again while it was being reloaded. Retry after the other program has finished writing it.");
+
+            var merge = NamedXmlExternalDocumentMergePolicy.Merge(
+                _loadedModXmlBaseline,
+                _modXmlDoc!,
+                externalDocument,
+                "unit",
+                element => element.Attribute("name")?.Value);
+            var conflicts = merge.ReplacedEditorChanges.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // A rename is one logical edit spanning two names. If either side
+            // changed externally, use the complete external version of both.
+            foreach (var rename in _pendingUnitRenames.Where(rename =>
+                         merge.ExternallyChangedNames.Contains(rename.Key, StringComparer.OrdinalIgnoreCase) ||
+                         merge.ExternallyChangedNames.Contains(rename.Value, StringComparer.OrdinalIgnoreCase)).ToList())
+            {
+                conflicts.Add(rename.Key);
+                conflicts.Add(rename.Value);
+                RestoreExternalUnitVersion(merge.Document, externalDocument, rename.Key);
+                RestoreExternalUnitVersion(merge.Document, externalDocument, rename.Value);
+                _pendingUnitRenames.Remove(rename.Key);
+            }
+
+            DiscardPendingUnitChangesForExternalConflicts(conflicts, externalDocument);
+            _modXmlDoc = merge.Document;
+            _modXmlRoot = merge.Document.Root;
+            _loadedModXmlBaseline = new XDocument(externalDocument);
+            _loadedModXmlFileState = stateAfterRead;
+            _isDirty = _dirtyUnitNames.Count > 0;
+
+            InvalidateSuggestionCaches();
+            RefreshSavedDocumentSnapshots(EditorEntityKind.Units);
+            RefreshUnitList();
+            if (!string.IsNullOrWhiteSpace(_currentUnitName) &&
+                ProtoXmlHandler.GetUnitElement(_modXmlRoot!, _currentUnitName) != null)
+            {
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            }
+            else
+            {
+                _currentUnitName = null;
+                ClearEditorPanels();
+            }
+            RefreshDocumentTabHeaders();
+            _statusMessage.Text = conflicts.Count > 0
+                ? $"External ProtoUnits reloaded. {conflicts.Count} conflicting Unit edit(s) were replaced; review, then save again."
+                : "External ProtoUnits reloaded and merged. Review the changes, then save again.";
+            return false;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unable to reload ProtoUnits",
+                "No files were written. " + exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private static void RestoreExternalUnitVersion(XDocument merged, XDocument external, string unitName)
+    {
+        if (merged.Root == null || external.Root == null)
+            return;
+        var mergedUnit = ProtoXmlHandler.GetUnitElement(merged.Root, unitName);
+        var externalUnit = ProtoXmlHandler.GetUnitElement(external.Root, unitName);
+        if (mergedUnit != null && externalUnit != null)
+            mergedUnit.ReplaceWith(new XElement(externalUnit));
+        else if (mergedUnit != null)
+            mergedUnit.Remove();
+        else if (externalUnit != null)
+            merged.Root.Add(new XElement(externalUnit));
+    }
+
+    private void DiscardPendingUnitChangesForExternalConflicts(
+        IReadOnlySet<string> conflicts,
+        XDocument externalDocument)
+    {
+        if (conflicts.Count == 0)
+            return;
+
+        var affectedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in conflicts)
+        {
+            affectedStringIds.UnionWith(CollectUnitOwnedStringIds(
+                name,
+                _loadedModXmlBaseline?.Root == null ? null : ProtoXmlHandler.GetUnitElement(_loadedModXmlBaseline.Root, name)));
+            affectedStringIds.UnionWith(CollectUnitOwnedStringIds(
+                name,
+                _modXmlRoot == null ? null : ProtoXmlHandler.GetUnitElement(_modXmlRoot, name)));
+            affectedStringIds.UnionWith(CollectUnitOwnedStringIds(
+                name,
+                externalDocument.Root == null ? null : ProtoXmlHandler.GetUnitElement(externalDocument.Root, name)));
+            _dirtyUnitNames.Remove(name);
+            _unitAbilityDrafts.Remove(name);
+            _duplicatedUnitRechargeFallbacks.Remove(name);
+        }
+
+        _pendingProtoActionRenames.RemoveAll(rename => conflicts.Contains(rename.UnitName));
+        foreach (var rename in _pendingUnitRenames.Where(rename =>
+                     conflicts.Contains(rename.Key) || conflicts.Contains(rename.Value)).ToList())
+            _pendingUnitRenames.Remove(rename.Key);
+        foreach (var id in affectedStringIds)
+        {
+            // A mod may intentionally reuse one string ID across several units.
+            // Keep a pending value while any non-conflicting dirty unit owns it.
+            if (IsUnitStringIdOwnedByAnyDirtyDocument(id))
+                continue;
+            _pendingUnitStringUpdates.Remove(id);
+            _pendingUnitStringRemovals.Remove(id);
+            _pendingUnitRenameRemovedStringIds.Remove(id);
+        }
+    }
+
+    private async Task<bool> ReloadExternallyChangedUnitStringsAsync()
+    {
+        var path = GetCurrentModStringsPath();
+        if (string.IsNullOrWhiteSpace(path) || _loadedModStringsFileState == null)
+            return true;
+
+        FileIntegrityTransaction.FileState currentState;
+        try
+        {
+            currentState = FileIntegrityTransaction.CaptureState(path);
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unable to check strings",
+                "The external string file could not be checked safely. No files were written.\n\n" + exception.Message)
+                .ShowDialog(this);
+            return false;
+        }
+
+        if (currentState == _loadedModStringsFileState)
+            return true;
+
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Strings changed outside the editor",
+            "stringmods.txt changed after the Unit editor loaded. Reload those external changes and merge them with unsaved Unit edits?\n\n" +
+            "For strings changed both externally and in the editor, Reload uses the external value. Other unsaved Unit strings are kept. Saving is paused after reload so you can review the result.",
+            confirmButtonText: "Reload")
+        {
+            Width = 610,
+            Height = 250,
+            MinWidth = 550,
+            MinHeight = 220
+        };
+        await prompt.ShowDialog(this);
+        if (!prompt.Confirmed)
+        {
+            _statusMessage.Text = "Save cancelled; external string changes were not overwritten.";
+            return false;
+        }
+
+        try
+        {
+            var stateBeforeRead = FileIntegrityTransaction.CaptureState(path);
+            var source = File.Exists(path)
+                ? PreservedTextEncoding.Decode(File.ReadAllBytes(path))
+                : PreservedTextEncoding.Utf8WithoutBom("Language = \"English\"\n\n");
+            var stateAfterRead = FileIntegrityTransaction.CaptureState(path);
+            if (stateBeforeRead != stateAfterRead)
+                throw new IOException("stringmods.txt changed again while it was being reloaded. Retry after the other program has finished writing it.");
+
+            var externalValues = StringTableDocument.Parse(source.Text).ToDictionary();
+            var externallyChangedIds = TechnologyStringMergePolicy.GetExternallyChangedIds(
+                _loadedModStringValues,
+                externalValues);
+            var replacedLocalChanges = TechnologyStringMergePolicy.UseExternalVersionsForChangedIds(
+                externallyChangedIds,
+                _pendingUnitStringUpdates,
+                _pendingUnitStringRemovals);
+            foreach (var id in externallyChangedIds)
+                _pendingUnitRenameRemovedStringIds.Remove(id);
+
+            _cachedModStringEntriesPath = path;
+            _cachedModStringEntries = new Dictionary<string, string>(externalValues, StringComparer.OrdinalIgnoreCase);
+            _loadedModStringsFileState = stateAfterRead;
+            ReplaceLoadedModStringValues(externalValues);
+            if (_technologyView?.IsDirty != true)
+                _technologyView?.AcknowledgeStringFileSavedByEditor();
+            _isDirty = _dirtyUnitNames.Count > 0;
+            if (!string.IsNullOrWhiteSpace(_currentUnitName) && _modXmlRoot != null)
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            RefreshDocumentTabHeaders();
+            _statusMessage.Text = replacedLocalChanges.Count > 0
+                ? $"External strings reloaded. {replacedLocalChanges.Count} conflicting Unit string edit(s) were replaced; review, then save again."
+                : "External strings reloaded and merged. Review the values, then save again.";
+            return false;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Unable to reload strings",
+                "No files were written. " + exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private void PreflightPendingUnitSave()
+    {
+        if (_modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
+            throw new InvalidOperationException("No active mod is loaded.");
+
+        var guardedPaths = new List<string?> { _modFilePath };
+        if (_loadedModStringsFileState != null)
+            guardedPaths.Add(GetCurrentModStringsPath());
+        FileIntegrityTransaction.Execute(
+            guardedPaths,
+            CaptureExpectedEditorFileStates(guardedPaths),
+            () => { });
+
+        foreach (var rename in _pendingProtoActionRenames)
+        {
+            var owningUnit = _modXmlRoot == null
+                ? null
+                : ProtoXmlHandler.GetUnitElement(_modXmlRoot, rename.UnitName);
+            if (owningUnit == null)
+                continue;
+            var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedProtoActionReferences(
+                owningUnit, rename.OldName);
+            if (unsupported.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"ProtoAction '{rename.OldName}' was not renamed because '{rename.UnitName}' contains " +
+                    "unsupported action reference field(s): " + string.Join(", ", unsupported) +
+                    ". No files were written.");
+            }
+        }
+
+        foreach (var rename in _pendingUnitRenames)
+        {
+            var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
+                _modXmlDoc, GameIdentifierKind.ProtoUnit, rename.Key);
+            if (unsupported.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"'{rename.Key}' was not renamed because proto_mods.xml contains unsupported reference field(s): " +
+                    string.Join(", ", unsupported) + ". No files were written.");
+            }
+        }
+    }
+
     private sealed record StatsNumericEditor(string Key, TextBox Editor, ProtoUnitNumericRule Rule);
 
     private void AttachProtoUnitStatsNumericBehaviors()
@@ -53523,6 +54439,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             // than a stale pre-save copy.
             if (_isDirty && !await CaptureCurrentUnitDraftAsync())
                 return;
+            if (_isDirty && !await ReloadExternallyChangedUnitFilesAsync())
+                return;
+            if (_isDirty)
+                PreflightPendingUnitSave();
 
             if (_isDirty && _majorGodView?.IsDirty == true)
             {
@@ -53599,11 +54519,28 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (_modDocumentSafetyError != null)
+        {
+            await DocumentSafetyDialog.ShowAsync(this, "ProtoUnit", _modDocumentSafetyError);
+            return;
+        }
+
         var editorTabIndexBeforeSave = _editorTabs.SelectedIndex;
         try
         {
             if (!await CaptureCurrentUnitDraftAsync())
                 return;
+            if (!await ReloadExternallyChangedUnitFilesAsync())
+                return;
+
+            var existingStringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            var existingStringRemovalCandidates = GetExistingStringCleanupCandidates(
+                _pendingUnitStringRemovals,
+                existingStringEntries);
+            var approvedStringRemovals = await ReviewOrphanStringsAsync(
+                existingStringRemovalCandidates,
+                "Saving the current Unit changes",
+                this);
 
             var documentBackup = new XDocument(_modXmlDoc);
             var unitNameBackup = _currentUnitName;
@@ -53614,7 +54551,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 entry => new XElement(entry.Value),
                 StringComparer.OrdinalIgnoreCase);
             var availableAbilityNamesBackup = _availableAbilityNames.ToList();
+            var loadedModStringsFileStateBackup = _loadedModStringsFileState;
+            var loadedModStringValuesBackup = new Dictionary<string, string>(
+                _loadedModStringValues,
+                StringComparer.OrdinalIgnoreCase);
             GameIdentifierReferenceMigrationPlan? identifierMigration = null;
+            FileIntegrityTransaction.FileState? committedModXmlFileState = null;
             try
             {
                 foreach (var rename in _pendingProtoActionRenames)
@@ -53636,18 +54578,44 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
 
                 var referenceFiles = GetGameIdentifierReferenceFiles();
+                var transactionPaths = new List<string?>
+                {
+                    _modFilePath,
+                    GetCurrentModStringsPath(),
+                    GetCurrentModAbilitiesFilePath("abilities_mods.xml"),
+                    GetCurrentModGameplayFilePath("powers_mods.xml"),
+                    GetCurrentModGameplayFilePath("techtree_mods.xml"),
+                    GetCurrentModGameplayFilePath("proto_unit_command_mods.xml"),
+                    GetCurrentModGameplayFilePath("unit_transform_mods.xml"),
+                    GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
+                    AbilityBindingMetadataStore.StoragePath
+                };
+                var expectedStates = FileIntegrityTransaction.CaptureStates(transactionPaths)
+                    .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+                if (_loadedModXmlFileState == null)
+                {
+                    throw new IOException(
+                        "proto_mods.xml has not been fingerprinted for this editor session. No files were written. Reload the mod before saving.");
+                }
+                AddExpectedState(expectedStates, _modFilePath, _loadedModXmlFileState);
+                AddExpectedState(expectedStates, GetCurrentModStringsPath(), _loadedModStringsFileState);
+
+                // Validate every external rename target before the transaction's
+                // first write. A fresh plan is still built after ability drafts
+                // are persisted so it contains those editor-owned changes too.
+                var migrationPreflight = GameIdentifierReferenceMigrationPlan.Prepare(
+                    referenceFiles.Where(file =>
+                        !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase)),
+                    GameIdentifierKind.ProtoUnit,
+                    _pendingUnitRenames,
+                    _pendingProtoActionRenames);
+                transactionPaths.AddRange(migrationPreflight.Paths);
+                foreach (var state in migrationPreflight.ExpectedStates)
+                    expectedStates[state.Key] = state.Value;
+
                 FileIntegrityTransaction.Execute(
-                    [
-                        _modFilePath,
-                        GetCurrentModStringsPath(),
-                        GetCurrentModAbilitiesFilePath("abilities_mods.xml"),
-                        GetCurrentModGameplayFilePath("powers_mods.xml"),
-                        GetCurrentModGameplayFilePath("techtree_mods.xml"),
-                        GetCurrentModGameplayFilePath("proto_unit_command_mods.xml"),
-                        GetCurrentModGameplayFilePath("unit_transform_mods.xml"),
-                        GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
-                        AbilityBindingMetadataStore.StoragePath
-                    ],
+                    transactionPaths,
+                    expectedStates,
                     () =>
                     {
                         SavePendingUnitRenames();
@@ -53667,7 +54635,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 rename.Key,
                                 rename.Value);
                         }
-                        SavePendingUnitStringDrafts();
+                        SavePendingUnitStringDrafts(approvedStringRemovals);
                         SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
                         SaveAllPendingAbilityDrafts();
 
@@ -53678,6 +54646,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             _pendingUnitRenames,
                             _pendingProtoActionRenames);
                         identifierMigration.Save(SaveXmlDocumentAtomic);
+                        committedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
                     });
             }
             catch
@@ -53695,6 +54664,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 foreach (var entry in abilityPowerCatalogBackup)
                     _abilityPowerCatalog[entry.Key] = entry.Value;
                 _availableAbilityNames = availableAbilityNamesBackup;
+                InvalidateModStringEntriesCache();
+                _loadedModStringsFileState = loadedModStringsFileStateBackup;
+                ReplaceLoadedModStringValues(loadedModStringValuesBackup);
                 throw;
             }
 
@@ -53702,6 +54674,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             // sequence. The first successful transaction is an editor-owned file
             // change, so let the technology guard adopt that new string baseline.
             _technologyView?.AcknowledgeStringFileSavedByEditor();
+            _loadedModXmlFileState = committedModXmlFileState
+                ?? throw new InvalidOperationException("The saved proto_mods.xml fingerprint was not captured.");
+            _loadedModXmlBaseline = new XDocument(_modXmlDoc);
 
             AdoptGameIdentifierReferenceMigration(identifierMigration);
 
@@ -54021,6 +54996,24 @@ public partial class ProtoEditorWindow : SimpleWindow
             await pErr.ShowDialog(this);
             return;
         }
+
+        if (_modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
+            return;
+        var candidateDocument = new XDocument(_modXmlDoc);
+        var candidateUnit = candidateDocument.Root == null
+            ? null
+            : ProtoXmlHandler.GetUnitElement(candidateDocument.Root, _currentUnitName);
+        candidateUnit?.Remove();
+        var deletionOverrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(_modFilePath)] = candidateDocument
+        };
+        if (!await EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.ProtoUnit,
+                _currentUnitName,
+                "Unit",
+                deletionOverrides))
+            return;
 
         var pConfirm = new Prompt(PromptType.Confirm, "Delete Unit", $"Are you sure you want to delete '{_currentUnitName}'?");
         await pConfirm.ShowDialog(this);

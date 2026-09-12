@@ -40,8 +40,12 @@ public sealed class TechnologyReferenceMigrationPlan
                      .Select(group => group.First()))
         {
             var path = Path.GetFullPath(file.Path);
-            states[path] = FileIntegrityTransaction.CaptureState(path);
+            var stateBeforeRead = FileIntegrityTransaction.CaptureState(path);
             var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            var stateAfterRead = FileIntegrityTransaction.CaptureState(path);
+            if (stateBeforeRead != stateAfterRead)
+                throw new IOException($"'{path}' changed while its technology references were being inspected. No files were written.");
+            states[path] = stateAfterRead;
             sources.Add(new TechnologyReferenceSource(file.Label, document, file.Kind, path, CanMigrate: true));
         }
 
@@ -61,6 +65,16 @@ public sealed class TechnologyReferenceMigrationPlan
             {
                 if (TechnologyReferenceIndex.RenameRecognizedReferences(source, operation.OldName, operation.NewName) > 0)
                     changedSources.Add(source);
+            }
+
+            var remainingRecognized = TechnologyReferenceIndex.Build(sources, [operation.OldName])
+                .Where(usage => usage.TechnologyName.Equals(operation.OldName, StringComparison.OrdinalIgnoreCase) &&
+                                usage.IsRecognized)
+                .ToList();
+            if (remainingRecognized.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"The technology rename verification still found {remainingRecognized.Count} recognized reference(s) to '{operation.OldName}'. No files were written.");
             }
         }
 
