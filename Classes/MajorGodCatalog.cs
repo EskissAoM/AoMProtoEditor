@@ -7,15 +7,24 @@ public sealed record MajorGodDefinition(string Name, bool IsBuiltIn, XElement So
 
 public static class MajorGodCatalog
 {
+    public const string SharedDataDisplayName = "Shared data";
     public const string BaseFileName = "major_gods.xml.xmb";
     public const string AlternateBaseFileName = "major_gods.xmb";
     public const string ModFileName = "major_gods_mods.xml";
     public const string ModRootName = "civsmods";
     public const string EntryName = "civ";
+    public static readonly string[] AgeValues =
+    [
+        "ArchaicAge", "ClassicalAge", "HeroicAge", "MythicAge", "WonderAge"
+    ];
     public static readonly string[] Pass1FieldOrder =
     [
         "name", "statsid", "key", "culture", "displaynameid", "rollovernameid", "titleid",
         "icon", "portrait", "breakoutportrait", "minimapborderimage", "backgroundscenario"
+    ];
+    public static readonly string[] EconomicFieldOrder =
+    [
+        "secondaryprayerefficiency", "buildingefficiency", "extrabuildingefficiency", "buildingrepairfactor"
     ];
 
     public static IReadOnlyList<MajorGodDefinition> ExtractDefinitions(XContainer container, bool isBuiltIn)
@@ -27,6 +36,57 @@ public static class MajorGodCatalog
             .Select(group => group.First())
             .OrderBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    public static XElement? ExtractSharedData(XContainer container)
+    {
+        var root = container switch
+        {
+            XDocument document => document.Root,
+            XElement element => element,
+            _ => null
+        };
+        if (root == null)
+            return null;
+
+        var sharedElements = root.Elements()
+            .Where(element => !element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase))
+            .Select(element => new XElement(element))
+            .ToList();
+        return sharedElements.Count == 0 ? null : new XElement(root.Name, sharedElements);
+    }
+
+    public static XElement? ExtractSharedDataFromBar(BarArchive? barFile, string? barPath)
+    {
+        if (barFile?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath))
+            return null;
+
+        var entries = barFile.Entries.Where(entry =>
+        {
+            var fileName = entry.Name.Replace('\\', '/').Split('/').LastOrDefault() ?? "";
+            return fileName.Equals(BaseFileName, StringComparison.OrdinalIgnoreCase) ||
+                   fileName.Equals(AlternateBaseFileName, StringComparison.OrdinalIgnoreCase);
+        });
+        using var stream = File.OpenRead(barPath);
+        foreach (var entry in entries)
+        {
+            try
+            {
+                var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
+                var bytes = new byte[size];
+                var read = entry.ReadDataDecompressed(stream, bytes);
+                if (read <= 0)
+                    continue;
+                var xml = XmbReader.ToFormattedXml(bytes.AsSpan(0, read));
+                if (!string.IsNullOrWhiteSpace(xml))
+                    return ExtractSharedData(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
+            }
+            catch
+            {
+                // Try another matching BAR member if this one is malformed.
+            }
+        }
+        return null;
+    }
 
     public static IReadOnlyList<MajorGodDefinition> ExtractBaseDefinitionsFromBar(BarArchive? barFile, string? barPath)
     {
@@ -163,6 +223,518 @@ public static class MajorGodCatalog
     public static XElement? FindDirectChild(XElement entry, string tag)
         => entry.Elements().FirstOrDefault(element =>
             element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+
+    public static XElement SetAgeTech(XElement entry, string age, string technology)
+    {
+        var ageTech = FindDirectChild(entry, "agetech");
+        if (ageTech == null)
+        {
+            ageTech = new XElement("agetech", new XAttribute("age", age), new XElement("tech", technology));
+            InsertAssociatedTechElement(entry, ageTech, "deathmatchtech", "teamtech", "icon");
+            return ageTech;
+        }
+
+        ageTech.SetAttributeValue("age", age);
+        var tech = FindDirectChild(ageTech, "tech");
+        if (tech == null)
+            ageTech.AddFirst(new XElement("tech", technology));
+        else
+            tech.Value = technology;
+        return ageTech;
+    }
+
+    public static XElement SetAssociatedTech(XElement entry, string tag, string technology)
+    {
+        if (!tag.Equals("deathmatchtech", StringComparison.OrdinalIgnoreCase) &&
+            !tag.Equals("teamtech", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(tag), tag, "Not an associated Major God technology field.");
+        }
+
+        var existing = FindDirectChild(entry, tag);
+        if (existing != null)
+        {
+            existing.Value = technology;
+            return existing;
+        }
+
+        var created = new XElement(tag, technology);
+        if (tag.Equals("deathmatchtech", StringComparison.OrdinalIgnoreCase))
+        {
+            var following = entry.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("teamtech", StringComparison.OrdinalIgnoreCase) ||
+                element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
+            if (following != null)
+                following.AddBeforeSelf(created);
+            else if (FindDirectChild(entry, "agetech") is { } ageTech)
+                ageTech.AddAfterSelf(created);
+            else
+                InsertAssociatedTechElement(entry, created);
+        }
+        else
+        {
+            var icon = FindDirectChild(entry, "icon");
+            if (icon != null)
+                icon.AddBeforeSelf(created);
+            else if (FindDirectChild(entry, "deathmatchtech") is { } deathmatchTech)
+                deathmatchTech.AddAfterSelf(created);
+            else if (FindDirectChild(entry, "agetech") is { } ageTech)
+                ageTech.AddAfterSelf(created);
+            else
+                InsertAssociatedTechElement(entry, created);
+        }
+        return created;
+    }
+
+    public static XElement SetEconomicValue(XElement entry, string tag, string value)
+    {
+        var targetIndex = Array.FindIndex(EconomicFieldOrder, candidate =>
+            candidate.Equals(tag, StringComparison.OrdinalIgnoreCase));
+        if (targetIndex < 0 || tag.Equals("secondaryprayerefficiency", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentOutOfRangeException(nameof(tag), tag, "Not a simple Major God economic field.");
+
+        var existing = FindDirectChild(entry, tag);
+        if (existing != null)
+        {
+            existing.Value = value;
+            return existing;
+        }
+
+        var created = new XElement(tag.ToLowerInvariant(), value);
+        InsertEconomicElement(entry, created, targetIndex);
+        return created;
+    }
+
+    public static XElement AddSecondaryPrayerEfficiency(
+        XElement entry,
+        string laterGrowth = "0",
+        string earlyIncomeReduction = "0",
+        string modifier = "0")
+    {
+        var existing = FindDirectChild(entry, "secondaryprayerefficiency");
+        if (existing != null)
+            return existing;
+
+        var created = new XElement("secondaryprayerefficiency",
+            new XAttribute("g", laterGrowth),
+            new XAttribute("v", earlyIncomeReduction),
+            new XAttribute("z", modifier));
+        InsertEconomicElement(entry, created, 0);
+        return created;
+    }
+
+    public static XElement AddSpecialMechanic(XElement entry, string tag)
+    {
+        var existing = FindDirectChild(entry, tag);
+        if (existing != null)
+            return existing;
+
+        var created = new XElement(tag.ToLowerInvariant());
+        entry.Add(created);
+        NormalizeDirectChildIndentation(entry);
+        return created;
+    }
+
+    public static XElement AddSpecialMechanicChild(XElement mechanic, string tag, string value = "")
+    {
+        var child = new XElement(tag.ToLowerInvariant(), value);
+        mechanic.Add(child);
+        NormalizeDirectChildIndentation(mechanic);
+        return child;
+    }
+
+    public static XElement AddShadesChild(XElement shades, string tag, string value = "")
+    {
+        var order = new[] { "protounit", "targetunit", "chance", "delay", "maxqueued" };
+        var normalizedTag = tag.ToLowerInvariant();
+        var child = new XElement(normalizedTag, value);
+        var index = Array.FindIndex(order, candidate => candidate.Equals(normalizedTag, StringComparison.OrdinalIgnoreCase));
+        var following = shades.Elements().FirstOrDefault(element =>
+        {
+            var followingIndex = Array.FindIndex(order, candidate =>
+                candidate.Equals(element.Name.LocalName, StringComparison.OrdinalIgnoreCase));
+            return followingIndex > index;
+        });
+        if (following != null) following.AddBeforeSelf(child);
+        else shades.Add(child);
+        NormalizeDirectChildIndentation(shades);
+        return child;
+    }
+
+    public static XElement AddTimeShiftingUnit(XElement timeShifting, string protoUnitName = "")
+    {
+        var unit = new XElement("protounit",
+            new XAttribute("costratio", "0"),
+            new XAttribute("timeratio", "0"),
+            protoUnitName);
+        timeShifting.Add(unit);
+        NormalizeDirectChildIndentation(timeShifting);
+        return unit;
+    }
+
+    public static XElement AddBuildingChainAnchor(XElement buildingChain)
+    {
+        var existing = FindDirectChild(buildingChain, "anchor");
+        if (existing != null)
+            return existing;
+        var anchor = new XElement("anchor", new XAttribute("vfx", ""));
+        buildingChain.AddFirst(anchor);
+        NormalizeDirectChildIndentation(buildingChain);
+        return anchor;
+    }
+
+    public static XElement AddBuildingChainAbundanceVfx(XElement buildingChain)
+        => AddBuildingChainVfxGroup(buildingChain, "abundancevfx");
+
+    public static XElement AddBuildingChainAutoBuildVfx(XElement buildingChain)
+        => AddBuildingChainVfxGroup(buildingChain, "autobuildvfx");
+
+    private static XElement AddBuildingChainVfxGroup(XElement buildingChain, string tag)
+    {
+        var existing = FindDirectChild(buildingChain, tag);
+        if (existing != null)
+            return existing;
+        var vfxGroup = new XElement(tag,
+            new XAttribute("small", ""),
+            new XAttribute("medium", ""),
+            new XAttribute("large", ""));
+        var preceding = tag.Equals("autobuildvfx", StringComparison.OrdinalIgnoreCase)
+            ? FindDirectChild(buildingChain, "abundancevfx") ?? FindDirectChild(buildingChain, "anchor")
+            : FindDirectChild(buildingChain, "anchor");
+        if (preceding != null) preceding.AddAfterSelf(vfxGroup);
+        else buildingChain.AddFirst(vfxGroup);
+        NormalizeDirectChildIndentation(buildingChain);
+        return vfxGroup;
+    }
+
+    public static XElement AddCombatXpTier(XElement combatXp, string value = "0")
+    {
+        var tier = new XElement("tier", value);
+        combatXp.Add(tier);
+        NormalizeDirectChildIndentation(combatXp);
+        return tier;
+    }
+
+    public static XElement AddBountyElement(XElement bounty, string tag, string value = "")
+    {
+        var normalizedTag = tag.ToLowerInvariant();
+        var element = normalizedTag switch
+        {
+            "bountyreward" or "bountytargetmultiplier" => new XElement(normalizedTag,
+                new XAttribute("unittype", ""),
+                new XAttribute("condition", "Damage"),
+                new XAttribute("resourcetype", "Favor"),
+                value.Length == 0 ? "0" : value),
+            "researchreward" or "researchcostmultiplier" => new XElement(normalizedTag,
+                new XAttribute("techtype", "all"),
+                new XAttribute("resourcetype", "Favor"),
+                value.Length == 0 ? "0" : value),
+            _ => new XElement(normalizedTag, value)
+        };
+
+        string[] order =
+        [
+            "active", "vfx", "excludedtarget", "bountydamagegoal", "bountyreductionstart",
+            "bountyreductionend", "bountyreductionstrength", "bountyreward",
+            "bountytargetmultiplier", "researchreward", "researchcostmultiplier", "excludedtechflag"
+        ];
+        var index = Array.FindIndex(order, candidate => candidate.Equals(normalizedTag, StringComparison.OrdinalIgnoreCase));
+        var following = bounty.Elements().FirstOrDefault(child =>
+        {
+            var followingIndex = Array.FindIndex(order, candidate =>
+                candidate.Equals(child.Name.LocalName, StringComparison.OrdinalIgnoreCase));
+            return followingIndex > index;
+        });
+        if (following != null) following.AddBeforeSelf(element);
+        else bounty.Add(element);
+        NormalizeDirectChildIndentation(bounty);
+        return element;
+    }
+
+    public static XElement AddBonusUnitGoal(XElement bonusUnitSpawning, string goalTag = "damagegoal")
+    {
+        var normalizedTag = goalTag.ToLowerInvariant();
+        var goal = new XElement(normalizedTag,
+            new XAttribute("name", ""),
+            new XAttribute("rewardtracking", "Single"),
+            new XElement("goalamount", "1"),
+            new XElement("spawnlocation", new XAttribute("type", DefaultSpawnLocationForGoal(normalizedTag))));
+        bonusUnitSpawning.Add(goal);
+        NormalizeDirectChildIndentation(bonusUnitSpawning);
+        NormalizeDirectChildIndentation(goal);
+        return goal;
+    }
+
+    public static XElement AddBonusGoalChild(XElement goal, string tag, string value = "")
+    {
+        var normalizedTag = tag.ToLowerInvariant();
+        var child = normalizedTag switch
+        {
+            "contributor" => new XElement(normalizedTag, new XAttribute("unit", ""), value.Length == 0 ? "0" : value),
+            "spawnlocation" => new XElement(normalizedTag,
+                new XAttribute("type", DefaultSpawnLocationForGoal(goal.Name.LocalName))),
+            _ => new XElement(normalizedTag, value)
+        };
+        goal.Add(child);
+        NormalizeDirectChildIndentation(goal);
+        return child;
+    }
+
+    public static IReadOnlyList<XElement> AddBonusRewardPointCosts(XElement goal)
+    {
+        var created = new List<XElement>();
+        foreach (var resource in ProtoConstants.KnownResourceTypes)
+        {
+            var cost = new XElement("rewardpointcost", new XAttribute("resourcetype", resource), "0");
+            goal.Add(cost);
+            created.Add(cost);
+        }
+        NormalizeDirectChildIndentation(goal);
+        return created;
+    }
+
+    public static XElement AddBonusDisplayInfo(XElement goal)
+    {
+        var existing = FindDirectChild(goal, "displayinfo");
+        if (existing != null)
+            return existing;
+        var goalName = goal.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim().ToUpperInvariant() ?? "";
+        var displayInfo = new XElement("displayinfo",
+            new XElement("displaynameid", $"STR_{goalName}_SPAWN_REWARD"),
+            new XElement("rolloverid", $"STR_{goalName}_SPAWN_REWARD_LR"),
+            new XElement("progresstype", "Default"),
+            new XElement("icon", ""),
+            new XElement("progresstooltipid", $"STR_{goalName}_SPAWN_REWARD_PROGRESS"),
+            new XElement("nextunittooltipid", $"STR_{goalName}_SPAWN_NEXT_UNIT"),
+            new XElement("notificationsound", ""),
+            new XElement("notificationmessageid", $"STR_{goalName}_SPAWN_REWARD_NOTIFICATION"));
+        goal.Add(new XElement("displayonhud", "true"), displayInfo);
+        NormalizeDirectChildIndentation(goal);
+        NormalizeDirectChildIndentation(displayInfo);
+        return displayInfo;
+    }
+
+    private static string DefaultSpawnLocationForGoal(string goalTag)
+        => goalTag.Equals("deathcountgoal", StringComparison.OrdinalIgnoreCase)
+            ? "DeathLocation"
+            : goalTag.Equals("resourcegoal", StringComparison.OrdinalIgnoreCase)
+                ? "FromBuilding"
+                : "DamageTarget";
+
+    public static XElement AddBuildingChainRateTier(XElement buildingChain)
+    {
+        var resourceGeneration = FindDirectChild(buildingChain, "resourcegeneration");
+        if (resourceGeneration == null)
+        {
+            resourceGeneration = new XElement("resourcegeneration");
+            buildingChain.Add(resourceGeneration);
+            NormalizeDirectChildIndentation(buildingChain);
+        }
+        var tier = new XElement("tilerateperminutetier",
+            new XAttribute("resource", "Favor"),
+            new XAttribute("mintiles", "0"),
+            "0");
+        resourceGeneration.Add(tier);
+        NormalizeDirectChildIndentation(resourceGeneration);
+        return tier;
+    }
+
+    public static XElement AddChainableBuilding(XElement buildingChain)
+    {
+        var building = new XElement("chainablebuilding",
+            new XAttribute("generationresource", "Favor"),
+            new XAttribute("chainradius", "0"));
+        var resourceGeneration = FindDirectChild(buildingChain, "resourcegeneration");
+        if (resourceGeneration != null) resourceGeneration.AddBeforeSelf(building);
+        else buildingChain.Add(building);
+        NormalizeDirectChildIndentation(buildingChain);
+        return building;
+    }
+
+    public static XElement? SetSpecialMechanicToggle(XElement entry, string tag, bool enabled, string value = "")
+    {
+        var existing = FindDirectChild(entry, tag);
+        if (!enabled)
+        {
+            if (existing != null)
+                RemoveElementAndAdjacentWhitespace(existing);
+            return null;
+        }
+
+        var element = existing ?? AddSpecialMechanic(entry, tag);
+        element.Value = value;
+        return element;
+    }
+
+    private static void InsertEconomicElement(XElement entry, XElement created, int targetIndex)
+    {
+        var following = entry.Elements().FirstOrDefault(element =>
+        {
+            var economicIndex = Array.FindIndex(EconomicFieldOrder, candidate =>
+                candidate.Equals(element.Name.LocalName, StringComparison.OrdinalIgnoreCase));
+            return economicIndex > targetIndex ||
+                   element.Name.LocalName.Equals("startingunits", StringComparison.OrdinalIgnoreCase) ||
+                   element.Name.LocalName.Equals("startingqueue", StringComparison.OrdinalIgnoreCase) ||
+                   element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
+                   element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase);
+        });
+        if (following != null)
+            following.AddBeforeSelf(created);
+        else
+            entry.Add(created);
+        NormalizeDirectChildIndentation(entry);
+    }
+
+    public static XElement AddStartingUnitsGroup(XElement entry, string mode = "supremacy")
+    {
+        var group = new XElement("startingunits");
+        if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
+            group.SetAttributeValue("mode", mode.ToLowerInvariant());
+
+        var following = entry.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
+            element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
+        if (following != null)
+            following.AddBeforeSelf(group);
+        else
+            entry.Add(group);
+        NormalizeDirectChildIndentation(entry);
+        return group;
+    }
+
+    public static XElement AddStartingUnit(XElement group, string protoUnitName = "")
+    {
+        var unit = new XElement("unit",
+            new XAttribute("count", "1"),
+            new XAttribute("x", "0"),
+            new XAttribute("y", "0"),
+            new XAttribute("z", "0"),
+            protoUnitName);
+        group.Add(unit);
+        NormalizeDirectChildIndentation(group);
+        return unit;
+    }
+
+    public static XElement AddStartingResourcesGroup(XElement entry, string mode = "supremacy")
+    {
+        var group = new XElement("startingresources");
+        if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
+            group.SetAttributeValue("mode", mode.ToLowerInvariant());
+
+        var icon = FindDirectChild(entry, "icon");
+        if (icon != null)
+            icon.AddBeforeSelf(group);
+        else
+            entry.Add(group);
+        NormalizeDirectChildIndentation(entry);
+        return group;
+    }
+
+    public static XElement AddStartingQueueGroup(XElement entry, string mode = "supremacy")
+    {
+        var group = new XElement("startingqueue");
+        if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
+            group.SetAttributeValue("mode", mode.ToLowerInvariant());
+
+        var following = entry.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
+            element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
+        if (following != null)
+            following.AddBeforeSelf(group);
+        else
+            entry.Add(group);
+        NormalizeDirectChildIndentation(entry);
+        return group;
+    }
+
+    public static XElement AddStartingQueueUnit(XElement group, string protoUnitName = "")
+    {
+        var unit = new XElement("unit", protoUnitName);
+        group.Add(unit);
+        NormalizeDirectChildIndentation(group);
+        return unit;
+    }
+
+    public static void SetStartingQueueCount(XElement unit, string value)
+    {
+        foreach (var attributeName in new[] { "autotrain", "prequeue" })
+            unit.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals(attributeName, StringComparison.OrdinalIgnoreCase))?.Remove();
+
+        var count = unit.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals("count", StringComparison.OrdinalIgnoreCase));
+        if (count == null)
+            unit.SetAttributeValue("count", value);
+        else
+            count.Value = value;
+    }
+
+    public static XElement AddStartingResource(XElement group, string resourceType, string amount = "0")
+    {
+        var resource = new XElement(resourceType.Trim().ToLowerInvariant(), amount);
+        group.Add(resource);
+        NormalizeDirectChildIndentation(group);
+        return resource;
+    }
+
+    public static void RemoveElementAndAdjacentWhitespace(XElement element)
+    {
+        var parent = element.Parent;
+        element.Remove();
+        if (parent != null)
+            NormalizeDirectChildIndentation(parent);
+    }
+
+    public static void NormalizeDirectChildIndentation(XElement parent)
+    {
+        var contentNodes = parent.Nodes()
+            .Where(node => node is not XText text || !string.IsNullOrWhiteSpace(text.Value))
+            .ToList();
+        if (contentNodes.Count == 0)
+        {
+            parent.RemoveNodes();
+            return;
+        }
+
+        var ownIndent = FindElementIndentation(parent);
+        var childIndent = ownIndent + "  ";
+        parent.RemoveNodes();
+        foreach (var node in contentNodes)
+        {
+            parent.Add(new XText(Environment.NewLine + childIndent));
+            parent.Add(node);
+        }
+        parent.Add(new XText(Environment.NewLine + ownIndent));
+    }
+
+    private static string FindElementIndentation(XElement element)
+    {
+        if (element.PreviousNode is XText precedingWhitespace && string.IsNullOrWhiteSpace(precedingWhitespace.Value))
+        {
+            var lastNewLine = Math.Max(precedingWhitespace.Value.LastIndexOf('\n'), precedingWhitespace.Value.LastIndexOf('\r'));
+            return precedingWhitespace.Value[(lastNewLine + 1)..];
+        }
+
+        return element.Parent == null ? "" : FindElementIndentation(element.Parent) + "  ";
+    }
+
+    private static void InsertAssociatedTechElement(XElement entry, XElement created, params string[] followingTags)
+    {
+        var following = entry.Elements().FirstOrDefault(element => followingTags.Any(tag =>
+            element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)));
+        if (following != null)
+        {
+            following.AddBeforeSelf(created);
+            return;
+        }
+
+        var title = FindDirectChild(entry, "titleid");
+        if (title != null)
+            title.AddAfterSelf(created);
+        else
+            entry.Add(created);
+    }
 
     public static string BuildStringId(string majorGodName, string tag)
     {

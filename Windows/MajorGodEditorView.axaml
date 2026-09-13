@@ -3,95 +3,258 @@
              xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
              xmlns:controls="using:AoMDivineDataEditor.Controls"
              x:Class="AoMDivineDataEditor.Windows.MajorGodEditorView"
-             Background="{DynamicResource AppBackgroundBrush}"
+             Background="Transparent"
              Foreground="{DynamicResource PrimaryTextBrush}">
-  <Grid ColumnDefinitions="3*,5,2*" RowDefinitions="*,Auto">
-    <Border Grid.Column="0" Classes="MainPanel" Padding="18,18,10,18">
-      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Spacing="4" Margin="0,0,12,0">
-          <TextBlock Text="Shared fields" FontSize="17" FontWeight="Bold" Margin="0,0,0,8"/>
+  <Grid x:Name="_mainGrid" RowDefinitions="*,Auto">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="4*"/>
+      <ColumnDefinition Width="5"/>
+      <ColumnDefinition Width="1*" MinWidth="250"/>
+    </Grid.ColumnDefinitions>
 
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Name" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" x:Name="_nameBox" TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Key" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" x:Name="_keyBox" Width="70" MaxWidth="70" MaxLength="1"
-                     HorizontalAlignment="Left" TextChanged="KeyBox_TextChanged"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Culture" VerticalAlignment="Center"/>
-            <ComboBox Grid.Column="1" x:Name="_cultureBox" Width="380" MaxWidth="380"
-                      HorizontalAlignment="Left" SelectionChanged="CultureBox_SelectionChanged"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Display Name" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" x:Name="_displayNameBox" TextChanged="ResolvedStringBox_TextChanged" Tag="displaynameid"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Rollover Name" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" x:Name="_rolloverNameBox" TextChanged="ResolvedStringBox_TextChanged" Tag="rollovernameid"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Title" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" x:Name="_titleBox" TextChanged="ResolvedStringBox_TextChanged" Tag="titleid"/>
-          </Grid>
+    <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
+      <Grid RowDefinitions="Auto,*">
+        <Grid x:Name="_majorGodIdentityRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+          <TextBlock Text="Major God :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+          <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
+                   HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold"
+                   TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
+        </Grid>
 
-          <Grid x:Name="_iconFieldsLayout" Margin="0,7,0,0">
-            <StackPanel Spacing="4">
-              <Grid ColumnDefinitions="170,*" Margin="0,3">
-                <TextBlock Text="Icon" VerticalAlignment="Center"/>
-                <controls:AssetPathEditor Grid.Column="1" x:Name="_iconEditor"/>
-              </Grid>
-              <Grid ColumnDefinitions="170,*" Margin="0,3">
-                <TextBlock Text="Portrait" VerticalAlignment="Center"/>
-                <controls:AssetPathEditor Grid.Column="1" x:Name="_portraitEditor"/>
-              </Grid>
-              <Grid ColumnDefinitions="170,*" Margin="0,3">
-                <TextBlock Text="Breakout Portrait" VerticalAlignment="Center"/>
-                <controls:AssetPathEditor Grid.Column="1" x:Name="_breakoutPortraitEditor"/>
-              </Grid>
-            </StackPanel>
-            <Border x:Name="_iconPreviewHost" Margin="558,3,0,0" HorizontalAlignment="Left" VerticalAlignment="Top"/>
-          </Grid>
+        <TabControl Grid.Row="1" x:Name="_majorGodTabs" SelectedIndex="0">
+          <TabItem x:Name="_propertiesTab" Classes="editorTab" Header="Properties">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Spacing="10" Margin="0,0,15,0">
+                <StackPanel x:Name="_majorGodPropertiesPanel" Spacing="10">
+            <TextBlock Text="──── Properties ────" FontWeight="Bold" FontSize="14"
+                       Foreground="#C59A52" Margin="0,15,0,5"/>
 
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Minimap Border Image" VerticalAlignment="Center"/>
-            <AutoCompleteBox Grid.Column="1" x:Name="_minimapBorderBox" FilterMode="Contains" MinimumPrefixLength="0"
-                             TextChanged="CatalogValueBox_TextChanged" Tag="minimapborderimage"/>
-          </Grid>
-          <Grid ColumnDefinitions="170,*" Margin="0,3">
-            <TextBlock Text="Background Scenario" VerticalAlignment="Center"/>
-            <AutoCompleteBox Grid.Column="1" x:Name="_backgroundScenarioBox" FilterMode="Contains" MinimumPrefixLength="0"
-                             TextChanged="CatalogValueBox_TextChanged" Tag="backgroundscenario"/>
-          </Grid>
-        </StackPanel>
-      </ScrollViewer>
+            <Grid x:Name="_identityLayout" HorizontalAlignment="Left">
+              <StackPanel Spacing="0">
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Display Name" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                  <TextBox Grid.Column="1" x:Name="_displayNameBox" Margin="0,4,8,4"
+                           TextChanged="ResolvedStringBox_TextChanged" Tag="displaynameid"/>
+                </Grid>
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Title" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                  <TextBox Grid.Column="1" x:Name="_titleBox" Margin="0,4,8,4"
+                           TextChanged="ResolvedStringBox_TextChanged" Tag="titleid"/>
+                </Grid>
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Rollover" VerticalAlignment="Top" Margin="0,10,6,4"/>
+                  <TextBox Grid.Column="1" x:Name="_rolloverNameBox" Margin="0,4,8,4"
+                           MinHeight="96" AcceptsReturn="True" TextWrapping="Wrap"
+                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                           TextChanged="ResolvedStringBox_TextChanged" Tag="rollovernameid"/>
+                </Grid>
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Icon" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                  <controls:AssetPathEditor Grid.Column="1" x:Name="_iconEditor" Margin="0,4,8,4"/>
+                </Grid>
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Portrait" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                  <controls:AssetPathEditor Grid.Column="1" x:Name="_portraitEditor" Margin="0,4,8,4"/>
+                </Grid>
+                <Grid ColumnDefinitions="150,*">
+                  <TextBlock Text="Breakout Portrait" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                  <controls:AssetPathEditor Grid.Column="1" x:Name="_breakoutPortraitEditor" Margin="0,4,8,4"/>
+                </Grid>
+              </StackPanel>
+              <Border x:Name="_iconPreviewHost" Margin="546,4,12,4"
+                      HorizontalAlignment="Left" VerticalAlignment="Top"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="150,200,Auto,70">
+              <TextBlock Text="Culture" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <AutoCompleteBox Grid.Column="1" x:Name="_cultureBox" Width="200" MaxWidth="200"
+                               HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="CultureBox_TextChanged"/>
+              <TextBlock Grid.Column="2" Text="Key" VerticalAlignment="Center" Margin="16,4,8,4"/>
+              <TextBox Grid.Column="3" x:Name="_keyBox" Width="70" MaxWidth="70" MaxLength="1"
+                       HorizontalAlignment="Left" TextChanged="KeyBox_TextChanged"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Text="Minimap Border Image" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <AutoCompleteBox Grid.Column="1" x:Name="_minimapBorderBox" FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="CatalogValueBox_TextChanged" Tag="minimapborderimage"/>
+            </Grid>
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Text="Background Scenario" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <AutoCompleteBox Grid.Column="1" x:Name="_backgroundScenarioBox" FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="CatalogValueBox_TextChanged" Tag="backgroundscenario"/>
+            </Grid>
+
+            <TextBlock Text="──── Associated Techs ────" FontWeight="Bold" FontSize="14"
+                       Foreground="#C59A52" Margin="0,15,0,5"/>
+
+            <Grid ColumnDefinitions="150,140,Auto,*">
+              <TextBlock Text="Age Tech" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <ComboBox Grid.Column="1" x:Name="_ageBox" Width="140" MaxWidth="140"
+                        HorizontalAlignment="Left" IsEnabled="False"/>
+              <TextBlock Grid.Column="2" Text="Tech" VerticalAlignment="Center" Margin="16,4,8,4"/>
+              <AutoCompleteBox Grid.Column="3" x:Name="_ageTechBox" Width="200" MaxWidth="200"
+                               HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="AssociatedTechBox_TextChanged" Tag="agetech"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*">
+              <TextBlock Text="Deathmatch Tech" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <AutoCompleteBox Grid.Column="1" x:Name="_deathmatchTechBox" Width="200" MaxWidth="200"
+                               HorizontalAlignment="Left"
+                               FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="AssociatedTechBox_TextChanged" Tag="deathmatchtech"/>
+            </Grid>
+
+            <Grid x:Name="_teamTechRow" ColumnDefinitions="150,200,Auto" IsVisible="False">
+              <TextBlock Text="Team Tech" VerticalAlignment="Center" Margin="0,4,6,4"/>
+              <AutoCompleteBox Grid.Column="1" x:Name="_teamTechBox" Width="200" MaxWidth="200"
+                               HorizontalAlignment="Left"
+                               FilterMode="Contains" MinimumPrefixLength="0"
+                               TextChanged="AssociatedTechBox_TextChanged" Tag="teamtech"/>
+              <Button Grid.Column="2" x:Name="_removeTeamTechButton" Classes="remove-button"
+                      Margin="4,4,0,4" Click="RemoveTeamTech_Click"/>
+            </Grid>
+            <Button x:Name="_addTeamTechButton" Content="Team Tech" Classes="add-component"
+                    HorizontalAlignment="Left" Margin="150,4,0,4" Padding="8,3"
+                    Click="AddTeamTech_Click"/>
+
+            <TextBlock Text="──── Economic ────" FontWeight="Bold" FontSize="14"
+                       Foreground="#C59A52" Margin="0,15,0,5"/>
+            <StackPanel x:Name="_economicPanel" Spacing="4"/>
+                </StackPanel>
+
+                <StackPanel x:Name="_sharedDataPropertiesPanel" Spacing="10" IsVisible="False">
+                  <TextBlock Text="──── Default data ────" FontWeight="Bold" FontSize="14"
+                             Foreground="#C59A52" Margin="0,15,0,5"/>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Population limit" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <TextBox x:Name="_defaultPopLimitBox" Width="80" MaxWidth="80" IsEnabled="False"/>
+                    <TextBlock Text="Repair Factor" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_defaultRepairFactorBox" Width="80" MaxWidth="80" IsEnabled="False"/>
+                    <StackPanel x:Name="_defaultContainedRegenRow" Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="Contained Regen Rate" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                      <TextBox x:Name="_defaultContainedRegenRateBox" Width="80" MaxWidth="80" IsEnabled="False"/>
+                    </StackPanel>
+                  </StackPanel>
+
+                  <TextBlock Text="──── Default Techs ────" FontWeight="Bold" FontSize="14"
+                             Foreground="#C59A52" Margin="0,15,0,5"/>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Lightning" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <TextBox x:Name="_sharedLightningTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
+                    <TextBlock Text="Death Match" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_sharedDeathMatchTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Story Mode" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <TextBox x:Name="_sharedStoryModeTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
+                    <TextBlock Text="Ludicrous Mode" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_sharedLudicrousModeTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
+                  </StackPanel>
+
+                  <TextBlock Text="──── Death Match Power Grant Delay ────" FontWeight="Bold" FontSize="14"
+                             Foreground="#C59A52" Margin="0,15,0,5"/>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Archaic" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                    <TextBox x:Name="_sharedArchaicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
+                    <TextBlock Text="Classical" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_sharedClassicalDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
+                    <TextBlock Text="Heroic" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_sharedHeroicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
+                    <TextBlock Text="Mythic" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBox x:Name="_sharedMythicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
+                  </StackPanel>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem x:Name="_startingAttributesTab" Classes="editorTab" Header="Starting Attributes">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Spacing="10" Margin="0,12,15,0">
+                <TextBlock Text="──── Starting Attributes ────" FontWeight="Bold" FontSize="14"
+                           Foreground="#C59A52" Margin="0,3,0,5"/>
+                <TextBlock Text="Starting Units" FontWeight="SemiBold" FontSize="14" Margin="0,2,0,2"/>
+                <StackPanel x:Name="_startingUnitsPanel" Spacing="8"/>
+                <Button x:Name="_addStartingUnitsGroupButton" Content="Starting Units" Classes="add-component"
+                        HorizontalAlignment="Left" Margin="0,4,0,4" Padding="8,3"
+                        Click="AddStartingUnitsGroup_Click"/>
+                <TextBlock Text="Starting Queue" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,2"/>
+                <StackPanel x:Name="_startingQueuePanel" Spacing="8"/>
+                <Button x:Name="_addStartingQueueGroupButton" Content="Starting Queue" Classes="add-component"
+                        HorizontalAlignment="Left" Margin="0,4,0,4" Padding="8,3"
+                        Click="AddStartingQueueGroup_Click"/>
+                <TextBlock Text="Starting Resources" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,2"/>
+                <StackPanel x:Name="_startingResourcesPanel" Spacing="8"/>
+                <Button x:Name="_addStartingResourcesGroupButton" Content="Starting Resources" Classes="add-component"
+                        HorizontalAlignment="Left" Margin="0,4,0,4" Padding="8,3"
+                        Click="AddStartingResourcesGroup_Click"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem x:Name="_specialAttributesTab" Classes="editorTab" Header="Special Attributes">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel x:Name="_specialAttributesPanel" Spacing="10" Margin="0,12,15,0">
+                <TextBlock Text="──── Special mechanics ────" FontWeight="Bold" FontSize="14"
+                           Foreground="#C59A52" Margin="0,3,0,5"/>
+                <StackPanel x:Name="_specialMechanicToggleRow" Orientation="Horizontal" Spacing="16" Margin="4,0,0,2">
+                  <CheckBox x:Name="_partisansCheckBox" Content="Has Partisans"
+                            IsCheckedChanged="PartisansCheckBox_Changed"/>
+                  <CheckBox x:Name="_devotionCommandsCheckBox" Content="Has Devotion Commands"
+                            IsCheckedChanged="DevotionCommandsCheckBox_Changed"/>
+                </StackPanel>
+                <StackPanel x:Name="_specialMechanicAddRow" Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Add" FontWeight="Bold" VerticalAlignment="Center" Margin="4,0,4,0"/>
+                  <AutoCompleteBox x:Name="_specialMechanicSelector" Width="260" MaxWidth="260"
+                                   HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"
+                                   SelectionChanged="SpecialMechanicSelector_SelectionChanged"/>
+                </StackPanel>
+                <WrapPanel x:Name="_specialMechanicTabs" Orientation="Horizontal"/>
+                <StackPanel x:Name="_specialMechanicsPanel" Spacing="4"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Grid>
     </Border>
 
-    <GridSplitter Grid.Column="1" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns"/>
+    <GridSplitter x:Name="_previewSplitter" Grid.Column="1" Width="5"
+                  Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns"/>
 
-    <Border Grid.Column="2" Classes="XmlPanel" BorderThickness="1,0,0,0">
-      <Grid RowDefinitions="Auto,*" Margin="12">
-        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
-          <TextBlock Classes="XmlHeader" Text="Raw XML" VerticalAlignment="Center"/>
-          <Button Grid.Column="1" x:Name="_applyRawXmlButton" Classes="positive" Content="Apply"
-                  Padding="12,4" IsVisible="False" Click="ApplyRawXml_Click"/>
+    <Border x:Name="_xmlPreviewPanel" Grid.Column="2" Classes="XmlPanel" BorderThickness="1,0,0,0">
+      <Grid>
+        <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
+          <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
+            <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center"/>
+            <Button Grid.Column="1" x:Name="_applyRawXmlButton" Classes="positive" Content="Apply"
+                    Padding="12,4" IsVisible="False" Click="ApplyRawXml_Click"/>
+          </Grid>
+          <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
+                                   FontFamily="Consolas" FontSize="12"
+                                   Background="{DynamicResource XmlEditorBrush}"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                   BorderBrush="{DynamicResource NormalBorderBrush}"
+                                   HorizontalScrollBarVisibility="Auto"
+                                   VerticalScrollBarVisibility="Auto"
+                                   TextChanged="RawXmlEditor_TextChanged"/>
         </Grid>
-        <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
-                                 FontFamily="Consolas" FontSize="12"
-                                 Background="{DynamicResource XmlEditorBrush}"
-                                 Foreground="{DynamicResource PrimaryTextBrush}"
-                                 BorderBrush="{DynamicResource NormalBorderBrush}"
-                                 HorizontalScrollBarVisibility="Auto"
-                                 VerticalScrollBarVisibility="Auto"
-                                 TextChanged="RawXmlEditor_TextChanged"/>
+        <Button x:Name="_xmlPreviewToggleButton" Content="&#x25B6;"
+                Width="20" Height="24" MinWidth="20" MinHeight="24"
+                FontSize="10" Padding="0"
+                Background="{DynamicResource DeepPanelBrush}"
+                BorderBrush="{DynamicResource NormalBorderBrush}"
+                BorderThickness="0" CornerRadius="0"
+                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,8,0,0" ZIndex="1"
+                ToolTip.Tip="Collapse XML Preview" Click="XmlPreviewToggle_Click"/>
       </Grid>
     </Border>
 
     <TextBlock Grid.Row="1" Grid.ColumnSpan="3" x:Name="_statusMessage"
                Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
-               Margin="0,8,0,8" HorizontalAlignment="Center"/>
+               Margin="0,6,0,0" HorizontalAlignment="Center"/>
   </Grid>
 </UserControl>

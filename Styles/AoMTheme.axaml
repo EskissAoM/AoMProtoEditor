@@ -96,6 +96,13 @@
   <Style Selector="TextBlock.muted">
     <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
   </Style>
+  <Style Selector="Border.editor-card">
+    <Setter Property="BorderBrush" Value="#4C4031" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="8" />
+    <Setter Property="Background" Value="#191C1A" />
+  </Style>
 
   <Style Selector="TextBox, AutoCompleteBox, ComboBox, NumericUpDown">
     <Setter Property="MinHeight" Value="30" />

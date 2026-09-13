@@ -27,11 +27,7 @@ public sealed class OnHitEffectEditor : Border
         TypeField = typeField;
         ActiveField = activeField;
 
-        BorderBrush = Brush.Parse("#4C4031");
-        BorderThickness = new Thickness(1);
-        CornerRadius = new CornerRadius(6);
-        Padding = new Thickness(8);
-        Background = Brush.Parse("#191C1A");
+        Classes.Add("editor-card");
 
         Body = new StackPanel { Spacing = 4 };
         Child = Body;

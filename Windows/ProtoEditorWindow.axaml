@@ -237,7 +237,13 @@
                     
                     <ListBox x:Name="_unitList"
                              SelectionChanged="UnitList_SelectionChanged"
-                             ContextRequested="UnitList_ContextRequested" />
+                             ContextRequested="UnitList_ContextRequested">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:CompileBindings="False">
+                                <TextBlock Text="{Binding DisplayName}" FontWeight="{Binding FontWeight}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                 </DockPanel>
             </Border>
 

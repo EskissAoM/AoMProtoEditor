@@ -77,16 +77,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         "animfile", "icon", "modelattachment", "soundsetfile",
         "chargedmodelattachment", "targetattachment", "infectionattachment"
     };
-    private static readonly (string Value, string Label)[] SupportedCultures =
-    [
-        ("greek", "Greek"),
-        ("egyptian", "Egyptian"),
-        ("norse", "Norse"),
-        ("atlantean", "Atlantean"),
-        ("chinese", "Chinese"),
-        ("japanese", "Japanese"),
-        ("aztec", "Aztec"),
-    ];
     private static readonly string[] KnownInitialUnitAiStances = ["Aggressive", "Defensive", "StandGround", "Passive"];
     private static readonly string[] KnownInitialShadingTypes = ProtoConstants.KnownShadingTypeDisplayNames;
     private static readonly string[] KnownVeterancyRankTypes = ["NumKills", "NumAttacks", "TotalDamage", "DamageAndResourcesEaten"];
@@ -243,10 +233,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string> _allCurrentNames = [];
     private readonly ObservableCollectionExtended<UnitListItem> _filteredUnitNames = [];
 
-    private sealed class UnitListItem(string? unitName, string displayName)
+    private sealed class UnitListItem(string? unitName, string displayName, bool isEmphasized = false)
     {
         public string? UnitName { get; } = unitName;
         public string DisplayName { get; } = displayName;
+        public FontWeight FontWeight { get; } = isEmphasized ? FontWeight.Bold : FontWeight.Normal;
         public override string ToString() => DisplayName;
     }
 
@@ -317,6 +308,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedBuildLimitTargets;
     private List<UnitTypeDefinition>? _cachedUnitTypeDefinitions;
     private List<TechTypeDefinition>? _cachedTechTypeDefinitions;
+    private List<string>? _cachedCultureNames;
     private List<string>? _cachedResourceSubtypeNames;
     private List<string>? _cachedPlacementFileNames;
     private List<string>? _cachedPathabilityFlags;
@@ -3174,6 +3166,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _cachedBuildLimitTargets = null;
         _cachedUnitTypeDefinitions = null;
         _cachedTechTypeDefinitions = null;
+        _cachedCultureNames = null;
         _cachedHotkeyContexts = null;
         _cachedTacticsNames = null;
 
@@ -3826,7 +3819,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
-        _allCurrentNames = names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        _allCurrentNames = _activeEntityKind == EditorEntityKind.MajorGods && selectedIndex == 0
+            ? names.ToList()
+            : names.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         FilterUnitList();
         RestoreEntityBrowserSelection();
     }
@@ -3836,7 +3831,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         var query = _searchBox.Text?.Trim() ?? "";
         _filteredUnitNames.Clear();
 
-        var items = _allCurrentNames.Select(name => new UnitListItem(name, GetDisplayedUnitName(name)));
+        var items = _allCurrentNames.Select(name => new UnitListItem(
+            name,
+            GetDisplayedUnitName(name),
+            _activeEntityKind == EditorEntityKind.MajorGods &&
+            name.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase)));
         if (query.Length > 0)
             items = items.Where(item => item.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
         _filteredUnitNames.AddItems(items);
@@ -4021,7 +4020,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _baseGameIconPaths.Concat(_customIconPaths),
             GetTechnologyPrerequisiteUnitNames(),
             GetTechnologyProtoUnitNames(),
-            SupportedCultureLabels,
+            GetKnownCultureNames(),
             GetTechnologyPrerequisiteMajorGodNames(),
             GetTechnologyTechTypeNames(),
             GetTechnologyProtoActionNames(),
@@ -4316,6 +4315,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
 
         var baseDefinitions = MajorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
+        var sharedData = MajorGodCatalog.ExtractSharedDataFromBar(_protoDataBarFile, _protoDataBarPath);
         if (baseDefinitions.Count == 0)
         {
             var loosePath = ResolveBaseGameplayXmlPath("major_gods.xml");
@@ -4323,9 +4323,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 try
                 {
-                    baseDefinitions = MajorGodCatalog.ExtractDefinitions(
-                        XDocument.Load(loosePath, LoadOptions.PreserveWhitespace),
-                        isBuiltIn: true);
+                    var looseDocument = XDocument.Load(loosePath, LoadOptions.PreserveWhitespace);
+                    baseDefinitions = MajorGodCatalog.ExtractDefinitions(looseDocument, isBuiltIn: true);
+                    sharedData ??= MajorGodCatalog.ExtractSharedData(looseDocument);
                 }
                 catch
                 {
@@ -4339,10 +4339,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
             ResolveDisplayStringAsync,
             SaveMajorGodStringValuesAsync,
-            SupportedCultureLabels,
+            GetKnownCultureNames(),
             _baseGameIconPaths.Concat(_customIconPaths),
             _iconPreviewService,
-            GetCurrentModStringsPath());
+            GetCurrentModStringsPath(),
+            GetMajorGodTechnologyNames(),
+            GetTechnologyProtoUnitNames(),
+            sharedData,
+            GetKnownUnitTypeNames(),
+            GetMajorGodTechnologyFlagNames(),
+            GetTechnologyTechTypeNames());
         _majorGodView.BrowserStateChanged += MajorGodView_BrowserStateChanged;
         _majorGodView.DirtyStateChanged += MajorGodView_DirtyStateChanged;
         _technologyHost.Content = _majorGodView;
@@ -4366,6 +4372,44 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void MajorGodView_DirtyStateChanged(object? sender, EventArgs e)
         => RefreshDocumentTabHeaders();
+
+    private IReadOnlyList<string> GetMajorGodTechnologyNames()
+    {
+        var names = new HashSet<string>(GetAvailableTechNames(), StringComparer.OrdinalIgnoreCase);
+        if (_technologyView != null)
+        {
+            names.UnionWith(_technologyView.GetTechnologyNames(modified: false));
+            names.UnionWith(_technologyView.GetTechnologyNames(modified: true));
+        }
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetMajorGodTechnologyFlagNames()
+    {
+        var flags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var document in GetBaseTechtreeDocumentsFromLoadedBar())
+        {
+            flags.UnionWith(document.Descendants().Where(element =>
+                    element.Name.LocalName.Equals("flag", StringComparison.OrdinalIgnoreCase))
+                .Select(element => element.Value.Trim()).Where(value => value.Length > 0));
+        }
+        var modPath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (File.Exists(modPath))
+        {
+            try
+            {
+                var document = XDocument.Load(modPath);
+                flags.UnionWith(document.Descendants().Where(element =>
+                        element.Name.LocalName.Equals("flag", StringComparison.OrdinalIgnoreCase))
+                    .Select(element => element.Value.Trim()).Where(value => value.Length > 0));
+            }
+            catch
+            {
+                // A malformed optional technology file must not prevent opening Major Gods.
+            }
+        }
+        return flags.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     private void TechnologyView_BrowserStateChanged(object? sender, EventArgs e)
     {
@@ -4617,7 +4661,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         var copyItem = new MenuItem
         {
             Header = "Copy",
-            IsEnabled = technologyModificationsAllowed
+            IsEnabled = technologyModificationsAllowed &&
+                        !(entityKind == EditorEntityKind.MajorGods &&
+                          entityName.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase))
         };
         copyItem.Click += async (_, _) =>
         {
@@ -5843,7 +5889,6 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static bool IsCultureAwareSimpleField(string tag) => CultureAwareSimpleFieldTags.Contains(tag, StringComparer.OrdinalIgnoreCase);
     private static readonly string[] TrainTechRowOptions = ["0", "1", "2", "3"];
     private static readonly string[] TrainTechColumnOptions = ["0", "1", "2", "3", "4", "5"];
-    private static readonly string[] SupportedCultureLabels = SupportedCultures.Select(x => x.Label).ToArray();
     private static readonly string[] OtherSpecificAttributeChoiceKeys =
     [
         "selectionradius",
@@ -5930,24 +5975,26 @@ public partial class ProtoEditorWindow : SimpleWindow
         "shortrollovertextid" => "SR",
         _ => tag.ToUpperInvariant(),
     };
-    private static string GetCultureLabel(string? cultureValue)
+    private string GetCultureLabel(string? cultureValue)
     {
         var normalized = cultureValue?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(normalized))
             return "";
 
-        return SupportedCultures.FirstOrDefault(x => x.Value.Equals(normalized, StringComparison.OrdinalIgnoreCase)).Label
-            ?? normalized;
+        return GetKnownCultureNames().FirstOrDefault(name =>
+                   name.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+               ?? normalized;
     }
 
-    private static string GetCultureValue(string? cultureLabel)
+    private string GetCultureValue(string? cultureLabel)
     {
         var normalized = cultureLabel?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(normalized))
             return "";
 
-        return SupportedCultures.FirstOrDefault(x => x.Label.Equals(normalized, StringComparison.OrdinalIgnoreCase)).Value
-            ?? normalized;
+        var cultureName = GetKnownCultureNames().FirstOrDefault(name =>
+            name.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+        return (cultureName ?? normalized).ToLowerInvariant();
     }
 
     private static readonly Dictionary<string, string> OtherSpecificAttributeLabels = new(StringComparer.OrdinalIgnoreCase)
@@ -6327,6 +6374,44 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string> GetKnownUnitTypeNames()
         => GetUnitTypeDefinitions().Select(definition => definition.Name).ToList();
+
+    private IReadOnlyList<string> GetKnownCultureNames()
+    {
+        if (_cachedCultureNames != null)
+            return _cachedCultureNames;
+
+        var baseNames = CultureCatalog.ExtractBaseNamesFromBar(_protoDataBarFile, _protoDataBarPath);
+        if (baseNames.Count == 0)
+        {
+            try
+            {
+                baseNames = CultureCatalog.ReadBaseFile(ResolveBaseGameplayXmlPath("cultures.xml"));
+            }
+            catch
+            {
+                // A malformed loose fallback must not hide cultures available from the active mod.
+                baseNames = [];
+            }
+        }
+
+        IReadOnlyList<string> modNames = [];
+        foreach (var fileName in new[] { CultureCatalog.ModFileName, CultureCatalog.AlternateModFileName })
+        {
+            try
+            {
+                modNames = CultureCatalog.Merge(
+                    modNames,
+                    CultureCatalog.ReadModFile(GetCurrentModGameplayFilePath(fileName)));
+            }
+            catch
+            {
+                // Keep the rest of the editor usable if an optional culture mod file is malformed.
+            }
+        }
+
+        _cachedCultureNames = CultureCatalog.Merge(baseNames, modNames).ToList();
+        return _cachedCultureNames;
+    }
 
     private List<string> GetDistinctBarSimpleFieldValues(string tag)
     {
@@ -37870,6 +37955,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var suggestionList = ProtoConstants.FieldSuggestions.TryGetValue(field.Tag, out var suggestions)
                     ? suggestions
                     : [];
+                var cultureNames = GetKnownCultureNames();
 
                 var fieldStack = new StackPanel { Spacing = 4 };
                 var rowStates = new List<CultureFieldRowState>();
@@ -37966,11 +38052,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                     var cultureCb = new ComboBox
                     {
-                        ItemsSource = SupportedCultureLabels
+                        ItemsSource = cultureNames
                             .Concat(string.IsNullOrWhiteSpace(cultureLabel) ? [] : [cultureLabel])
                             .Distinct(StringComparer.OrdinalIgnoreCase)
                             .ToList(),
-                        SelectedItem = SupportedCultureLabels.FirstOrDefault(x => x.Equals(cultureLabel, StringComparison.OrdinalIgnoreCase)) ?? cultureLabel,
+                        SelectedItem = cultureNames.FirstOrDefault(x => x.Equals(cultureLabel, StringComparison.OrdinalIgnoreCase)) ?? cultureLabel,
                         IsEnabled = !_isReadOnly,
                         Width = 80,
                         Margin = new Thickness(0, 4, 8, 4)
@@ -38053,10 +38139,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 rowStates
                                     .Select(x => GetCultureValue(x.CultureCb.SelectedItem as string ?? x.CultureCb.SelectedValue as string ?? "")),
                                 StringComparer.OrdinalIgnoreCase);
-                            var nextCulture = SupportedCultures
-                                .Select(x => x.Label)
+                            var nextCulture = cultureNames
                                 .FirstOrDefault(x => !usedCultures.Contains(GetCultureValue(x)))
-                                ?? SupportedCultures[0].Label;
+                                ?? cultureNames.FirstOrDefault()
+                                ?? "";
                             if (!defaultRowHasSelector)
                             {
                                 defaultRowHasSelector = true;
@@ -39300,7 +39386,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 IEnumerable<string> suggestions = tag switch
                 {
-                    "culture" => SupportedCultureLabels,
+                    "culture" => GetKnownCultureNames(),
                     "resourcesubtype" => GetKnownResourceSubtypeNames(),
                     "hotkeycontext" => GetKnownHotkeyContexts(),
                     "allyhotkeycontext" => GetKnownHotkeyContexts(),
