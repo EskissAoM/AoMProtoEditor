@@ -308,7 +308,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string>? _cachedBuildLimitTargets;
     private List<UnitTypeDefinition>? _cachedUnitTypeDefinitions;
     private List<TechTypeDefinition>? _cachedTechTypeDefinitions;
+    private List<CultureDefinition>? _cachedCultureDefinitions;
+    private List<MinorGodDefinition>? _cachedMinorGodDefinitions;
+    private List<string>? _cachedMinorGodAgeUpgradeTechNames;
     private List<string>? _cachedCultureNames;
+    private List<string>? _cachedTerrainCreepNames;
     private List<string>? _cachedResourceSubtypeNames;
     private List<string>? _cachedPlacementFileNames;
     private List<string>? _cachedPathabilityFlags;
@@ -3166,7 +3170,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _cachedBuildLimitTargets = null;
         _cachedUnitTypeDefinitions = null;
         _cachedTechTypeDefinitions = null;
+        _cachedCultureDefinitions = null;
+        _cachedMinorGodDefinitions = null;
+        _cachedMinorGodAgeUpgradeTechNames = null;
         _cachedCultureNames = null;
+        _cachedTerrainCreepNames = null;
         _cachedHotkeyContexts = null;
         _cachedTacticsNames = null;
 
@@ -3534,7 +3542,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         _activeDocumentTab = _mainDocumentTab;
         if (_mainDocumentTab != null)
+        {
             SelectDocumentTabWithoutActivation(_mainDocumentTab);
+            if (string.IsNullOrWhiteSpace(_mainDocumentTab.EntityName))
+                ShowEmptyDocumentState(_mainDocumentTab.EntityKind);
+        }
         RefreshDocumentTabHeaders();
     }
 
@@ -4034,10 +4046,49 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetExternalTechnologyReferences,
             PrepareExternalTechnologyReferenceMigration,
             AdoptExternalTechnologyReferenceMigration,
-            GetTechnologyDeletionReferences);
+            GetTechnologyDeletionReferences,
+            technologySavedAsync: AdoptSavedTechnologyLifecycleAsync,
+            hasLinkedMinorGod: HasCustomMinorGodForTechnology,
+            confirmLinkedMinorGodRemovalAsync: ConfirmLinkedMinorGodRemovalAsync,
+            prepareMinorGodLifecycle: PrepareMinorGodTechnologyLifecycle,
+            externalStringReferenceProvider: FindTechnologyExternalStringReferences);
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
+    }
+
+    private IReadOnlySet<string> FindTechnologyExternalStringReferences(IEnumerable<string> candidateIds)
+    {
+        var currentDocuments = new List<XDocument>();
+        var excludedPaths = new List<string>();
+        if (_modXmlDoc != null)
+        {
+            currentDocuments.Add(new XDocument(_modXmlDoc));
+            if (!string.IsNullOrWhiteSpace(_modFilePath))
+                excludedPaths.Add(_modFilePath);
+        }
+
+        var majorGodSnapshot = _majorGodView?.CreateModifiedDocumentSnapshot();
+        if (majorGodSnapshot != null)
+        {
+            currentDocuments.Add(majorGodSnapshot);
+            var majorGodPath = GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName);
+            if (!string.IsNullOrWhiteSpace(majorGodPath))
+                excludedPaths.Add(majorGodPath);
+        }
+
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (!string.IsNullOrWhiteSpace(technologyPath))
+            excludedPaths.Add(technologyPath);
+        var stringsPath = GetCurrentModStringsPath();
+        if (!string.IsNullOrWhiteSpace(stringsPath))
+            excludedPaths.Add(stringsPath);
+
+        return ModDeletionSafety.FindReferencedStringIds(
+            GetCurrentModRootDirectory(),
+            candidateIds,
+            currentDocuments,
+            excludedPaths);
     }
 
     private IReadOnlyList<TechnologyReferenceUsage> GetExternalTechnologyReferences()
@@ -4116,6 +4167,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
         if (!string.IsNullOrWhiteSpace(techtreePath))
             excluded.Add(Path.GetFullPath(techtreePath));
+        var minorGodPath = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (!string.IsNullOrWhiteSpace(minorGodPath))
+            excluded.Add(Path.GetFullPath(minorGodPath));
         if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
         {
             excluded.Add(Path.GetFullPath(_modFilePath));
@@ -4128,6 +4182,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         foreach (var file in GetTechnologyReferenceFiles().Where(file =>
+                     file.Kind != TechnologyReferenceDocumentKind.MinorGods &&
                      !excluded.Contains(Path.GetFullPath(file.Path))))
         {
             var before = FileIntegrityTransaction.CaptureState(file.Path);
@@ -4149,7 +4204,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 file.Label, document, file.Kind, file.Path, CanMigrate: true));
         }
 
-        var usages = TechnologyReferenceIndex.Build(sources, [technologyName]).ToList();
+        var usages = TechnologyReferenceIndex.FindReferencesTo(sources, technologyName).ToList();
         usages.AddRange(ModDeletionSafety.FindCustomFileReferences(
                 GetCurrentModRootDirectory(), technologyName, excluded)
             .Select(reference => new TechnologyReferenceUsage(
@@ -4283,7 +4338,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private TechnologyReferenceMigrationPlan PrepareExternalTechnologyReferenceMigration(
         IReadOnlyList<TechnologyRenameOperation> operations)
-        => TechnologyReferenceMigrationPlan.Prepare(GetTechnologyReferenceFiles(), operations);
+        => TechnologyReferenceMigrationPlan.Prepare(
+            GetTechnologyReferenceFiles().Where(file => file.Kind != TechnologyReferenceDocumentKind.MinorGods),
+            operations);
 
     private void AdoptExternalTechnologyReferenceMigration(TechnologyReferenceMigrationPlan plan)
     {
@@ -4348,9 +4405,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             sharedData,
             GetKnownUnitTypeNames(),
             GetMajorGodTechnologyFlagNames(),
-            GetTechnologyTechTypeNames());
+            GetTechnologyTechTypeNames(),
+            GetKnownTerrainCreepNames(),
+            PrepareMajorGodReferenceMigration,
+            AdoptMajorGodReferenceMigration,
+            EnsureMajorGodCanBeDeletedAsync,
+            this);
         _majorGodView.BrowserStateChanged += MajorGodView_BrowserStateChanged;
         _majorGodView.DirtyStateChanged += MajorGodView_DirtyStateChanged;
+        _majorGodView.Saved += MajorGodView_Saved;
         _technologyHost.Content = _majorGodView;
     }
 
@@ -4373,6 +4436,37 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void MajorGodView_DirtyStateChanged(object? sender, EventArgs e)
         => RefreshDocumentTabHeaders();
 
+    private void MajorGodView_Saved(object? sender, EventArgs e)
+    {
+        InvalidateSuggestionCaches();
+        _technologyView?.UpdateMajorGodNames(GetTechnologyPrerequisiteMajorGodNames());
+    }
+
+    private GameIdentifierReferenceMigrationPlan PrepareMajorGodReferenceMigration(
+        IReadOnlyList<KeyValuePair<string, string>> renames)
+    {
+        var majorGodPath = GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName);
+        var files = GetGameIdentifierReferenceFiles().Where(file =>
+            string.IsNullOrWhiteSpace(majorGodPath) ||
+            !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(majorGodPath), StringComparison.OrdinalIgnoreCase));
+        return GameIdentifierReferenceMigrationPlan.Prepare(files, GameIdentifierKind.MajorGod, renames);
+    }
+
+    private void AdoptMajorGodReferenceMigration(GameIdentifierReferenceMigrationPlan plan)
+    {
+        var protoDocument = plan.GetDocument(_modFilePath);
+        if (protoDocument != null)
+            AdoptSavedProtoDocument(protoDocument);
+        AdoptGameIdentifierReferenceMigration(plan);
+    }
+
+    private Task<bool> EnsureMajorGodCanBeDeletedAsync(Window owner, string name)
+        => EnsureIdentifierCanBeDeletedAsync(
+            GameIdentifierKind.MajorGod,
+            name,
+            "Major God",
+            owner: owner);
+
     private IReadOnlyList<string> GetMajorGodTechnologyNames()
     {
         var names = new HashSet<string>(GetAvailableTechNames(), StringComparer.OrdinalIgnoreCase);
@@ -4382,6 +4476,26 @@ public partial class ProtoEditorWindow : SimpleWindow
             names.UnionWith(_technologyView.GetTechnologyNames(modified: true));
         }
         return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string> GetMinorGodAgeUpgradeTechnologyNames()
+    {
+        if (_cachedMinorGodAgeUpgradeTechNames != null)
+            return _cachedMinorGodAgeUpgradeTechNames;
+        var documents = GetBaseTechtreeDocumentsFromLoadedBar().ToList();
+        foreach (var path in new[]
+        {
+            ResolveBaseGameplayXmlPath("techtree.xml"),
+            ResolveBaseGameplayXmlPath("aotg_techtree.techtree"),
+            GetCurrentModGameplayFilePath("techtree_mods.xml")
+        })
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
+            try { documents.Add(XDocument.Load(path, LoadOptions.PreserveWhitespace)); }
+            catch { /* Keep valid entries loaded from the other shared sources. */ }
+        }
+        _cachedMinorGodAgeUpgradeTechNames = MinorGodCatalog.ExtractAgeUpgradeTechnologyNames(documents).ToList();
+        return _cachedMinorGodAgeUpgradeTechNames;
     }
 
     private IReadOnlyList<string> GetMajorGodTechnologyFlagNames()
@@ -4417,6 +4531,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
 
         _unitTabs.SelectedIndex = _technologyView.IsModifiedMode ? 1 : 0;
+        if (string.IsNullOrWhiteSpace(_technologyView.CurrentTechnologyName))
+        {
+            SetMainDocumentTarget(
+                EditorEntityKind.Technologies,
+                _technologyView.IsModifiedMode,
+                entityName: null);
+            RefreshUnitList();
+            return;
+        }
+        HideEmptyDocumentPlaceholder();
         if (_activeDocumentTab?.EntityKind == EditorEntityKind.Technologies &&
             !string.IsNullOrWhiteSpace(_technologyView.CurrentTechnologyName))
         {
@@ -4473,9 +4597,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (_technologyView == null)
             return;
-        await _technologyView.AddTechnologyAsync();
-        _unitTabs.SelectedIndex = _technologyView.IsModifiedMode ? 1 : 0;
-        RefreshUnitList();
+        await AddTechnologyFromBrowserAsync(duplicateSelected: false);
     }
 
     private async void EntityDelete_Click(object? sender, RoutedEventArgs e)
@@ -4518,6 +4640,35 @@ public partial class ProtoEditorWindow : SimpleWindow
         SetMainDocumentTarget(EditorEntityKind.MajorGods, isModified: true, _majorGodView.CurrentMajorGodName);
         RefreshUnitList();
         RestoreEntityBrowserSelection();
+    }
+
+    private async Task AddTechnologyFromBrowserAsync(bool duplicateSelected)
+    {
+        if (_technologyView == null)
+            return;
+
+        _documentTabActivationInProgress = true;
+        try
+        {
+            await _technologyView.AddTechnologyAsync(duplicateSelected);
+        }
+        finally
+        {
+            _documentTabActivationInProgress = false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_technologyView.CurrentTechnologyName))
+            return;
+
+        _unitTabs.SelectedIndex = 1;
+        SetMainDocumentTarget(
+            EditorEntityKind.Technologies,
+            isModified: true,
+            _technologyView.CurrentTechnologyName);
+        HideEmptyDocumentPlaceholder();
+        RefreshUnitList();
+        RestoreEntityBrowserSelection();
+        RefreshDocumentTabHeaders();
     }
 
     private async Task DeleteSelectedTechnologyAsync()
@@ -4673,7 +4824,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (entityKind == EditorEntityKind.Units)
                 await AddUnitAsync(duplicateSelected: true);
             else if (entityKind == EditorEntityKind.Technologies && _technologyView != null)
-                await _technologyView.AddTechnologyAsync(duplicateSelected: true);
+                await AddTechnologyFromBrowserAsync(duplicateSelected: true);
             else if (entityKind == EditorEntityKind.MajorGods && _majorGodView != null)
             {
                 await _majorGodView.AddMajorGodAsync(duplicateSelected: true);
@@ -6375,42 +6526,180 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string> GetKnownUnitTypeNames()
         => GetUnitTypeDefinitions().Select(definition => definition.Name).ToList();
 
+    private IReadOnlyList<CultureDefinition> GetCultureDefinitions()
+    {
+        if (_cachedCultureDefinitions != null)
+            return _cachedCultureDefinitions;
+
+        var baseDefinitions = CultureCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
+        if (baseDefinitions.Count == 0)
+        {
+            try
+            {
+                var dataBarPath = ResolveDataBarPath();
+                if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
+                {
+                    using var stream = File.OpenRead(dataBarPath);
+                    var barFile = new BarArchive(stream);
+                    if (barFile.Load(out _))
+                        baseDefinitions = CultureCatalog.ExtractBaseDefinitionsFromBar(barFile, dataBarPath);
+                }
+            }
+            catch
+            {
+                // Fall through to the loose gameplay XML.
+            }
+        }
+
+        if (baseDefinitions.Count == 0)
+        {
+            try { baseDefinitions = CultureCatalog.ReadBaseDefinitions(ResolveBaseGameplayXmlPath("cultures.xml")); }
+            catch { baseDefinitions = []; }
+        }
+
+        IReadOnlyList<CultureDefinition> modDefinitions = [];
+        try
+        {
+            modDefinitions = CultureCatalog.ReadModDefinitions(
+                GetCurrentModGameplayFilePath(CultureCatalog.ModFileName));
+        }
+        catch
+        {
+            // Keep read-only editors usable; the manager performs strict safety validation before editing.
+        }
+
+        _cachedCultureDefinitions = CultureCatalog.MergeDefinitions(baseDefinitions, modDefinitions).ToList();
+        return _cachedCultureDefinitions;
+    }
+
     private IReadOnlyList<string> GetKnownCultureNames()
     {
         if (_cachedCultureNames != null)
             return _cachedCultureNames;
-
-        var baseNames = CultureCatalog.ExtractBaseNamesFromBar(_protoDataBarFile, _protoDataBarPath);
-        if (baseNames.Count == 0)
-        {
-            try
-            {
-                baseNames = CultureCatalog.ReadBaseFile(ResolveBaseGameplayXmlPath("cultures.xml"));
-            }
-            catch
-            {
-                // A malformed loose fallback must not hide cultures available from the active mod.
-                baseNames = [];
-            }
-        }
-
-        IReadOnlyList<string> modNames = [];
-        foreach (var fileName in new[] { CultureCatalog.ModFileName, CultureCatalog.AlternateModFileName })
-        {
-            try
-            {
-                modNames = CultureCatalog.Merge(
-                    modNames,
-                    CultureCatalog.ReadModFile(GetCurrentModGameplayFilePath(fileName)));
-            }
-            catch
-            {
-                // Keep the rest of the editor usable if an optional culture mod file is malformed.
-            }
-        }
-
-        _cachedCultureNames = CultureCatalog.Merge(baseNames, modNames).ToList();
+        _cachedCultureNames = GetCultureDefinitions().Select(definition => definition.Name).ToList();
         return _cachedCultureNames;
+    }
+
+    private IReadOnlyList<MinorGodDefinition> GetMinorGodDefinitions()
+    {
+        if (_cachedMinorGodDefinitions != null)
+            return _cachedMinorGodDefinitions;
+
+        var baseDefinitions = MinorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
+        if (baseDefinitions.Count == 0)
+        {
+            try
+            {
+                var dataBarPath = ResolveDataBarPath();
+                if (!string.IsNullOrWhiteSpace(dataBarPath) && File.Exists(dataBarPath))
+                {
+                    using var stream = File.OpenRead(dataBarPath);
+                    var barFile = new BarArchive(stream);
+                    if (barFile.Load(out _))
+                        baseDefinitions = MinorGodCatalog.ExtractBaseDefinitionsFromBar(barFile, dataBarPath);
+                }
+            }
+            catch
+            {
+                // Fall through to the loose gameplay XML.
+            }
+        }
+
+        if (baseDefinitions.Count == 0)
+        {
+            try { baseDefinitions = MinorGodCatalog.ReadBaseDefinitions(ResolveBaseGameplayXmlPath("minor_gods.xml")); }
+            catch { baseDefinitions = []; }
+        }
+
+        IReadOnlyList<MinorGodDefinition> modDefinitions = [];
+        try
+        {
+            modDefinitions = MinorGodCatalog.ReadModDefinitions(
+                GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName));
+        }
+        catch
+        {
+            // The manager performs strict safety validation before allowing edits.
+        }
+
+        var technologies = GetMinorGodAgeUpgradeTechnologyNames();
+        baseDefinitions = MinorGodCatalog.Canonicalize(baseDefinitions, technologies);
+        modDefinitions = MinorGodCatalog.Canonicalize(modDefinitions, technologies);
+        _cachedMinorGodDefinitions = MinorGodCatalog.MergeDefinitions(baseDefinitions, modDefinitions).ToList();
+        return _cachedMinorGodDefinitions;
+    }
+
+    private IReadOnlyList<string> GetKnownTerrainCreepNames()
+    {
+        if (_cachedTerrainCreepNames != null)
+            return _cachedTerrainCreepNames;
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_protoDataBarFile?.Entries != null &&
+            !string.IsNullOrWhiteSpace(_protoDataBarPath) &&
+            File.Exists(_protoDataBarPath))
+        {
+            var entries = _protoDataBarFile.Entries.Where(entry =>
+            {
+                var fileName = entry.Name.Replace('\\', '/').Split('/').LastOrDefault() ?? "";
+                return fileName.Equals("terrain_creep_types.xml.xmb", StringComparison.OrdinalIgnoreCase) ||
+                       fileName.Equals("terrain_creep_types.xmb", StringComparison.OrdinalIgnoreCase);
+            });
+            using var stream = File.OpenRead(_protoDataBarPath);
+            foreach (var entry in entries)
+            {
+                try
+                {
+                    var xml = ReadBarXmbXml(entry, stream);
+                    if (!string.IsNullOrWhiteSpace(xml))
+                        AddTerrainCreepTypeNames(names, XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
+                }
+                catch
+                {
+                    // Keep names decoded from other matching entries and the active mod.
+                }
+            }
+        }
+
+        if (names.Count == 0)
+        {
+            var loosePath = ResolveBaseGameplayXmlPath("terrain_creep_types.xml");
+            if (!string.IsNullOrWhiteSpace(loosePath) && File.Exists(loosePath))
+            {
+                try { AddTerrainCreepTypeNames(names, XDocument.Load(loosePath, LoadOptions.PreserveWhitespace)); }
+                catch { /* A malformed optional loose fallback must not block the editor. */ }
+            }
+        }
+
+        var modPath = GetCurrentModGameplayFilePath("terrain_creep_types_mods.xml");
+        if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
+        {
+            try
+            {
+                var document = XDocument.Load(modPath, LoadOptions.PreserveWhitespace);
+                if (document.Root?.Name.LocalName.Equals("terraincreepsmods", StringComparison.OrdinalIgnoreCase) == true)
+                    AddTerrainCreepTypeNames(names, document);
+            }
+            catch
+            {
+                // A malformed optional terrain creep mod file must not block Major Gods.
+            }
+        }
+
+        _cachedTerrainCreepNames = names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+        return _cachedTerrainCreepNames;
+    }
+
+    private static void AddTerrainCreepTypeNames(ISet<string> names, XContainer container)
+    {
+        foreach (var name in container.Descendants().Where(element =>
+                     element.Name.LocalName.Equals("terraincreep", StringComparison.OrdinalIgnoreCase))
+                 .Select(element => element.Attributes().FirstOrDefault(attribute =>
+                     attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim())
+                 .Where(name => !string.IsNullOrWhiteSpace(name)))
+        {
+            names.Add(name!);
+        }
     }
 
     private List<string> GetDistinctBarSimpleFieldValues(string tag)
@@ -34194,6 +34483,970 @@ public partial class ProtoEditorWindow : SimpleWindow
         RefreshTechnologyViewAfterTechTypeChanges();
     }
 
+    private async Task OpenCultureManagerAsync()
+    {
+        if (_modXmlRoot == null && !await EnsureLocalModAsync())
+            return;
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
+            return;
+
+        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+            return;
+        if (_majorGodView?.IsDirty == true && !await _majorGodView.SaveAsync())
+            return;
+        if (_isDirty)
+        {
+            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
+            if (_isDirty) return;
+        }
+
+        var culturePath = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                culturePath,
+                ModXmlDocumentKind.Cultures,
+                "Unable to load Cultures"))
+            return;
+
+        _cachedCultureDefinitions = null;
+        _cachedCultureNames = null;
+        var items = GetCultureDefinitions()
+            .Select(definition => new CultureManagerItem(
+                definition.Name,
+                definition.IsBuiltIn,
+                CountCultureUsage(definition.Name)))
+            .ToList();
+        var manager = new CultureManagerWindow(
+            items,
+            OpenCultureEditorAsync,
+            CreateCultureAsync,
+            DuplicateCultureAsync,
+            RenameCultureAsync,
+            DeleteCultureAsync,
+            CountCultureUsage,
+            (owner, name) => EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.Culture, name, "Culture", owner: owner));
+        await manager.ShowDialog(this);
+
+        _cachedCultureDefinitions = null;
+        _cachedCultureNames = null;
+        RefreshEditorsAfterCultureChanges();
+    }
+
+    private async Task OpenCultureEditorAsync(Window owner, string name, bool isBuiltIn)
+    {
+        _cachedCultureDefinitions = null;
+        _cachedCultureNames = null;
+        FileIntegrityTransaction.FileState? openedCultureState = null;
+        FileIntegrityTransaction.FileState? openedStringsState = null;
+        CultureDefinition? definition;
+        if (!isBuiltIn)
+        {
+            var path = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName)
+                ?? throw new InvalidOperationException("The active Culture file path could not be resolved.");
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Cultures);
+            var element = CultureCatalog.FindDefinition(prepared.Document.Root!, name);
+            definition = element == null
+                ? null
+                : new CultureDefinition(CultureCatalog.ReadField(element, "name"), false, new XElement(element));
+            openedCultureState = prepared.LoadedState;
+            openedStringsState = CaptureCurrentModStringsStateForEdit();
+        }
+        else
+        {
+            definition = GetCultureDefinitions().FirstOrDefault(candidate =>
+                candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && candidate.IsBuiltIn)
+                ?? GetCultureDefinitions().FirstOrDefault(candidate =>
+                    candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+        if (definition == null)
+        {
+            await new Prompt(PromptType.Error, "Unable to open Culture", $"Could not load '{name}'.").ShowDialog(owner);
+            return;
+        }
+
+        var replayPanelBackgrounds = GetCultureDefinitions()
+            .Select(candidate => CultureCatalog.ReadField(candidate.SourceElement, "replaypanelbackground"))
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var editor = new CultureEditorWindow(
+            definition,
+            replayPanelBackgrounds,
+            ResolveDisplayStringAsync,
+            (originalName, updated, displayName) => SaveCultureDefinitionAsync(
+                originalName,
+                updated,
+                displayName,
+                openedCultureState,
+                openedStringsState));
+        await editor.ShowDialog(owner);
+    }
+
+    private int CountCultureUsage(string cultureName)
+    {
+        try
+        {
+            return InspectIdentifierForDeletion(GameIdentifierKind.Culture, cultureName)
+                .References.Count;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private async Task<bool> CreateCultureAsync(string name)
+    {
+        return await MutateCultureDocumentAsync(
+            "create Culture",
+            document =>
+            {
+                EnsureCultureNameAvailable(name);
+                EnsureCultureGeneratedStringNamespaceAvailable(name, document);
+                CultureCatalog.AddDefinition(document, name);
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [CultureCatalog.BuildDisplayNameId(name)] = name
+            },
+            []);
+    }
+
+    private async Task<bool> DuplicateCultureAsync(string sourceName, bool sourceIsBuiltIn, string newName)
+    {
+        var source = GetCultureDefinitions().FirstOrDefault(definition =>
+            definition.Name.Equals(sourceName, StringComparison.OrdinalIgnoreCase) &&
+            definition.IsBuiltIn == sourceIsBuiltIn)
+            ?? GetCultureDefinitions().FirstOrDefault(definition =>
+                definition.Name.Equals(sourceName, StringComparison.OrdinalIgnoreCase));
+        if (source == null)
+        {
+            await new Prompt(PromptType.Error, "Unable to copy Culture", $"Could not load '{sourceName}'.").ShowDialog(this);
+            return false;
+        }
+
+        var sourceDisplayId = CultureCatalog.ReadField(source.SourceElement, "displaynameid");
+        var sourceDisplayText = sourceDisplayId.Length == 0
+            ? source.Name
+            : await ResolveDisplayStringAsync(sourceDisplayId) ?? source.Name;
+        var newDisplayId = CultureCatalog.BuildDisplayNameId(newName);
+        return await MutateCultureDocumentAsync(
+            "copy Culture",
+            document =>
+            {
+                EnsureCultureNameAvailable(newName);
+                EnsureCultureGeneratedStringNamespaceAvailable(newName, document);
+                var currentSource = source.IsBuiltIn
+                    ? source.SourceElement
+                    : CultureCatalog.FindDefinition(document.Root!, sourceName)
+                      ?? throw new InvalidOperationException($"Custom Culture '{sourceName}' changed or was removed. Reopen the manager before copying it.");
+                var template = new XElement(currentSource);
+                CultureCatalog.SetField(template, "displaynameid", newDisplayId);
+                CultureCatalog.AddDefinition(document, newName, template);
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [newDisplayId] = sourceDisplayText },
+            []);
+    }
+
+    private async Task<bool> SaveCultureDefinitionAsync(
+        string originalName,
+        XElement definition,
+        string? displayNameUpdate,
+        FileIntegrityTransaction.FileState? openedCultureState,
+        FileIntegrityTransaction.FileState? openedStringsState)
+    {
+        var path = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (openedCultureState == null)
+                throw new IOException("The Culture editor has no opening file fingerprint. Reopen it before saving.");
+            var cultureFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Cultures) with
+            {
+                LoadedState = openedCultureState
+            };
+            var currentDefinition = CultureCatalog.FindDefinition(cultureFile.Document.Root!, originalName)
+                ?? throw new InvalidOperationException($"Custom Culture '{originalName}' was not found.");
+            GodModuleFieldValidation.ValidateCultureDefinition(definition, originalName);
+            var previousDisplayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
+            var candidateName = CultureCatalog.ReadField(definition, "name");
+            if (CultureCatalog.OwnsDisplayNameId(candidateName, CultureCatalog.ReadField(definition, "displaynameid")))
+                EnsureCultureGeneratedStringNamespaceAvailable(candidateName, cultureFile.Document, originalName);
+            if (!CultureCatalog.ReplaceDefinition(cultureFile.Document, originalName, definition))
+                throw new InvalidOperationException($"Custom Culture '{originalName}' was not found.");
+            var displayNameId = CultureCatalog.ReadField(definition, "displaynameid");
+            var writesString = displayNameUpdate != null && displayNameId.Length > 0;
+            var stringPath = writesString ? GetCurrentModStringsPath() : null;
+            if (writesString && (string.IsNullOrWhiteSpace(stringPath) || openedStringsState == null))
+                throw new IOException("The Culture string file has no opening fingerprint. Reopen the editor before saving.");
+            if (writesString)
+            {
+                var entries = LoadCurrentModStringEntries(requireReadable: true);
+                if (entries.ContainsKey(displayNameId) &&
+                    !displayNameId.Equals(previousDisplayNameId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"String ID '{displayNameId}' already exists and is not owned by this Culture. No string was overwritten.");
+                }
+            }
+            var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(stringPath) && openedStringsState != null)
+                expected[Path.GetFullPath(stringPath)] = openedStringsState;
+            await ModDocumentPersistence.ExecuteAsync(
+                [cultureFile],
+                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                expected,
+                async () =>
+                {
+                    SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
+                    if (writesString)
+                    {
+                        await SaveCultureStringValuesAsync(
+                            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                            {
+                                [displayNameId] = displayNameUpdate!
+                            },
+                            []);
+                    }
+                });
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Culture '{originalName}' saved.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to save Culture", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> RenameCultureAsync(string oldName, string newName)
+    {
+        var culturePath = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(culturePath)) return false;
+        try
+        {
+            EnsureCultureNameAvailable(newName, oldName);
+            var cultureFile = ModDocumentPersistence.Prepare(culturePath, ModXmlDocumentKind.Cultures);
+            var currentDefinition = CultureCatalog.FindDefinition(cultureFile.Document.Root!, oldName)
+                ?? throw new InvalidOperationException($"Custom Culture '{oldName}' was not found.");
+            EnsureCultureGeneratedStringNamespaceAvailable(newName, cultureFile.Document, oldName);
+            var oldDisplayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
+            var ownedStringRename = CultureCatalog.RenameOwnedDisplayNameId(
+                currentDefinition,
+                oldName,
+                newName);
+            if (!CultureCatalog.RenameDefinition(cultureFile.Document, oldName, newName))
+                throw new InvalidOperationException($"Custom Culture '{oldName}' was not found.");
+
+            var stringUpdates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var stringRemovals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string? stringPath = null;
+            FileIntegrityTransaction.FileState? stringState = null;
+            if (ownedStringRename != null)
+            {
+                var newDisplayNameId = ownedStringRename.NewId;
+                stringPath = GetCurrentModStringsPath()
+                    ?? throw new InvalidOperationException("The active mod stringmods file path could not be resolved.");
+                stringState = CaptureCurrentModStringsStateForEdit();
+                var entries = LoadCurrentModStringEntries();
+                if (entries.ContainsKey(newDisplayNameId))
+                {
+                    throw new InvalidOperationException(
+                        $"String ID '{newDisplayNameId}' already exists and is not owned by this Culture. Choose another name.");
+                }
+                var displayText = entries.GetValueOrDefault(oldDisplayNameId) ??
+                                  await ResolveDisplayStringAsync(oldDisplayNameId) ?? oldName;
+                stringUpdates[newDisplayNameId] = displayText;
+                stringRemovals.Add(oldDisplayNameId);
+            }
+
+            var fullCulturePath = Path.GetFullPath(culturePath);
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
+                GetGameIdentifierReferenceFiles().Where(file =>
+                    !Path.GetFullPath(file.Path).Equals(fullCulturePath, StringComparison.OrdinalIgnoreCase)),
+                GameIdentifierKind.Culture,
+                [new KeyValuePair<string, string>(oldName, newName)]);
+            var expectedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(
+                migration.ExpectedStates,
+                StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(stringPath) && stringState != null)
+                expectedStates[Path.GetFullPath(stringPath)] = stringState;
+            await ModDocumentPersistence.ExecuteAsync(
+                [cultureFile],
+                migration.Paths.Concat(string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath]),
+                expectedStates,
+                async () =>
+                {
+                    SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
+                    migration.Save(SaveXmlDocumentAtomic);
+                    // The string writer adopts its cache, so it must be the final step of
+                    // the disk transaction after every operation that can still fail.
+                    if (stringUpdates.Count > 0 || stringRemovals.Count > 0)
+                        await SaveCultureStringValuesAsync(stringUpdates, stringRemovals);
+                });
+            var migratedProtoDocument = migration.GetDocument(_modFilePath);
+            if (migratedProtoDocument != null)
+                AdoptSavedProtoDocument(migratedProtoDocument);
+            AdoptGameIdentifierReferenceMigration(migration);
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Culture '{oldName}' renamed to '{newName}'.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to rename Culture", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DeleteCultureAsync(string name)
+    {
+        var path = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (!await EnsureIdentifierCanBeDeletedAsync(GameIdentifierKind.Culture, name, "Culture"))
+                return false;
+            var cultureFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Cultures);
+            var currentDefinition = CultureCatalog.FindDefinition(cultureFile.Document.Root!, name)
+                ?? throw new InvalidOperationException($"Custom Culture '{name}' was not found.");
+            var displayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
+            var stringRemovals = CultureCatalog.OwnsDisplayNameId(name, displayNameId)
+                ? new[] { displayNameId }
+                : [];
+            if (!CultureCatalog.DeleteDefinition(cultureFile.Document, name))
+                throw new InvalidOperationException($"Custom Culture '{name}' was not found.");
+            var stringPath = stringRemovals.Length > 0 ? GetCurrentModStringsPath() : null;
+            var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(stringPath))
+                expected[Path.GetFullPath(stringPath)] = CaptureCurrentModStringsStateForEdit();
+            await ModDocumentPersistence.ExecuteAsync(
+                [cultureFile],
+                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                expected,
+                async () =>
+                {
+                    SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
+                    if (stringRemovals.Length > 0)
+                        await SaveCultureStringValuesAsync(
+                            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                            stringRemovals);
+                });
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Culture '{name}' removed.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to remove Culture", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> MutateCultureDocumentAsync(
+        string operation,
+        Action<XDocument> mutation,
+        IReadOnlyDictionary<string, string>? stringUpdates = null,
+        IReadOnlyCollection<string>? stringRemovals = null)
+    {
+        var path = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            var cultureFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Cultures);
+            mutation(cultureFile.Document);
+            stringUpdates ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            stringRemovals ??= [];
+            var writesStrings = stringUpdates.Count > 0 || stringRemovals.Count > 0;
+            var stringPath = writesStrings ? GetCurrentModStringsPath() : null;
+            if (writesStrings && string.IsNullOrWhiteSpace(stringPath))
+                throw new InvalidOperationException("The active mod stringmods file path could not be resolved.");
+            var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(stringPath))
+            {
+                expected[Path.GetFullPath(stringPath)] = CaptureCurrentModStringsStateForEdit();
+                var existingStrings = LoadCurrentModStringEntries();
+                var collision = stringUpdates.Keys.FirstOrDefault(existingStrings.ContainsKey);
+                if (collision != null)
+                {
+                    throw new InvalidOperationException(
+                        $"String ID '{collision}' already exists and is not owned by the new Culture. Choose another name.");
+                }
+            }
+            await ModDocumentPersistence.ExecuteAsync(
+                [cultureFile],
+                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                expected,
+                async () =>
+                {
+                    SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
+                    if (writesStrings)
+                        await SaveCultureStringValuesAsync(stringUpdates, stringRemovals);
+                });
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = "Culture changes saved.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, $"Unable to {operation}", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private void EnsureCultureNameAvailable(string name, string? ignoredCustomName = null)
+    {
+        if (!CultureCatalog.IsValidName(name))
+            throw new InvalidOperationException("Culture names can contain only letters, digits, '_' and '-'.");
+        if (GetCultureDefinitions().Any(definition =>
+                !definition.Name.Equals(ignoredCustomName, StringComparison.OrdinalIgnoreCase) &&
+                definition.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Culture '{name}' already exists.");
+    }
+
+    private void EnsureCultureGeneratedStringNamespaceAvailable(
+        string name,
+        XDocument currentModDocument,
+        string? ignoredCultureName = null)
+    {
+        var definitions = GetCultureDefinitions()
+            .Where(definition => definition.IsBuiltIn)
+            .Concat(CultureCatalog.ExtractDefinitions(currentModDocument, isBuiltIn: false));
+        var collision = CultureCatalog.FindGeneratedDisplayNameIdCollision(
+            name,
+            definitions,
+            ignoredCultureName);
+        if (collision != null)
+        {
+            throw new InvalidOperationException(
+                $"Culture '{name}' would use string ID '{CultureCatalog.BuildDisplayNameId(name)}', which is already owned by '{collision.Name}'. Choose another name.");
+        }
+    }
+
+    private FileIntegrityTransaction.FileState CaptureCurrentModStringsStateForEdit()
+    {
+        var path = GetCurrentModStringsPath();
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("The active mod stringmods file path could not be resolved.");
+        LoadCurrentModStringEntries(requireReadable: true);
+        return _loadedModStringsFileState ?? FileIntegrityTransaction.CaptureState(path);
+    }
+
+    private void RefreshEditorsAfterCultureChanges()
+    {
+        var selectedGod = _majorGodView?.CurrentMajorGodName;
+        var modifiedGods = _majorGodView?.IsModifiedMode == true;
+        if (ReferenceEquals(_technologyHost.Content, _majorGodView))
+            _technologyHost.Content = null;
+        _majorGodView = null;
+        RefreshTechnologyViewAfterTechTypeChanges();
+        if (_activeEntityKind == EditorEntityKind.MajorGods)
+        {
+            EnsureMajorGodView();
+            _majorGodView!.SetModifiedMode(modifiedGods);
+            _majorGodView.SelectMajorGod(selectedGod);
+        }
+        if (_activeEntityKind == EditorEntityKind.Units && !string.IsNullOrWhiteSpace(_currentUnitName))
+            BuildEditorPanel(_currentUnitName, resetScroll: false);
+    }
+
+    private async Task OpenMinorGodManagerAsync()
+    {
+        if (_modXmlRoot == null && !await EnsureLocalModAsync()) return;
+        if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath)) return;
+        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync()) return;
+        if (_majorGodView?.IsDirty == true && !await _majorGodView.SaveAsync()) return;
+        if (_isDirty)
+        {
+            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
+            if (_isDirty) return;
+        }
+
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (!await EnsureEditableXmlDocumentSafeAsync(
+                path, ModXmlDocumentKind.MinorGods, "Unable to load Minor Gods")) return;
+        var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
+        {
+            try
+            {
+                var stateBeforeRead = FileIntegrityTransaction.CaptureState(techtreePath);
+                var techtreeDocument = XDocument.Load(techtreePath, LoadOptions.PreserveWhitespace);
+                var stateAfterRead = FileIntegrityTransaction.CaptureState(techtreePath);
+                if (stateBeforeRead != stateAfterRead)
+                    throw new IOException($"'{techtreePath}' changed while Minor Gods were being synchronized.");
+                await SynchronizeMinorGodsForSavedTechnologiesAsync(
+                    techtreeDocument,
+                    techtreePath,
+                    stateAfterRead);
+            }
+            catch (Exception exception)
+            {
+                await new Prompt(PromptType.Error, "Unable to synchronize Minor Gods", exception.Message)
+                    .ShowDialog(this);
+                return;
+            }
+        }
+        if (_baseGameIconPaths.Count == 0) await LoadBaseGameIconCatalogAsync();
+        LoadCurrentModAssetCatalogs();
+        _cachedMinorGodDefinitions = null;
+        var items = GetMinorGodDefinitions().Select(definition => new MinorGodManagerItem(
+            definition.Name, definition.TechName, definition.IsBuiltIn,
+            CountMinorGodUsage(definition.TechName))).ToList();
+        var manager = new MinorGodManagerWindow(
+            items, OpenMinorGodEditorAsync, CreateMinorGodAsync, DuplicateMinorGodAsync,
+            RenameMinorGodAsync, DeleteMinorGodAsync, CountMinorGodUsage,
+            EnsureMinorGodCanBeDeletedAsync);
+        await manager.ShowDialog(this);
+        _cachedMinorGodDefinitions = null;
+    }
+
+    private async Task<MinorGodEditorResult?> OpenMinorGodEditorAsync(
+        Window owner, string techName, bool isBuiltIn)
+    {
+        _cachedMinorGodDefinitions = null;
+        var technologyDependency = CaptureMinorGodTechnologyDependency();
+        FileIntegrityTransaction.FileState? openedMinorGodState = null;
+        MinorGodDefinition? definition;
+        if (!isBuiltIn)
+        {
+            var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName)
+                ?? throw new InvalidOperationException("The active Minor God file path could not be resolved.");
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods);
+            var element = MinorGodCatalog.FindDefinition(prepared.Document.Root!, techName);
+            definition = element == null
+                ? null
+                : new MinorGodDefinition(
+                    MinorGodCatalog.GetDisplayName(element.Name.LocalName),
+                    element.Name.LocalName,
+                    false,
+                    new XElement(element));
+            openedMinorGodState = prepared.LoadedState;
+        }
+        else
+        {
+            definition = GetMinorGodDefinitions().FirstOrDefault(candidate =>
+                candidate.TechName.Equals(techName, StringComparison.OrdinalIgnoreCase) && candidate.IsBuiltIn)
+                ?? GetMinorGodDefinitions().FirstOrDefault(candidate =>
+                    candidate.TechName.Equals(techName, StringComparison.OrdinalIgnoreCase));
+        }
+        if (definition == null)
+        {
+            await new Prompt(PromptType.Error, "Unable to open Minor God",
+                $"Could not load '{MinorGodCatalog.GetDisplayName(techName)}'.").ShowDialog(owner);
+            return null;
+        }
+
+        var editor = new MinorGodEditorWindow(
+            definition,
+            technologyDependency.AgeUpgradeNames,
+            _baseGameIconPaths.Concat(_customIconPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList(),
+            _iconPreviewService,
+            (originalTechName, updated) => SaveMinorGodDefinitionAsync(
+                originalTechName,
+                updated,
+                openedMinorGodState,
+                technologyDependency.Path,
+                technologyDependency.State));
+        return await editor.ShowDialog<MinorGodEditorResult?>(owner);
+    }
+
+    private int CountMinorGodUsage(string techName)
+        => GetAvailableTechNames().Contains(techName, StringComparer.OrdinalIgnoreCase) ? 1 : 0;
+
+    private async Task<bool> EnsureMinorGodCanBeDeletedAsync(Window owner, string techName)
+    {
+        if (CountMinorGodUsage(techName) == 0) return true;
+        await new Prompt(
+            PromptType.Error,
+            "Minor God is linked to a Technology",
+            $"'{MinorGodCatalog.GetDisplayName(techName)}' cannot be removed while Technology '{techName}' exists.\n\n" +
+            "Delete that Technology instead; the editor will offer to remove the associated Minor God in the same operation.")
+            .ShowDialog(owner);
+        return false;
+    }
+
+    private async Task<MinorGodManagerItem?> CreateMinorGodAsync(Window owner, string name)
+    {
+        try
+        {
+            EnsureMinorGodNameAvailable(name);
+            var techName = ResolveMinorGodTechName(name);
+            if (techName == null)
+            {
+                var proposal = new Prompt(
+                    PromptType.Confirm,
+                    "Create associated Technology?",
+                    $"No AgeUpgrade technology exists for '{name}'. Create one now?",
+                    confirmButtonText: "OK");
+                await proposal.ShowDialog(owner);
+                if (!proposal.Confirmed) return null;
+
+                var agePrompt = new MinorGodAgePromptWindow(name);
+                var agePrefix = await agePrompt.ShowDialog<string?>(owner);
+                if (string.IsNullOrWhiteSpace(agePrefix)) return null;
+                techName = agePrefix + name.Trim();
+                var previousContent = _technologyHost.Content;
+                try
+                {
+                    EnsureTechnologyView();
+                    if (_technologyView == null || !await _technologyView.AddAgeUpgradeTechnologyAsync(techName))
+                        throw new InvalidOperationException($"Technology '{techName}' could not be created.");
+                }
+                finally
+                {
+                    if (_activeEntityKind != EditorEntityKind.Technologies)
+                        _technologyHost.Content = previousContent;
+                }
+                InvalidateSuggestionCaches(includeTechNames: true);
+                _cachedMinorGodDefinitions = null;
+                var automatic = GetMinorGodDefinitions().FirstOrDefault(definition =>
+                    !definition.IsBuiltIn &&
+                    definition.TechName.Equals(techName, StringComparison.OrdinalIgnoreCase));
+                if (automatic != null)
+                    return new MinorGodManagerItem(automatic.Name, automatic.TechName, false, 0);
+            }
+            var saved = await MutateMinorGodDocumentAsync("create Minor God", document =>
+                MinorGodCatalog.AddDefinition(document, techName!));
+            return saved ? new MinorGodManagerItem(name, techName, false, 0) : null;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to create Minor God", exception.Message).ShowDialog(this);
+            return null;
+        }
+    }
+
+    private async Task<MinorGodManagerItem?> DuplicateMinorGodAsync(
+        string sourceTechName, bool sourceIsBuiltIn, string newName)
+    {
+        try
+        {
+            EnsureMinorGodNameAvailable(newName);
+            var source = GetMinorGodDefinitions().FirstOrDefault(definition =>
+                definition.TechName.Equals(sourceTechName, StringComparison.OrdinalIgnoreCase) &&
+                definition.IsBuiltIn == sourceIsBuiltIn)
+                ?? throw new InvalidOperationException($"Minor God '{sourceTechName}' was not found.");
+            var newTechName = ResolveMinorGodTechName(newName, source.TechName)
+                ?? throw new InvalidOperationException(
+                    $"No existing age technology ends with '{newName}'. Create that technology first.");
+            var saved = await MutateMinorGodDocumentAsync("copy Minor God", document =>
+            {
+                var currentSource = source.IsBuiltIn
+                    ? source.SourceElement
+                    : MinorGodCatalog.FindDefinition(document.Root!, sourceTechName)
+                      ?? throw new InvalidOperationException($"Custom Minor God '{sourceTechName}' changed or was removed. Reopen the manager before copying it.");
+                MinorGodCatalog.AddDefinition(document, newTechName, currentSource);
+            });
+            return saved ? new MinorGodManagerItem(newName, newTechName, false, 0) : null;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to copy Minor God", exception.Message).ShowDialog(this);
+            return null;
+        }
+    }
+
+    private async Task<MinorGodManagerItem?> RenameMinorGodAsync(string oldTechName, string newName)
+    {
+        try
+        {
+            EnsureMinorGodNameAvailable(newName, oldTechName);
+            var newTechName = MinorGodCatalog.GetAgePrefix(oldTechName) + newName.Trim();
+            var previousContent = _technologyHost.Content;
+            try
+            {
+                EnsureTechnologyView();
+                if (_technologyView == null ||
+                    !await _technologyView.RenameTechnologyAsync(oldTechName, newTechName))
+                    return null;
+            }
+            finally
+            {
+                if (_activeEntityKind != EditorEntityKind.Technologies)
+                    _technologyHost.Content = previousContent;
+            }
+
+            InvalidateSuggestionCaches(includeTechNames: true);
+            _cachedMinorGodDefinitions = null;
+            return new MinorGodManagerItem(newName.Trim(), newTechName, false, 1);
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to rename Minor God", exception.Message).ShowDialog(this);
+            return null;
+        }
+    }
+
+    private async Task<bool> SaveMinorGodDefinitionAsync(
+        string oldTechName,
+        XElement definition,
+        FileIntegrityTransaction.FileState? openedMinorGodState,
+        string? openedTechnologyPath,
+        FileIntegrityTransaction.FileState? openedTechnologyState)
+    {
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (openedMinorGodState == null)
+                throw new IOException("The Minor God editor has no opening file fingerprint. Reopen it before saving.");
+            var newTechName = definition.Name.LocalName;
+            var technologyDependency = CaptureMinorGodTechnologyDependency();
+            if (openedTechnologyState != technologyDependency.State ||
+                !string.Equals(openedTechnologyPath, technologyDependency.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("techtree_mods.xml changed after the Minor God editor opened. No files were written. Reopen the editor before saving.");
+            }
+            if (!technologyDependency.AgeUpgradeNames.Contains(newTechName, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Technology '{newTechName}' is not an existing AgeUpgrade technology.");
+            GodModuleFieldValidation.ValidateMinorGodDefinition(
+                definition,
+                technologyDependency.AgeUpgradeNames,
+                _baseGameIconPaths.Concat(_customIconPaths));
+            EnsureMinorGodTechAvailable(newTechName, oldTechName);
+            var minorGodFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods) with
+            {
+                LoadedState = openedMinorGodState
+            };
+            if (!MinorGodCatalog.ReplaceDefinition(minorGodFile.Document, oldTechName, definition))
+                throw new InvalidOperationException($"Custom Minor God '{oldTechName}' was not found.");
+            var expected = CreateDependencyExpectedState(technologyDependency.Path, technologyDependency.State);
+            ModDocumentPersistence.Execute(
+                [minorGodFile],
+                string.IsNullOrWhiteSpace(technologyDependency.Path) ? [] : [technologyDependency.Path],
+                expected,
+                () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Minor God '{MinorGodCatalog.GetDisplayName(newTechName)}' saved.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to save Minor God", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> DeleteMinorGodAsync(string techName)
+    {
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (!await EnsureMinorGodCanBeDeletedAsync(this, techName)) return false;
+            var minorGodFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods);
+            if (!MinorGodCatalog.DeleteDefinition(minorGodFile.Document, techName))
+                throw new InvalidOperationException($"Custom Minor God '{techName}' was not found.");
+            var technologyDependency = CaptureMinorGodTechnologyDependency();
+            if (technologyDependency.AllNames.Contains(techName, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Technology '{techName}' still exists. Delete that Technology to remove its Minor God atomically.");
+            EnsureMinorGodDefinitionsHaveTechnologies(minorGodFile.Document, technologyDependency.AgeUpgradeNames);
+            ModDocumentPersistence.Execute(
+                [minorGodFile],
+                string.IsNullOrWhiteSpace(technologyDependency.Path) ? [] : [technologyDependency.Path],
+                CreateDependencyExpectedState(technologyDependency.Path, technologyDependency.State),
+                () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = $"Minor God '{MinorGodCatalog.GetDisplayName(techName)}' removed.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to remove Minor God", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private async Task<bool> MutateMinorGodDocumentAsync(string operation, Action<XDocument> mutation)
+    {
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            var minorGodFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods);
+            mutation(minorGodFile.Document);
+            var technologyDependency = CaptureMinorGodTechnologyDependency();
+            EnsureMinorGodDefinitionsHaveTechnologies(minorGodFile.Document, technologyDependency.AgeUpgradeNames);
+            ModDocumentPersistence.Execute(
+                [minorGodFile],
+                string.IsNullOrWhiteSpace(technologyDependency.Path) ? [] : [technologyDependency.Path],
+                CreateDependencyExpectedState(technologyDependency.Path, technologyDependency.State),
+                () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
+            InvalidateSuggestionCaches();
+            _statusMessage.Text = "Minor God changes saved.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, $"Unable to {operation}", exception.Message).ShowDialog(this);
+            return false;
+        }
+    }
+
+    private Task SynchronizeMinorGodsForSavedTechnologiesAsync(
+        XDocument techtreeDocument,
+        string techtreePath,
+        FileIntegrityTransaction.FileState techtreeState)
+    {
+        var minorGodPath = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(minorGodPath)) return Task.CompletedTask;
+        var minorGodFile = ModDocumentPersistence.Prepare(minorGodPath, ModXmlDocumentKind.MinorGods);
+        if (MinorGodCatalog.AddMissingDefinitionsForAgeUpgradeTechnologies(minorGodFile.Document, [techtreeDocument]) > 0)
+        {
+            ModDocumentPersistence.Execute(
+                [minorGodFile],
+                [techtreePath],
+                CreateDependencyExpectedState(techtreePath, techtreeState),
+                () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
+        }
+        InvalidateSuggestionCaches(includeTechNames: true);
+        return Task.CompletedTask;
+    }
+
+    private (
+        IReadOnlyList<string> AgeUpgradeNames,
+        IReadOnlyList<string> AllNames,
+        string? Path,
+        FileIntegrityTransaction.FileState? State) CaptureMinorGodTechnologyDependency()
+    {
+        var path = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        var stateBeforeRead = string.IsNullOrWhiteSpace(path)
+            ? null
+            : FileIntegrityTransaction.CaptureState(path);
+        _cachedTechNames = null;
+        _cachedMinorGodAgeUpgradeTechNames = null;
+        var allNames = GetAvailableTechNames().ToList();
+        var ageUpgradeNames = GetMinorGodAgeUpgradeTechnologyNames().ToList();
+        var stateAfterRead = string.IsNullOrWhiteSpace(path)
+            ? null
+            : FileIntegrityTransaction.CaptureState(path);
+        if (stateBeforeRead != stateAfterRead)
+            throw new IOException($"'{path}' changed while its Minor God dependencies were being loaded.");
+        return (ageUpgradeNames, allNames, path, stateAfterRead);
+    }
+
+    private static IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> CreateDependencyExpectedState(
+        string? path,
+        FileIntegrityTransaction.FileState? state)
+    {
+        if (string.IsNullOrWhiteSpace(path) || state == null)
+            return new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+        return new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(path)] = state
+        };
+    }
+
+    private static void EnsureMinorGodDefinitionsHaveTechnologies(
+        XDocument minorGodDocument,
+        IReadOnlyList<string> ageUpgradeTechnologyNames)
+    {
+        var known = ageUpgradeTechnologyNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var orphan = minorGodDocument.Root?.Elements().FirstOrDefault(element =>
+            !known.Contains(element.Name.LocalName));
+        if (orphan != null)
+        {
+            throw new InvalidDataException(
+                $"Minor God '{MinorGodCatalog.GetDisplayName(orphan.Name.LocalName)}' has no matching AgeUpgrade technology '{orphan.Name.LocalName}'. No files were written.");
+        }
+    }
+
+    private Task AdoptSavedTechnologyLifecycleAsync(XDocument _)
+    {
+        // The Minor God lifecycle document is committed in the same transaction as
+        // techtree_mods.xml. Only refresh caches after that transaction succeeds.
+        _cachedMinorGodDefinitions = null;
+        InvalidateSuggestionCaches(includeTechNames: true);
+        _majorGodView?.UpdateTechnologyCatalogs(
+            GetMajorGodTechnologyNames(),
+            GetMajorGodTechnologyFlagNames(),
+            GetTechnologyTechTypeNames());
+        return Task.CompletedTask;
+    }
+
+    private bool HasCustomMinorGodForTechnology(string techName)
+    {
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+        var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods);
+        return MinorGodCatalog.FindDefinition(prepared.Document.Root!, techName) != null;
+    }
+
+    private async Task<bool> ConfirmLinkedMinorGodRemovalAsync(Window owner, string techName)
+    {
+        var minorGodName = MinorGodCatalog.GetDisplayName(techName);
+        var prompt = new Prompt(
+            PromptType.Confirm,
+            "Remove associated Minor God?",
+            $"Technology '{techName}' is associated with Minor God '{minorGodName}'.\n\n" +
+            "Continuing will remove the Minor God entry together with the Technology change. Cancel keeps both unchanged.",
+            confirmButtonText: "Continue");
+        await prompt.ShowDialog(owner);
+        return prompt.Confirmed;
+    }
+
+    private PreparedModXmlDocument? PrepareMinorGodTechnologyLifecycle(
+        XDocument technologyDocument,
+        IReadOnlyList<TechnologyRenameOperation> renames,
+        IReadOnlyCollection<string> removedTechnologyNames)
+    {
+        var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.MinorGods);
+        var before = prepared.Document.ToString(SaveOptions.DisableFormatting);
+        MinorGodCatalog.ApplyTechnologyLifecycle(
+            prepared.Document,
+            technologyDocument,
+            renames,
+            removedTechnologyNames);
+        return before.Equals(prepared.Document.ToString(SaveOptions.DisableFormatting), StringComparison.Ordinal)
+            ? null
+            : prepared;
+    }
+
+    private string? ResolveMinorGodTechName(string name, string? preferredSourceTech = null)
+    {
+        var candidates = GetMinorGodAgeUpgradeTechnologyNames().Where(tech =>
+            MinorGodCatalog.GetDisplayName(tech).Equals(name.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        if (candidates.Count == 0) return null;
+        var preferredPrefix = MinorGodCatalog.GetAgePrefix(preferredSourceTech ?? "");
+        return candidates.FirstOrDefault(tech =>
+                   tech.StartsWith(preferredPrefix, StringComparison.OrdinalIgnoreCase))
+               ?? candidates.FirstOrDefault(tech =>
+                   tech.StartsWith("ClassicalAge", StringComparison.OrdinalIgnoreCase))
+               ?? candidates[0];
+    }
+
+    private void EnsureMinorGodNameAvailable(string name, string? ignoredTechName = null)
+    {
+        if (!MinorGodCatalog.IsValidName(name))
+            throw new InvalidOperationException("Minor God names can contain only letters, digits, '_' and '-'.");
+        if (GetMinorGodDefinitions().Any(definition =>
+                !definition.TechName.Equals(ignoredTechName, StringComparison.OrdinalIgnoreCase) &&
+                definition.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Minor God '{name.Trim()}' already exists.");
+    }
+
+    private void EnsureMinorGodTechAvailable(string techName, string? ignoredTechName = null)
+    {
+        var canonical = GetMinorGodAgeUpgradeTechnologyNames().FirstOrDefault(candidate =>
+            candidate.Equals(techName, StringComparison.OrdinalIgnoreCase));
+        if (canonical == null)
+            throw new InvalidOperationException($"Technology '{techName}' does not exist.");
+        if (GetMinorGodDefinitions().Any(definition =>
+                !definition.TechName.Equals(ignoredTechName, StringComparison.OrdinalIgnoreCase) &&
+                definition.TechName.Equals(canonical, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Minor God technology '{canonical}' is already used.");
+    }
+
     private void RefreshTechnologyViewAfterTechTypeChanges()
     {
         if (_technologyView == null)
@@ -49072,6 +50325,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     internal static void SaveTechTypeXmlDocument(XDocument document, string path)
         => SaveAbilityXmlDocument(document, path);
 
+    internal static void SaveCultureXmlDocument(XDocument document, string path)
+        => SaveAbilityXmlDocument(document, path);
+
+    internal static void SaveMinorGodXmlDocument(XDocument document, string path)
+        => SaveAbilityXmlDocument(document, path);
+
     private static string GetRechargeModeDisplayValue(string? value)
         => string.Equals(value?.Trim(), "resourceDropoff", StringComparison.OrdinalIgnoreCase)
             ? "ResourceDropoff"
@@ -49540,6 +50799,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
         => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.MajorGods);
+
+    private Task SaveCultureStringValuesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        IReadOnlyCollection<string> removals)
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Cultures);
 
     private Task SaveResolvedStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
@@ -54828,6 +56092,16 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async void Gods_Click(object? sender, RoutedEventArgs e)
     {
         await ShowEntityKindAsync(EditorEntityKind.MajorGods);
+    }
+
+    private async void GodsCultures_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenCultureManagerAsync();
+    }
+
+    private async void GodsMinorGods_Click(object? sender, RoutedEventArgs e)
+    {
+        await OpenMinorGodManagerAsync();
     }
 
     private async void ProtounitCommands_Click(object? sender, RoutedEventArgs e)

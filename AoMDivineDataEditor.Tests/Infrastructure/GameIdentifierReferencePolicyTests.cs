@@ -201,4 +201,73 @@ public sealed class GameIdentifierReferencePolicyTests
 
         Assert.Equal(["@futuretechtype"], unknown);
     }
+
+    [Fact]
+    public void MajorGodRename_MigratesKnownTechnologyReferences_WithoutRenamingItsDefinition()
+    {
+        var document = XDocument.Parse("""
+            <root>
+              <civ><name>OldGod</name></civ>
+              <tech name="ForGod">
+                <prereqs><civilization><civName>OldGod</civName><civName>OldGod</civName></civilization></prereqs>
+                <effects><effect uiShowIfMajorGod="OldGod" /><effect civ="OldGod" /></effects>
+              </tech>
+              <unit name="Oracle"><majorgod>OldGod</majorgod></unit>
+            </root>
+            """);
+
+        var changed = GameIdentifierReferencePolicy.RenameReferences(
+            document, GameIdentifierKind.MajorGod, "OldGod", "NewGod");
+
+        Assert.Equal(5, changed);
+        Assert.Equal("OldGod", document.Descendants("civ").Single().Element("name")?.Value);
+        Assert.All(document.Descendants("civName"), element => Assert.Equal("NewGod", element.Value));
+        Assert.Equal("NewGod", (string?)document.Descendants("effect").Single(effect =>
+            effect.Attribute("uiShowIfMajorGod") != null).Attribute("uiShowIfMajorGod"));
+        Assert.Equal("NewGod", (string?)document.Descendants("effect").Single(effect =>
+            effect.Attribute("civ") != null).Attribute("civ"));
+        Assert.Equal("NewGod", document.Descendants("majorgod").Single().Value);
+    }
+
+    [Fact]
+    public void CultureRename_MigratesMajorGodAndTechnologyPrerequisiteReferences()
+    {
+        var document = XDocument.Parse("""
+            <root>
+              <culture><name>OldCulture</name></culture>
+              <civ><name>God</name><culture>OldCulture</culture></civ>
+              <tech name="ForCulture"><prereqs><culture><cultureName>OldCulture</cultureName><cultureName>OldCulture</cultureName></culture></prereqs></tech>
+            </root>
+            """);
+
+        var changed = GameIdentifierReferencePolicy.RenameReferences(
+            document, GameIdentifierKind.Culture, "OldCulture", "NewCulture");
+
+        Assert.Equal(3, changed);
+        Assert.Equal("OldCulture", document.Descendants("culture").First().Element("name")?.Value);
+        Assert.Equal("NewCulture", document.Descendants("civ").Single().Element("culture")?.Value);
+        Assert.All(document.Descendants("cultureName"), element => Assert.Equal("NewCulture", element.Value));
+    }
+
+    [Fact]
+    public void MajorGodSpecialMechanicUnitReferences_AreMigratedByTheirDeclaredShape()
+    {
+        var document = XDocument.Parse("""
+            <civsmods><civ><name>God</name>
+              <shades><targetunit>Old</targetunit></shades>
+              <buildingchain><anchor vfx="Old">Old</anchor>
+                <chainablebuilding chainradius="10" generationresource="Favor">Old</chainablebuilding>
+              </buildingchain>
+              <terraincreeps><terraincreep preventplacement="Old"><protounit>Old</protounit></terraincreep></terraincreeps>
+              <bonusunitspawning><reward>Old</reward><contributor unit="Old" /></bonusunitspawning>
+            </civ></civsmods>
+            """);
+
+        var changed = GameIdentifierReferencePolicy.RenameReferences(
+            document, GameIdentifierKind.ProtoUnit, "Old", "New");
+
+        Assert.Equal(8, changed);
+        Assert.Empty(GameIdentifierReferencePolicy.FindRecognizedReferences(
+            document, GameIdentifierKind.ProtoUnit, "Old"));
+    }
 }

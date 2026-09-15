@@ -3,6 +3,8 @@ using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Classes;
 
+public sealed record OwnedStringRename(string Field, string OldId, string NewId);
+
 public sealed record MajorGodDefinition(string Name, bool IsBuiltIn, XElement SourceElement);
 
 public static class MajorGodCatalog
@@ -180,7 +182,7 @@ public static class MajorGodCatalog
         var statsId = FindDirectChild(entry, "statsid");
         if (statsId != null)
         {
-            statsId.Value = "SP";
+            XmlTriviaPreserver.SetText(statsId, "SP");
             return;
         }
 
@@ -200,7 +202,7 @@ public static class MajorGodCatalog
         var existing = FindDirectChild(entry, tag);
         if (existing != null)
         {
-            existing.Value = value ?? "";
+            XmlTriviaPreserver.SetText(existing, value);
             return existing;
         }
 
@@ -239,7 +241,7 @@ public static class MajorGodCatalog
         if (tech == null)
             ageTech.AddFirst(new XElement("tech", technology));
         else
-            tech.Value = technology;
+            XmlTriviaPreserver.SetText(tech, technology);
         return ageTech;
     }
 
@@ -254,7 +256,7 @@ public static class MajorGodCatalog
         var existing = FindDirectChild(entry, tag);
         if (existing != null)
         {
-            existing.Value = technology;
+            XmlTriviaPreserver.SetText(existing, technology);
             return existing;
         }
 
@@ -296,7 +298,7 @@ public static class MajorGodCatalog
         var existing = FindDirectChild(entry, tag);
         if (existing != null)
         {
-            existing.Value = value;
+            XmlTriviaPreserver.SetText(existing, value);
             return existing;
         }
 
@@ -370,6 +372,28 @@ public static class MajorGodCatalog
         timeShifting.Add(unit);
         NormalizeDirectChildIndentation(timeShifting);
         return unit;
+    }
+
+    public static XElement AddTerrainCreep(XElement terrainCreeps)
+    {
+        var creep = new XElement("terraincreep",
+            new XAttribute("creep", ""),
+            new XAttribute("maxradius", "0"),
+            new XAttribute("growthrate", "0"),
+            new XAttribute("decayrate", "0"),
+            new XAttribute("minupdateinterval", "0"),
+            new XAttribute("maxupdateinterval", "0"));
+        terrainCreeps.Add(creep);
+        NormalizeDirectChildIndentation(terrainCreeps);
+        return creep;
+    }
+
+    public static XElement AddTerrainCreepGenerator(XElement terrainCreep, string protoUnitName)
+    {
+        var generator = new XElement("protounit", protoUnitName.Trim());
+        terrainCreep.Add(generator);
+        NormalizeDirectChildIndentation(terrainCreep);
+        return generator;
     }
 
     public static XElement AddBuildingChainAnchor(XElement buildingChain)
@@ -563,7 +587,7 @@ public static class MajorGodCatalog
         }
 
         var element = existing ?? AddSpecialMechanic(entry, tag);
-        element.Value = value;
+        XmlTriviaPreserver.SetText(element, value);
         return element;
     }
 
@@ -751,6 +775,131 @@ public static class MajorGodCatalog
             _ => ""
         };
         return $"STR_CIV_{token}{suffix}";
+    }
+
+    public static bool OwnsResolvedStringId(string majorGodName, string tag, string? stringId)
+        => !string.IsNullOrWhiteSpace(stringId) &&
+           BuildStringId(majorGodName, tag).Equals(stringId.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    public static IReadOnlyList<OwnedStringRename> RenameOwnedResolvedStringIds(
+        XElement entry,
+        string oldMajorGodName,
+        string newMajorGodName)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var changes = new List<OwnedStringRename>();
+        foreach (var tag in new[] { "displaynameid", "rollovernameid", "titleid" })
+        {
+            var element = FindDirectChild(entry, tag);
+            var oldId = BuildStringId(oldMajorGodName, tag);
+            if (element == null || !element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var newId = BuildStringId(newMajorGodName, tag);
+            if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            XmlTriviaPreserver.SetText(element, newId);
+            changes.Add(new OwnedStringRename(tag, oldId, newId));
+        }
+        return changes;
+    }
+
+    public static string BuildBonusGoalStringId(string goalName, string suffix)
+        => $"STR_{goalName.Trim().ToUpperInvariant()}_{suffix}";
+
+    public static IReadOnlyList<OwnedStringRename> RenameOwnedBonusGoalStringIds(
+        XElement goal,
+        string oldGoalName,
+        string newGoalName)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        var displayInfo = FindDirectChild(goal, "displayinfo");
+        if (displayInfo == null)
+            return [];
+        var changes = new List<OwnedStringRename>();
+        foreach (var (tag, suffix) in new[]
+                 {
+                     ("displaynameid", "SPAWN_REWARD"),
+                     ("rolloverid", "SPAWN_REWARD_LR"),
+                     ("progresstooltipid", "SPAWN_REWARD_PROGRESS"),
+                     ("nextunittooltipid", "SPAWN_NEXT_UNIT"),
+                     ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
+                 })
+        {
+            var element = FindDirectChild(displayInfo, tag);
+            var oldId = BuildBonusGoalStringId(oldGoalName, suffix);
+            if (element == null || !element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var newId = BuildBonusGoalStringId(newGoalName, suffix);
+            if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            XmlTriviaPreserver.SetText(element, newId);
+            changes.Add(new OwnedStringRename(tag, oldId, newId));
+        }
+        return changes;
+    }
+
+    public static IReadOnlySet<string> CollectOwnedStringIds(XElement entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var majorGodName = GetName(entry);
+        foreach (var tag in new[] { "displaynameid", "rollovernameid", "titleid" })
+        {
+            var id = FindDirectChild(entry, tag)?.Value.Trim() ?? "";
+            if (majorGodName.Length > 0 && OwnsResolvedStringId(majorGodName, tag, id))
+                owned.Add(id);
+        }
+
+        foreach (var goal in entry.Descendants().Where(element =>
+                     element.Name.LocalName.Equals("damagegoal", StringComparison.OrdinalIgnoreCase) ||
+                     element.Name.LocalName.Equals("deathcountgoal", StringComparison.OrdinalIgnoreCase) ||
+                     element.Name.LocalName.Equals("resourcegoal", StringComparison.OrdinalIgnoreCase)))
+        {
+            var goalName = goal.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            var displayInfo = FindDirectChild(goal, "displayinfo");
+            if (goalName.Length == 0 || displayInfo == null)
+                continue;
+            foreach (var (tag, suffix) in new[]
+                     {
+                         ("displaynameid", "SPAWN_REWARD"),
+                         ("rolloverid", "SPAWN_REWARD_LR"),
+                         ("progresstooltipid", "SPAWN_REWARD_PROGRESS"),
+                         ("nextunittooltipid", "SPAWN_NEXT_UNIT"),
+                         ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
+                     })
+            {
+                var id = FindDirectChild(displayInfo, tag)?.Value.Trim() ?? "";
+                if (id.Equals(BuildBonusGoalStringId(goalName, suffix), StringComparison.OrdinalIgnoreCase))
+                    owned.Add(id);
+            }
+        }
+        return owned;
+    }
+
+    public static MajorGodDefinition? FindGeneratedStringNamespaceCollision(
+        string majorGodName,
+        IEnumerable<MajorGodDefinition> definitions,
+        string? excludedMajorGodName = null)
+    {
+        ArgumentNullException.ThrowIfNull(definitions);
+        var generatedIds = new[] { "displaynameid", "rollovernameid", "titleid" }
+            .Select(tag => BuildStringId(majorGodName, tag))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return definitions.FirstOrDefault(definition =>
+        {
+            if (definition.Name.Equals(majorGodName, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(excludedMajorGodName) &&
+                 definition.Name.Equals(excludedMajorGodName, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            if (new[] { "displaynameid", "rollovernameid", "titleid" }
+                .Any(tag => generatedIds.Contains(BuildStringId(definition.Name, tag))))
+                return true;
+            return definition.SourceElement.DescendantsAndSelf().Any(element =>
+                !element.HasElements && generatedIds.Contains(element.Value.Trim())) ||
+                   definition.SourceElement.DescendantsAndSelf().Any(element =>
+                       element.Attributes().Any(attribute => generatedIds.Contains(attribute.Value.Trim())));
+        });
     }
 
     public static bool IsValidKey(string? value)

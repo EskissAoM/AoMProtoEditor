@@ -54,9 +54,7 @@ public sealed class TechnologyReferenceMigrationPlan
         var changedSources = new HashSet<TechnologyReferenceSource>(ReferenceEqualityComparer.Instance);
         foreach (var operation in operations)
         {
-            var usages = TechnologyReferenceIndex.Build(sources, [operation.OldName])
-                .Where(usage => usage.TechnologyName.Equals(operation.OldName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            var usages = TechnologyReferenceIndex.FindReferencesTo(sources, operation.OldName);
             affected.AddRange(usages.Where(usage => usage.IsRecognized));
             unknown.AddRange(usages.Where(usage => !usage.IsRecognized));
             if (unknown.Count > 0)
@@ -67,9 +65,8 @@ public sealed class TechnologyReferenceMigrationPlan
                     changedSources.Add(source);
             }
 
-            var remainingRecognized = TechnologyReferenceIndex.Build(sources, [operation.OldName])
-                .Where(usage => usage.TechnologyName.Equals(operation.OldName, StringComparison.OrdinalIgnoreCase) &&
-                                usage.IsRecognized)
+            var remainingRecognized = TechnologyReferenceIndex.FindReferencesTo(sources, operation.OldName)
+                .Where(usage => usage.IsRecognized)
                 .ToList();
             if (remainingRecognized.Count > 0)
             {

@@ -52,6 +52,8 @@ public static class ModReferenceFileCatalog
             return TechnologyReferenceDocumentKind.Powers;
         if (fileName.Equals(MajorGodCatalog.ModFileName, StringComparison.OrdinalIgnoreCase))
             return TechnologyReferenceDocumentKind.MajorGods;
+        if (fileName.Equals(MinorGodCatalog.ModFileName, StringComparison.OrdinalIgnoreCase))
+            return TechnologyReferenceDocumentKind.MinorGods;
         if (Path.GetExtension(path).Equals(".tactics", StringComparison.OrdinalIgnoreCase))
             return TechnologyReferenceDocumentKind.Tactics;
         return TechnologyReferenceDocumentKind.Other;

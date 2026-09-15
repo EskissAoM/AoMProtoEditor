@@ -206,6 +206,14 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("EnsureDuplicatedTechnologyCoreProperties(tech, name)", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(\"displaynameid\", displayId)", techCode, StringComparison.Ordinal);
         Assert.Contains("new XElement(\"rollovertextid\", rolloverId)", techCode, StringComparison.Ordinal);
+        var addMethodStart = techCode.IndexOf("public async Task AddTechnologyAsync", StringComparison.Ordinal);
+        var nextMethodStart = techCode.IndexOf("public async Task<bool> AddAgeUpgradeTechnologyAsync", addMethodStart, StringComparison.Ordinal);
+        var addMethod = techCode[addMethodStart..nextMethodStart];
+        var currentAssignment = addMethod.IndexOf("_current = tech;", StringComparison.Ordinal);
+        var buildAwait = addMethod.IndexOf("await BuildEditorAsync();", StringComparison.Ordinal);
+        var browserNotification = addMethod.IndexOf("BrowserStateChanged?.Invoke", StringComparison.Ordinal);
+        Assert.True(currentAssignment >= 0 && buildAwait > currentAssignment && browserNotification > buildAwait,
+            "A newly created technology must become current and finish building before the main browser is notified.");
     }
 
 
@@ -278,12 +286,38 @@ public sealed class TechnologyPhase1RegressionTests
         Assert.Contains("OperatorToSymbol", techCode, StringComparison.Ordinal);
         Assert.Contains("_prereqUnitNames", techCode, StringComparison.Ordinal);
         Assert.Contains("_majorGodNames", techCode, StringComparison.Ordinal);
+        Assert.Contains("AddMultiValuePrerequisiteFields(prereq, firstRow", techCode, StringComparison.Ordinal);
+        Assert.Contains("var entryGroup = new StackPanel", techCode, StringComparison.Ordinal);
+        Assert.Contains("Margin = new Thickness(0, 0, 8, 0)", techCode, StringComparison.Ordinal);
+        Assert.Contains("entryGroup.Children.Add(CreateInlineLabel(label))", techCode, StringComparison.Ordinal);
+        Assert.Contains("firstRow.Children.Add(entryGroup)", techCode, StringComparison.Ordinal);
+        Assert.Contains("add.Margin = new Thickness(8, 4, 8, 4)", techCode, StringComparison.Ordinal);
+        Assert.Contains("firstRow.Children.Add(add)", techCode, StringComparison.Ordinal);
+        Assert.Contains("GetAvailableMultiValuePrerequisiteOptions", techCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("add.Margin = new Thickness(158, 0, 0, 0)", techCode, StringComparison.Ordinal);
         Assert.Contains("KbStatsUsingResourceParameter", techCode, StringComparison.Ordinal);
         Assert.Contains("ProtoConstants.KnownResourceTypes", techCode, StringComparison.Ordinal);
         Assert.Contains("GetTechnologyPrerequisiteUnitNames()", mainCode, StringComparison.Ordinal);
         Assert.Contains("GetTechnologyPrerequisiteMajorGodNames()", mainCode, StringComparison.Ordinal);
         Assert.Contains("major_gods_mods.xml", mainCode, StringComparison.Ordinal);
         Assert.Contains("_prereqsPanel.IsEnabled = canEdit", techCode, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TechnologyEditor_MultiValuePrerequisitesExcludeValuesUsedByOtherEntries()
+    {
+        var first = TechnologyEditorView.GetAvailableMultiValuePrerequisiteOptions(
+            ["Zeus", "Hades", "Poseidon"],
+            ["Hades"],
+            "Zeus");
+        var importedDuplicate = TechnologyEditorView.GetAvailableMultiValuePrerequisiteOptions(
+            ["Zeus", "Hades", "Poseidon"],
+            ["Zeus"],
+            "Zeus");
+
+        Assert.Equal(["Zeus", "Poseidon"], first);
+        Assert.Contains("Zeus", importedDuplicate);
+        Assert.DoesNotContain("Hades", first);
     }
 
     [Fact]
@@ -307,7 +341,8 @@ public sealed class TechnologyPhase1RegressionTests
 
         Assert.Contains("CreateInlineLabel(\"Unit\")", techCode, StringComparison.Ordinal);
         Assert.Contains("prereq.Value.Trim(),\n            200,", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        Assert.Contains("CreateStrictPrereqSelector(options, activeEntry.Value.Trim(), 150", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateStrictPrereqSelector(availableOptions, currentValue, 150", techCode, StringComparison.Ordinal);
+        Assert.Contains("selectAllOnFirstClick: true", techCode, StringComparison.Ordinal);
         Assert.Contains("AddPrerequisiteButton(tech);", techCode, StringComparison.Ordinal);
         Assert.Contains("if (prereqs.Count == 0 && !IsModifiedTab)", techCode, StringComparison.Ordinal);
         Assert.Contains("Classes = { \"remove-button\" }", techCode, StringComparison.Ordinal);

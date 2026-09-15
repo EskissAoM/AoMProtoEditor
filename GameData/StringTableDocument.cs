@@ -9,6 +9,7 @@ public enum StringTableSection
     Abilities,
     Technologies,
     MajorGods,
+    Cultures,
     UnitCommands
 }
 
@@ -286,6 +287,7 @@ public sealed partial class StringTableDocument
         StringTableSection.Abilities => "Abilities",
         StringTableSection.Technologies => "Technologies",
         StringTableSection.MajorGods => "Major Gods",
+        StringTableSection.Cultures => "Cultures",
         StringTableSection.UnitCommands => "Unit Commands",
         _ => throw new ArgumentOutOfRangeException(nameof(section), section, null)
     };

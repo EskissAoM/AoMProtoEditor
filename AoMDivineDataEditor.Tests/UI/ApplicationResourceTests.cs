@@ -48,6 +48,21 @@ public sealed class ApplicationResourceTests
     }
 
     [Fact]
+    public void Main_window_uses_DPI_aware_adaptive_startup_sizing()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        var windowBase = File.ReadAllText(Path.Combine(root, "SimpleWindow.cs"));
+        var editor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.DoesNotContain("UseAdaptiveStartupSize", editor, StringComparison.Ordinal);
+        Assert.Contains("Opened += (_, _) => FitStartupSizeToWorkingArea()", windowBase, StringComparison.Ordinal);
+        Assert.Contains("double.IsFinite(Width) ? Width : Bounds.Width", windowBase, StringComparison.Ordinal);
+        Assert.Contains("screen.WorkingArea.Width / screen.Scaling", windowBase, StringComparison.Ordinal);
+        Assert.Contains("screen.WorkingArea.Height / screen.Scaling", windowBase, StringComparison.Ordinal);
+        Assert.Contains("WindowState = WindowState.Maximized", windowBase, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Creation_component_and_copy_actions_use_distinct_semantic_styles()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));

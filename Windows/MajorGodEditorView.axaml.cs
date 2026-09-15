@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Controls;
+using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Windows;
 
@@ -16,6 +17,18 @@ public partial class MajorGodEditorView : UserControl
     private static readonly string[] ResolvedStringTags = ["displaynameid", "rollovernameid", "titleid"];
     private static readonly string[] ImageTags = ["icon", "portrait", "breakoutportrait"];
     private static readonly string[] StartingModes = ["Supremacy", "Deathmatch", "Lightning"];
+    private static readonly (string Label, string Attribute)[] TerrainCreepFlags =
+    [
+        ("avoidUnbuildable", "avoidunbuildable"),
+        ("avoidImpassable", "avoidimpassable"),
+        ("avoidShallowWater", "avoidshallowwater"),
+        ("allowDisconnectedGrowth", "allowdisconnectedgrowth")
+    ];
+    private static readonly string[] TerrainCreepBuildabilityValues =
+    [
+        "Buildable", "Unbuildable", "UnbuildableSelf", "UnbuildableOthers",
+        "UnbuildableAllies", "UnbuildableEnemies"
+    ];
     private static readonly (string Label, string Tag)[] BonusGoalFlags =
     [
         ("ForceSpawn", "forcespawn"),
@@ -43,13 +56,19 @@ public partial class MajorGodEditorView : UserControl
     private readonly string? _modStringsPath;
     private readonly Func<string, Task<string?>>? _resolveStringAsync;
     private readonly Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? _saveStringsAsync;
+    private readonly Func<IReadOnlyList<KeyValuePair<string, string>>, GameIdentifierReferenceMigrationPlan>?
+        _prepareReferenceMigration;
+    private readonly Action<GameIdentifierReferenceMigrationPlan>? _adoptReferenceMigration;
+    private readonly Func<Window, string, Task<bool>>? _ensureCanDeleteAsync;
+    private readonly Window? _dialogOwner;
     private readonly IReadOnlyList<string> _cultureNames;
-    private readonly IReadOnlyList<string> _technologyNames;
+    private IReadOnlyList<string> _technologyNames;
     private readonly IReadOnlyList<string> _protoUnitNames;
     private readonly IReadOnlyList<string> _unitTypeNames;
     private readonly IReadOnlyList<string> _unitOrTypeNames;
-    private readonly IReadOnlyList<string> _technologyFlagNames;
-    private readonly IReadOnlyList<string> _techTypeNames;
+    private IReadOnlyList<string> _technologyFlagNames;
+    private IReadOnlyList<string> _techTypeNames;
+    private readonly IReadOnlyList<string> _terrainCreepNames;
     private readonly IReadOnlyList<string> _iconPaths;
     private readonly IReadOnlyList<string> _minimapBorderValues;
     private readonly IReadOnlyList<string> _backgroundScenarioValues;
@@ -59,7 +78,10 @@ public partial class MajorGodEditorView : UserControl
     private readonly Dictionary<string, string> _pendingStringUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _pendingStringOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingStringRemovals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _pendingStringRemovalOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dirtyNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<KeyValuePair<string, string>> _pendingRenames = [];
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
 
     private XDocument? _modDocument;
     private XDocument? _loadedModDocument;
@@ -80,6 +102,7 @@ public partial class MajorGodEditorView : UserControl
 
     public event EventHandler? BrowserStateChanged;
     public event EventHandler? DirtyStateChanged;
+    public event EventHandler? Saved;
 
     public MajorGodEditorView() : this([], null)
     {
@@ -99,7 +122,13 @@ public partial class MajorGodEditorView : UserControl
         XElement? baseSharedData = null,
         IEnumerable<string>? unitTypeNames = null,
         IEnumerable<string>? technologyFlagNames = null,
-        IEnumerable<string>? techTypeNames = null)
+        IEnumerable<string>? techTypeNames = null,
+        IEnumerable<string>? terrainCreepNames = null,
+        Func<IReadOnlyList<KeyValuePair<string, string>>, GameIdentifierReferenceMigrationPlan>?
+            prepareReferenceMigration = null,
+        Action<GameIdentifierReferenceMigrationPlan>? adoptReferenceMigration = null,
+        Func<Window, string, Task<bool>>? ensureCanDeleteAsync = null,
+        Window? dialogOwner = null)
     {
         InitializeComponent();
         XmlSyntaxEditorService.Configure(_rawXmlEditor);
@@ -113,6 +142,10 @@ public partial class MajorGodEditorView : UserControl
         _modStringsPath = modStringsPath;
         _resolveStringAsync = resolveStringAsync;
         _saveStringsAsync = saveStringsAsync;
+        _prepareReferenceMigration = prepareReferenceMigration;
+        _adoptReferenceMigration = adoptReferenceMigration;
+        _ensureCanDeleteAsync = ensureCanDeleteAsync;
+        _dialogOwner = dialogOwner;
         _cultureNames = (cultureNames ?? [])
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim())
@@ -152,6 +185,12 @@ public partial class MajorGodEditorView : UserControl
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        _terrainCreepNames = (terrainCreepNames ?? [])
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         _baseSharedData = baseSharedData == null ? null : new XElement(baseSharedData);
         _cultureBox.ItemsSource = _cultureNames;
         EditorAutoCompleteService.EnableDropdown(_cultureBox, () => _isPopulating);
@@ -180,12 +219,9 @@ public partial class MajorGodEditorView : UserControl
 
         if (!string.IsNullOrWhiteSpace(_modPath))
         {
-            var stateBeforeRead = FileIntegrityTransaction.CaptureState(_modPath);
-            _modDocument = MajorGodCatalog.LoadOrCreateModDocument(_modPath);
-            var stateAfterRead = FileIntegrityTransaction.CaptureState(_modPath);
-            if (stateBeforeRead != stateAfterRead)
-                throw new IOException($"'{_modPath}' changed while it was being opened.");
-            _loadedFileState = stateAfterRead;
+            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.MajorGods);
+            _modDocument = prepared.Document;
+            _loadedFileState = prepared.LoadedState;
             _loadedModDocument = new XDocument(_modDocument);
         }
         if (!string.IsNullOrWhiteSpace(_modStringsPath))
@@ -230,6 +266,28 @@ public partial class MajorGodEditorView : UserControl
             return [];
         return MajorGodCatalog.ExtractDefinitions(_modDocument, false).Select(definition => definition.Name).ToList();
     }
+
+    public void UpdateTechnologyCatalogs(
+        IEnumerable<string> technologyNames,
+        IEnumerable<string> technologyFlagNames,
+        IEnumerable<string> techTypeNames)
+    {
+        _technologyNames = NormalizeCatalog(technologyNames);
+        _technologyFlagNames = NormalizeCatalog(technologyFlagNames);
+        _techTypeNames = NormalizeCatalog(techTypeNames);
+        foreach (var technologyBox in new[] { _ageTechBox, _deathmatchTechBox, _teamTechBox })
+            technologyBox.ItemsSource = _technologyNames;
+        if (_currentEntry != null)
+            _ = PopulateStructuredFieldsAsync(_currentEntry);
+    }
+
+    private static IReadOnlyList<string> NormalizeCatalog(IEnumerable<string> values)
+        => values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     public void SetModifiedMode(bool modified)
     {
@@ -448,27 +506,41 @@ public partial class MajorGodEditorView : UserControl
         {
             var candidate = _currentEntry;
             var appliedRawXml = _rawEditorDirty;
+            var ownedStringIdsBeforeRawEdit = appliedRawXml
+                ? MajorGodCatalog.CollectOwnedStringIds(_currentEntry)
+                : null;
             if (appliedRawXml)
             {
                 candidate = XElement.Parse(_rawXmlEditor.Text ?? "", LoadOptions.PreserveWhitespace);
                 if (!candidate.Name.LocalName.Equals(MajorGodCatalog.EntryName, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Raw XML must have a <civ> root element.");
             }
+            ValidateCandidateStructure(candidate);
 
             var newName = MajorGodCatalog.GetName(candidate);
             if (string.IsNullOrWhiteSpace(newName))
                 throw new InvalidDataException("Name cannot be empty.");
+            if (!InternalNamePolicy.IsValidOrUnchangedLegacy(newName, _loadedEntryName))
+                throw new InvalidDataException($"Name can contain only {InternalNamePolicy.AllowedCharactersDescription}.");
             var duplicate = MajorGodCatalog.Find(_modDocument!, newName);
             if (duplicate != null && !ReferenceEquals(duplicate, _currentEntry))
                 throw new InvalidDataException($"A modified major god named '{newName}' already exists.");
+            var namespaceCollision = FindMajorGodStringNamespaceCollision(newName, _loadedEntryName);
+            if (namespaceCollision != null)
+            {
+                throw new InvalidDataException(
+                    $"Major God '{newName}' would use the same generated string IDs as '{namespaceCollision.Name}'. Choose another name.");
+            }
 
             var key = ReadValue(candidate, "key");
             if (!MajorGodCatalog.IsValidKey(key))
                 throw new InvalidDataException("Key must be exactly one capital letter from A to Z.");
             var culture = ReadValue(candidate, "culture");
-            if (_cultureNames.Count > 0 && !_cultureNames.Contains(culture, StringComparer.OrdinalIgnoreCase))
+            if (culture.Length == 0 ||
+                (_cultureNames.Count > 0 && !_cultureNames.Contains(culture, StringComparer.OrdinalIgnoreCase)))
                 throw new InvalidDataException("Culture must be selected from the supported culture list.");
 
+            ValidateSharedFields(candidate);
             ValidateAssociatedTechs(candidate);
             ValidateEconomicAttributes(candidate);
             ValidateSpecialMechanics(candidate);
@@ -485,12 +557,20 @@ public partial class MajorGodEditorView : UserControl
             {
                 _currentEntry.ReplaceWith(candidate);
                 _currentEntry = candidate;
+                ScheduleOwnedStringRemovals(
+                    ownedStringIdsBeforeRawEdit!.Except(MajorGodCatalog.CollectOwnedStringIds(candidate)),
+                    _loadedEntryName ?? newName);
+                PruneUnreferencedPendingStringUpdates(_loadedEntryName ?? newName, candidate);
                 _rawEditorDirty = false;
                 _applyRawXmlButton.IsVisible = false;
                 MarkCurrentDirty();
             }
 
-            AdoptNameAndGeneratedStringIds(newName);
+            var oldName = _loadedEntryName;
+            await AdoptNameAndGeneratedStringIdsAsync(newName);
+            if (!string.IsNullOrWhiteSpace(oldName) &&
+                !oldName.Equals(newName, StringComparison.OrdinalIgnoreCase))
+                AddOrCollapsePendingRename(oldName, newName);
             CurrentMajorGodName = newName;
             _loadedEntryName = newName;
             SetRawXml(candidate.ToString());
@@ -508,29 +588,24 @@ public partial class MajorGodEditorView : UserControl
         }
     }
 
-    private void AdoptNameAndGeneratedStringIds(string newName)
+    private async Task AdoptNameAndGeneratedStringIdsAsync(string newName)
     {
         var oldName = _loadedEntryName;
         if (_currentEntry == null || string.IsNullOrWhiteSpace(oldName) || oldName.Equals(newName, StringComparison.Ordinal))
             return;
 
-        foreach (var tag in ResolvedStringTags)
+        foreach (var rename in MajorGodCatalog.RenameOwnedResolvedStringIds(_currentEntry, oldName, newName))
         {
-            var element = MajorGodCatalog.FindDirectChild(_currentEntry, tag);
-            if (element == null)
-                continue;
-            var oldId = MajorGodCatalog.BuildStringId(oldName, tag);
-            if (!element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
-                continue;
-            var newId = MajorGodCatalog.BuildStringId(newName, tag);
-            element.Value = newId;
-            _stringIds[tag] = newId;
-            if (_pendingStringUpdates.Remove(oldId, out var text))
-            {
-                _pendingStringUpdates[newId] = text;
-                _pendingStringOwners.Remove(oldId);
-                _pendingStringOwners[newId] = newName;
-            }
+            _stringIds[rename.Field] = rename.NewId;
+            var hadPendingText = _pendingStringUpdates.Remove(rename.OldId, out var text);
+            if (!hadPendingText && _resolveStringAsync != null)
+                text = await _resolveStringAsync(rename.OldId);
+            _pendingStringRemovals.Remove(rename.NewId);
+            _pendingStringRemovalOwners.Remove(rename.NewId);
+            _pendingStringUpdates[rename.NewId] = text ?? "";
+            _pendingStringOwners.Remove(rename.OldId);
+            _pendingStringOwners[rename.NewId] = newName;
+            ScheduleOwnedStringRemoval(rename.OldId, newName);
         }
 
         if (_dirtyNames.Remove(oldName))
@@ -538,6 +613,74 @@ public partial class MajorGodEditorView : UserControl
         foreach (var id in _pendingStringOwners.Where(pair =>
                      pair.Value.Equals(oldName, StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Key).ToList())
             _pendingStringOwners[id] = newName;
+        foreach (var id in _pendingStringRemovalOwners.Where(pair =>
+                     pair.Value.Equals(oldName, StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Key).ToList())
+            _pendingStringRemovalOwners[id] = newName;
+    }
+
+    private MajorGodDefinition? FindMajorGodStringNamespaceCollision(
+        string candidateName,
+        string? excludedMajorGodName = null)
+    {
+        var definitions = _baseEntries.Select(pair =>
+                new MajorGodDefinition(pair.Key, true, pair.Value))
+            .Concat(_modDocument == null
+                ? []
+                : MajorGodCatalog.ExtractDefinitions(_modDocument, false));
+        return MajorGodCatalog.FindGeneratedStringNamespaceCollision(
+            candidateName,
+            definitions,
+            excludedMajorGodName);
+    }
+
+    private void ScheduleOwnedStringRemoval(string stringId, string ownerName)
+    {
+        if (string.IsNullOrWhiteSpace(stringId))
+            return;
+        _pendingStringUpdates.Remove(stringId);
+        _pendingStringOwners.Remove(stringId);
+        _pendingStringRemovals.Add(stringId);
+        _pendingStringRemovalOwners[stringId] = ownerName;
+    }
+
+    private void ScheduleOwnedStringRemovals(IEnumerable<string> stringIds, string ownerName)
+    {
+        foreach (var stringId in stringIds)
+            ScheduleOwnedStringRemoval(stringId, ownerName);
+    }
+
+    private void PruneUnreferencedPendingStringUpdates(string ownerName, XElement currentEntry)
+    {
+        var referencedIds = currentEntry.DescendantsAndSelf()
+            .SelectMany(element => element.Attributes().Select(attribute => attribute.Value)
+                .Append(element.HasElements ? "" : element.Value))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in _pendingStringOwners.Where(pair =>
+                     pair.Value.Equals(ownerName, StringComparison.OrdinalIgnoreCase) &&
+                     !referencedIds.Contains(pair.Key)).Select(pair => pair.Key).ToList())
+        {
+            _pendingStringOwners.Remove(id);
+            _pendingStringUpdates.Remove(id);
+        }
+    }
+
+    private void AddOrCollapsePendingRename(string oldName, string newName)
+    {
+        var chainedIndex = _pendingRenames.FindIndex(rename =>
+            rename.Value.Equals(oldName, StringComparison.OrdinalIgnoreCase));
+        if (chainedIndex >= 0)
+        {
+            var originalName = _pendingRenames[chainedIndex].Key;
+            if (originalName.Equals(newName, StringComparison.OrdinalIgnoreCase))
+                _pendingRenames.RemoveAt(chainedIndex);
+            else
+                _pendingRenames[chainedIndex] = new KeyValuePair<string, string>(originalName, newName);
+            return;
+        }
+
+        _pendingRenames.Add(new KeyValuePair<string, string>(oldName, newName));
     }
 
     public async Task AddMajorGodAsync(bool duplicateSelected = false)
@@ -556,12 +699,16 @@ public partial class MajorGodEditorView : UserControl
             return;
 
         var sourceEntry = duplicateSelected ? _currentEntry : null;
-        var existingNames = new HashSet<string>(GetMajorGodNames(true), StringComparer.OrdinalIgnoreCase);
+        var existingNames = new HashSet<string>(
+            _baseEntries.Keys.Concat(GetMajorGodNames(true)),
+            StringComparer.OrdinalIgnoreCase);
         var baseName = duplicateSelected && !string.IsNullOrWhiteSpace(CurrentMajorGodName)
             ? CurrentMajorGodName + "Copy"
             : "NewMajorGod";
         var name = baseName;
-        for (var suffix = 2; existingNames.Contains(name); suffix++)
+        for (var suffix = 2;
+             existingNames.Contains(name) || FindMajorGodStringNamespaceCollision(name) != null;
+             suffix++)
             name = baseName + suffix;
 
         XElement entry;
@@ -615,6 +762,14 @@ public partial class MajorGodEditorView : UserControl
     {
         if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentMajorGodName))
             return;
+        var currentName = CurrentMajorGodName;
+        var referenceName = _pendingRenames.LastOrDefault(rename =>
+            rename.Value.Equals(currentName, StringComparison.OrdinalIgnoreCase)).Key;
+        if (string.IsNullOrWhiteSpace(referenceName))
+            referenceName = currentName;
+        if (_ensureCanDeleteAsync != null && TopLevel.GetTopLevel(this) is Window deletionOwner &&
+            !await _ensureCanDeleteAsync(deletionOwner, referenceName))
+            return;
         if (TopLevel.GetTopLevel(this) is Window owner)
         {
             var prompt = new Prompt(PromptType.Confirm, "Delete major god?", $"Delete '{CurrentMajorGodName}' from major_gods_mods.xml?");
@@ -622,7 +777,11 @@ public partial class MajorGodEditorView : UserControl
             if (!prompt.Confirmed)
                 return;
         }
+        ScheduleOwnedStringRemovals(MajorGodCatalog.CollectOwnedStringIds(_currentEntry), currentName);
         _dirtyNames.Add(CurrentMajorGodName);
+        _pendingRenames.RemoveAll(rename =>
+            rename.Key.Equals(referenceName, StringComparison.OrdinalIgnoreCase) ||
+            rename.Value.Equals(currentName, StringComparison.OrdinalIgnoreCase));
         _currentEntry.Remove();
         _currentEntry = null;
         CurrentMajorGodName = null;
@@ -652,6 +811,13 @@ public partial class MajorGodEditorView : UserControl
     {
         var current = MajorGodCatalog.Find(_modDocument!, name);
         var restored = savedElement == null ? null : new XElement(savedElement);
+        var restoredName = restored == null ? "" : MajorGodCatalog.GetName(restored);
+        _pendingRenames.RemoveAll(rename =>
+            rename.Key.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+            rename.Value.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+            restoredName.Length > 0 &&
+            (rename.Key.Equals(restoredName, StringComparison.OrdinalIgnoreCase) ||
+             rename.Value.Equals(restoredName, StringComparison.OrdinalIgnoreCase)));
         if (current != null && restored != null)
             current.ReplaceWith(restored);
         else if (current != null)
@@ -659,10 +825,18 @@ public partial class MajorGodEditorView : UserControl
         else if (restored != null)
             _modDocument!.Root!.Add(restored);
 
-        foreach (var id in _pendingStringOwners.Where(pair => pair.Value.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Key).ToList())
+        var discardedOwnerNames = new[] { name, restoredName }
+            .Where(owner => !string.IsNullOrWhiteSpace(owner))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in _pendingStringOwners.Where(pair => discardedOwnerNames.Contains(pair.Value)).Select(pair => pair.Key).ToList())
         {
             _pendingStringOwners.Remove(id);
             _pendingStringUpdates.Remove(id);
+        }
+        foreach (var id in _pendingStringRemovalOwners.Where(pair => discardedOwnerNames.Contains(pair.Value)).Select(pair => pair.Key).ToList())
+        {
+            _pendingStringRemovalOwners.Remove(id);
+            _pendingStringRemovals.Remove(id);
         }
         _dirtyNames.Remove(name);
         _rawEditorDirty = false;
@@ -672,6 +846,22 @@ public partial class MajorGodEditorView : UserControl
     }
 
     public async Task<bool> SaveAsync()
+    {
+        await _saveGate.WaitAsync();
+        try
+        {
+            return await SaveCoreAsync();
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    internal XDocument? CreateModifiedDocumentSnapshot()
+        => _modDocument == null ? null : new XDocument(_modDocument);
+
+    private async Task<bool> SaveCoreAsync()
     {
         if (!await CommitCurrentMajorGodAsync())
             return false;
@@ -689,6 +879,10 @@ public partial class MajorGodEditorView : UserControl
 
         try
         {
+            var renamesToSave = _pendingRenames.ToList();
+            var referenceMigration = renamesToSave.Count > 0
+                ? _prepareReferenceMigration?.Invoke(renamesToSave)
+                : null;
             var stringUpdates = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
             var stringRemovals = _pendingStringRemovals
                 .Where(id => !IsStringIdReferencedByAnyMajorGod(id))
@@ -696,22 +890,43 @@ public partial class MajorGodEditorView : UserControl
             var writesStrings = stringUpdates.Count > 0 || stringRemovals.Count > 0;
             if (writesStrings && (_saveStringsAsync == null || string.IsNullOrWhiteSpace(_modStringsPath)))
                 throw new InvalidOperationException("Major God strings cannot be saved because the active mod string file is unavailable.");
+            if (stringUpdates.Count > 0)
+                ValidatePendingGeneratedStringClaims();
 
             var expectedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
             if (_loadedFileState != null)
                 expectedStates[Path.GetFullPath(_modPath)] = _loadedFileState;
             if (writesStrings && _loadedStringsFileState != null)
                 expectedStates[Path.GetFullPath(_modStringsPath!)] = _loadedStringsFileState;
+            if (referenceMigration != null)
+            {
+                foreach (var state in referenceMigration.ExpectedStates)
+                    expectedStates[state.Key] = state.Value;
+            }
 
-            await FileIntegrityTransaction.ExecuteAsync(
-                writesStrings ? [_modPath, _modStringsPath] : [_modPath],
+            var preparedMajorGods = new PreparedModXmlDocument(
+                Path.GetFullPath(_modPath),
+                ModXmlDocumentKind.MajorGods,
+                _modDocument,
+                _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath));
+            await ModDocumentPersistence.ExecuteAsync(
+                [preparedMajorGods],
+                (writesStrings ? new[] { _modStringsPath } : [])
+                    .Concat(referenceMigration?.Paths ?? []),
                 expectedStates,
                 async () =>
                 {
                     ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modPath);
+                    referenceMigration?.Save((document, path) =>
+                        ProtoEditorWindow.SaveAbilityXmlDocument(document, path));
+                    // String persistence also adopts the new string cache. Keep it last so
+                    // an earlier XML/reference failure cannot leave memory ahead of rollback.
                     if (writesStrings)
                         await _saveStringsAsync!(stringUpdates, stringRemovals);
                 });
+
+            if (referenceMigration != null)
+                _adoptReferenceMigration?.Invoke(referenceMigration);
 
             _loadedFileState = FileIntegrityTransaction.CaptureState(_modPath);
             _loadedModDocument = new XDocument(_modDocument);
@@ -720,9 +935,13 @@ public partial class MajorGodEditorView : UserControl
             _pendingStringUpdates.Clear();
             _pendingStringOwners.Clear();
             _pendingStringRemovals.Clear();
+            _pendingStringRemovalOwners.Clear();
             _dirtyNames.Clear();
+            foreach (var rename in renamesToSave)
+                _pendingRenames.Remove(rename);
             SetDirty(false);
             _statusMessage.Text = "Saved major_gods_mods.xml and resolved strings.";
+            Saved?.Invoke(this, EventArgs.Empty);
             return true;
         }
         catch (Exception ex)
@@ -738,6 +957,35 @@ public partial class MajorGodEditorView : UserControl
         => _modDocument?.Descendants().Any(element =>
             !element.HasElements && element.Value.Trim().Equals(id, StringComparison.OrdinalIgnoreCase)) == true;
 
+    private void ValidatePendingGeneratedStringClaims()
+    {
+        if (_modDocument == null || _loadedModDocument == null ||
+            string.IsNullOrWhiteSpace(_modStringsPath) || !File.Exists(_modStringsPath))
+            return;
+
+        var existingStrings = StringTableParser.Parse(
+            PreservedTextEncoding.Decode(File.ReadAllBytes(_modStringsPath)).Text);
+        foreach (var (stringId, ownerName) in _pendingStringOwners)
+        {
+            if (!existingStrings.ContainsKey(stringId))
+                continue;
+            var current = MajorGodCatalog.Find(_modDocument, ownerName);
+            if (current == null || !MajorGodCatalog.CollectOwnedStringIds(current).Contains(stringId))
+                continue;
+
+            var originalName = _pendingRenames.LastOrDefault(rename =>
+                rename.Value.Equals(ownerName, StringComparison.OrdinalIgnoreCase)).Key;
+            if (string.IsNullOrWhiteSpace(originalName))
+                originalName = ownerName;
+            var loaded = MajorGodCatalog.Find(_loadedModDocument, originalName);
+            if (loaded != null && MajorGodCatalog.CollectOwnedStringIds(loaded).Contains(stringId))
+                continue;
+
+            throw new InvalidOperationException(
+                $"String ID '{stringId}' already exists and is not owned by Major God '{ownerName}'. Choose another name.");
+        }
+    }
+
     private async Task<bool> ReloadExternallyChangedDocumentAsync()
     {
         if (string.IsNullOrWhiteSpace(_modPath) || _loadedFileState == null || _loadedModDocument == null)
@@ -746,7 +994,8 @@ public partial class MajorGodEditorView : UserControl
         var currentState = FileIntegrityTransaction.CaptureState(_modPath);
         if (currentState == _loadedFileState)
             return true;
-        if (TopLevel.GetTopLevel(this) is not Window owner)
+        var owner = TopLevel.GetTopLevel(this) as Window ?? _dialogOwner;
+        if (owner == null)
         {
             _statusMessage.Text = "major_gods_mods.xml changed outside the editor. Reload it before saving.";
             return false;
@@ -773,11 +1022,9 @@ public partial class MajorGodEditorView : UserControl
 
         try
         {
-            var stateBeforeRead = FileIntegrityTransaction.CaptureState(_modPath);
-            var externalDocument = MajorGodCatalog.LoadOrCreateModDocument(_modPath);
-            var stateAfterRead = FileIntegrityTransaction.CaptureState(_modPath);
-            if (stateBeforeRead != stateAfterRead)
-                throw new IOException("major_gods_mods.xml changed again while it was being reloaded.");
+            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.MajorGods);
+            var externalDocument = prepared.Document;
+            var stateAfterRead = prepared.LoadedState;
 
             var merge = NamedXmlExternalDocumentMergePolicy.Merge(
                 _loadedModDocument,
@@ -785,6 +1032,18 @@ public partial class MajorGodEditorView : UserControl
                 externalDocument,
                 MajorGodCatalog.EntryName,
                 MajorGodCatalog.GetName);
+            var renamedConflict = _pendingRenames.FirstOrDefault(rename =>
+                merge.ReplacedEditorChanges.Contains(rename.Key, StringComparer.OrdinalIgnoreCase) ||
+                merge.ReplacedEditorChanges.Contains(rename.Value, StringComparer.OrdinalIgnoreCase));
+            if (!renamedConflict.Equals(default(KeyValuePair<string, string>)))
+            {
+                await new Prompt(
+                    PromptType.Error,
+                    "Unable to merge Major God rename",
+                    $"'{renamedConflict.Key}' was renamed in the editor while that Major God also changed externally. No files were overwritten. Reopen the editor to use the external version.")
+                    .ShowDialog(owner);
+                return false;
+            }
             foreach (var conflict in merge.ReplacedEditorChanges)
                 _dirtyNames.Remove(conflict);
 
@@ -862,6 +1121,8 @@ public partial class MajorGodEditorView : UserControl
             MajorGodCatalog.SetPass1Value(_currentEntry!, tag, id);
             RefreshRawXmlFromCurrent();
         }
+        _pendingStringRemovals.Remove(id);
+        _pendingStringRemovalOwners.Remove(id);
         _pendingStringUpdates[id] = box.Text ?? "";
         _pendingStringOwners[id] = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
         MarkCurrentDirty();
@@ -1089,6 +1350,26 @@ public partial class MajorGodEditorView : UserControl
         ValidateNonNegativeFloatAttribute(secondaryPrayer, "z", "Secondary Prayer Modifier");
     }
 
+    private static void ValidateCandidateStructure(XElement candidate)
+    {
+        var document = new XDocument(new XElement(MajorGodCatalog.ModRootName, new XElement(candidate)));
+        var validation = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.MajorGods);
+        if (validation.IsSafeToEdit)
+            return;
+        throw new InvalidDataException(string.Join(
+            Environment.NewLine,
+            validation.Errors.Select(error => $"{error.ObjectName}: {error.Reason}")));
+    }
+
+    private void ValidateSharedFields(XElement entry)
+    {
+        GodModuleFieldValidation.ValidateMajorGodSharedFields(
+            entry,
+            _iconPaths,
+            _minimapBorderValues,
+            _backgroundScenarioValues);
+    }
+
     private static void ValidateNonNegativeFloat(XElement entry, string tag, string label)
     {
         var element = MajorGodCatalog.FindDirectChild(entry, tag);
@@ -1232,6 +1513,11 @@ public partial class MajorGodEditorView : UserControl
                     remove.Click += (_, _) =>
                     {
                         if (!CanEditCurrent()) return;
+                        if (definition.Tag.Equals("bonusunitspawning", StringComparison.OrdinalIgnoreCase))
+                        {
+                            foreach (var goal in element.Elements().Where(IsBonusGoal))
+                                ScheduleBonusDisplayStringRemoval(goal);
+                        }
                         MajorGodCatalog.RemoveElementAndAdjacentWhitespace(element);
                         _selectedSpecialMechanicTag = nextSelectedTag;
                         MarkCurrentDirty();
@@ -1243,6 +1529,8 @@ public partial class MajorGodEditorView : UserControl
                 system.Children.Add(header);
                 if (definition.Tag.Equals("shades", StringComparison.OrdinalIgnoreCase))
                     BuildShadesEditor(system, element);
+                else if (definition.Tag.Equals("terraincreeps", StringComparison.OrdinalIgnoreCase))
+                    BuildTerrainCreepsEditor(system, element);
                 else if (definition.Tag.Equals("timeshifting", StringComparison.OrdinalIgnoreCase))
                     BuildTimeShiftingEditor(system, element);
                 else if (definition.Tag.Equals("buildingchain", StringComparison.OrdinalIgnoreCase))
@@ -1284,6 +1572,8 @@ public partial class MajorGodEditorView : UserControl
         var mechanic = MajorGodCatalog.AddSpecialMechanic(_currentEntry!, definition.Tag);
         if (definition.Tag.Equals("timeshifting", StringComparison.OrdinalIgnoreCase))
             SetAttribute(mechanic, "maxconcurrenttimeshifts", "1");
+        else if (definition.Tag.Equals("terraincreeps", StringComparison.OrdinalIgnoreCase))
+            MajorGodCatalog.AddTerrainCreep(mechanic);
         else if (definition.Tag.Equals("buildingchain", StringComparison.OrdinalIgnoreCase))
             MajorGodCatalog.AddBuildingChainAnchor(mechanic);
         else if (definition.Tag.Equals("combatxp", StringComparison.OrdinalIgnoreCase))
@@ -1335,6 +1625,8 @@ public partial class MajorGodEditorView : UserControl
 
         if (MajorGodCatalog.FindDirectChild(entry, "shades") is { } shades)
             ValidateShades(shades);
+        if (MajorGodCatalog.FindDirectChild(entry, "terraincreeps") is { } terrainCreeps)
+            ValidateTerrainCreeps(terrainCreeps);
         if (MajorGodCatalog.FindDirectChild(entry, "timeshifting") is { } timeShifting)
             ValidateTimeShifting(timeShifting);
         if (MajorGodCatalog.FindDirectChild(entry, "buildingchain") is { } buildingChain)
@@ -1463,6 +1755,349 @@ public partial class MajorGodEditorView : UserControl
             };
         }
         RenderTargets();
+        host.Children.Add(row);
+    }
+
+    private void BuildTerrainCreepsEditor(Panel host, XElement terrainCreeps)
+    {
+        var creeps = terrainCreeps.Elements().Where(child =>
+            child.Name.LocalName.Equals("terraincreep", StringComparison.OrdinalIgnoreCase)).ToList();
+        for (var index = 0; index < creeps.Count; index++)
+        {
+            var creep = creeps[index];
+            var body = AddBonusSubcontainer(host, $"Terrain Creep {index + 1}", IsModifiedMode ? () =>
+            {
+                MajorGodCatalog.RemoveElementAndAdjacentWhitespace(creep);
+                MarkAndRebuildSpecialMechanics();
+            } : null);
+
+            var coreRow = CreateBountyWrappingRow();
+            coreRow.Children.Add(CreateBonusFieldPair("Creep",
+                CreateSpecialAttributeAutoComplete(creep, "creep", _terrainCreepNames)));
+            coreRow.Children.Add(CreateBonusFieldPair("Radius",
+                CreateSpecialAttributeNumberBox(creep, "maxradius", "0", ProtoUnitNumericKind.UnsignedFloat)));
+            coreRow.Children.Add(CreateBonusFieldPair("Growth Rate",
+                CreateSpecialAttributeNumberBox(creep, "growthrate", "0", ProtoUnitNumericKind.UnsignedFloat)));
+            coreRow.Children.Add(CreateBonusFieldPair("Decay Rate",
+                CreateSpecialAttributeNumberBox(creep, "decayrate", "0", ProtoUnitNumericKind.UnsignedFloat)));
+            BuildTerrainCreepOptionalNumber(coreRow, creep, "strength", "Strength");
+            body.Children.Add(coreRow);
+
+            var intervalRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            intervalRow.Children.Add(new TextBlock
+            {
+                Text = "Update Interval (s)",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            intervalRow.Children.Add(CreateInlineLabel("Min"));
+            var minimumInterval = CreateSpecialAttributeNumberBox(
+                creep, "minupdateinterval", "0", ProtoUnitNumericKind.UnsignedFloat);
+            minimumInterval.VerticalAlignment = VerticalAlignment.Center;
+            intervalRow.Children.Add(minimumInterval);
+            intervalRow.Children.Add(CreateInlineLabel("Max"));
+            var maximumInterval = CreateSpecialAttributeNumberBox(
+                creep, "maxupdateinterval", "0", ProtoUnitNumericKind.UnsignedFloat);
+            maximumInterval.VerticalAlignment = VerticalAlignment.Center;
+            intervalRow.Children.Add(maximumInterval);
+            BuildTerrainCreepPlacementOptions(intervalRow, creep);
+            body.Children.Add(intervalRow);
+
+            BuildTerrainCreepFlags(body, creep);
+            BuildTerrainCreepGenerators(body, creep);
+        }
+
+        if (IsModifiedMode)
+        {
+            var add = CreateAddButton("Add terrain creep");
+            add.HorizontalAlignment = HorizontalAlignment.Left;
+            add.Click += (_, _) =>
+            {
+                if (!CanEditCurrent()) return;
+                MajorGodCatalog.AddTerrainCreep(terrainCreeps);
+                MarkAndRebuildSpecialMechanics();
+            };
+            host.Children.Add(add);
+        }
+    }
+
+    private void BuildTerrainCreepOptionalNumber(Panel row, XElement creep, string attributeName, string label)
+    {
+        var attribute = FindAttribute(creep, attributeName);
+        if (attribute == null)
+        {
+            if (!IsModifiedMode) return;
+            var add = CreateAddButton(label);
+            add.Margin = new Thickness(0, 0, 4, 4);
+            add.Click += (_, _) =>
+            {
+                if (!CanEditCurrent()) return;
+                SetAttribute(creep, attributeName, "0");
+                MarkAndRebuildSpecialMechanics();
+            };
+            row.Children.Add(add);
+            return;
+        }
+
+        var fields = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            Margin = new Thickness(0, 0, 4, 4),
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        fields.Children.Add(CreateInlineLabel(label));
+        fields.Children.Add(CreateSpecialAttributeNumberBox(creep, attributeName, "0", ProtoUnitNumericKind.UnsignedFloat));
+        if (IsModifiedMode)
+        {
+            var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
+            remove.Click += (_, _) =>
+            {
+                if (!CanEditCurrent()) return;
+                RemoveAttribute(creep, attributeName);
+                MarkAndRebuildSpecialMechanics();
+            };
+            fields.Children.Add(remove);
+        }
+        row.Children.Add(fields);
+    }
+
+    private void BuildTerrainCreepFlags(Panel host, XElement creep)
+    {
+        var row = CreateBountyWrappingRow();
+        AutoCompleteBox? picker = null;
+        if (IsModifiedMode)
+        {
+            picker = new AutoCompleteBox
+            {
+                Width = 50,
+                MaxWidth = 50,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                MinimumPrefixLength = 0,
+                Margin = new Thickness(0, 0, 4, 4)
+            };
+            EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
+            row.Children.Add(CreateBonusFieldPair("Flags", picker));
+        }
+
+        var chips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (picker == null)
+            row.Children.Add(CreateBonusFieldPair("Flags", chips));
+        else
+            row.Children.Add(chips);
+
+        void Render()
+        {
+            chips.Children.Clear();
+            var selected = TerrainCreepFlags.Where(definition =>
+                FindAttribute(creep, definition.Attribute) != null).ToList();
+            foreach (var definition in selected)
+            {
+                var captured = definition;
+                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Label, IsModifiedMode ? () =>
+                {
+                    RemoveAttribute(creep, captured.Attribute);
+                    MarkCurrentDirty();
+                    RefreshRawXmlFromCurrent();
+                    Render();
+                } : null, readOnly: !IsModifiedMode));
+            }
+            if (picker != null)
+            {
+                var used = selected.Select(definition => definition.Attribute).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                picker.ItemsSource = TerrainCreepFlags.Where(definition => !used.Contains(definition.Attribute))
+                    .Select(definition => definition.Label).ToList();
+            }
+        }
+
+        if (picker != null)
+        {
+            picker.SelectionChanged += (_, _) =>
+            {
+                if (!CanEditCurrent() || picker.SelectedItem is not string label) return;
+                var definition = TerrainCreepFlags.First(candidate =>
+                    candidate.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
+                SetAttribute(creep, definition.Attribute, "");
+                MarkCurrentDirty();
+                RefreshRawXmlFromCurrent();
+                picker.SelectedItem = null;
+                picker.Text = "";
+                Render();
+            };
+        }
+        Render();
+        if (IsModifiedMode || chips.Children.Count > 0)
+            host.Children.Add(row);
+    }
+
+    private void BuildTerrainCreepPlacementOptions(Panel row, XElement creep)
+    {
+        var buildability = FindAttribute(creep, "buildability");
+        if (buildability == null)
+        {
+            if (IsModifiedMode)
+            {
+                var add = CreateAddButton("Buildability");
+                add.Margin = new Thickness(0);
+                add.VerticalAlignment = VerticalAlignment.Center;
+                add.Click += (_, _) =>
+                {
+                    if (!CanEditCurrent()) return;
+                    SetAttribute(creep, "buildability", "buildable");
+                    MarkAndRebuildSpecialMechanics();
+                };
+                row.Children.Add(add);
+            }
+        }
+        else
+        {
+            var current = buildability.Value.Trim();
+            var options = TerrainCreepBuildabilityValues.Append(current)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var combo = new ComboBox
+            {
+                ItemsSource = options,
+                SelectedItem = options.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
+                Width = 160,
+                IsEnabled = IsModifiedMode
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (!CanEditCurrent() || combo.SelectedItem is not string selected) return;
+                SetAttribute(creep, "buildability", selected.ToLowerInvariant());
+                MarkCurrentDirty();
+                RefreshRawXmlFromCurrent();
+            };
+            var fields = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            fields.Children.Add(CreateInlineLabel("Buildability"));
+            fields.Children.Add(combo);
+            if (IsModifiedMode)
+            {
+                var remove = new Button { Classes = { "remove-button" } };
+                remove.Click += (_, _) =>
+                {
+                    if (!CanEditCurrent()) return;
+                    RemoveAttribute(creep, "buildability");
+                    MarkAndRebuildSpecialMechanics();
+                };
+                fields.Children.Add(remove);
+            }
+            row.Children.Add(fields);
+        }
+
+        var preventPlacement = FindAttribute(creep, "preventplacement");
+        if (preventPlacement == null)
+        {
+            if (IsModifiedMode)
+            {
+                var add = CreateAddButton("Prevent placement");
+                add.Margin = new Thickness(0);
+                add.VerticalAlignment = VerticalAlignment.Center;
+                add.Click += (_, _) =>
+                {
+                    if (!CanEditCurrent()) return;
+                    SetAttribute(creep, "preventplacement", "");
+                    MarkAndRebuildSpecialMechanics();
+                };
+                row.Children.Add(add);
+            }
+        }
+        else
+        {
+            var fields = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            fields.Children.Add(CreateInlineLabel("Prevent Placement of"));
+            fields.Children.Add(CreateSpecialAttributeAutoComplete(creep, "preventplacement", _unitOrTypeNames));
+            if (IsModifiedMode)
+            {
+                var remove = new Button { Classes = { "remove-button" } };
+                remove.Click += (_, _) =>
+                {
+                    if (!CanEditCurrent()) return;
+                    RemoveAttribute(creep, "preventplacement");
+                    MarkAndRebuildSpecialMechanics();
+                };
+                fields.Children.Add(remove);
+            }
+            row.Children.Add(fields);
+        }
+    }
+
+    private void BuildTerrainCreepGenerators(Panel host, XElement creep)
+    {
+        var row = CreateBountyWrappingRow();
+        AutoCompleteBox? picker = null;
+        if (IsModifiedMode)
+        {
+            picker = new AutoCompleteBox
+            {
+                Width = 50,
+                MaxWidth = 50,
+                FilterMode = AutoCompleteFilterMode.Contains,
+                MinimumPrefixLength = 0,
+                Margin = new Thickness(0, 0, 4, 4)
+            };
+            EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
+            row.Children.Add(CreateBonusFieldPair("Generator", picker));
+        }
+
+        var chips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (picker == null)
+            row.Children.Add(CreateBonusFieldPair("Generator", chips));
+        else
+            row.Children.Add(chips);
+
+        void Render()
+        {
+            var generators = creep.Elements().Where(child =>
+                child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList();
+            chips.Children.Clear();
+            foreach (var generator in generators)
+            {
+                var captured = generator;
+                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsModifiedMode ? () =>
+                {
+                    MajorGodCatalog.RemoveElementAndAdjacentWhitespace(captured);
+                    MarkCurrentDirty();
+                    RefreshRawXmlFromCurrent();
+                    Render();
+                } : null, readOnly: !IsModifiedMode));
+            }
+            if (picker != null)
+            {
+                var used = generators.Select(generator => generator.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                picker.ItemsSource = _protoUnitNames.Where(name => !used.Contains(name)).ToList();
+            }
+        }
+
+        if (picker != null)
+        {
+            picker.SelectionChanged += (_, _) =>
+            {
+                if (!CanEditCurrent() || picker.SelectedItem is not string name || string.IsNullOrWhiteSpace(name)) return;
+                MajorGodCatalog.AddTerrainCreepGenerator(creep, name);
+                MarkCurrentDirty();
+                RefreshRawXmlFromCurrent();
+                picker.SelectedItem = null;
+                picker.Text = "";
+                Render();
+            };
+        }
+        Render();
         host.Children.Add(row);
     }
 
@@ -1800,7 +2435,7 @@ public partial class MajorGodEditorView : UserControl
         {
             var newName = name.Text?.Trim() ?? "";
             if (newName.Equals(committedGoalName, StringComparison.Ordinal)) return;
-            await RenameBonusGoalGeneratedStringsAsync(goal, newName);
+            await RenameBonusGoalGeneratedStringsAsync(goal, committedGoalName, newName);
             committedGoalName = newName;
         };
         row.Children.Add(CreateBonusFieldPair("Name", name));
@@ -2160,7 +2795,8 @@ public partial class MajorGodEditorView : UserControl
             add.Click += (_, _) =>
             {
                 if (!CanEditCurrent()) return;
-                MajorGodCatalog.AddBonusDisplayInfo(goal);
+                var displayInfo = MajorGodCatalog.AddBonusDisplayInfo(goal);
+                QueueBonusDisplayStrings(goal, displayInfo);
                 MarkAndRebuildBonusUnitSpawning();
             };
             host.Children.Add(add);
@@ -2240,16 +2876,8 @@ public partial class MajorGodEditorView : UserControl
         }
     }
 
-    private static string BuildBonusGoalStringId(XElement goal, string suffix)
-        => BuildBonusGoalStringId(FindAttribute(goal, "name")?.Value ?? "", suffix);
-
-    private static string BuildBonusGoalStringId(string goalName, string suffix)
-        => $"STR_{goalName.Trim().ToUpperInvariant()}_{suffix}";
-
-    private async Task RenameBonusGoalGeneratedStringsAsync(XElement goal, string newName)
+    private void QueueBonusDisplayStrings(XElement goal, XElement displayInfo)
     {
-        var displayInfo = MajorGodCatalog.FindDirectChild(goal, "displayinfo");
-        if (displayInfo == null) return;
         foreach (var (tag, suffix) in new[]
                  {
                      ("displaynameid", "SPAWN_REWARD"),
@@ -2259,20 +2887,40 @@ public partial class MajorGodEditorView : UserControl
                      ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
                  })
         {
-            var element = MajorGodCatalog.FindDirectChild(displayInfo, tag);
-            if (element == null) continue;
-            var oldId = element.Value.Trim();
-            var newId = BuildBonusGoalStringId(newName, suffix);
-            if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase)) continue;
-            var hadPendingText = _pendingStringUpdates.Remove(oldId, out var text);
-            if (!hadPendingText && _resolveStringAsync != null && oldId.Length > 0)
-                text = await _resolveStringAsync(oldId);
-            _pendingStringOwners.Remove(oldId);
-            if (oldId.Length > 0) _pendingStringRemovals.Add(oldId);
-            _pendingStringRemovals.Remove(newId);
-            _pendingStringUpdates[newId] = text ?? "";
-            _pendingStringOwners[newId] = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
-            element.Value = newId;
+            var id = MajorGodCatalog.FindDirectChild(displayInfo, tag)?.Value.Trim() ?? "";
+            if (id.Length == 0 ||
+                !id.Equals(BuildBonusGoalStringId(goal, suffix), StringComparison.OrdinalIgnoreCase))
+                continue;
+            _pendingStringRemovals.Remove(id);
+            _pendingStringRemovalOwners.Remove(id);
+            _pendingStringUpdates.TryAdd(id, "");
+            _pendingStringOwners[id] = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
+        }
+    }
+
+    private static string BuildBonusGoalStringId(XElement goal, string suffix)
+        => BuildBonusGoalStringId(FindAttribute(goal, "name")?.Value ?? "", suffix);
+
+    private static string BuildBonusGoalStringId(string goalName, string suffix)
+        => MajorGodCatalog.BuildBonusGoalStringId(goalName, suffix);
+
+    private async Task RenameBonusGoalGeneratedStringsAsync(XElement goal, string oldName, string newName)
+    {
+        var displayInfo = MajorGodCatalog.FindDirectChild(goal, "displayinfo");
+        if (displayInfo == null) return;
+        foreach (var rename in MajorGodCatalog.RenameOwnedBonusGoalStringIds(goal, oldName, newName))
+        {
+            var hadPendingText = _pendingStringUpdates.Remove(rename.OldId, out var text);
+            if (!hadPendingText && _resolveStringAsync != null)
+                text = await _resolveStringAsync(rename.OldId);
+            _pendingStringOwners.Remove(rename.OldId);
+            ScheduleOwnedStringRemoval(
+                rename.OldId,
+                CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!));
+            _pendingStringRemovals.Remove(rename.NewId);
+            _pendingStringRemovalOwners.Remove(rename.NewId);
+            _pendingStringUpdates[rename.NewId] = text ?? "";
+            _pendingStringOwners[rename.NewId] = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
         }
         MarkAndRebuildBonusUnitSpawning();
     }
@@ -2281,13 +2929,22 @@ public partial class MajorGodEditorView : UserControl
     {
         var displayInfo = MajorGodCatalog.FindDirectChild(goal, "displayinfo");
         if (displayInfo == null) return;
-        foreach (var tag in new[] { "displaynameid", "rolloverid", "progresstooltipid", "nextunittooltipid", "notificationmessageid" })
+        var goalName = FindAttribute(goal, "name")?.Value ?? "";
+        foreach (var (tag, suffix) in new[]
+                 {
+                     ("displaynameid", "SPAWN_REWARD"),
+                     ("rolloverid", "SPAWN_REWARD_LR"),
+                     ("progresstooltipid", "SPAWN_REWARD_PROGRESS"),
+                     ("nextunittooltipid", "SPAWN_NEXT_UNIT"),
+                     ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
+                 })
         {
             var id = MajorGodCatalog.FindDirectChild(displayInfo, tag)?.Value.Trim() ?? "";
-            if (id.Length == 0) continue;
-            _pendingStringUpdates.Remove(id);
-            _pendingStringOwners.Remove(id);
-            _pendingStringRemovals.Add(id);
+            if (!id.Equals(BuildBonusGoalStringId(goalName, suffix), StringComparison.OrdinalIgnoreCase))
+                continue;
+            ScheduleOwnedStringRemoval(
+                id,
+                CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!));
         }
     }
 
@@ -3168,12 +3825,68 @@ public partial class MajorGodEditorView : UserControl
         ValidateSingleSpecialProtoUnit(shades, "Shades Unit");
         var targets = shades.Elements().Where(child => child.Name.LocalName.Equals("targetunit", StringComparison.OrdinalIgnoreCase)).ToList();
         if (targets.Count == 0) throw new InvalidDataException("Shades requires at least one From unit.");
-        foreach (var target in targets) ValidateUnitOrTypeName(target.Value, "Shades From");
+        var usedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var target in targets)
+        {
+            ValidateUnitOrTypeName(target.Value, "Shades From");
+            if (!usedTargets.Add(target.Value.Trim()))
+                throw new InvalidDataException($"Shades From '{target.Value.Trim()}' can only occur once.");
+        }
         ValidateBoundedFloatElement(shades, "chance", "Shades Probability", 0, 1);
         ValidateBoundedFloatElement(shades, "delay", "Shades Delay", 0, double.MaxValue);
         if (MajorGodCatalog.FindDirectChild(shades, "maxqueued") is { } maxQueued &&
             (!int.TryParse(maxQueued.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var max) || max < 1))
             throw new InvalidDataException("Shades Max Queue must be an integer greater than or equal to one.");
+    }
+
+    private void ValidateTerrainCreeps(XElement terrainCreeps)
+    {
+        var creeps = terrainCreeps.Elements().Where(child =>
+            child.Name.LocalName.Equals("terraincreep", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (creeps.Count == 0)
+            throw new InvalidDataException("TerrainCreeps requires at least one Terrain Creep entry.");
+
+        foreach (var creep in creeps)
+        {
+            var creepType = FindAttribute(creep, "creep")?.Value.Trim() ?? "";
+            if (creepType.Length == 0 ||
+                (_terrainCreepNames.Count > 0 && !_terrainCreepNames.Contains(creepType, StringComparer.OrdinalIgnoreCase)))
+            {
+                throw new InvalidDataException("Terrain Creep must reference an existing terrain creep type.");
+            }
+
+            ValidateNonNegativeFloatAttribute(creep, "maxradius", "Terrain Creep Radius");
+            ValidateNonNegativeFloatAttribute(creep, "growthrate", "Terrain Creep Growth Rate");
+            ValidateNonNegativeFloatAttribute(creep, "decayrate", "Terrain Creep Decay Rate");
+            ValidateNonNegativeFloatAttribute(creep, "minupdateinterval", "Terrain Creep Minimum Update Interval");
+            ValidateNonNegativeFloatAttribute(creep, "maxupdateinterval", "Terrain Creep Maximum Update Interval");
+            var minimumInterval = ParseNonNegativeFloatAttribute(creep, "minupdateinterval");
+            var maximumInterval = ParseNonNegativeFloatAttribute(creep, "maxupdateinterval");
+            if (minimumInterval > maximumInterval)
+                throw new InvalidDataException("Terrain Creep Minimum Update Interval cannot exceed Maximum Update Interval.");
+            if (FindAttribute(creep, "strength") != null)
+                ValidateNonNegativeFloatAttribute(creep, "strength", "Terrain Creep Strength");
+
+            if (FindAttribute(creep, "buildability") is { } buildability &&
+                !TerrainCreepBuildabilityValues.Contains(buildability.Value.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Terrain Creep Buildability must be a valid buildability mode.");
+            }
+            if (FindAttribute(creep, "preventplacement") is { } preventPlacement)
+                ValidateUnitOrTypeName(preventPlacement.Value, "Terrain Creep Prevent placement");
+
+            var generators = creep.Elements().Where(child =>
+                child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (generators.Count == 0)
+                throw new InvalidDataException("Terrain Creep requires at least one Generator.");
+            var usedGenerators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var generator in generators)
+            {
+                ValidateProtoUnitName(generator.Value, "Terrain Creep Generator");
+                if (!usedGenerators.Add(generator.Value.Trim()))
+                    throw new InvalidDataException($"Terrain Creep Generator '{generator.Value.Trim()}' can only occur once.");
+            }
+        }
     }
 
     private void ValidateTimeShifting(XElement timeShifting)
@@ -3339,9 +4052,8 @@ public partial class MajorGodEditorView : UserControl
             foreach (var flag in BonusGoalFlags)
             {
                 if (MajorGodCatalog.FindDirectChild(goal, flag.Tag) is { } element &&
-                    !element.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) &&
-                    !element.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException($"{label} {flag.Label} must be true or false.");
+                    !element.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"{label} {flag.Label} must be true when present.");
             }
             ValidateBonusDisplayInfo(goal, label);
         }
@@ -3362,8 +4074,10 @@ public partial class MajorGodEditorView : UserControl
         var progressType = MajorGodCatalog.FindDirectChild(displayInfo, "progresstype")?.Value ?? "";
         if (!new[] { "Default", "ShieldBlessing", "SpawnReward" }.Contains(progressType, StringComparer.OrdinalIgnoreCase))
             throw new InvalidDataException($"{label} Progress Type must be Default, ShieldBlessing, or SpawnReward.");
-        if (string.IsNullOrWhiteSpace(MajorGodCatalog.FindDirectChild(displayInfo, "icon")?.Value))
-            throw new InvalidDataException($"{label} Display info requires an Icon.");
+        GodModuleFieldValidation.ValidateCatalogAsset(
+            MajorGodCatalog.FindDirectChild(displayInfo, "icon")?.Value ?? "",
+            _iconPaths,
+            $"{label} Display info Icon");
         if (MajorGodCatalog.FindDirectChild(displayInfo, "notificationsound") == null)
             throw new InvalidDataException($"{label} Display info requires a Notification Sound field.");
     }
@@ -3416,6 +4130,10 @@ public partial class MajorGodEditorView : UserControl
             ValidateNonNegativeIntegerLike(reduction[0]!.Value, "Favor Bounty Reduction Start at");
             ValidateNonNegativeIntegerLike(reduction[1]!.Value, "Favor Bounty Reduction End at");
             ValidateNonNegativeFloatValue(reduction[2]!.Value, "Favor Bounty Reduction Factor");
+            var reductionStart = decimal.Parse(reduction[0]!.Value, NumberStyles.Number, CultureInfo.InvariantCulture);
+            var reductionEnd = decimal.Parse(reduction[1]!.Value, NumberStyles.Number, CultureInfo.InvariantCulture);
+            if (reductionStart > reductionEnd)
+                throw new InvalidDataException("Favor Bounty Reduction Start at cannot exceed End at.");
         }
 
         ValidateUniqueBountyChips(bounty, "excludedtarget", "Excluded target", ValidateUnitOrTypeName);
@@ -3515,6 +4233,9 @@ public partial class MajorGodEditorView : UserControl
             throw new InvalidDataException($"{label} must be an integer greater than or equal to zero.");
     }
 
+    private static double ParseNonNegativeFloatAttribute(XElement element, string attributeName)
+        => double.Parse(FindAttribute(element, attributeName)!.Value, NumberStyles.Float, CultureInfo.InvariantCulture);
+
     private void ValidateTechnologyFlagName(string raw, string label)
     {
         var value = raw.Trim();
@@ -3602,7 +4323,11 @@ public partial class MajorGodEditorView : UserControl
         if (!MajorGodCatalog.AgeValues.Contains(age, StringComparer.OrdinalIgnoreCase))
             throw new InvalidDataException("Age Tech must use an age from ArchaicAge through WonderAge.");
 
-        ValidateTechnology(ReadValue(ageTech, "tech"), "Age Tech");
+        var ageTechnologies = ageTech.Elements().Where(element =>
+            element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (ageTechnologies.Count != 1)
+            throw new InvalidDataException("Age Tech requires exactly one Tech field.");
+        ValidateTechnology(ageTechnologies[0].Value.Trim(), "Age Tech");
         ValidateTechnology(ReadValue(entry, "deathmatchtech"), "Deathmatch Tech");
         if (MajorGodCatalog.FindDirectChild(entry, "teamtech") is { } teamTech)
             ValidateTechnology(teamTech.Value.Trim(), "Team Tech");
@@ -4122,11 +4847,19 @@ public partial class MajorGodEditorView : UserControl
                 if (unitName.Length == 0 ||
                     (_protoUnitNames.Count > 0 && !_protoUnitNames.Contains(unitName, StringComparer.OrdinalIgnoreCase)))
                     throw new InvalidDataException($"{mode} Starting Queue must reference an existing ProtoUnit.");
-                if (FindAttribute(unit, "count") is { } count &&
+                var count = FindAttribute(unit, "count");
+                if (count != null &&
                     (!int.TryParse(count.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var countValue) || countValue <= 0))
                     throw new InvalidDataException($"Starting Queue Unit '{unitName}' Count must be an integer greater than zero.");
+                var autoTrain = FindAttribute(unit, "autotrain");
+                var preQueue = FindAttribute(unit, "prequeue");
+                ValidateTrueFlagAttribute(autoTrain, $"Starting Queue Unit '{unitName}' Auto Train");
+                ValidateTrueFlagAttribute(preQueue, $"Starting Queue Unit '{unitName}' Prequeue");
+                if (count != null && (autoTrain != null || preQueue != null))
+                    throw new InvalidDataException($"Starting Queue Unit '{unitName}' cannot use Count with Auto Train or Prequeue.");
                 if (FindAttribute(unit, "delay") is { } delay &&
-                    (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) || delayValue <= 0))
+                    (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) ||
+                     !double.IsFinite(delayValue) || delayValue <= 0))
                     throw new InvalidDataException($"Starting Queue Unit '{unitName}' Delay must be greater than zero.");
             }
         }
@@ -4314,14 +5047,18 @@ public partial class MajorGodEditorView : UserControl
                 throw new InvalidDataException($"Starting Resources mode '{mode}' can only be used once.");
 
             var usedResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var resource in group.Elements().Where(element =>
-                         ProtoConstants.KnownResourceTypes.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase)))
+            var resources = group.Elements().Where(element =>
+                ProtoConstants.KnownResourceTypes.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (resources.Count == 0)
+                throw new InvalidDataException($"{mode} Starting Resources requires at least one Resource.");
+            foreach (var resource in resources)
             {
                 var resourceType = ProtoConstants.KnownResourceTypes.First(type =>
                     type.Equals(resource.Name.LocalName, StringComparison.OrdinalIgnoreCase));
                 if (!usedResources.Add(resourceType))
                     throw new InvalidDataException($"{mode} Starting Resources contains '{resourceType}' more than once.");
-                if (!double.TryParse(resource.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) || amount < 0)
+                if (!double.TryParse(resource.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) ||
+                    !double.IsFinite(amount) || amount < 0)
                     throw new InvalidDataException($"{mode} Starting Resource '{resourceType}' Amount must be zero or greater.");
             }
         }
@@ -4354,11 +5091,13 @@ public partial class MajorGodEditorView : UserControl
                     throw new InvalidDataException($"Starting Unit '{unitName}' Count must be an integer greater than zero.");
                 foreach (var axis in new[] { "x", "y", "z" })
                 {
-                    if (!double.TryParse(FindAttribute(unit, axis)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                    if (!double.TryParse(FindAttribute(unit, axis)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var offset) ||
+                        !double.IsFinite(offset))
                         throw new InvalidDataException($"Starting Unit '{unitName}' Offset {axis.ToUpperInvariant()} must be a number.");
                 }
                 if (FindAttribute(unit, "delay") is { } delay &&
-                    (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) || delayValue <= 0))
+                    (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) ||
+                     !double.IsFinite(delayValue) || delayValue <= 0))
                     throw new InvalidDataException($"Starting Unit '{unitName}' Delay must be greater than zero.");
             }
         }
@@ -4368,6 +5107,12 @@ public partial class MajorGodEditorView : UserControl
     {
         var mode = FindAttribute(group, "mode")?.Value.Trim() ?? "";
         return mode.Length == 0 ? "Supremacy" : char.ToUpperInvariant(mode[0]) + mode[1..].ToLowerInvariant();
+    }
+
+    private static void ValidateTrueFlagAttribute(XAttribute? attribute, string label)
+    {
+        if (attribute != null && !attribute.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"{label} must be true when present.");
     }
 
     private static XAttribute? FindAttribute(XElement element, string name)

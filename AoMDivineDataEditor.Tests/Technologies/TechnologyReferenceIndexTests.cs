@@ -57,6 +57,28 @@ public sealed class TechnologyReferenceIndexTests
     }
 
     [Fact]
+    public void NameScopedLookupDoesNotReturnRecognizedReferencesToOtherTechnologies()
+    {
+        var document = XDocument.Parse("""
+            <root>
+              <unit name="First"><tech>UsedTech</tech></unit>
+              <unit name="Second"><tech>DifferentTech</tech></unit>
+              <unit name="Third"><associatedtech>AnotherTech</associatedtech></unit>
+            </root>
+            """);
+        var source = new TechnologyReferenceSource(
+            "ProtoUnits", document, TechnologyReferenceDocumentKind.ProtoUnits, CanMigrate: true);
+
+        var unused = TechnologyReferenceIndex.FindReferencesTo([source], "UnusedTech");
+        var used = TechnologyReferenceIndex.FindReferencesTo([source], "UsedTech");
+
+        Assert.Empty(unused);
+        var reference = Assert.Single(used);
+        Assert.Equal("UsedTech", reference.TechnologyName);
+        Assert.Equal("First", reference.Owner);
+    }
+
+    [Fact]
     public void RenameChainsCollapseAndARevertRemovesThePendingMigration()
     {
         var first = TechnologyReferenceIndex.AddOrCollapseRename([], "A", "B");
@@ -65,6 +87,34 @@ public sealed class TechnologyReferenceIndexTests
 
         Assert.Equal(new TechnologyRenameOperation("A", "C"), Assert.Single(second));
         Assert.Empty(reverted);
+    }
+
+    [Fact]
+    public void Major_god_tech_fields_and_dynamic_minor_god_entries_are_migrated()
+    {
+        var majorGods = XDocument.Parse("""
+            <civsmods><civ><name>God</name><agetech><tech>OldTech</tech></agetech>
+              <deathmatchtech>OldTech</deathmatchtech><teamtech>OldTech</teamtech>
+            </civ></civsmods>
+            """);
+        var minorGods = XDocument.Parse("""
+            <minorgodsmods><!-- note --><classicalageoldgod portraitfilename="portrait.png" /></minorgodsmods>
+            """, LoadOptions.PreserveWhitespace);
+        var majorSource = new TechnologyReferenceSource(
+            "Major Gods", majorGods, TechnologyReferenceDocumentKind.MajorGods, CanMigrate: true);
+        var minorSource = new TechnologyReferenceSource(
+            "Minor Gods", minorGods, TechnologyReferenceDocumentKind.MinorGods, CanMigrate: true);
+
+        Assert.Equal(3, TechnologyReferenceIndex.RenameRecognizedReferences(majorSource, "OldTech", "NewTech"));
+        Assert.Equal(1, TechnologyReferenceIndex.RenameRecognizedReferences(
+            minorSource, "ClassicalAgeOldGod", "ClassicalAgeNewGod"));
+
+        Assert.All(majorGods.Descendants().Where(element => !element.HasElements && element.Name != "name"),
+            element => Assert.Equal("NewTech", element.Value));
+        var renamedMinorGod = Assert.Single(minorGods.Root!.Elements());
+        Assert.Equal("ClassicalAgeNewGod", renamedMinorGod.Name.LocalName);
+        Assert.Equal("portrait.png", (string?)renamedMinorGod.Attribute("portraitfilename"));
+        Assert.Single(minorGods.Root!.Nodes().OfType<XComment>());
     }
 
     [Fact]

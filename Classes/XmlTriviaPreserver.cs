@@ -10,6 +10,20 @@ namespace AoMDivineDataEditor.Classes;
 /// </summary>
 public static class XmlTriviaPreserver
 {
+    /// <summary>
+    /// Replaces an element's scalar text while retaining comments, processing
+    /// instructions, and its existing whitespace layout.
+    /// </summary>
+    public static void SetText(XElement element, string? value)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        var original = new XElement(element);
+        element.Value = value ?? "";
+        Preserve(original, element);
+        if (string.IsNullOrEmpty(value) && !element.Nodes().Any())
+            element.Add(new XText(""));
+    }
+
     public static void Preserve(XElement original, XElement updated)
     {
         ArgumentNullException.ThrowIfNull(original);

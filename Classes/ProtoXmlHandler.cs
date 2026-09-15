@@ -239,11 +239,7 @@ public static class ProtoXmlHandler
         if (el == null)
             unit.Add(new XElement(tag, value));
         else
-        {
-            var original = new XElement(el);
-            el.Value = value;
-            XmlTriviaPreserver.Preserve(original, el);
-        }
+            XmlTriviaPreserver.SetText(el, value);
     }
 
     /// <summary>Remove a direct child element entirely.</summary>

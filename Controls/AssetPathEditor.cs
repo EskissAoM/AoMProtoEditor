@@ -14,6 +14,10 @@ public sealed class AssetPathEditor : Grid
     private bool _editing;
     private bool _suppress;
     private Func<string, Task>? _changed;
+    private HashSet<string> _validFullValues = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>When enabled, non-empty free text is cleared when editing ends unless it matches the supplied catalog.</summary>
+    public bool RequireSuggestionMatch { get; set; }
 
     public TextBox CompactPresenter { get; } = new()
     {
@@ -31,6 +35,14 @@ public sealed class AssetPathEditor : Grid
     public event EventHandler? FullValueChanged;
     public event EventHandler? EditingCompleted;
 
+    public void CommitEditing()
+    {
+        if (_editing)
+            EndEdit();
+        else
+            ClearInvalidValueIfNeeded();
+    }
+
     public AssetPathEditor()
     {
         Children.Add(CompactPresenter);
@@ -40,6 +52,12 @@ public sealed class AssetPathEditor : Grid
             (suggestion.DisplayValue.Contains(search ?? "", StringComparison.OrdinalIgnoreCase) || suggestion.FullValue.Contains(search ?? "", StringComparison.OrdinalIgnoreCase));
         Editor.ItemSelector = (_, item) => item is PathSuggestion suggestion ? suggestion.FullValue : item?.ToString() ?? "";
         EditorTextFieldStyle.ConfigureSelector(Editor);
+        // The host controls the compact editor width. The shared selector style
+        // has a fixed standard width, which otherwise overflows narrower paired
+        // fields such as Portrait/Icon and draws over its neighbor while editing.
+        Editor.Width = double.NaN;
+        Editor.MaxWidth = double.PositiveInfinity;
+        Editor.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         Width = EditorTextFieldStyle.StandardWidth;
         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
         CompactPresenter.AddHandler(InputElement.PointerPressedEvent, (_, _) =>
@@ -67,8 +85,14 @@ public sealed class AssetPathEditor : Grid
 
     public void Configure(string fullValue, IEnumerable<string> suggestions, Func<string, Task>? changed)
     {
+        var catalog = suggestions
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _validFullValues = catalog.ToHashSet(StringComparer.OrdinalIgnoreCase);
         FullValue = fullValue?.Trim() ?? ""; _changed = changed;
-        Suggestions = AssetPathDisplayService.CreateSuggestions(suggestions.Append(FullValue));
+        Suggestions = AssetPathDisplayService.CreateSuggestions(catalog.Append(FullValue));
         Editor.ItemsSource = Suggestions;
         _suppress = true;
         try { Editor.Text = FullValue; } finally { _suppress = false; }
@@ -115,10 +139,25 @@ public sealed class AssetPathEditor : Grid
             return;
 
         _editing = false;
+        ClearInvalidValueIfNeeded();
         Editor.IsVisible = false;
         CompactPresenter.IsVisible = true;
         Refresh();
         EditingCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ClearInvalidValueIfNeeded()
+    {
+        if (RequireSuggestionMatch && FullValue.Length > 0 && !_validFullValues.Contains(FullValue))
+        {
+            FullValue = "";
+            _suppress = true;
+            try { Editor.Text = ""; }
+            finally { _suppress = false; }
+            FullValueChanged?.Invoke(this, EventArgs.Empty);
+            if (_changed != null)
+                _ = _changed("");
+        }
     }
     private void Refresh()
     {

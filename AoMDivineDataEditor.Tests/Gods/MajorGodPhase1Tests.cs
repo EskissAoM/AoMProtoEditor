@@ -731,6 +731,47 @@ public sealed class MajorGodPhase1Tests
     }
 
     [Fact]
+    public void TerrainCreepHelpers_CreateCanonicalEntriesAndGenerators()
+    {
+        var terrainCreeps = new XElement("terraincreeps");
+        var creep = MajorGodCatalog.AddTerrainCreep(terrainCreeps);
+        creep.SetAttributeValue("creep", "GaiaCreep");
+        var generator = MajorGodCatalog.AddTerrainCreepGenerator(creep, "TownCenter");
+
+        Assert.Equal("terraincreep", creep.Name.LocalName);
+        Assert.Equal("GaiaCreep", creep.Attribute("creep")?.Value);
+        Assert.Equal("0", creep.Attribute("maxradius")?.Value);
+        Assert.Equal("0", creep.Attribute("growthrate")?.Value);
+        Assert.Equal("0", creep.Attribute("decayrate")?.Value);
+        Assert.Equal("0", creep.Attribute("minupdateinterval")?.Value);
+        Assert.Equal("0", creep.Attribute("maxupdateinterval")?.Value);
+        Assert.Equal("protounit", generator.Name.LocalName);
+        Assert.Equal("TownCenter", generator.Value);
+    }
+
+    [Fact]
+    public void TerrainCreepEditor_UsesGameAndModCatalogsAndStructuredControls()
+    {
+        var editor = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "MajorGodEditorView.axaml.cs"));
+        var window = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "ProtoEditorWindow.axaml.cs"));
+
+        Assert.Contains("BuildTerrainCreepsEditor", editor, StringComparison.Ordinal);
+        Assert.Contains("CreateSpecialAttributeAutoComplete(creep, \"creep\", _terrainCreepNames)", editor, StringComparison.Ordinal);
+        Assert.Contains("\"maxradius\"", editor, StringComparison.Ordinal);
+        Assert.Contains("\"allowDisconnectedGrowth\"", editor, StringComparison.Ordinal);
+        Assert.Contains("TerrainCreepBuildabilityValues", editor, StringComparison.Ordinal);
+        Assert.Contains("Text = \"Update Interval (s)\"", editor, StringComparison.Ordinal);
+        Assert.Contains("CreateInlineLabel(\"Prevent Placement of\")", editor, StringComparison.Ordinal);
+        Assert.Contains("BuildTerrainCreepPlacementOptions(intervalRow, creep);", editor, StringComparison.Ordinal);
+        Assert.Contains("BuildTerrainCreepGenerators", editor, StringComparison.Ordinal);
+        Assert.Contains("ValidateTerrainCreeps", editor, StringComparison.Ordinal);
+        Assert.Contains("terrain_creep_types.xml.xmb", window, StringComparison.Ordinal);
+        Assert.Contains("terrain_creep_types_mods.xml", window, StringComparison.Ordinal);
+        Assert.Contains("terraincreepsmods", window, StringComparison.Ordinal);
+        Assert.Contains("ReadBarXmbXml(entry, stream)", window, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildingChainHelpers_PreserveCanonicalNestingAndOrdering()
     {
         var chain = new XElement("buildingchain");
@@ -878,15 +919,17 @@ public sealed class MajorGodPhase1Tests
     }
 
     [Fact]
-    public void MainWindow_WiresBothGodNavigationButtons()
+    public void MainWindow_WiresGodMenuAndEntityNavigationButtons()
     {
         var root = ProjectSource.RootPath;
         var document = XDocument.Load(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml"));
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
 
         var buttons = document.Descendants().Where(element => element.Name.LocalName == "Button").ToList();
-        Assert.Contains(buttons, button => (string?)button.Attribute("Content") == "Gods" &&
+        Assert.Contains(buttons, button => (string?)button.Attribute("Content") == "Edit / View" &&
                                            (string?)button.Attribute("Click") == "Gods_Click");
+        Assert.Contains(buttons, button => (string?)button.Attribute("Content") == "Cultures" &&
+                                           (string?)button.Attribute("Click") == "GodsCultures_Click");
         Assert.Contains(buttons, button => (string?)button.Attribute(x + "Name") == "_godsEntityButton" &&
                                            (string?)button.Attribute("Click") == "GodsEntity_Click" &&
                                            button.Attribute("IsEnabled") == null);

@@ -180,7 +180,23 @@
                             </Flyout>
                         </Button.Flyout>
                     </Button>
-                    <Button Classes="topNav" Content="Gods" Click="Gods_Click" />
+                    <Button Classes="topNav" Content="Gods">
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Spacing="4" Margin="4">
+                                    <Button Classes="topMenuItem"
+                                            Content="Edit / View"
+                                            Click="Gods_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Cultures"
+                                            Click="GodsCultures_Click" />
+                                    <Button Classes="topMenuItem"
+                                            Content="Minor Gods"
+                                            Click="GodsMinorGods_Click" />
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
                     <Button Classes="topNav" Content="Settings" Click="Settings_Click" />
                 </StackPanel>
 

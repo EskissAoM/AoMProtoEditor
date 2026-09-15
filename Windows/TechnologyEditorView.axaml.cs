@@ -276,17 +276,24 @@ public partial class TechnologyEditorView : UserControl
     private readonly Action? _reloadStringsFromDisk;
     private readonly Func<IReadOnlyList<TechnologyReferenceUsage>>? _externalTechnologyReferenceProvider;
     private readonly Func<string, IReadOnlyList<TechnologyReferenceUsage>>? _technologyDeletionReferenceProvider;
+    private readonly Func<IEnumerable<string>, IReadOnlySet<string>>? _externalStringReferenceProvider;
+    private readonly Func<XDocument, Task>? _technologySavedAsync;
+    private readonly Func<string, bool>? _hasLinkedMinorGod;
+    private readonly Func<Window, string, Task<bool>>? _confirmLinkedMinorGodRemovalAsync;
+    private readonly Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
+        _prepareMinorGodLifecycle;
     private readonly Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? _prepareTechnologyReferenceMigration;
     private readonly Action<TechnologyReferenceMigrationPlan>? _adoptTechnologyReferenceMigration;
     private readonly IconPreviewService? _iconPreviewService;
     private readonly Dictionary<string, string> _pendingStringUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingStringRemovals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _automaticStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _loadedStringValues = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyList<string> _iconPaths = [];
     private readonly IReadOnlyList<string> _prereqUnitNames = [];
     private readonly IReadOnlyList<string> _protoUnitNames = [];
     private readonly IReadOnlyList<string> _cultureNames = [];
-    private readonly IReadOnlyList<string> _majorGodNames = [];
+    private IReadOnlyList<string> _majorGodNames = [];
     private readonly IReadOnlyList<string> _techTypeNames = [];
     private readonly IReadOnlyList<string> _protoActionNames = [];
     private readonly IReadOnlyList<string> _tacticNames = [];
@@ -310,6 +317,7 @@ public partial class TechnologyEditorView : UserControl
     private bool _dirty;
     private readonly HashSet<string> _dirtyTechnologyNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<TechnologyRenameOperation> _pendingTechnologyRenames = [];
+    private readonly HashSet<string> _pendingMinorGodRemovals = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<TechnologyReferenceUsage> _technologyReferenceUsages = [];
     private string? _technologyReferenceIndexError;
     private readonly HashSet<(XElement Effect, string Attribute)> _openOnHitOptionalSelectors = [];
@@ -373,7 +381,13 @@ public partial class TechnologyEditorView : UserControl
         Func<IReadOnlyList<TechnologyReferenceUsage>>? externalTechnologyReferenceProvider = null,
         Func<IReadOnlyList<TechnologyRenameOperation>, TechnologyReferenceMigrationPlan>? prepareTechnologyReferenceMigration = null,
         Action<TechnologyReferenceMigrationPlan>? adoptTechnologyReferenceMigration = null,
-        Func<string, IReadOnlyList<TechnologyReferenceUsage>>? technologyDeletionReferenceProvider = null)
+        Func<string, IReadOnlyList<TechnologyReferenceUsage>>? technologyDeletionReferenceProvider = null,
+        Func<XDocument, Task>? technologySavedAsync = null,
+        Func<string, bool>? hasLinkedMinorGod = null,
+        Func<Window, string, Task<bool>>? confirmLinkedMinorGodRemovalAsync = null,
+        Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
+            prepareMinorGodLifecycle = null,
+        Func<IEnumerable<string>, IReadOnlySet<string>>? externalStringReferenceProvider = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
@@ -387,6 +401,11 @@ public partial class TechnologyEditorView : UserControl
         _prepareTechnologyReferenceMigration = prepareTechnologyReferenceMigration;
         _adoptTechnologyReferenceMigration = adoptTechnologyReferenceMigration;
         _technologyDeletionReferenceProvider = technologyDeletionReferenceProvider;
+        _technologySavedAsync = technologySavedAsync;
+        _hasLinkedMinorGod = hasLinkedMinorGod;
+        _confirmLinkedMinorGodRemovalAsync = confirmLinkedMinorGodRemovalAsync;
+        _prepareMinorGodLifecycle = prepareMinorGodLifecycle;
+        _externalStringReferenceProvider = externalStringReferenceProvider;
         _iconPreviewService = iconPreviewService;
         _iconPaths = iconPaths?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         _prereqUnitNames = prereqUnitNames?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
@@ -476,6 +495,8 @@ public partial class TechnologyEditorView : UserControl
             rename.NewName.Equals(technologyName, StringComparison.OrdinalIgnoreCase) ||
             rename.OldName.Equals(savedName, StringComparison.OrdinalIgnoreCase) ||
             rename.NewName.Equals(savedName, StringComparison.OrdinalIgnoreCase));
+        _pendingMinorGodRemovals.Remove(technologyName);
+        _pendingMinorGodRemovals.Remove(savedName);
 
         var affectedStringIds = CollectReferencedTechnologyStringIds(current);
         affectedStringIds.UnionWith(CollectReferencedTechnologyStringIds(restored));
@@ -518,6 +539,7 @@ public partial class TechnologyEditorView : UserControl
                 continue;
             _pendingStringUpdates.Remove(id);
             _pendingStringRemovals.Remove(id);
+            _automaticStringRemovals.Remove(id);
         }
         _dirtyTechnologyNames.Remove(technologyName);
         _dirtyTechnologyNames.Remove(savedName);
@@ -583,6 +605,22 @@ public partial class TechnologyEditorView : UserControl
     {
         var source = modified ? _modified : _original;
         return source.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public void UpdateMajorGodNames(IEnumerable<string> names)
+    {
+        var updated = names
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (_majorGodNames.SequenceEqual(updated, StringComparer.OrdinalIgnoreCase))
+            return;
+
+        _majorGodNames = updated;
+        if (_current != null)
+            _ = BuildEditorAsync();
     }
 
     public void RefreshTechnologyReferenceUsage()
@@ -1545,21 +1583,25 @@ public partial class TechnologyEditorView : UserControl
             grid.Children.Add(label);
 
             costs.TryGetValue(resource, out var existing);
-            var box = CreateNumericTextBox(existing?.Value ?? "0");
+            var displayedValue = existing?.Value ?? "0";
+            var box = CreateNumericTextBox(displayedValue);
             EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
             box.Margin = new Thickness(0, 4, index < ProtoConstants.KnownResourceTypes.Length - 1 ? 8 : 0, 4);
             Grid.SetColumn(box, index * 2 + 1);
             box.TextChanged += (_, _) =>
             {
                 if (_loadingUi || !IsModifiedTab) return;
+                var value = box.Text ?? "0";
+                if (value.Equals(displayedValue, StringComparison.Ordinal)) return;
+                displayedValue = value;
                 if (existing == null)
                 {
-                    existing = new XElement("cost", new XAttribute("resourcetype", resource), box.Text ?? "0");
+                    existing = new XElement("cost", new XAttribute("resourcetype", resource), value);
                     InsertBeforeEffectsOrAppend(tech, existing);
                 }
                 else
                 {
-                    existing.Value = box.Text ?? "0";
+                    existing.Value = value;
                 }
                 MarkDirty();
                 UpdatePreview();
@@ -1692,11 +1734,24 @@ public partial class TechnologyEditorView : UserControl
                     captured.Value.Trim(),
                     IsModifiedTab ? () =>
                     {
-                        captured.Remove();
-                        MarkDirty();
-                        Render();
-                        RefreshPickerItems();
-                        UpdatePreview();
+                        if (tag.Equals("flag", StringComparison.OrdinalIgnoreCase) &&
+                            captured.Value.Trim().Equals("AgeUpgrade", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ObserveUiOperation(
+                                RemoveAgeUpgradeFlagAsync(tech, captured, Render, RefreshPickerItems),
+                                "remove the AgeUpgrade flag");
+                            return;
+                        }
+                        RemoveChip();
+
+                        void RemoveChip()
+                        {
+                            captured.Remove();
+                            MarkDirty();
+                            Render();
+                            RefreshPickerItems();
+                            UpdatePreview();
+                        }
                     } : null,
                     readOnly: !IsModifiedTab));
             }
@@ -1721,6 +1776,9 @@ public partial class TechnologyEditorView : UserControl
                 {
                     var element = new XElement(tag, value);
                     InsertBeforeEffectsOrAppend(tech, element);
+                    if (tag.Equals("flag", StringComparison.OrdinalIgnoreCase) &&
+                        value.Equals("AgeUpgrade", StringComparison.OrdinalIgnoreCase))
+                        _pendingMinorGodRemovals.Remove(GetLinkedMinorGodTechnologyName(tech));
                     MarkDirty();
                     Render();
                     UpdatePreview();
@@ -1736,6 +1794,41 @@ public partial class TechnologyEditorView : UserControl
         RefreshPickerItems();
         content.Children.Add(chips);
         _propertiesPanel.Children.Add(content);
+    }
+
+    private async Task RemoveAgeUpgradeFlagAsync(
+        XElement technology,
+        XElement flag,
+        Action render,
+        Action refreshPickerItems)
+    {
+        if (!CanEditModifiedDocument || flag.Parent == null)
+            return;
+
+        var linkedTechName = GetLinkedMinorGodTechnologyName(technology);
+        if (_hasLinkedMinorGod?.Invoke(linkedTechName) == true)
+        {
+            if (TopLevel.GetTopLevel(this) is not Window owner ||
+                _confirmLinkedMinorGodRemovalAsync == null ||
+                !await _confirmLinkedMinorGodRemovalAsync(owner, linkedTechName))
+                return;
+            _pendingMinorGodRemovals.Add(linkedTechName);
+        }
+
+        flag.Remove();
+        MarkDirty();
+        render();
+        refreshPickerItems();
+        UpdatePreview();
+    }
+
+    private string GetLinkedMinorGodTechnologyName(XElement technology)
+    {
+        var currentName = GetCaseInsensitiveAttribute(technology, "name")?.Value.Trim() ?? "";
+        return _pendingTechnologyRenames
+                   .LastOrDefault(rename => rename.NewName.Equals(currentName, StringComparison.OrdinalIgnoreCase))
+                   ?.OldName
+               ?? currentName;
     }
 
     private void AddTextPropertyRow(string label, string value, Action<string> setter, Action? removeAction = null)
@@ -1969,7 +2062,7 @@ public partial class TechnologyEditorView : UserControl
         };
         firstRow.Children.Add(typeCombo);
 
-        AddPrerequisiteFields(prereq, currentType, firstRow, content);
+        AddPrerequisiteFields(prereq, currentType, firstRow);
 
         if (IsModifiedTab)
         {
@@ -1990,7 +2083,7 @@ public partial class TechnologyEditorView : UserControl
         _prereqsPanel.Children.Add(border);
     }
 
-    private void AddPrerequisiteFields(XElement prereq, string type, WrapPanel firstRow, StackPanel content)
+    private void AddPrerequisiteFields(XElement prereq, string type, WrapPanel firstRow)
     {
         switch (type.ToLowerInvariant())
         {
@@ -2004,10 +2097,10 @@ public partial class TechnologyEditorView : UserControl
                 AddTypeCountPrerequisiteFields(prereq, firstRow);
                 break;
             case "culture":
-                AddMultiValuePrerequisiteFields(prereq, content, "cultureName", _cultureNames, "Culture");
+                AddMultiValuePrerequisiteFields(prereq, firstRow, "cultureName", _cultureNames, "Culture");
                 break;
             case "civilization":
-                AddMultiValuePrerequisiteFields(prereq, content, "civName", _majorGodNames, "Major god");
+                AddMultiValuePrerequisiteFields(prereq, firstRow, "civName", _majorGodNames, "Major god");
                 break;
             case "kbstat":
                 AddKbStatPrerequisiteFields(prereq, firstRow);
@@ -2171,7 +2264,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddMultiValuePrerequisiteFields(
         XElement prereq,
-        StackPanel content,
+        WrapPanel firstRow,
         string childName,
         IEnumerable<string> options,
         string label)
@@ -2180,13 +2273,31 @@ public partial class TechnologyEditorView : UserControl
         if (entries.Count == 0 && !string.IsNullOrWhiteSpace(prereq.Value))
             entries.Add(new XElement(childName, prereq.Value.Trim()));
 
-        foreach (var entry in entries)
+        var catalogOptions = options
+            .Where(option => !string.IsNullOrWhiteSpace(option))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        for (var index = 0; index < entries.Count; index++)
         {
+            var entry = entries[index];
             var activeEntry = entry;
             var isAttached = activeEntry.Parent == prereq;
-            var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(158, 0, 0, 0) };
-            row.Children.Add(CreateInlineLabel(label));
-            var entrySelector = CreateStrictPrereqSelector(options, activeEntry.Value.Trim(), 150, value =>
+            var currentValue = activeEntry.Value.Trim();
+            var otherValues = entries
+                .Where(other => !ReferenceEquals(other, entry))
+                .Select(other => other.Value.Trim());
+            var availableOptions = GetAvailableMultiValuePrerequisiteOptions(
+                catalogOptions,
+                otherValues,
+                currentValue);
+            var entryGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            if (index == 0)
+                entryGroup.Children.Add(CreateInlineLabel(label));
+            var entrySelector = CreateStrictPrereqSelector(availableOptions, currentValue, 150, value =>
             {
                 if (!isAttached)
                 {
@@ -2201,27 +2312,49 @@ public partial class TechnologyEditorView : UserControl
                 }
                 MarkDirty();
                 UpdatePreview();
-            });
+                _ = BuildEditorAsync();
+            }, selectAllOnFirstClick: true);
             if (IsModifiedTab && isAttached)
                 entrySelector.Margin = new Thickness(entrySelector.Margin.Left, entrySelector.Margin.Top, 0, entrySelector.Margin.Bottom);
-            row.Children.Add(entrySelector);
+            entryGroup.Children.Add(entrySelector);
             if (IsModifiedTab && isAttached)
-                row.Children.Add(CreateRemoveButton(() => entry.Remove()));
-            content.Children.Add(row);
+                entryGroup.Children.Add(CreateRemoveButton(() => entry.Remove()));
+            firstRow.Children.Add(entryGroup);
         }
 
         if (IsModifiedTab)
         {
             var add = CreateOptionalPropertyButton($"Add {label.ToLowerInvariant()}");
-            add.Margin = new Thickness(158, 0, 0, 0);
+            add.Margin = new Thickness(8, 4, 8, 4);
+            var usedValues = entries
+                .Select(entry => entry.Value.Trim())
+                .Where(value => value.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var nextValue = catalogOptions.FirstOrDefault(option => !usedValues.Contains(option));
+            add.IsEnabled = nextValue != null;
             add.Click += (_, _) =>
             {
-                prereq.Add(new XElement(childName, options.FirstOrDefault() ?? ""));
+                if (nextValue == null) return;
+                prereq.Add(new XElement(childName, nextValue));
                 MarkDirty();
                 _ = BuildEditorAsync();
             };
-            content.Children.Add(add);
+            firstRow.Children.Add(add);
         }
+    }
+
+    internal static IReadOnlyList<string> GetAvailableMultiValuePrerequisiteOptions(
+        IEnumerable<string> options,
+        IEnumerable<string> valuesUsedByOtherEntries,
+        string currentValue)
+    {
+        var used = valuesUsedByOtherEntries
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return options
+            .Where(option => option.Equals(currentValue, StringComparison.OrdinalIgnoreCase) || !used.Contains(option))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private AutoCompleteBox CreateStrictPrereqSelector(
@@ -2229,7 +2362,8 @@ public partial class TechnologyEditorView : UserControl
         string current,
         double width,
         Action<string> committed,
-        bool deferSelectionCommit = false)
+        bool deferSelectionCommit = false,
+        bool selectAllOnFirstClick = false)
     {
         var values = options
             .Append(current)
@@ -2259,7 +2393,7 @@ public partial class TechnologyEditorView : UserControl
             preserveUnknownInitialValue: true,
             allowEmpty: false,
             deferSelectionCommit: deferSelectionCommit,
-            selectAllOnFirstClick: false,
+            selectAllOnFirstClick: selectAllOnFirstClick,
             keepStartVisibleAfterCommit: true,
             valueCommitted: value =>
             {
@@ -8318,6 +8452,7 @@ public partial class TechnologyEditorView : UserControl
         var technologyBackup = new XElement(technology);
         var stringUpdatesBackup = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
         var stringRemovalsBackup = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
+        var automaticRemovalsBackup = new HashSet<string>(_automaticStringRemovals, StringComparer.OrdinalIgnoreCase);
         try
         {
             foreach (var tag in TechnologyStringBackedTags)
@@ -8337,6 +8472,8 @@ public partial class TechnologyEditorView : UserControl
             }
 
             await RegenerateAllEffectStringsAsync(technology, newName, removeOldIds: true);
+            _automaticStringRemovals.UnionWith(
+                _pendingStringRemovals.Where(id => !stringRemovalsBackup.Contains(id)));
             if (!ReferenceEquals(_current, technology) ||
                 !string.Equals(_currentOriginalName, oldName, StringComparison.Ordinal))
             {
@@ -8344,7 +8481,8 @@ public partial class TechnologyEditorView : UserControl
                     technology,
                     technologyBackup,
                     stringUpdatesBackup,
-                    stringRemovalsBackup);
+                    stringRemovalsBackup,
+                    automaticRemovalsBackup);
                 return false;
             }
         }
@@ -8354,7 +8492,8 @@ public partial class TechnologyEditorView : UserControl
                 technology,
                 technologyBackup,
                 stringUpdatesBackup,
-                stringRemovalsBackup);
+                stringRemovalsBackup,
+                automaticRemovalsBackup);
             throw;
         }
 
@@ -8398,7 +8537,8 @@ public partial class TechnologyEditorView : UserControl
         XElement technology,
         XElement technologyBackup,
         IReadOnlyDictionary<string, string> stringUpdatesBackup,
-        IReadOnlyCollection<string> stringRemovalsBackup)
+        IReadOnlyCollection<string> stringRemovalsBackup,
+        IReadOnlyCollection<string> automaticRemovalsBackup)
     {
         technology.ReplaceAttributes(technologyBackup.Attributes());
         technology.ReplaceNodes(technologyBackup.Nodes());
@@ -8408,6 +8548,9 @@ public partial class TechnologyEditorView : UserControl
         _pendingStringRemovals.Clear();
         foreach (var id in stringRemovalsBackup)
             _pendingStringRemovals.Add(id);
+        _automaticStringRemovals.Clear();
+        foreach (var id in automaticRemovalsBackup)
+            _automaticStringRemovals.Add(id);
     }
 
     internal static string BuildTechnologyStringId(string technologyName, string tag)
@@ -8696,10 +8839,74 @@ public partial class TechnologyEditorView : UserControl
         _modDocument.Root!.Add(tech);
         _modified[name] = tech;
         _techTabs.SelectedIndex = 1;
+        _current = tech;
+        _currentOriginalName = name;
         _dirtyTechnologyNames.Add(name);
         MarkDirty();
         RefreshList(name);
+        await BuildEditorAsync();
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task<bool> AddAgeUpgradeTechnologyAsync(string name)
+    {
+        var normalized = name.Trim();
+        if (!CanModifyTechnologyDocument || !InternalNamePolicy.IsValid(normalized) ||
+            _modified.ContainsKey(normalized) || _original.ContainsKey(normalized))
+            return false;
+
+        var displayId = BuildTechnologyStringId(normalized, "displaynameid");
+        var rolloverId = BuildTechnologyStringId(normalized, "rollovertextid");
+        var technology = new XElement("tech",
+            new XAttribute("name", normalized),
+            new XElement("displaynameid", displayId),
+            new XElement("rollovertextid", rolloverId),
+            new XElement("icon", ""),
+            new XElement("status", "UNOBTAINABLE"),
+            new XElement("researchpoints", "0"),
+            new XElement("flag", "AgeUpgrade"));
+        _pendingStringRemovals.Remove(displayId);
+        _pendingStringRemovals.Remove(rolloverId);
+        _pendingStringUpdates[displayId] = MinorGodCatalog.GetDisplayName(normalized);
+        _pendingStringUpdates[rolloverId] = "";
+        _modDocument.Root!.Add(technology);
+        _modified[normalized] = technology;
+        _techTabs.SelectedIndex = 1;
+        _current = technology;
+        _currentOriginalName = normalized;
+        _loadingUi = true;
+        _techNameBox.Text = normalized;
+        _loadingUi = false;
+        _dirtyTechnologyNames.Add(normalized);
+        MarkDirty();
+        RefreshList(normalized);
+        if (await SaveAsync())
+            return true;
+        DiscardTechnologyChanges(normalized, savedElement: null);
+        return false;
+    }
+
+    public async Task<bool> RenameTechnologyAsync(string oldName, string newName)
+    {
+        var normalizedOldName = oldName.Trim();
+        var normalizedNewName = newName.Trim();
+        if (!CanModifyTechnologyDocument || !_modified.ContainsKey(normalizedOldName))
+            return false;
+        var savedElement = LoadSavedTechnologyElement(normalizedOldName);
+
+        SetModifiedMode(true);
+        SelectTechnology(normalizedOldName);
+        await AwaitActiveEditorBuildCompletionAsync();
+        if (_current == null || !_currentOriginalName!.Equals(normalizedOldName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        _techNameBox.Text = normalizedNewName;
+        if (!await CommitCurrentTechnologyAsync())
+            return false;
+        if (await SaveAsync())
+            return true;
+        DiscardTechnologyChanges(normalizedNewName, savedElement);
+        return false;
     }
 
     private void RestorePendingStringState(
@@ -8730,13 +8937,20 @@ public partial class TechnologyEditorView : UserControl
 
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
 
+        var linkedMinorGodTechName = GetLinkedMinorGodTechnologyName(tech);
+        var hasLinkedMinorGod = false;
+
         IReadOnlyList<TechnologyReferenceUsage> references;
         try
         {
+            hasLinkedMinorGod = _hasLinkedMinorGod?.Invoke(linkedMinorGodTechName) == true;
             references = _original.ContainsKey(name)
                 ? []
                 : GetTechnologyReferences(name)
                     .Concat(_technologyDeletionReferenceProvider?.Invoke(name) ?? [])
+                    .Where(reference =>
+                        reference.TechnologyName.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+                        !reference.Field.Equals("Minor God technology", StringComparison.OrdinalIgnoreCase))
                     .DistinctBy(reference =>
                         $"{reference.Path}\0{reference.Owner}\0{reference.Field}",
                         StringComparer.OrdinalIgnoreCase)
@@ -8769,24 +8983,21 @@ public partial class TechnologyEditorView : UserControl
             return;
         }
 
-        var confirm = new Prompt(PromptType.Confirm, "Delete Technology", $"Are you sure you want to delete '{name}'?");
-        await confirm.ShowDialog(owner);
-        if (!confirm.Confirmed) return;
-
-        var relatedStringIds = tech.Elements()
-            .Where(e => TechnologyStringBackedTags.Contains(e.Name.LocalName, StringComparer.OrdinalIgnoreCase))
-            .Select(e => e.Value.Trim())
-            .Concat(tech.Descendants()
-                .Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase))
-                .Select(e => e.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("tooltipID", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? ""))
-            .Where(id => id.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var stringId in relatedStringIds)
+        if (hasLinkedMinorGod)
         {
-            _pendingStringUpdates.Remove(stringId);
-            _pendingStringRemovals.Add(stringId);
+            if (_confirmLinkedMinorGodRemovalAsync == null ||
+                !await _confirmLinkedMinorGodRemovalAsync(owner, linkedMinorGodTechName))
+                return;
+            _pendingMinorGodRemovals.Add(linkedMinorGodTechName);
         }
+        else
+        {
+            var confirm = new Prompt(PromptType.Confirm, "Delete Technology", $"Are you sure you want to delete '{name}'?");
+            await confirm.ShowDialog(owner);
+            if (!confirm.Confirmed) return;
+        }
+
+        QueueTechnologyLifecycleStringRemovals(tech);
         foreach (var effect in tech.Descendants().Where(e => e.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)).ToList())
             QueueEffectOwnedStringsForRemoval(effect);
 
@@ -8800,6 +9011,16 @@ public partial class TechnologyEditorView : UserControl
         ClearEditor();
         RefreshList();
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void QueueTechnologyLifecycleStringRemovals(XElement technology)
+    {
+        foreach (var stringId in CollectReferencedTechnologyStringIds(technology))
+        {
+            _pendingStringUpdates.Remove(stringId);
+            _pendingStringRemovals.Add(stringId);
+            _automaticStringRemovals.Add(stringId);
+        }
     }
 
     private void XmlPreviewToggle_Click(object? sender, RoutedEventArgs e)
@@ -8942,17 +9163,30 @@ public partial class TechnologyEditorView : UserControl
         {
             var stringUpdatesToSave = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
             var requestedStringRemovals = new HashSet<string>(_pendingStringRemovals, StringComparer.OrdinalIgnoreCase);
-            IReadOnlySet<string> approvedStringRemovals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (requestedStringRemovals.Count > 0 && TopLevel.GetTopLevel(this) is Window stringReviewOwner)
+            _automaticStringRemovals.IntersectWith(requestedStringRemovals);
+            var automaticStringRemovals = requestedStringRemovals
+                .Where(_automaticStringRemovals.Contains)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var reviewCandidates = requestedStringRemovals
+                .Where(id => !automaticStringRemovals.Contains(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            IReadOnlySet<string> reviewedStringRemovals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (reviewCandidates.Count > 0 && TopLevel.GetTopLevel(this) is Window stringReviewOwner)
             {
                 var review = new OrphanCleanupReviewWindow(
-                    requestedStringRemovals,
+                    reviewCandidates,
                     "Saving the current Technology changes");
                 await review.ShowDialog(stringReviewOwner);
-                approvedStringRemovals = review.SelectedIds;
+                reviewedStringRemovals = review.SelectedIds;
             }
+            var approvedStringRemovals = automaticStringRemovals
+                .Concat(reviewedStringRemovals)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var externallyReferencedStringIds = _externalStringReferenceProvider?.Invoke(approvedStringRemovals)
+                ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var stringRemovalsToSave = approvedStringRemovals
-                .Where(id => !IsStringIdReferencedByAnyTechnology(id))
+                .Where(id => !IsStringIdReferencedByAnyTechnology(id) &&
+                             !externallyReferencedStringIds.Contains(id))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var candidateDocument = new XDocument(_modDocument);
             var renamesToSave = _pendingTechnologyRenames.ToList();
@@ -8964,10 +9198,7 @@ public partial class TechnologyEditorView : UserControl
                 CanMigrate: true);
             foreach (var rename in renamesToSave)
             {
-                var localReferences = TechnologyReferenceIndex.Build([candidateSource], [rename.OldName])
-                    .Where(reference =>
-                        reference.TechnologyName.Equals(rename.OldName, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                var localReferences = TechnologyReferenceIndex.FindReferencesTo([candidateSource], rename.OldName);
                 var unknown = localReferences.Where(reference => !reference.IsRecognized).ToList();
                 if (unknown.Count > 0)
                 {
@@ -8993,6 +9224,11 @@ public partial class TechnologyEditorView : UserControl
                     return false;
                 }
             }
+
+            var minorGodLifecycle = _prepareMinorGodLifecycle?.Invoke(
+                candidateDocument,
+                renamesToSave,
+                _pendingMinorGodRemovals.ToList());
 
             foreach (var technology in candidateDocument.Root?.Elements().Where(e => e.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? [])
                 NormalizeChangedEffectAttributeOrder(technology);
@@ -9032,6 +9268,11 @@ public partial class TechnologyEditorView : UserControl
                 foreach (var state in externalMigration.ExpectedStates)
                     expectedStates[state.Key] = state.Value;
             }
+            if (minorGodLifecycle != null)
+            {
+                paths.Add(minorGodLifecycle.Path);
+                expectedStates[minorGodLifecycle.Path] = minorGodLifecycle.LoadedState;
+            }
 
             await FileIntegrityTransaction.ExecuteAsync(paths, expectedStates, async () =>
             {
@@ -9040,7 +9281,14 @@ public partial class TechnologyEditorView : UserControl
                     await _saveStringsAsync!(stringUpdatesToSave, stringRemovalsToSave);
                 externalMigration?.Save((document, path) =>
                     ProtoEditorWindow.SaveAbilityXmlDocument(document, path));
+                if (minorGodLifecycle != null)
+                    ProtoEditorWindow.SaveMinorGodXmlDocument(
+                        minorGodLifecycle.Document,
+                        minorGodLifecycle.Path);
             });
+
+            if (_technologySavedAsync != null)
+                await _technologySavedAsync(new XDocument(candidateDocument));
 
             if (externalMigration != null && _adoptTechnologyReferenceMigration != null)
                 _adoptTechnologyReferenceMigration(externalMigration);
@@ -9075,9 +9323,13 @@ public partial class TechnologyEditorView : UserControl
                     _pendingStringUpdates.Remove(update.Key);
             }
             foreach (var removal in requestedStringRemovals)
+            {
                 _pendingStringRemovals.Remove(removal);
+                _automaticStringRemovals.Remove(removal);
+            }
             foreach (var rename in renamesToSave)
                 _pendingTechnologyRenames.Remove(rename);
+            _pendingMinorGodRemovals.Clear();
             _savedModifiedTechnologyXml.Clear();
             foreach (var (name, xml) in savedTechnologyXml)
                 _savedModifiedTechnologyXml[name] = xml;
@@ -9235,6 +9487,8 @@ public partial class TechnologyEditorView : UserControl
             _savedModifiedTechnologyXml.Clear();
             foreach (var (name, xml) in externalBaseline)
                 _savedModifiedTechnologyXml[name] = xml;
+            foreach (var conflict in merge.ReplacedEditorChanges)
+                _pendingMinorGodRemovals.Remove(conflict);
             _loadedTechtreeFileState = FileIntegrityTransaction.CaptureState(_modTechtreePath);
             _effectsPendingDefaultInitialization.Clear();
             _openOnHitOptionalSelectors.Clear();

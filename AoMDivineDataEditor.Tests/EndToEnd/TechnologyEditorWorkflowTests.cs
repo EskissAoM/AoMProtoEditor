@@ -68,6 +68,21 @@ public sealed class TechnologyEditorWorkflowTests
     }
 
     [Fact]
+    public void Creating_minor_god_age_upgrade_does_not_duplicate_default_costs()
+    {
+        EnsureAvalonia();
+        using var fixture = new TechnologyEditorFixture("<techtreemods />");
+        var editor = CreateEditor(fixture, (_, _) => Task.CompletedTask);
+
+        Assert.True(CompleteOnDispatcher(() =>
+            editor.AddAgeUpgradeTechnologyAsync("ClassicalAgeExampleGod")));
+
+        var technology = FindTechnology(XDocument.Load(fixture.TechtreePath), "ClassicalAgeExampleGod");
+        Assert.Single(technology.Elements("flag"), flag => flag.Value == "AgeUpgrade");
+        Assert.Empty(technology.Elements("cost"));
+    }
+
+    [Fact]
     public void EditingOnePropertyDoesNotRewriteSiblingTechnologyOrUnknownPayload()
     {
         EnsureAvalonia();
@@ -165,6 +180,216 @@ public sealed class TechnologyEditorWorkflowTests
 
         Assert.False(writerCalled);
         Assert.Equal("STR_SHARED_NAME = Shared\r\n", File.ReadAllText(fixture.StringsPath));
+    }
+
+    [Fact]
+    public void RenamingTechnologyMovesExclusivelyOwnedStringsInsteadOfLeavingDuplicates()
+    {
+        EnsureAvalonia();
+        const string oldName = "MythicAgeNewMinorGodYeah2";
+        const string newName = "MythicAgeNewMinorGodYeah3";
+        const string oldDisplayId = "STR_TECH_MYTHIC_AGE_NEW_MINOR_GOD_YEAH2_NAME";
+        const string oldRolloverId = "STR_TECH_MYTHIC_AGE_NEW_MINOR_GOD_YEAH2_LR";
+        const string newDisplayId = "STR_TECH_MYTHIC_AGE_NEW_MINOR_GOD_YEAH3_NAME";
+        const string newRolloverId = "STR_TECH_MYTHIC_AGE_NEW_MINOR_GOD_YEAH3_LR";
+        using var fixture = new TechnologyEditorFixture($"""
+            <techtreemods>
+              <tech name="{oldName}">
+                <displaynameid>{oldDisplayId}</displaynameid>
+                <rollovertextid>{oldRolloverId}</rollovertextid>
+                <flag>AgeUpgrade</flag>
+              </tech>
+            </techtreemods>
+            """, $"{oldDisplayId} = New Minor God Yeah 2\r\n{oldRolloverId} = Rollover text\r\n");
+        IReadOnlyDictionary<string, string>? savedUpdates = null;
+        IReadOnlyCollection<string>? savedRemovals = null;
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [oldDisplayId] = "New Minor God Yeah 2",
+            [oldRolloverId] = "Rollover text"
+        };
+        var editor = CreateEditor(
+            fixture,
+            (updates, removals) =>
+            {
+                savedUpdates = new Dictionary<string, string>(updates, StringComparer.OrdinalIgnoreCase);
+                savedRemovals = removals.ToArray();
+                var source = File.ReadAllText(fixture.StringsPath);
+                var updated = StringTableDocument.Parse(source).Apply(
+                    updates,
+                    removals,
+                    StringTableSection.Technologies);
+                File.WriteAllText(fixture.StringsPath, updated, new UTF8Encoding(false));
+                return Task.CompletedTask;
+            },
+            resolveStringAsync: id => Task.FromResult(values.GetValueOrDefault(id)));
+
+        Assert.True(CompleteOnDispatcher(() => editor.RenameTechnologyAsync(oldName, newName)));
+
+        Assert.NotNull(savedUpdates);
+        Assert.Equal("New Minor God Yeah 2", savedUpdates![newDisplayId]);
+        Assert.Equal("Rollover text", savedUpdates[newRolloverId]);
+        Assert.DoesNotContain(oldDisplayId, savedUpdates.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(oldRolloverId, savedUpdates.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.NotNull(savedRemovals);
+        Assert.Contains(oldDisplayId, savedRemovals!, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(oldRolloverId, savedRemovals!, StringComparer.OrdinalIgnoreCase);
+
+        var savedTechnology = FindTechnology(XDocument.Load(fixture.TechtreePath), newName);
+        Assert.Equal(newDisplayId, savedTechnology.Element("displaynameid")?.Value);
+        Assert.Equal(newRolloverId, savedTechnology.Element("rollovertextid")?.Value);
+        var savedStrings = StringTableDocument.Parse(File.ReadAllText(fixture.StringsPath)).ToDictionary();
+        Assert.DoesNotContain(oldDisplayId, savedStrings.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(oldRolloverId, savedStrings.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("New Minor God Yeah 2", savedStrings[newDisplayId]);
+        Assert.Equal("Rollover text", savedStrings[newRolloverId]);
+    }
+
+    [Fact]
+    public void LifecycleStringRemovalPreservesAnIdReferencedOutsideTechnologyDocuments()
+    {
+        EnsureAvalonia();
+        const string stringId = "STR_TECH_DELETE_ME_NAME";
+        using var fixture = new TechnologyEditorFixture(
+            "<techtreemods />",
+            $"{stringId} = Keep me\r\n");
+        IReadOnlyCollection<string>? savedRemovals = null;
+        var editor = CreateEditor(
+            fixture,
+            (_, removals) =>
+            {
+                savedRemovals = removals.ToArray();
+                return Task.CompletedTask;
+            },
+            externalStringReferenceProvider: ids =>
+                ids.Contains(stringId, StringComparer.OrdinalIgnoreCase)
+                    ? new HashSet<string>([stringId], StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        GetPrivateField<HashSet<string>>(editor, "_pendingStringRemovals").Add(stringId);
+        GetPrivateField<HashSet<string>>(editor, "_automaticStringRemovals").Add(stringId);
+
+        Assert.True(CompleteOnDispatcher(editor.SaveAsync));
+
+        Assert.Null(savedRemovals);
+        Assert.Equal($"{stringId} = Keep me\r\n", File.ReadAllText(fixture.StringsPath));
+    }
+
+    [Fact]
+    public void ConfirmedTechnologyDeletionRemovesItsExclusivelyOwnedStrings()
+    {
+        EnsureAvalonia();
+        const string displayId = "STR_TECH_DELETE_ME_NAME";
+        const string rolloverId = "STR_TECH_DELETE_ME_LR";
+        using var fixture = new TechnologyEditorFixture(
+            $"<techtreemods><tech name=\"DeleteMe\"><displaynameid>{displayId}</displaynameid><rollovertextid>{rolloverId}</rollovertextid></tech></techtreemods>",
+            $"{displayId} = Delete me\r\n{rolloverId} = Delete rollover\r\n");
+        var editor = CreateEditor(fixture, (updates, removals) =>
+        {
+            var source = File.ReadAllText(fixture.StringsPath);
+            var updated = StringTableDocument.Parse(source).Apply(
+                updates,
+                removals,
+                StringTableSection.Technologies);
+            File.WriteAllText(fixture.StringsPath, updated, new UTF8Encoding(false));
+            return Task.CompletedTask;
+        });
+        var draft = GetDraftDocument(editor);
+        var technology = FindTechnology(draft, "DeleteMe");
+        InvokePrivate(editor, "QueueTechnologyLifecycleStringRemovals", technology);
+        technology.Remove();
+        GetPrivateField<Dictionary<string, XElement>>(editor, "_modified").Remove("DeleteMe");
+
+        Assert.True(CompleteOnDispatcher(editor.SaveAsync));
+
+        var savedStrings = StringTableDocument.Parse(File.ReadAllText(fixture.StringsPath)).ToDictionary();
+        Assert.DoesNotContain(displayId, savedStrings.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(rolloverId, savedStrings.Keys, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TechnologyRenameCommitsMinorGodAndStringLifecycleWithoutLosingUnmanagedContent()
+    {
+        EnsureAvalonia();
+        const string oldTechName = "MythicAgePreservedGod";
+        const string newTechName = "MythicAgeRenamedGod";
+        const string oldDisplayId = "STR_TECH_MYTHIC_AGE_PRESERVED_GOD_NAME";
+        const string oldRolloverId = "STR_TECH_MYTHIC_AGE_PRESERVED_GOD_LR";
+        using var fixture = new TechnologyEditorFixture($"""
+            <techtreemods custom="keep-tech-root">
+              <!-- keep technology comment -->
+              <tech name="{oldTechName}" future="yes">
+                <displaynameid>{oldDisplayId}</displaynameid>
+                <rollovertextid>{oldRolloverId}</rollovertextid>
+                <flag>AgeUpgrade</flag>
+                <futuretechnology><payload /></futuretechnology>
+              </tech>
+            </techtreemods>
+            """, $"// keep string comment\r\n{oldDisplayId} = Preserved God\r\n{oldRolloverId} = Preserved rollover\r\n");
+        File.WriteAllText(fixture.MinorGodsPath, $"""
+            <minorgodsmods custom="keep-minor-root">
+              <!-- keep minor comment -->
+              <{oldTechName} future="yes" portraitfilename="portrait.png">
+                <futureminor>42</futureminor>
+              </{oldTechName}>
+            </minorgodsmods>
+            """, new UTF8Encoding(false));
+        var stringValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [oldDisplayId] = "Preserved God",
+            [oldRolloverId] = "Preserved rollover"
+        };
+        var editor = CreateEditor(
+            fixture,
+            (updates, removals) =>
+            {
+                var encoded = PreservedTextEncoding.Decode(File.ReadAllBytes(fixture.StringsPath));
+                var updated = StringTableDocument.Parse(encoded.Text).Apply(
+                    updates,
+                    removals,
+                    StringTableSection.Technologies);
+                File.WriteAllBytes(fixture.StringsPath, encoded.Encode(updated));
+                return Task.CompletedTask;
+            },
+            resolveStringAsync: id => Task.FromResult(stringValues.GetValueOrDefault(id)),
+            prepareMinorGodLifecycle: (technologyDocument, renames, removals) =>
+            {
+                var prepared = ModDocumentPersistence.Prepare(
+                    fixture.MinorGodsPath,
+                    ModXmlDocumentKind.MinorGods);
+                MinorGodCatalog.ApplyTechnologyLifecycle(
+                    prepared.Document,
+                    technologyDocument,
+                    renames,
+                    removals);
+                return prepared;
+            });
+
+        Assert.True(CompleteOnDispatcher(() => editor.RenameTechnologyAsync(oldTechName, newTechName)));
+
+        var technologies = XDocument.Load(fixture.TechtreePath, LoadOptions.PreserveWhitespace);
+        var renamedTechnology = FindTechnology(technologies, newTechName);
+        Assert.Equal("keep-tech-root", (string?)technologies.Root?.Attribute("custom"));
+        Assert.Equal("yes", (string?)renamedTechnology.Attribute("future"));
+        Assert.NotNull(renamedTechnology.Element("futuretechnology")?.Element("payload"));
+        Assert.Contains(technologies.Root!.Nodes().OfType<XComment>(), comment =>
+            comment.Value.Contains("keep technology comment", StringComparison.Ordinal));
+
+        var minorGods = XDocument.Load(fixture.MinorGodsPath, LoadOptions.PreserveWhitespace);
+        var renamedMinorGod = MinorGodCatalog.FindDefinition(minorGods.Root!, newTechName);
+        Assert.NotNull(renamedMinorGod);
+        Assert.Equal("keep-minor-root", (string?)minorGods.Root?.Attribute("custom"));
+        Assert.Equal("yes", (string?)renamedMinorGod!.Attribute("future"));
+        Assert.Equal("42", renamedMinorGod.Element("futureminor")?.Value);
+        Assert.Contains(minorGods.Root!.Nodes().OfType<XComment>(), comment =>
+            comment.Value.Contains("keep minor comment", StringComparison.Ordinal));
+
+        var stringText = File.ReadAllText(fixture.StringsPath);
+        var strings = StringTableDocument.Parse(stringText).ToDictionary();
+        Assert.Contains("// keep string comment", stringText, StringComparison.Ordinal);
+        Assert.DoesNotContain(oldDisplayId, strings.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(oldRolloverId, strings.Keys, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("Preserved God", strings["STR_TECH_MYTHIC_AGE_RENAMED_GOD_NAME"]);
+        Assert.Equal("Preserved rollover", strings["STR_TECH_MYTHIC_AGE_RENAMED_GOD_LR"]);
     }
 
     [Fact]
@@ -345,8 +570,17 @@ public sealed class TechnologyEditorWorkflowTests
     private static TechnologyEditorView CreateEditor(
         TechnologyEditorFixture fixture,
         Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? saveStringsAsync = null,
-        IEnumerable<XDocument>? originalDocuments = null)
-        => AvaloniaTestHost.Run(() => fixture.CreateEditor(saveStringsAsync, originalDocuments));
+        IEnumerable<XDocument>? originalDocuments = null,
+        Func<string, Task<string?>>? resolveStringAsync = null,
+        Func<IEnumerable<string>, IReadOnlySet<string>>? externalStringReferenceProvider = null,
+        Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
+            prepareMinorGodLifecycle = null)
+        => AvaloniaTestHost.Run(() => fixture.CreateEditor(
+            saveStringsAsync,
+            originalDocuments,
+            resolveStringAsync,
+            externalStringReferenceProvider,
+            prepareMinorGodLifecycle));
 
     private static T CompleteOnDispatcher<T>(Func<Task<T>> action)
         => AvaloniaTestHost.RunAsync(action);
@@ -367,6 +601,13 @@ public sealed class TechnologyEditorWorkflowTests
                    ?.GetValue(instance)
                ?? throw new MissingFieldException(instance.GetType().FullName, name));
 
+    private static void InvokePrivate(object instance, string name, params object[] arguments)
+    {
+        var method = instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? throw new MissingMethodException(instance.GetType().FullName, name);
+        method.Invoke(instance, arguments);
+    }
+
     private static void EnsureAvalonia()
         => AvaloniaTestHost.EnsureStarted();
 
@@ -380,21 +621,30 @@ public sealed class TechnologyEditorWorkflowTests
             DirectoryPath = _workspace.RootPath;
             TechtreePath = _workspace.WriteText("techtree_mods.xml", technologyXml);
             StringsPath = _workspace.WriteText("stringmods.txt", strings);
+            MinorGodsPath = _workspace.WriteText("minor_gods_mods.xml", "<minorgodsmods />");
         }
 
         public string DirectoryPath { get; }
         public string TechtreePath { get; }
         public string StringsPath { get; }
+        public string MinorGodsPath { get; }
 
         public TechnologyEditorView CreateEditor(
             Func<IReadOnlyDictionary<string, string>, IReadOnlyCollection<string>, Task>? saveStringsAsync = null,
-            IEnumerable<XDocument>? originalDocuments = null)
+            IEnumerable<XDocument>? originalDocuments = null,
+            Func<string, Task<string?>>? resolveStringAsync = null,
+            Func<IEnumerable<string>, IReadOnlySet<string>>? externalStringReferenceProvider = null,
+            Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
+                prepareMinorGodLifecycle = null)
             => new(
                 originalDocuments,
                 baseGameplayDirectory: null,
                 TechtreePath,
+                resolveStringAsync,
                 saveStringsAsync: saveStringsAsync,
-                modStringsPath: StringsPath);
+                modStringsPath: StringsPath,
+                prepareMinorGodLifecycle: prepareMinorGodLifecycle,
+                externalStringReferenceProvider: externalStringReferenceProvider);
 
         public void Dispose() => _workspace.Dispose();
     }

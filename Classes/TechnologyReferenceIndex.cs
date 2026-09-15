@@ -11,6 +11,7 @@ public enum TechnologyReferenceDocumentKind
     UnitTransforms,
     Powers,
     MajorGods,
+    MinorGods,
     Tactics,
     Other
 }
@@ -50,7 +51,9 @@ public static class TechnologyReferenceIndex
 {
     private static readonly HashSet<string> LeafReferenceNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "tech", "technology", "associatedtech", "forbidtech", "requiredtech"
+        "tech", "technology", "associatedtech", "forbidtech", "requiredtech",
+        "deathmatchtech", "teamtech", "lightningtech", "storymodetech", "ludicrousmodetech",
+        "empirewarstech"
     };
 
     private static readonly HashSet<string> TechtreeValueEffectTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -94,6 +97,17 @@ public static class TechnologyReferenceIndex
         }
 
         return results;
+    }
+
+    public static IReadOnlyList<TechnologyReferenceUsage> FindReferencesTo(
+        IEnumerable<TechnologyReferenceSource> sources,
+        string technologyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(technologyName);
+        var normalized = technologyName.Trim();
+        return Build(sources, [normalized])
+            .Where(usage => usage.TechnologyName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     public static int RenameRecognizedReferences(
@@ -140,6 +154,20 @@ public static class TechnologyReferenceIndex
     {
         if (source.Document.Root == null)
             yield break;
+
+        if (source.Kind == TechnologyReferenceDocumentKind.MinorGods)
+        {
+            foreach (var minorGod in source.Document.Root.Elements())
+            {
+                yield return new ReferenceCandidate(
+                    minorGod.Name.LocalName,
+                    MinorGodCatalog.GetDisplayName(minorGod.Name.LocalName),
+                    "Minor God technology",
+                    true,
+                    value => minorGod.Name = minorGod.Name.Namespace + value);
+            }
+            yield break;
+        }
 
         var recognizedObjects = new HashSet<XObject>(ReferenceEqualityComparer.Instance);
         foreach (var element in source.Document.Descendants())

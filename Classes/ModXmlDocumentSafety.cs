@@ -13,6 +13,9 @@ public enum ModXmlDocumentKind
     Tactics,
     UnitTypes,
     TechTypes,
+    Cultures,
+    MajorGods,
+    MinorGods,
 }
 
 public enum ModXmlValidationSeverity
@@ -72,6 +75,9 @@ public static class ModXmlDocumentSafety
             [ModXmlDocumentKind.Tactics] = "tactics",
             [ModXmlDocumentKind.UnitTypes] = "abstractunittypesmods",
             [ModXmlDocumentKind.TechTypes] = "techtypesmods",
+            [ModXmlDocumentKind.Cultures] = "culturesmods",
+            [ModXmlDocumentKind.MajorGods] = "civsmods",
+            [ModXmlDocumentKind.MinorGods] = "minorgodsmods",
         };
 
     private static readonly HashSet<string> ProtoSingletonElements = new(NameComparer)
@@ -111,6 +117,56 @@ public static class ModXmlDocumentSafety
         "unitaction", "rangeindicator", "cursortype", "activetime", "radius",
         "explicitlyrestrictedplacementtargettype", "replacerolloverid", "replaceicon",
         "allowduringnorush", "onlyfromstealth", "notblockable"
+    };
+
+    private static readonly HashSet<string> CultureSingletonElements = new(NameComparer)
+    {
+        "name", "displaynameid", "compendiumimage", "compendiumtopic", "replaypanelbackground"
+    };
+
+    private static readonly HashSet<string> MajorGodSingletonElements = new(NameComparer)
+    {
+        "name", "statsid", "key", "culture", "displaynameid", "rollovernameid", "titleid",
+        "agetech", "deathmatchtech", "teamtech", "empirewarstech", "icon", "portrait",
+        "breakoutportrait", "minimapborderimage", "backgroundscenario", "buildingefficiency",
+        "extrabuildingefficiency", "buildingrepairfactor", "secondaryprayerefficiency",
+        "partisans", "devotioncommands", "shades", "terraincreeps", "bonusunitspawning",
+        "bountyresourceearning", "timeshifting", "buildingchain", "combatxp",
+        "oncastpowercostfactor"
+    };
+
+    private static readonly HashSet<string> AgeTechSingletonElements = new(NameComparer)
+    {
+        "tech"
+    };
+
+    private static readonly HashSet<string> ShadesSingletonElements = new(NameComparer)
+    {
+        "protounit", "chance", "delay", "maxqueued"
+    };
+
+    private static readonly HashSet<string> BuildingChainSingletonElements = new(NameComparer)
+    {
+        "anchor", "abundancevfx", "autobuildvfx", "resourcegeneration"
+    };
+
+    private static readonly HashSet<string> BountySingletonElements = new(NameComparer)
+    {
+        "active", "bountydamagegoal", "bountyreductionstart", "bountyreductionend",
+        "bountyreductionstrength", "vfx"
+    };
+
+    private static readonly HashSet<string> BonusGoalSingletonElements = new(NameComparer)
+    {
+        "active", "goalamount", "spawnlocation", "displayonhud", "displayinfo",
+        "forcespawn", "agerestricted", "culturerestricted", "archaicspawn",
+        "currentageonly", "nextageonly", "ignoreageroll"
+    };
+
+    private static readonly HashSet<string> BonusDisplayInfoSingletonElements = new(NameComparer)
+    {
+        "displaynameid", "rolloverid", "progresstype", "icon", "progresstooltipid",
+        "nextunittooltipid", "notificationsound", "notificationmessageid"
     };
 
     public static SafeModXmlLoadResult LoadExisting(
@@ -206,6 +262,29 @@ public static class ModXmlDocumentSafety
                 ValidateTextEntries(root, "techtype", "technology type", issues);
                 WarnUnknownRootChildren(root, ["techtype"], issues);
                 break;
+            case ModXmlDocumentKind.Cultures:
+                ValidateNamedChildEntries(root, "culture", "culture", "name", CultureSingletonElements, issues);
+                WarnUnknownRootChildren(root, ["culture"], issues);
+                break;
+            case ModXmlDocumentKind.MajorGods:
+                ValidateNamedChildEntries(root, "civ", "major god", "name", MajorGodSingletonElements, issues, ValidateMajorGod);
+                WarnUnknownRootChildren(root, ["civ"], issues);
+                break;
+            case ModXmlDocumentKind.MinorGods:
+                AddDuplicateNames(issues, "minor god", root.Elements().Select(element => element.Name.LocalName));
+                AddDuplicateNames(
+                    issues,
+                    "minor god display name",
+                    root.Elements().Select(element => MinorGodCatalog.GetDisplayName(element.Name.LocalName)));
+                foreach (var minorGod in root.Elements())
+                {
+                    ValidateDuplicateAttributes(
+                        minorGod,
+                        $"Minor god '{MinorGodCatalog.GetDisplayName(minorGod.Name.LocalName)}'",
+                        [MinorGodCatalog.PortraitAttribute, MinorGodCatalog.IconAttribute],
+                        issues);
+                }
+                break;
         }
 
         return new ModXmlDocumentValidation(issues.Distinct().ToList());
@@ -234,6 +313,160 @@ public static class ModXmlDocumentSafety
 
         AddDuplicateNames(issues, $"Unit '{name}' action", namedActions);
     }
+
+    private static void ValidateMajorGod(XElement entry, string name, List<ModXmlValidationIssue> issues)
+    {
+        var owner = $"Major god '{name}'";
+        if (FindDirect(entry, "agetech") is { } ageTech)
+        {
+            ValidateDuplicateSingletons(ageTech, $"{owner} Age Tech", AgeTechSingletonElements, issues);
+            ValidateDuplicateAttributes(ageTech, $"{owner} Age Tech", ["age"], issues);
+        }
+        if (FindDirect(entry, "secondaryprayerefficiency") is { } prayer)
+            ValidateDuplicateAttributes(prayer, $"{owner} Secondary Prayer Efficiency", ["g", "v", "z"], issues);
+        if (FindDirect(entry, "shades") is { } shades)
+            ValidateDuplicateSingletons(shades, $"{owner} Shades", ShadesSingletonElements, issues);
+        if (FindDirect(entry, "buildingchain") is { } buildingChain)
+            ValidateDuplicateSingletons(buildingChain, $"{owner} BuildingChain", BuildingChainSingletonElements, issues);
+        if (FindDirect(entry, "bountyresourceearning") is { } bounty)
+            ValidateDuplicateSingletons(bounty, $"{owner} BountyResourceEarning", BountySingletonElements, issues);
+
+        ValidateModeGroups(entry, owner, "startingunits", issues);
+        ValidateModeGroups(entry, owner, "startingqueue", issues);
+        ValidateModeGroups(entry, owner, "startingresources", issues);
+        foreach (var group in Direct(entry, "startingunits").Concat(Direct(entry, "startingqueue")))
+        {
+            ValidateDuplicateAttributes(group, $"{owner} <{group.Name.LocalName}>", ["mode"], issues);
+            foreach (var unit in Direct(group, "unit"))
+            {
+                ValidateDuplicateAttributes(
+                    unit,
+                    $"{owner} <{group.Name.LocalName}> unit '{GetDirectText(unit)}'",
+                    ["count", "delay", "x", "y", "z", "autotrain", "prequeue"],
+                    issues);
+            }
+        }
+        foreach (var resources in Direct(entry, "startingresources"))
+        {
+            ValidateDuplicateAttributes(resources, $"{owner} <startingresources>", ["mode"], issues);
+            foreach (var duplicate in resources.Elements()
+                         .GroupBy(element => element.Name.LocalName, NameComparer)
+                         .Where(group => group.Count() > 1))
+            {
+                AddError(
+                    issues,
+                    $"{owner} Starting Resources '{GetMode(resources)}'",
+                    $"contains {duplicate.Count()} <{duplicate.Key}> entries; a resource can occur only once per mode.");
+            }
+        }
+
+        if (FindDirect(entry, "bonusunitspawning") is { } bonus)
+        {
+            var goals = bonus.Elements().Where(IsBonusGoal).ToList();
+            AddDuplicateNames(
+                issues,
+                $"{owner} BonusUnitSpawning goal",
+                goals.Select(goal => GetAttribute(goal, "name")).Where(value => value.Length > 0));
+            foreach (var goal in goals)
+            {
+                var goalName = GetAttribute(goal, "name");
+                var goalOwner = $"{owner} BonusUnitSpawning goal '{(goalName.Length == 0 ? "(unnamed)" : goalName)}'";
+                ValidateDuplicateSingletons(goal, goalOwner, BonusGoalSingletonElements, issues);
+                ValidateDuplicateAttributes(goal, goalOwner, ["name", "rewardtracking"], issues);
+                foreach (var spawn in Direct(goal, "spawnlocation"))
+                    ValidateDuplicateAttributes(spawn, $"{goalOwner} Spawn Location", ["type", "landbuilding", "waterbuilding"], issues);
+                foreach (var contributor in Direct(goal, "contributor"))
+                    ValidateDuplicateAttributes(contributor, $"{goalOwner} Contributor", ["unit", "type", "resource"], issues);
+                foreach (var cost in Direct(goal, "rewardpointcost"))
+                    ValidateDuplicateAttributes(cost, $"{goalOwner} Reward Point Cost", ["resourcetype"], issues);
+                ValidateDuplicateKeyedChildren(goal, goalOwner, "rewardpointcost", "resourcetype", issues);
+                if (FindDirect(goal, "displayinfo") is { } displayInfo)
+                    ValidateDuplicateSingletons(displayInfo, $"{goalOwner} Display info", BonusDisplayInfoSingletonElements, issues);
+            }
+        }
+
+        if (FindDirect(entry, "terraincreeps") is { } terrainCreeps)
+        {
+            foreach (var creep in Direct(terrainCreeps, "terraincreep"))
+            {
+                ValidateDuplicateAttributes(
+                    creep,
+                    $"{owner} Terrain Creep",
+                    ["creep", "maxradius", "growthrate", "decayrate", "strength", "minupdateinterval",
+                     "maxupdateinterval", "avoidunbuildable", "avoidimpassable", "avoidshallowwater",
+                     "allowdisconnectedgrowth", "buildability", "preventplacement"],
+                    issues);
+            }
+        }
+
+        if (FindDirect(entry, "timeshifting") is { } timeShifting)
+        {
+            ValidateDuplicateAttributes(timeShifting, $"{owner} TimeShifting", ["maxconcurrenttimeshifts"], issues);
+            foreach (var unit in Direct(timeShifting, "protounit"))
+                ValidateDuplicateAttributes(unit, $"{owner} TimeShifting unit '{GetDirectText(unit)}'", ["costratio", "timeratio"], issues);
+        }
+
+        if (FindDirect(entry, "buildingchain") is { } chain)
+        {
+            if (FindDirect(chain, "anchor") is { } anchor)
+                ValidateDuplicateAttributes(anchor, $"{owner} BuildingChain Anchor", ["vfx"], issues);
+            foreach (var vfx in Direct(chain, "abundancevfx").Concat(Direct(chain, "autobuildvfx")))
+                ValidateDuplicateAttributes(vfx, $"{owner} BuildingChain <{vfx.Name.LocalName}>", ["small", "medium", "large"], issues);
+            foreach (var generation in Direct(chain, "resourcegeneration"))
+            foreach (var tier in Direct(generation, "tilerateperminutetier"))
+                ValidateDuplicateAttributes(tier, $"{owner} BuildingChain resource tier", ["resource", "mintiles"], issues);
+            foreach (var building in Direct(chain, "chainablebuilding"))
+                ValidateDuplicateAttributes(building, $"{owner} Chainable Building '{GetDirectText(building)}'", ["chainradius", "generationresource"], issues);
+        }
+
+        if (FindDirect(entry, "bountyresourceearning") is { } bountySystem)
+        {
+            foreach (var reward in Direct(bountySystem, "bountyreward"))
+                ValidateDuplicateAttributes(reward, $"{owner} Bounty Reward", ["condition", "protounit", "unittype", "resourcetype", "combatxp", "multiplybyunitcost", "asspawnedunit"], issues);
+            foreach (var multiplier in Direct(bountySystem, "bountytargetmultiplier"))
+                ValidateDuplicateAttributes(multiplier, $"{owner} Bounty Target Multiplier", ["condition", "protounit", "unittype", "resourcetype", "combatxp", "attackertype", "relativity"], issues);
+            foreach (var research in Direct(bountySystem, "researchreward").Concat(Direct(bountySystem, "researchcostmultiplier")))
+                ValidateDuplicateAttributes(research, $"{owner} Bounty <{research.Name.LocalName}>", ["techtype", "resourcetype", "combatxp"], issues);
+        }
+    }
+
+    private static void ValidateModeGroups(
+        XElement entry,
+        string owner,
+        string groupName,
+        List<ModXmlValidationIssue> issues)
+    {
+        foreach (var duplicate in Direct(entry, groupName)
+                     .GroupBy(GetMode, NameComparer)
+                     .Where(group => group.Count() > 1))
+        {
+            AddError(
+                issues,
+                owner,
+                $"contains {duplicate.Count()} <{groupName}> groups for mode '{duplicate.Key}'.");
+        }
+    }
+
+    private static string GetMode(XElement group)
+    {
+        var mode = GetAttribute(group, "mode");
+        return mode.Length == 0 ? "supremacy" : mode;
+    }
+
+    private static IEnumerable<XElement> Direct(XElement owner, string name)
+        => owner.Elements().Where(element => IsNamed(element, name));
+
+    private static XElement? FindDirect(XElement owner, string name)
+        => Direct(owner, name).FirstOrDefault();
+
+    private static string GetAttribute(XElement element, string name)
+        => element.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+
+    private static bool IsBonusGoal(XElement element)
+        => element.Name.LocalName.Equals("damagegoal", StringComparison.OrdinalIgnoreCase) ||
+           element.Name.LocalName.Equals("deathgoal", StringComparison.OrdinalIgnoreCase) ||
+           element.Name.LocalName.Equals("resourcegoal", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateAbilityAssociations(XElement root, List<ModXmlValidationIssue> issues)
     {
@@ -333,7 +566,8 @@ public static class ModXmlDocumentSafety
         string objectKind,
         string identifierElement,
         HashSet<string> singletonElements,
-        List<ModXmlValidationIssue> issues)
+        List<ModXmlValidationIssue> issues,
+        Action<XElement, string, List<ModXmlValidationIssue>>? additionalValidation = null)
     {
         var direct = root.Elements().Where(element => IsNamed(element, entryName)).ToList();
         var nested = root.Descendants().Where(element => IsNamed(element, entryName)).Except(direct).ToList();
@@ -349,6 +583,7 @@ public static class ModXmlDocumentSafety
             else
                 names.Add(name);
             ValidateDuplicateSingletons(entry, $"{objectKind} '{name}'", singletonElements, issues);
+            additionalValidation?.Invoke(entry, name.Length == 0 ? "(unnamed)" : name, issues);
         }
         AddDuplicateNames(issues, objectKind, names);
     }
@@ -385,6 +620,24 @@ public static class ModXmlDocumentSafety
                      .Where(group => group.Count() > 1))
         {
             AddError(issues, objectName, $"contains {duplicate.Count()} <{elementName}> entries for '{duplicate.Key}'.");
+        }
+    }
+
+    private static void ValidateDuplicateAttributes(
+        XElement owner,
+        string objectName,
+        IReadOnlyCollection<string> managedNames,
+        List<ModXmlValidationIssue> issues)
+    {
+        foreach (var duplicate in owner.Attributes()
+                     .Where(attribute => managedNames.Contains(attribute.Name.LocalName, NameComparer))
+                     .GroupBy(attribute => attribute.Name.LocalName, NameComparer)
+                     .Where(group => group.Count() > 1))
+        {
+            AddError(
+                issues,
+                objectName,
+                $"contains {duplicate.Count()} '{duplicate.Key}' attributes, but the editor manages that attribute as a single value.");
         }
     }
 

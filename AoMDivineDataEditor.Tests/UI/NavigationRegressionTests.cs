@@ -138,7 +138,9 @@ public sealed class NavigationRegressionTests
         Assert.Contains("IsEnabled = isModified", code, StringComparison.Ordinal);
         Assert.Contains("ActivateContextEntityAsync", code, StringComparison.Ordinal);
         Assert.Contains("AddUnitAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
-        Assert.Contains("AddTechnologyAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
+        Assert.Contains("AddTechnologyFromBrowserAsync(duplicateSelected: true)", code, StringComparison.Ordinal);
+        Assert.Contains("await AddTechnologyFromBrowserAsync(duplicateSelected: false)", code, StringComparison.Ordinal);
+        Assert.Contains("_documentTabActivationInProgress = true;", code, StringComparison.Ordinal);
         Assert.DoesNotContain("Do you want to DUPLICATE the selected unit", code, StringComparison.Ordinal);
         Assert.Equal("New", (string?)entityAddButton.Attribute("Content"));
         var standaloneTechnologyAdd = technologyXaml.Descendants()
@@ -158,6 +160,11 @@ public sealed class NavigationRegressionTests
         Assert.Contains("await CaptureCurrentUnitDraftAsync()", code, StringComparison.Ordinal);
         Assert.Contains("RenameOpenDocumentTabs", code, StringComparison.Ordinal);
         Assert.Contains("RemoveDeletedDocumentTabs", code, StringComparison.Ordinal);
+        Assert.Contains("if (string.IsNullOrWhiteSpace(_technologyView.CurrentTechnologyName))", code, StringComparison.Ordinal);
+        Assert.Contains("HideEmptyDocumentPlaceholder();", code, StringComparison.Ordinal);
+        Assert.Contains("EditorEntityKind.Technologies,\n                _technologyView.IsModifiedMode,\n                entityName: null", code.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("if (string.IsNullOrWhiteSpace(_mainDocumentTab.EntityName))", code, StringComparison.Ordinal);
+        Assert.Contains("ShowEmptyDocumentState(_mainDocumentTab.EntityKind)", code, StringComparison.Ordinal);
         Assert.Contains("ResetDocumentTabs", code, StringComparison.Ordinal);
         Assert.Contains("RefreshDocumentTabHeaders();", code, StringComparison.Ordinal);
         Assert.Contains("IsTechnologyDirty", technologyCode, StringComparison.Ordinal);
@@ -383,7 +390,7 @@ public sealed class NavigationRegressionTests
 
         Assert.Contains(": base(initializeProtoEditor: false)", tacticsCode, StringComparison.Ordinal);
         Assert.Contains(": base(gameData, initializeProtoEditor: false)", abilitiesCode, StringComparison.Ordinal);
-        Assert.Equal(2, Regex.Matches(editorCode, @"HideEmptyDocumentPlaceholder\(\);").Count);
+        Assert.Equal(4, Regex.Matches(editorCode, @"HideEmptyDocumentPlaceholder\(\);").Count);
         Assert.Contains("private void HideEmptyDocumentPlaceholder()", editorCode, StringComparison.Ordinal);
         Assert.Contains("_emptyDocumentOverlay.IsVisible = false;", editorCode, StringComparison.Ordinal);
         Assert.Contains("await _pendingAbilityEditorLoadTask;", editorCode, StringComparison.Ordinal);

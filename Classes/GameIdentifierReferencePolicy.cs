@@ -7,6 +7,8 @@ public enum GameIdentifierKind
     ProtoUnit,
     UnitType,
     TechType,
+    Culture,
+    MajorGod,
     Ability,
     ProtoUnitCommand,
     Tactics
@@ -88,6 +90,16 @@ public static class GameIdentifierReferencePolicy
     {
         "command", "optionalcommand", "transformcommand", "prereqcommand", "sharedcommand",
         "removecommandprequeueonprequeue"
+    };
+
+    private static readonly HashSet<string> MajorGodMixedUnitReferenceElements = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "targetunit", "anchor", "chainablebuilding", "excludedtarget", "reward", "excludefromreward"
+    };
+
+    private static readonly HashSet<string> MajorGodMixedUnitReferenceAttributes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "preventplacement", "landbuilding", "waterbuilding", "attackertype"
     };
 
     public static int RenameReferences(
@@ -261,9 +273,12 @@ public static class GameIdentifierReferencePolicy
             if (elementName.Equals("unit", StringComparison.OrdinalIgnoreCase) ||
                 elementName.Equals("tech", StringComparison.OrdinalIgnoreCase) ||
                 elementName.Equals("power", StringComparison.OrdinalIgnoreCase) ||
-                elementName.Equals("majorgod", StringComparison.OrdinalIgnoreCase))
+                elementName.Equals("majorgod", StringComparison.OrdinalIgnoreCase) ||
+                elementName.Equals("civ", StringComparison.OrdinalIgnoreCase))
             {
                 var name = GetAttribute(candidate, "name")?.Value.Trim();
+                name ??= candidate.Elements().FirstOrDefault(child =>
+                    child.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim();
                 if (!string.IsNullOrWhiteSpace(name))
                     return name;
             }
@@ -516,6 +531,13 @@ public static class GameIdentifierReferencePolicy
         var name = element.Name.LocalName;
         if (kind == GameIdentifierKind.ProtoUnit && ProtoUnitElementNames.Contains(name))
             return true;
+        if ((kind == GameIdentifierKind.ProtoUnit || kind == GameIdentifierKind.UnitType) &&
+            IsWithinMajorGodDefinition(element) && MajorGodMixedUnitReferenceElements.Contains(name))
+            return true;
+        if (kind == GameIdentifierKind.ProtoUnit && IsWithinMajorGodDefinition(element) &&
+            (name.Equals("protounit", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("vfx", StringComparison.OrdinalIgnoreCase)))
+            return true;
         if (kind == GameIdentifierKind.ProtoUnit && UnitTypeElementNames.Contains(name) && IsTechnologyField(element))
             return true;
         if (kind == GameIdentifierKind.UnitType && UnitTypeElementNames.Contains(name))
@@ -523,6 +545,14 @@ public static class GameIdentifierReferencePolicy
         if (kind == GameIdentifierKind.TechType &&
             name.Equals("techtype", StringComparison.OrdinalIgnoreCase) &&
             !IsDefinitionElement(element, kind))
+            return true;
+        if (kind == GameIdentifierKind.Culture &&
+            (name.Equals("culture", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("culturename", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (kind == GameIdentifierKind.MajorGod &&
+            (name.Equals("majorgod", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("civname", StringComparison.OrdinalIgnoreCase)))
             return true;
         if (kind == GameIdentifierKind.Ability && AbilityReferenceElements.Contains(name))
             return !(name.Equals("power", StringComparison.OrdinalIgnoreCase) &&
@@ -552,11 +582,35 @@ public static class GameIdentifierReferencePolicy
         if (kind == GameIdentifierKind.ProtoUnit && ProtoUnitAttributeNames.Contains(name))
             return !(owner.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase) &&
                      name.Equals("unit", StringComparison.OrdinalIgnoreCase));
+        if ((kind == GameIdentifierKind.ProtoUnit || kind == GameIdentifierKind.UnitType) &&
+            IsWithinMajorGodDefinition(owner) && MajorGodMixedUnitReferenceAttributes.Contains(name))
+            return true;
+        if (kind == GameIdentifierKind.ProtoUnit && IsWithinMajorGodDefinition(owner) &&
+            (name.Equals("protounit", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("vfx", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("small", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("medium", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("large", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("asspawnedunit", StringComparison.OrdinalIgnoreCase) ||
+             owner.Name.LocalName.Equals("contributor", StringComparison.OrdinalIgnoreCase) &&
+             name.Equals("unit", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (kind == GameIdentifierKind.UnitType && IsWithinMajorGodDefinition(owner) &&
+            owner.Name.LocalName.Equals("contributor", StringComparison.OrdinalIgnoreCase) &&
+            name.Equals("type", StringComparison.OrdinalIgnoreCase))
+            return true;
         if (kind == GameIdentifierKind.ProtoUnit && UnitTypeAttributeNames.Contains(name) && IsTechnologyField(owner))
             return true;
         if (kind == GameIdentifierKind.UnitType && UnitTypeAttributeNames.Contains(name))
             return true;
         if (kind == GameIdentifierKind.TechType && name.Equals("techtype", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (kind == GameIdentifierKind.Culture && name.Equals("culture", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (kind == GameIdentifierKind.MajorGod &&
+            (name.Equals("civname", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("uishowifmajorgod", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("civ", StringComparison.OrdinalIgnoreCase) && IsTechnologyField(owner)))
             return true;
         if (kind == GameIdentifierKind.Ability &&
             (name.Equals("ability", StringComparison.OrdinalIgnoreCase) ||
@@ -620,6 +674,11 @@ public static class GameIdentifierReferencePolicy
             candidate.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase) &&
             GetAttribute(candidate, "name") != null);
 
+    private static bool IsWithinMajorGodDefinition(XElement element)
+        => element.AncestorsAndSelf().Any(candidate =>
+            candidate.Name.LocalName.Equals("civ", StringComparison.OrdinalIgnoreCase) &&
+            candidate.Elements().Any(child => child.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase)));
+
     private static bool IsDefinitionElement(XElement element, GameIdentifierKind kind)
     {
         // Definition catalogs occupy a separate identifier namespace. A Unit and
@@ -635,6 +694,10 @@ public static class GameIdentifierReferencePolicy
         return kind switch
         {
             GameIdentifierKind.UnitType => element.Name.LocalName.Equals("abstractunittype", StringComparison.OrdinalIgnoreCase),
+            GameIdentifierKind.Culture => element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+                                          element.Parent?.Name.LocalName.Equals("culture", StringComparison.OrdinalIgnoreCase) == true,
+            GameIdentifierKind.MajorGod => element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+                                           element.Parent?.Name.LocalName.Equals("civ", StringComparison.OrdinalIgnoreCase) == true,
             GameIdentifierKind.ProtoUnitCommand => element.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
                                                    element.Parent?.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) == true,
             _ => false
@@ -666,6 +729,11 @@ public static class GameIdentifierReferencePolicy
                   name.Equals("unit", StringComparison.OrdinalIgnoreCase)
                 : kind == GameIdentifierKind.TechType
                     ? name.Contains("techtype", StringComparison.OrdinalIgnoreCase)
+                    : kind == GameIdentifierKind.Culture
+                        ? name.Contains("culture", StringComparison.OrdinalIgnoreCase)
+                    : kind == GameIdentifierKind.MajorGod
+                        ? name.Contains("majorgod", StringComparison.OrdinalIgnoreCase) ||
+                          name.Contains("civname", StringComparison.OrdinalIgnoreCase)
                     : kind == GameIdentifierKind.Ability
                         ? name.Contains("ability", StringComparison.OrdinalIgnoreCase) ||
                           name.Contains("power", StringComparison.OrdinalIgnoreCase)
