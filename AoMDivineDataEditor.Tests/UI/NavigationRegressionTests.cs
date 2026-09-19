@@ -26,7 +26,8 @@ public sealed class NavigationRegressionTests
             element.Attribute("IsEnabled") == null);
         Assert.Contains(xaml.Descendants(), element =>
             (string?)element.Attribute("Content") == "Powers" &&
-            (string?)element.Attribute("IsEnabled") == "False");
+            (string?)element.Attribute("Click") == "PowersEntity_Click" &&
+            element.Attribute("IsEnabled") == null);
 
         var selectorContainer = xaml.Descendants().Single(element =>
             element.Attributes().Any(attribute =>
@@ -207,6 +208,7 @@ public sealed class NavigationRegressionTests
         Assert.Contains("<Setter Property=\"Height\" Value=\"6\" />", xamlText, StringComparison.Ordinal);
         Assert.Contains("<Border Padding=\"0,0,0,14\">", xamlText, StringComparison.Ordinal);
         Assert.Contains("EditorEntityKind.MajorGods => \"Major God\"", code, StringComparison.Ordinal);
+        Assert.Contains("EditorEntityKind.Powers => \"Power\"", code, StringComparison.Ordinal);
         Assert.Contains("var source = tab.IsModified ? \"Custom\" : \"Original\";", code, StringComparison.Ordinal);
         Assert.Contains("$\"{kind}: {tab.EntityName} ({source})\"", code, StringComparison.Ordinal);
         Assert.Contains("MaxWidth = 170", code, StringComparison.Ordinal);
@@ -390,7 +392,7 @@ public sealed class NavigationRegressionTests
 
         Assert.Contains(": base(initializeProtoEditor: false)", tacticsCode, StringComparison.Ordinal);
         Assert.Contains(": base(gameData, initializeProtoEditor: false)", abilitiesCode, StringComparison.Ordinal);
-        Assert.Equal(4, Regex.Matches(editorCode, @"HideEmptyDocumentPlaceholder\(\);").Count);
+        Assert.Equal(5, Regex.Matches(editorCode, @"HideEmptyDocumentPlaceholder\(\);").Count);
         Assert.Contains("private void HideEmptyDocumentPlaceholder()", editorCode, StringComparison.Ordinal);
         Assert.Contains("_emptyDocumentOverlay.IsVisible = false;", editorCode, StringComparison.Ordinal);
         Assert.Contains("await _pendingAbilityEditorLoadTask;", editorCode, StringComparison.Ordinal);
@@ -580,7 +582,10 @@ public sealed class NavigationRegressionTests
         Assert.Contains("FilterMode = AutoCompleteFilterMode.Contains", helper.Value, StringComparison.Ordinal);
         Assert.Contains("selectAllOnFirstClick: false", helper.Value, StringComparison.Ordinal);
         Assert.Contains("FreezeEditorScrollWhileDropDownIsOpen(acb, _editorScroll);", helper.Value, StringComparison.Ordinal);
-        Assert.Contains("autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor", code, StringComparison.Ordinal);
+        Assert.Contains("EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(autoCompleteBox, ownerScroll)",
+            code, StringComparison.Ordinal);
+        Assert.Contains("autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor", autoCompleteCode,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("KeepDropDownAnchoredDuringOwnerScroll", autoCompleteCode, StringComparison.Ordinal);
     }
 

@@ -104,6 +104,12 @@ public partial class MajorGodEditorView : UserControl
     public event EventHandler? DirtyStateChanged;
     public event EventHandler? Saved;
 
+    public void AcknowledgeStringFileSavedByEditor()
+    {
+        if (!string.IsNullOrWhiteSpace(_modStringsPath))
+            _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+    }
+
     public MajorGodEditorView() : this([], null)
     {
     }

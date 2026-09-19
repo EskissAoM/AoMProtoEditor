@@ -955,10 +955,15 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
     public void AdditionalAttributePicker_UsesSharedOpenAndAttachedScrollBehavior()
     {
         var source = ReadProtoEditorSource();
+        var autoCompleteSource = File.ReadAllText(Path.Combine(ProjectSource.RootPath,
+            "Classes", "EditorAutoCompleteService.cs"));
 
         Assert.Contains("EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);", source, StringComparison.Ordinal);
         Assert.Contains("FreezeEditorScrollWhileDropDownIsOpen(pickerAcb, _editorScroll);", source, StringComparison.Ordinal);
-        Assert.Contains("autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor", source, StringComparison.Ordinal);
+        Assert.Contains("EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(autoCompleteBox, ownerScroll)",
+            source, StringComparison.Ordinal);
+        Assert.Contains("autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor", autoCompleteSource,
+            StringComparison.Ordinal);
         Assert.Contains("new ColumnDefinitions(\"Auto, Auto, Auto\")", source, StringComparison.Ordinal);
         Assert.Contains("Margin = new Thickness(2, 0, 0, 0)", source, StringComparison.Ordinal);
     }

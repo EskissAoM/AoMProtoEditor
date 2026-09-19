@@ -7,6 +7,7 @@ public enum StringTableSection
 {
     Units,
     Abilities,
+    Powers,
     Technologies,
     MajorGods,
     Cultures,
@@ -285,6 +286,7 @@ public sealed partial class StringTableDocument
     {
         StringTableSection.Units => "Units",
         StringTableSection.Abilities => "Abilities",
+        StringTableSection.Powers => "Powers",
         StringTableSection.Technologies => "Technologies",
         StringTableSection.MajorGods => "Major Gods",
         StringTableSection.Cultures => "Cultures",

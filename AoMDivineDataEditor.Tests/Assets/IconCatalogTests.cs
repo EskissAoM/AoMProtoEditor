@@ -71,6 +71,24 @@ public sealed class IconCatalogTests
         Assert.DoesNotContain(result, path => path.EndsWith(".dds", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(@"aztec\static_color\god_powers\agave_bloom_icon.png",
+        @"resources\aztec\static_color\god_powers\agave_bloom_icon.png")]
+    [InlineData(@"resources\greek\static_color\god_powers\underworld_passage_icon.png",
+        @"greek\static_color\god_powers\underworld_passage_icon.png")]
+    public void ResourcePathAliasesKeepTheOriginalPathFirst(string original, string fallback)
+    {
+        Assert.Equal([original, fallback], IconCatalog.EnumerateResourcePathAliases(original));
+    }
+
+    [Fact]
+    public void ResourceRelativeIconPathRemovesOnlyTheRootFolder()
+    {
+        Assert.Equal(@"aztec\static_color\god_powers\agave_bloom_icon.png",
+            IconCatalog.ToResourceRelativePath(
+                @"resources\aztec\static_color\god_powers\agave_bloom_icon.png"));
+    }
+
     [Fact]
     public void NormalizeIconCatalogValue_RepairsKnownDdsValuesButPreservesUnknownCustomPaths()
     {

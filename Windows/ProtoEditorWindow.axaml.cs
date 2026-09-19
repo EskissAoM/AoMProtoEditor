@@ -35,7 +35,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         Units,
         Technologies,
-        MajorGods
+        MajorGods,
+        Powers
     }
 
     private enum NewCustomUnitKind
@@ -124,6 +125,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly Dictionary<string, string> _loadedModStringValues = new(StringComparer.OrdinalIgnoreCase);
     private TechnologyEditorView? _technologyView;
     private MajorGodEditorView? _majorGodView;
+    private PowerEditorView? _powerView;
     private ProtoBarData? _barData;
     private bool _isDirty;
     private bool _isPopulating;
@@ -3310,6 +3312,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Units => "Unit",
                 EditorEntityKind.Technologies => "Tech",
                 EditorEntityKind.MajorGods => "Major God",
+                EditorEntityKind.Powers => "Power",
                 _ => "Entity"
             };
             var source = tab.IsModified ? "Custom" : "Original";
@@ -3337,6 +3340,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             EditorEntityKind.Units => _dirtyUnitNames.Contains(tab.EntityName),
             EditorEntityKind.Technologies => _technologyView?.IsTechnologyDirty(tab.EntityName) == true,
             EditorEntityKind.MajorGods => _majorGodView?.IsMajorGodDirty(tab.EntityName) == true,
+            EditorEntityKind.Powers => _powerView?.IsPowerDirty(tab.EntityName) == true,
             _ => false
         };
     }
@@ -3460,6 +3464,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Units => LoadSavedUnitElement(entityName),
                 EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(entityName),
                 EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(entityName),
+                EditorEntityKind.Powers => _powerView?.LoadSavedPowerElement(entityName),
                 _ => null
             };
         SelectDocumentTabWithoutActivation(_mainDocumentTab);
@@ -3477,6 +3482,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             EditorEntityKind.Technologies => "Click on a technology to start",
             EditorEntityKind.MajorGods => "Click on a major god to view its raw XML",
+            EditorEntityKind.Powers => "Click on a power to view its raw XML",
             _ => "Click on a unit to start"
         };
         _emptyDocumentOverlay.IsVisible = true;
@@ -3498,6 +3504,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         else if (entityKind == EditorEntityKind.MajorGods)
         {
             _majorGodView?.SelectMajorGod(null);
+        }
+        else if (entityKind == EditorEntityKind.Powers)
+        {
+            _powerView?.SelectPower(null);
         }
         else
         {
@@ -3613,6 +3623,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Units => LoadSavedUnitElement(entityName),
                 EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(entityName),
                 EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(entityName),
+                EditorEntityKind.Powers => _powerView?.LoadSavedPowerElement(entityName),
                 _ => null
             };
         }
@@ -3645,6 +3656,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             _majorGodView != null &&
             !await _majorGodView.CommitCurrentMajorGodAsync())
             return;
+        if (ReferenceEquals(_activeDocumentTab, tab) &&
+            tab.EntityKind == EditorEntityKind.Powers &&
+            _powerView != null &&
+            !await _powerView.CommitCurrentPowerAsync())
+            return;
 
         if (IsDocumentTabDirty(tab))
         {
@@ -3663,6 +3679,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _technologyView.DiscardTechnologyChanges(tab.EntityName, tab.SavedElement);
             else if (tab.EntityKind == EditorEntityKind.MajorGods && _majorGodView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
                 _majorGodView.DiscardMajorGodChanges(tab.EntityName, tab.SavedElement);
+            else if (tab.EntityKind == EditorEntityKind.Powers && _powerView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
+                _powerView.DiscardPowerChanges(tab.EntityName, tab.SavedElement);
         }
 
         var wasActive = ReferenceEquals(_activeDocumentTab, tab);
@@ -3730,6 +3748,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SelectDocumentTabWithoutActivation(previous);
                 return;
             }
+            if (_activeEntityKind == EditorEntityKind.Powers &&
+                _powerView != null &&
+                !await _powerView.CommitCurrentPowerAsync())
+            {
+                if (previous != null)
+                    SelectDocumentTabWithoutActivation(previous);
+                return;
+            }
 
             _activeDocumentTab = target;
             if (string.IsNullOrWhiteSpace(target.EntityName))
@@ -3747,6 +3773,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _technologyView?.SetModifiedMode(target.IsModified);
             else if (target.EntityKind == EditorEntityKind.MajorGods)
                 _majorGodView?.SetModifiedMode(target.IsModified);
+            else if (target.EntityKind == EditorEntityKind.Powers)
+                _powerView?.SetModifiedMode(target.IsModified);
             RefreshUnitList();
 
             _suppressUnitListSelectionChange = true;
@@ -3764,6 +3792,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _technologyView?.SelectTechnology(target.EntityName);
             else if (target.EntityKind == EditorEntityKind.MajorGods)
                 _majorGodView?.SelectMajorGod(target.EntityName);
+            else if (target.EntityKind == EditorEntityKind.Powers)
+                _powerView?.SelectPower(target.EntityName);
             else
                 BuildEditorPanel(target.EntityName);
         }
@@ -3809,6 +3839,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
 
             names.AddRange(_majorGodView.GetMajorGodNames(modified: selectedIndex == 1));
+        }
+        else if (_activeEntityKind == EditorEntityKind.Powers)
+        {
+            if (_powerView == null)
+                return;
+
+            names.AddRange(_powerView.GetPowerNames(modified: selectedIndex == 1));
         }
         else if (_barData == null)
         {
@@ -3859,6 +3896,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             EditorEntityKind.Technologies => _technologyView?.CurrentTechnologyName,
             EditorEntityKind.MajorGods => _majorGodView?.CurrentMajorGodName,
+            EditorEntityKind.Powers => _powerView?.CurrentPowerName,
             _ => _currentUnitName
         };
         if (string.IsNullOrWhiteSpace(selectedName))
@@ -3911,6 +3949,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         await ShowEntityKindAsync(EditorEntityKind.MajorGods);
     }
 
+    private async void PowersEntity_Click(object? sender, RoutedEventArgs e)
+    {
+        await ShowEntityKindAsync(EditorEntityKind.Powers);
+    }
+
     private async Task ShowEntityKindAsync(EditorEntityKind entityKind)
     {
         if (_activeEntityKind == entityKind)
@@ -3932,6 +3975,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             _majorGodView != null &&
             !await _majorGodView.CommitCurrentMajorGodAsync())
             return;
+        if (_activeEntityKind == EditorEntityKind.Powers &&
+            _powerView != null &&
+            !await _powerView.CommitCurrentPowerAsync())
+            return;
 
         ApplyEntityKindUi(entityKind);
         SetMainDocumentTarget(entityKind, _unitTabs.SelectedIndex == 1, entityName: null);
@@ -3945,6 +3992,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _activeEntityKind = entityKind;
         var showTechnologies = entityKind == EditorEntityKind.Technologies;
         var showMajorGods = entityKind == EditorEntityKind.MajorGods;
+        var showPowers = entityKind == EditorEntityKind.Powers;
         if (showTechnologies)
         {
             EnsureTechnologyView();
@@ -3955,13 +4003,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             EnsureMajorGodView();
             _majorGodView!.SetModifiedMode(_unitTabs.SelectedIndex == 1);
         }
+        else if (showPowers)
+        {
+            EnsurePowerView();
+            _powerView!.SetModifiedMode(_unitTabs.SelectedIndex == 1);
+        }
 
-        _technologyHost.IsVisible = showTechnologies || showMajorGods;
-        _technologyHost.Content = showTechnologies ? _technologyView : showMajorGods ? _majorGodView : null;
-        _entityListHeading.Text = showTechnologies ? "Technologies" : showMajorGods ? "Major Gods" : "Units";
+        _technologyHost.IsVisible = showTechnologies || showMajorGods || showPowers;
+        _technologyHost.Content = showTechnologies ? _technologyView : showMajorGods ? _majorGodView : showPowers ? _powerView : null;
+        _entityListHeading.Text = showTechnologies ? "Technologies" : showMajorGods ? "Major Gods" : showPowers ? "Powers" : "Units";
         _unitsEntityButton.Classes.Set("active", entityKind == EditorEntityKind.Units);
         _techsEntityButton.Classes.Set("active", showTechnologies);
         _godsEntityButton.Classes.Set("active", showMajorGods);
+        _powersEntityButton.Classes.Set("active", showPowers);
         var documentModificationsAllowed = showTechnologies
             ? _technologyView!.CanModifyTechnologyDocument
             : entityKind != EditorEntityKind.Units || _modDocumentSafetyError == null;
@@ -3976,10 +4030,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         _technologyHost.Content = null;
         _technologyView = null;
         _majorGodView = null;
+        _powerView = null;
         _entityListHeading.Text = "Units";
         _unitsEntityButton.Classes.Set("active", true);
         _techsEntityButton.Classes.Set("active", false);
         _godsEntityButton.Classes.Set("active", false);
+        _powersEntityButton.Classes.Set("active", false);
         _entityDeleteButton.IsEnabled = false;
         ResetDocumentTabs();
     }
@@ -4013,6 +4069,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Units => LoadSavedUnitElement(tab.EntityName!),
                 EditorEntityKind.Technologies => _technologyView?.LoadSavedTechnologyElement(tab.EntityName!),
                 EditorEntityKind.MajorGods => _majorGodView?.LoadSavedMajorGodElement(tab.EntityName!),
+                EditorEntityKind.Powers => _powerView?.LoadSavedPowerElement(tab.EntityName!),
                 _ => null
             };
         }
@@ -4320,16 +4377,21 @@ public partial class ProtoEditorWindow : SimpleWindow
         bool Includes(string? path) => !string.IsNullOrWhiteSpace(path) && plan.Paths.Any(candidate =>
             candidate.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
 
-        if (Includes(GetCurrentModGameplayFilePath("techtree_mods.xml")))
+        if (Includes(GetCurrentModGameplayFilePath("techtree_mods.xml")) && _technologyView?.IsDirty != true)
             RefreshTechnologyViewAfterTechTypeChanges();
         if (Includes(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName)))
             _majorGodView = null;
         if (Includes(GetCurrentModAbilitiesFilePath("abilities_mods.xml")) ||
             Includes(GetCurrentModGameplayFilePath("powers_mods.xml")))
         {
+            if (Includes(GetCurrentModGameplayFilePath("powers_mods.xml")) && _powerView?.IsDirty != true)
+                _powerView?.AcknowledgePowerFileSavedByEditor();
             _abilityPowerCatalog.Clear();
-            _abilityDrafts.Clear();
-            _unitAbilityDrafts.Clear();
+            if (!_isDirty)
+            {
+                _abilityDrafts.Clear();
+                _unitAbilityDrafts.Clear();
+            }
         }
         if (Includes(GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")))
             _protoUnitCommandCatalogLoaded = false;
@@ -4357,9 +4419,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 path.Equals(GetCurrentModAbilitiesFilePath("abilities_mods.xml"), StringComparison.OrdinalIgnoreCase) ||
                 path.Equals(GetCurrentModGameplayFilePath("powers_mods.xml"), StringComparison.OrdinalIgnoreCase)))
         {
+            if (_powerView?.IsDirty != true && plan.Paths.Any(path =>
+                    path.Equals(GetCurrentModGameplayFilePath("powers_mods.xml"), StringComparison.OrdinalIgnoreCase)))
+            {
+                _powerView?.AcknowledgePowerFileSavedByEditor();
+            }
             _abilityPowerCatalog.Clear();
-            _abilityDrafts.Clear();
-            _unitAbilityDrafts.Clear();
+            if (!_isDirty)
+            {
+                _abilityDrafts.Clear();
+                _unitAbilityDrafts.Clear();
+            }
         }
         _protoUnitCommandCatalogLoaded = false;
         _cachedTechNames = null;
@@ -4466,6 +4536,142 @@ public partial class ProtoEditorWindow : SimpleWindow
             name,
             "Major God",
             owner: owner);
+
+    private void EnsurePowerView()
+    {
+        if (_powerView != null)
+            return;
+
+        var definitions = new Dictionary<string, PowerDefinition>(StringComparer.OrdinalIgnoreCase);
+        void AddDefinitions(IEnumerable<PowerDefinition> candidates)
+        {
+            foreach (var definition in candidates)
+                definitions.TryAdd(definition.Name, definition);
+        }
+
+        AddDefinitions(PowerCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath));
+        var loadedBarPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(_protoDataBarPath))
+            loadedBarPaths.Add(Path.GetFullPath(_protoDataBarPath));
+        var resolvedDataBarPath = ResolveDataBarPath();
+        if (!string.IsNullOrWhiteSpace(resolvedDataBarPath) && File.Exists(resolvedDataBarPath) &&
+            loadedBarPaths.Add(Path.GetFullPath(resolvedDataBarPath)))
+        {
+            try
+            {
+                using var stream = File.OpenRead(resolvedDataBarPath);
+                var dataBar = new BarArchive(stream);
+                if (dataBar.Load(out _))
+                    AddDefinitions(PowerCatalog.ExtractBaseDefinitionsFromBar(dataBar, resolvedDataBarPath));
+            }
+            catch
+            {
+                // Keep catalogs already decoded from the primary Data.bar.
+            }
+        }
+        AddDefinitions(PowerCatalog.ExtractDefinitions(
+            PowerCatalog.LoadLooseBaseDocuments(ResolveBaseGameplayDirectory()),
+            isBuiltIn: true));
+
+        _powerView = new PowerEditorView(
+            definitions.Values,
+            GetCurrentModGameplayFilePath(PowerCatalog.ModFileName),
+            PreparePowerReferenceMigration,
+            AdoptPowerReferenceMigration,
+            EnsurePowerCanBeDeletedAsync,
+            this,
+            ResolveDisplayStringAsync,
+            SavePowerStringValuesAsync,
+            _baseGameIconPaths.Concat(_customIconPaths),
+            _iconPreviewService,
+            GetCurrentModStringsPath(),
+            GetTechnologyProtoUnitNames(),
+            GetKnownUnitTypeNames());
+        _powerView.BrowserStateChanged += PowerView_BrowserStateChanged;
+        _powerView.DirtyStateChanged += PowerView_DirtyStateChanged;
+        _powerView.Saved += PowerView_Saved;
+        _technologyHost.Content = _powerView;
+    }
+
+    private GameIdentifierReferenceMigrationPlan PreparePowerReferenceMigration(
+        IReadOnlyList<KeyValuePair<string, string>> renames)
+    {
+        var powerPath = GetCurrentModGameplayFilePath(PowerCatalog.ModFileName);
+        return GameIdentifierReferenceMigrationPlan.Prepare(
+            GetGameIdentifierReferenceFiles().Where(file =>
+                string.IsNullOrWhiteSpace(powerPath) ||
+                !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(powerPath), StringComparison.OrdinalIgnoreCase)),
+            GameIdentifierKind.Ability,
+            renames);
+    }
+
+    private void AdoptPowerReferenceMigration(GameIdentifierReferenceMigrationPlan plan)
+    {
+        var protoDocument = plan.GetDocument(_modFilePath);
+        if (protoDocument != null)
+            AdoptSavedProtoDocument(protoDocument);
+        AdoptGameIdentifierReferenceMigration(plan);
+    }
+
+    private Task<bool> EnsurePowerCanBeDeletedAsync(Window owner, string name)
+        => EnsureIdentifierCanBeDeletedAsync(
+            GameIdentifierKind.Ability,
+            name,
+            "Power",
+            owner: owner);
+
+    private void PowerView_BrowserStateChanged(object? sender, EventArgs e)
+    {
+        if (_activeEntityKind != EditorEntityKind.Powers || _powerView == null)
+            return;
+
+        _unitTabs.SelectedIndex = _powerView.IsModifiedMode ? 1 : 0;
+        if (string.IsNullOrWhiteSpace(_powerView.CurrentPowerName))
+        {
+            SetMainDocumentTarget(EditorEntityKind.Powers, _powerView.IsModifiedMode, entityName: null);
+            RefreshUnitList();
+            return;
+        }
+        HideEmptyDocumentPlaceholder();
+        if (_activeDocumentTab?.EntityKind == EditorEntityKind.Powers)
+        {
+            var previousName = _activeDocumentTab.EntityName;
+            var currentName = _powerView.CurrentPowerName!;
+            var changedDocument = !string.IsNullOrWhiteSpace(previousName) &&
+                                  !string.Equals(previousName, currentName, StringComparison.OrdinalIgnoreCase);
+            var wasRenamed = changedDocument && _powerView.IsModifiedMode &&
+                             !_powerView.GetPowerNames(modified: true)
+                                 .Contains(previousName!, StringComparer.OrdinalIgnoreCase);
+            if (wasRenamed)
+                RenameOpenDocumentTabs(EditorEntityKind.Powers, previousName!, currentName);
+            else if (changedDocument && !_activeDocumentTab.IsMain)
+                SetMainDocumentTarget(EditorEntityKind.Powers, _powerView.IsModifiedMode, currentName);
+            _activeDocumentTab.IsModified = _powerView.IsModifiedMode;
+            _activeDocumentTab.EntityName = currentName;
+        }
+        RefreshUnitList();
+        RestoreEntityBrowserSelection();
+        RefreshDocumentTabHeaders();
+    }
+
+    private void PowerView_DirtyStateChanged(object? sender, EventArgs e)
+        => RefreshDocumentTabHeaders();
+
+    private void PowerView_Saved(object? sender, EventArgs e)
+    {
+        _majorGodView?.AcknowledgeStringFileSavedByEditor();
+        _abilityPowerCatalog.Clear();
+        // Global and manager saves persist Units before Powers. Keep this guard
+        // so a future direct Power save cannot discard an unrelated Unit draft.
+        if (!_isDirty)
+        {
+            _abilityDrafts.Clear();
+            _unitAbilityDrafts.Clear();
+        }
+        if (_technologyView?.IsDirty != true)
+            RefreshTechnologyViewAfterTechTypeChanges();
+        InvalidateSuggestionCaches();
+    }
 
     private IReadOnlyList<string> GetMajorGodTechnologyNames()
     {
@@ -4595,6 +4801,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (_activeEntityKind == EditorEntityKind.Powers)
+        {
+            if (_powerView == null)
+                return;
+            await _powerView.AddPowerAsync();
+            ShowAddedPowerInModifiedBrowser();
+            return;
+        }
+
         if (_technologyView == null)
             return;
         await AddTechnologyFromBrowserAsync(duplicateSelected: false);
@@ -4620,6 +4835,18 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        if (_activeEntityKind == EditorEntityKind.Powers)
+        {
+            if (_powerView == null)
+                return;
+            var deletedName = _powerView.CurrentPowerName;
+            await _powerView.DeleteCurrentPowerAsync();
+            if (!string.IsNullOrWhiteSpace(deletedName))
+                RemoveDeletedDocumentTabs(EditorEntityKind.Powers, deletedName);
+            RefreshUnitList();
+            return;
+        }
+
         await DeleteSelectedTechnologyAsync();
     }
 
@@ -4638,6 +4865,25 @@ public partial class ProtoEditorWindow : SimpleWindow
             _documentTabActivationInProgress = false;
         }
         SetMainDocumentTarget(EditorEntityKind.MajorGods, isModified: true, _majorGodView.CurrentMajorGodName);
+        RefreshUnitList();
+        RestoreEntityBrowserSelection();
+    }
+
+    private void ShowAddedPowerInModifiedBrowser()
+    {
+        if (_powerView == null || string.IsNullOrWhiteSpace(_powerView.CurrentPowerName))
+            return;
+
+        _documentTabActivationInProgress = true;
+        try
+        {
+            _unitTabs.SelectedIndex = 1;
+        }
+        finally
+        {
+            _documentTabActivationInProgress = false;
+        }
+        SetMainDocumentTarget(EditorEntityKind.Powers, isModified: true, _powerView.CurrentPowerName);
         RefreshUnitList();
         RestoreEntityBrowserSelection();
     }
@@ -4830,6 +5076,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 await _majorGodView.AddMajorGodAsync(duplicateSelected: true);
                 ShowAddedMajorGodInModifiedBrowser();
             }
+            else if (entityKind == EditorEntityKind.Powers && _powerView != null)
+            {
+                await _powerView.AddPowerAsync(duplicateSelected: true);
+                ShowAddedPowerInModifiedBrowser();
+            }
         };
         menu.Items.Add(copyItem);
 
@@ -4852,9 +5103,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 await DeleteSelectedTechnologyAsync();
             }
-            else if (_majorGodView != null)
+            else if (entityKind == EditorEntityKind.MajorGods && _majorGodView != null)
             {
                 await _majorGodView.DeleteCurrentMajorGodAsync();
+                RefreshUnitList();
+            }
+            else if (entityKind == EditorEntityKind.Powers && _powerView != null)
+            {
+                await _powerView.DeleteCurrentPowerAsync();
                 RefreshUnitList();
             }
         };
@@ -4905,6 +5161,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
                     EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
                     EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
+                    EditorEntityKind.Powers => _powerView == null || await _powerView.CommitCurrentPowerAsync(),
                     _ => true
                 };
                 if (!canLeave)
@@ -4941,6 +5198,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             _technologyView?.SetModifiedMode(selectedModified);
         else if (_activeEntityKind == EditorEntityKind.MajorGods)
             _majorGodView?.SetModifiedMode(selectedModified);
+        else if (_activeEntityKind == EditorEntityKind.Powers)
+            _powerView?.SetModifiedMode(selectedModified);
         var technologyModificationsAllowed = _activeEntityKind != EditorEntityKind.Technologies ||
                                              _technologyView?.CanModifyTechnologyDocument == true;
         if (_activeEntityKind == EditorEntityKind.Units && _modDocumentSafetyError != null)
@@ -5023,6 +5282,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             }
 
+            if (_activeEntityKind == EditorEntityKind.Powers)
+            {
+                if (_powerView != null && !await _powerView.CommitCurrentPowerAsync())
+                {
+                    RestoreEntityBrowserSelection();
+                    return;
+                }
+                SetMainDocumentTarget(EditorEntityKind.Powers, _unitTabs.SelectedIndex == 1, selectedName);
+                _powerView?.SelectPower(selectedName);
+                return;
+            }
+
             if (selectedName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase))
             {
                 SetMainDocumentTarget(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
@@ -5081,6 +5352,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
             EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
             EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
+            EditorEntityKind.Powers => _powerView == null || await _powerView.CommitCurrentPowerAsync(),
             _ => true
         };
         if (!captured)
@@ -5094,6 +5366,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Units => "the Units browser",
                 EditorEntityKind.Technologies => "the Technologies browser",
                 EditorEntityKind.MajorGods => "the Major Gods browser",
+                EditorEntityKind.Powers => "the Powers browser",
                 _ => "the entity browser"
             }
             : $"'{incomingName}'";
@@ -5119,6 +5392,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         else if (main.EntityKind == EditorEntityKind.MajorGods && _majorGodView != null)
         {
             _majorGodView.DiscardMajorGodChanges(main.EntityName, main.SavedElement);
+        }
+        else if (main.EntityKind == EditorEntityKind.Powers && _powerView != null)
+        {
+            _powerView.DiscardPowerChanges(main.EntityName, main.SavedElement);
         }
 
         RefreshDocumentTabHeaders();
@@ -32163,24 +32440,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static void FreezeEditorScrollWhileDropDownIsOpen(
         AutoCompleteBox autoCompleteBox,
         ScrollViewer ownerScroll)
-    {
-        void FreezeEditorWheel(object? sender, PointerWheelEventArgs args)
-        {
-            var sourceIsInsideEditor = args.Source is Visual source &&
-                (ReferenceEquals(source, ownerScroll) ||
-                 source.GetVisualAncestors().Any(ancestor => ReferenceEquals(ancestor, ownerScroll)));
-            if (autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor)
-                args.Handled = true;
-        }
-
-        ownerScroll.AddHandler(
-            InputElement.PointerWheelChangedEvent,
-            FreezeEditorWheel,
-            RoutingStrategies.Tunnel,
-            handledEventsToo: true);
-        autoCompleteBox.DetachedFromVisualTree += (_, _) =>
-            ownerScroll.RemoveHandler(InputElement.PointerWheelChangedEvent, FreezeEditorWheel);
-    }
+        => EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(autoCompleteBox, ownerScroll);
 
     private static void AttachNoWhitespaceNameBehavior(AutoCompleteBox autoCompleteBox)
     {
@@ -34396,18 +34656,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        // Unit Type mutations can migrate references in both ProtoUnits and
+        // powers_mods.xml. Persist every editor that owns those documents first.
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
-
-        // Unit Type mutations write the ProtoUnit document as part of their
-        // transaction. Persist any pending ProtoUnit/action rename first so it
-        // receives its own complete cross-file reference migration.
-        if (_isDirty)
-        {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty)
-                return;
-        }
 
         if (!await EnsureEditableXmlDocumentSafeAsync(
                 GetCurrentModGameplayFilePath("abstract_unit_types_mods.xml"),
@@ -34452,7 +34704,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
 
         if (!await EnsureEditableXmlDocumentSafeAsync(
@@ -34490,15 +34742,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
-            return;
-        if (_majorGodView?.IsDirty == true && !await _majorGodView.SaveAsync())
-            return;
-        if (_isDirty)
+        if (_majorGodView?.IsDirty == true)
         {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty) return;
+            if (!await _majorGodView.SaveAsync())
+                return;
+            _powerView?.AcknowledgeStringFileSavedByEditor();
         }
+        if (!await SavePendingChangesBeforeImmediateManagerAsync())
+            return;
 
         var culturePath = GetCurrentModGameplayFilePath(CultureCatalog.ModFileName);
         if (!await EnsureEditableXmlDocumentSafeAsync(
@@ -34526,6 +34777,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.Culture, name, "Culture", owner: owner));
         await manager.ShowDialog(this);
+
+        _powerView?.AcknowledgeStringFileSavedByEditor();
 
         _cachedCultureDefinitions = null;
         _cachedCultureNames = null;
@@ -34956,13 +35209,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_modXmlRoot == null && !await EnsureLocalModAsync()) return;
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath)) return;
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync()) return;
-        if (_majorGodView?.IsDirty == true && !await _majorGodView.SaveAsync()) return;
-        if (_isDirty)
+        if (_majorGodView?.IsDirty == true)
         {
-            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-            if (_isDirty) return;
+            if (!await _majorGodView.SaveAsync()) return;
+            _powerView?.AcknowledgeStringFileSavedByEditor();
         }
+        if (!await SavePendingChangesBeforeImmediateManagerAsync()) return;
 
         var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
         if (!await EnsureEditableXmlDocumentSafeAsync(
@@ -35000,6 +35252,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             RenameMinorGodAsync, DeleteMinorGodAsync, CountMinorGodUsage,
             EnsureMinorGodCanBeDeletedAsync);
         await manager.ShowDialog(this);
+        _powerView?.AcknowledgeStringFileSavedByEditor();
         _cachedMinorGodDefinitions = null;
     }
 
@@ -36189,6 +36442,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.Ability, name, "Ability", owner: owner));
         await window.ShowDialog(this);
+        _powerView?.AcknowledgePowerFileSavedByEditor();
+        _powerView?.AcknowledgeStringFileSavedByEditor();
     }
 
     private void EnsureAbilityCatalogLoadedForManager()
@@ -36255,7 +36510,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                              GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase)))
                 return false;
             var power = new XElement("power", new XAttribute("name", abilityName), new XAttribute("type", "UnitAction"));
-            root.Add(power);
+            PowerCatalog.AddNewEntry(doc, power, PowerDocumentSection.Abilities);
             ModDocumentPersistence.Execute([prepared], null, null,
                 () => SaveAbilityXmlDocument(doc, path));
             _abilityPowerCatalog[abilityName] = new XElement(power);
@@ -36306,7 +36561,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 stringEntries[newId] = sourceText;
                 stringsChanged = true;
             }
-            powerFile.Document.Root.Add(clone);
+            PowerCatalog.AddNewEntry(powerFile.Document, clone, PowerDocumentSection.Abilities);
             var stringPath = stringsChanged ? GetCurrentModStringsPath() : null;
             var expected = CaptureExpectedEditorFileStates([stringPath]);
             ModDocumentPersistence.Execute([powerFile], [stringPath], expected, () =>
@@ -36488,7 +36743,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else
         {
-            root.Add(replacement);
+            PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities);
         }
         if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
         {
@@ -36747,13 +37002,24 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> SavePendingChangesBeforeImmediateManagerAsync()
     {
-        if (_technologyView?.IsDirty == true && !await _technologyView.SaveAsync())
+        if (_technologyView?.IsDirty == true)
+        {
+            if (!await _technologyView.SaveAsync())
+                return false;
+            _powerView?.AcknowledgeStringFileSavedByEditor();
+        }
+        if (_powerView?.IsDirty == true && !await _powerView.CommitCurrentPowerAsync())
             return false;
-        if (!_isDirty)
-            return true;
 
-        await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
-        return !_isDirty;
+        if (_isDirty)
+        {
+            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
+            if (_isDirty)
+                return false;
+            _powerView?.AcknowledgePowerFileSavedByEditor();
+        }
+
+        return _powerView?.IsDirty != true || await _powerView.SaveAsync();
     }
 
     private Task<bool> ValidateManagedTacticsDeletionAsync(Window owner, string tacticsName)
@@ -50800,6 +51066,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         IReadOnlyCollection<string> removals)
         => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.MajorGods);
 
+    private Task SavePowerStringValuesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        IReadOnlyCollection<string> removals)
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Powers);
+
     private Task SaveCultureStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
@@ -51359,7 +51630,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                              (_isDirty || _dirtyUnitNames.Count > 0);
         var hasTechnologyChanges = _technologyView?.IsDirty ?? false;
         var hasMajorGodChanges = _majorGodView?.IsDirty ?? false;
-        if (!hasUnitChanges && !hasTechnologyChanges && !hasMajorGodChanges)
+        var hasPowerChanges = _powerView?.IsDirty ?? false;
+        if (!hasUnitChanges && !hasTechnologyChanges && !hasMajorGodChanges && !hasPowerChanges)
             return true;
 
         var prompt = new Prompt(PromptType.Confirm, "Unsaved Changes", "You have unsaved changes. Do you want to discard them and continue?");
@@ -51713,62 +51985,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private static List<XDocument> ExtractGodPowerDocumentsFromBar(BarArchive barFile, string barPath)
-    {
-        var documents = new List<XDocument>();
-        var entries = barFile.Entries;
-        if (entries == null || !File.Exists(barPath)) return documents;
-
-        var matching = entries.Where(entry =>
-        {
-            var fileName = entry.Name.Replace('\\', '/').Split('/').LastOrDefault() ?? "";
-            return fileName.EndsWith(".godpowers.xmb", StringComparison.OrdinalIgnoreCase);
-        }).ToList();
-
-        using var stream = File.OpenRead(barPath);
-        foreach (var entry in matching)
-        {
-            try
-            {
-                var size = entry.IsCompressed ? entry.SizeUncompressed : entry.SizeInArchive;
-                var decompressed = new byte[size];
-                var readBytes = entry.ReadDataDecompressed(stream, decompressed);
-                if (readBytes <= 0) continue;
-                var xml = XmbReader.ToFormattedXml(decompressed.AsSpan(0, readBytes));
-                if (!string.IsNullOrWhiteSpace(xml))
-                    documents.Add(XDocument.Parse(xml, LoadOptions.PreserveWhitespace));
-            }
-            catch { }
-        }
-        return documents;
-    }
+        => PowerCatalog.ExtractBaseDocumentsFromBar(barFile, barPath).ToList();
 
     internal static IReadOnlyList<string> ExtractTechnologyGodPowerNames(
         IEnumerable<XDocument> originalDocuments,
         IEnumerable<XDocument> modDocuments)
-        => GetPowerElements(originalDocuments)
-            .Concat(GetPowerElements(modDocuments).Where(IsModGodPower))
-            .Select(GetAbilityElementName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-    private static IEnumerable<XElement> GetPowerElements(IEnumerable<XDocument> documents)
-        => documents
-            .SelectMany(document => document.Root?.DescendantsAndSelf() ?? [])
-            .Where(element => element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase));
-
-    private static bool IsModGodPower(XElement power)
-    {
-        var type = power.Attributes().FirstOrDefault(attribute =>
-            attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
-        if (type.Equals("UnitAction", StringComparison.OrdinalIgnoreCase)) return false;
-        if (!type.Equals("GeneralEffect", StringComparison.OrdinalIgnoreCase)) return true;
-
-        var godPower = power.Attributes().FirstOrDefault(attribute =>
-            attribute.Name.LocalName.Equals("godpower", StringComparison.OrdinalIgnoreCase));
-        return godPower != null && string.IsNullOrWhiteSpace(godPower.Value);
-    }
+        => PowerCatalog.ExtractCatalogNames(originalDocuments, modDocuments);
 
     private string? GetCurrentModAbilitiesFilePath(string fileName)
     {
@@ -52179,7 +52401,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     else
                     {
-                        root.Add(replacement);
+                        PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities);
                     }
                     _abilityPowerCatalog[draft.Name] = new XElement(replacement);
                     RegisterAvailableAbilityName(draft.Name);
@@ -55793,11 +56015,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             if (_isDirty)
                 PreflightPendingUnitSave();
+            if (_powerView?.IsDirty == true && !await _powerView.CommitCurrentPowerAsync())
+                return;
 
             if (_isDirty && _majorGodView?.IsDirty == true)
             {
                 if (!await _majorGodView.SaveAsync())
                     return;
+                _powerView?.AcknowledgeStringFileSavedByEditor();
                 RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
             }
 
@@ -55805,6 +56030,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (!await _technologyView.SaveAsync())
                     return;
+                _powerView?.AcknowledgeStringFileSavedByEditor();
                 InvalidateModStringEntriesCache();
                 _cachedTechNames = null;
                 RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
@@ -55817,6 +56043,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 await SaveCurrentUnitCoreAsync(sender, e);
                 if (_isDirty)
                     return;
+                _powerView?.AcknowledgePowerFileSavedByEditor();
             }
 
             // Major-god documents can themselves reference technologies. Save
@@ -55826,6 +56053,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (!await _majorGodView.SaveAsync())
                     return;
+                _powerView?.AcknowledgeStringFileSavedByEditor();
                 RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
             }
 
@@ -55833,8 +56061,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (!await _technologyView.SaveAsync())
                     return;
+                _powerView?.AcknowledgeStringFileSavedByEditor();
                 _cachedTechNames = null;
                 RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
+                _statusMessage.Text = "Saved successfully.";
+                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_statusMessage.Text == "Saved successfully.")
+                        _statusMessage.Text = "";
+                }));
+            }
+
+            if (_powerView?.IsDirty == true)
+            {
+                if (!await _powerView.SaveAsync())
+                    return;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.Powers);
                 _statusMessage.Text = "Saved successfully.";
                 _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
                 {
@@ -56024,6 +56266,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             // sequence. The first successful transaction is an editor-owned file
             // change, so let the technology guard adopt that new string baseline.
             _technologyView?.AcknowledgeStringFileSavedByEditor();
+            _powerView?.AcknowledgeStringFileSavedByEditor();
             _loadedModXmlFileState = committedModXmlFileState
                 ?? throw new InvalidOperationException("The saved proto_mods.xml fingerprint was not captured.");
             _loadedModXmlBaseline = new XDocument(_modXmlDoc);
@@ -56443,7 +56686,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             !await _majorGodView.CommitCurrentMajorGodAsync())
             return;
 
-        if (_isDirty || (_technologyView?.IsDirty ?? false) || (_majorGodView?.IsDirty ?? false))
+        if (_activeEntityKind == EditorEntityKind.Powers &&
+            _powerView != null &&
+            !await _powerView.CommitCurrentPowerAsync())
+            return;
+
+        if (_isDirty || (_technologyView?.IsDirty ?? false) || (_majorGodView?.IsDirty ?? false) || (_powerView?.IsDirty ?? false))
         {
             var proceed = await PromptUnsavedChangesAsync();
             if (proceed)

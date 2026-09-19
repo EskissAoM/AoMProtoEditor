@@ -113,9 +113,9 @@ public static class ModXmlDocumentSafety
 
     private static readonly HashSet<string> PowerSingletonElements = new(NameComparer)
     {
-        "icon", "displaynameid", "rolloverid", "abstractplacementtargettype", "placement",
+        "icon", "displaynameid", "rolloverid", "placement",
         "unitaction", "rangeindicator", "cursortype", "activetime", "radius",
-        "explicitlyrestrictedplacementtargettype", "replacerolloverid", "replaceicon",
+        "replacerolloverid", "replaceicon",
         "allowduringnorush", "onlyfromstealth", "notblockable"
     };
 

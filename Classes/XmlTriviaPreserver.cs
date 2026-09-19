@@ -10,6 +10,18 @@ namespace AoMDivineDataEditor.Classes;
 /// </summary>
 public static class XmlTriviaPreserver
 {
+    /// <summary>Removes a direct XML element without leaving its indentation as an empty line.</summary>
+    public static void RemoveElementAndAdjacentWhitespace(XElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        if (element.PreviousNode is XText previous && string.IsNullOrWhiteSpace(previous.Value))
+            previous.Remove();
+        else if (element.PreviousNode == null && element.NextNode is XText next &&
+                 string.IsNullOrWhiteSpace(next.Value))
+            next.Remove();
+        element.Remove();
+    }
+
     /// <summary>
     /// Replaces an element's scalar text while retaining comments, processing
     /// instructions, and its existing whitespace layout.

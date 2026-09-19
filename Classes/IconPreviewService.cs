@@ -44,10 +44,12 @@ public sealed class IconPreviewService
         var archiveKey = $"{archiveInfo.FullName}|{archiveInfo.Length}|{archiveInfo.LastWriteTimeUtc.Ticks}";
         var entries = await IconCatalog.LoadEntryIndexAsync(archiveInfo.FullName).ConfigureAwait(false);
 
-        var ddsPath = ChangeExtension(normalizedPath, ".dds");
-        if (!entries.TryGetValue(ddsPath, out var entry))
+        var ddsPath = IconCatalog.EnumerateResourcePathAliases(ChangeExtension(normalizedPath, ".dds"))
+            .FirstOrDefault(entries.ContainsKey);
+        if (ddsPath == null)
             return null;
 
+        var entry = entries[ddsPath];
         var entryKey = $"bar|{archiveKey}|{ddsPath}";
         return await GetCachedAsync(entryKey, () => LoadArchiveEntryAsync(archiveInfo.FullName, entry)).ConfigureAwait(false);
     }

@@ -42,6 +42,7 @@ public sealed class TechnologyDataRound19RegressionTests
         var root = FindRepositoryRoot();
         var editorCode = File.ReadAllText(Path.Combine(root, "Windows", "TechnologyEditorView.axaml.cs"));
         var windowCode = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
+        var catalogCode = File.ReadAllText(Path.Combine(root, "Classes", "PowerCatalog.cs"));
 
         Assert.Contains("subtype.Equals(\"PowerROF\"", editorCode, StringComparison.Ordinal);
         Assert.Contains("subtype.Equals(\"PowerMaxUses\"", editorCode, StringComparison.Ordinal);
@@ -51,7 +52,8 @@ public sealed class TechnologyDataRound19RegressionTests
         Assert.Contains("MigrateDataAttribute(effect, \"power\", \"protopower\")", editorCode, StringComparison.Ordinal);
         Assert.Contains("GetTechnologyGodPowerNames()", windowCode, StringComparison.Ordinal);
         Assert.Contains("god_powers", windowCode, StringComparison.Ordinal);
-        Assert.Contains(".godpowers.xmb", windowCode, StringComparison.Ordinal);
+        Assert.Contains("PowerCatalog.ExtractCatalogNames", windowCode, StringComparison.Ordinal);
+        Assert.Contains(".godpowers.xmb", catalogCode, StringComparison.Ordinal);
         Assert.Contains("GetCurrentModGameplayFilePath(\"powers_mods.xml\")", windowCode, StringComparison.Ordinal);
     }
 

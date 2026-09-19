@@ -100,4 +100,27 @@ public static class IconCatalog
 
     internal static string NormalizePath(string? path)
         => (path ?? "").Trim().Replace('/', '\\').TrimStart('\\');
+
+    internal static string ToResourceRelativePath(string path)
+    {
+        var normalized = NormalizePath(path);
+        const string resourcesPrefix = "resources\\";
+        return normalized.StartsWith(resourcesPrefix, StringComparison.OrdinalIgnoreCase)
+            ? normalized[resourcesPrefix.Length..]
+            : normalized;
+    }
+
+    internal static IEnumerable<string> EnumerateResourcePathAliases(string path)
+    {
+        var normalized = NormalizePath(path);
+        if (normalized.Length == 0)
+            yield break;
+
+        yield return normalized;
+        const string resourcesPrefix = "resources\\";
+        if (normalized.StartsWith(resourcesPrefix, StringComparison.OrdinalIgnoreCase))
+            yield return ToResourceRelativePath(normalized);
+        else
+            yield return resourcesPrefix + normalized;
+    }
 }

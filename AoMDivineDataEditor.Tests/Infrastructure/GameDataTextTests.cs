@@ -229,6 +229,7 @@ public sealed class GameDataTextTests
     [Theory]
     [InlineData(StringTableSection.Units, "// === AoM: DDE ==  Units ===")]
     [InlineData(StringTableSection.Abilities, "// === AoM: DDE ==  Abilities ===")]
+    [InlineData(StringTableSection.Powers, "// === AoM: DDE ==  Powers ===")]
     [InlineData(StringTableSection.Technologies, "// === AoM: DDE ==  Technologies ===")]
     [InlineData(StringTableSection.MajorGods, "// === AoM: DDE ==  Major Gods ===")]
     [InlineData(StringTableSection.UnitCommands, "// === AoM: DDE ==  Unit Commands ===")]

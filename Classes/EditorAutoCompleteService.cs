@@ -15,6 +15,24 @@ namespace AoMDivineDataEditor.Classes;
 /// </summary>
 public static class EditorAutoCompleteService
 {
+    public static void FreezeOwnerScrollWhileDropDownIsOpen(AutoCompleteBox autoCompleteBox,
+        ScrollViewer ownerScroll)
+    {
+        void FreezeEditorWheel(object? sender, PointerWheelEventArgs args)
+        {
+            var sourceIsInsideEditor = args.Source is Visual source &&
+                (ReferenceEquals(source, ownerScroll) ||
+                 source.GetVisualAncestors().Any(ancestor => ReferenceEquals(ancestor, ownerScroll)));
+            if (autoCompleteBox.IsDropDownOpen && sourceIsInsideEditor)
+                args.Handled = true;
+        }
+
+        ownerScroll.AddHandler(InputElement.PointerWheelChangedEvent, FreezeEditorWheel,
+            RoutingStrategies.Tunnel, handledEventsToo: true);
+        autoCompleteBox.DetachedFromVisualTree += (_, _) =>
+            ownerScroll.RemoveHandler(InputElement.PointerWheelChangedEvent, FreezeEditorWheel);
+    }
+
     public static void EnableDropdown(
         AutoCompleteBox autoCompleteBox,
         Func<bool>? isBusy = null,

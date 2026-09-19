@@ -1,0 +1,906 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+             xmlns:controls="using:AoMDivineDataEditor.Controls"
+             x:Class="AoMDivineDataEditor.Windows.PowerEditorView"
+             Background="Transparent"
+             Foreground="{DynamicResource PrimaryTextBrush}">
+  <Grid x:Name="_mainGrid" RowDefinitions="*,Auto">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="4*"/>
+      <ColumnDefinition Width="5"/>
+      <ColumnDefinition Width="1*" MinWidth="250"/>
+    </Grid.ColumnDefinitions>
+
+    <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
+      <Grid RowDefinitions="Auto,*">
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+          <TextBlock Text="Power :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+          <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
+                   HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold"
+                   TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
+        </Grid>
+        <TabControl Grid.Row="1" x:Name="_powerTabs" SelectedIndex="0">
+          <TabItem Classes="editorTab" Header="Properties">
+            <ScrollViewer x:Name="_propertiesScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Spacing="10" Margin="0,12,15,0">
+                <TextBlock Text="──── Properties ────" FontWeight="Bold" FontSize="14"
+                           Foreground="#C59A52" Margin="0,3,0,5"/>
+                <Grid>
+                  <StackPanel Spacing="0">
+                    <Grid ColumnDefinitions="150,*">
+                      <TextBlock Text="Display Name" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                      <TextBox Grid.Column="1" x:Name="_displayNameBox" Tag="displaynameid"
+                               Margin="0,4,8,4" TextChanged="ResolvedStringBox_TextChanged"/>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                      <TextBlock Text="Rollover" VerticalAlignment="Top" Margin="0,10,6,4"/>
+                      <TextBox Grid.Column="1" x:Name="_rolloverBox" Tag="rolloverid"
+                               Margin="0,4,8,4" MinHeight="32" AcceptsReturn="True" TextWrapping="Wrap"
+                               ScrollViewer.VerticalScrollBarVisibility="Auto"
+                               TextChanged="ResolvedStringBox_TextChanged"/>
+                    </Grid>
+                    <Button x:Name="_addActiveRolloverButton" Content="Active Power Rollover"
+                            Classes="add-component" HorizontalAlignment="Left"
+                            Margin="150,4,0,4" Padding="8,3" Click="AddActiveRollover_Click"/>
+                    <Grid x:Name="_activeRolloverRow" ColumnDefinitions="150,Auto,Auto" IsVisible="False">
+                      <TextBlock Text="Active Rollover" VerticalAlignment="Top" Margin="0,10,6,4"/>
+                      <TextBox Grid.Column="1" x:Name="_activeRolloverBox" Tag="activepowerrolloverid"
+                               Margin="0,4,8,4" MinHeight="32" AcceptsReturn="True" TextWrapping="Wrap"
+                               ScrollViewer.VerticalScrollBarVisibility="Auto"
+                               TextChanged="ResolvedStringBox_TextChanged"/>
+                      <Button Grid.Column="2" x:Name="_removeActiveRolloverButton" Classes="remove-button"
+                              Margin="4,4,0,4" Click="RemoveActiveRollover_Click"/>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*">
+                      <TextBlock Text="Icon" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                      <controls:AssetPathEditor Grid.Column="1" x:Name="_iconEditor" Margin="0,4,8,4"/>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Active Time (s)" VerticalAlignment="Center"/>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <TextBox x:Name="_activeTimeBox" Tag="activetime" TextChanged="NumericBox_TextChanged"/>
+                        <Button x:Name="_addBuildUpButton" Content="BuildUp (s)" Classes="add-component"
+                                Click="AddOptionalTime_Click" Tag="builduptime"/>
+                        <StackPanel x:Name="_buildUpRow" Orientation="Horizontal" Spacing="4" IsVisible="False">
+                          <TextBlock Text="BuildUp (s)" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_buildUpBox" Tag="builduptime" TextChanged="NumericBox_TextChanged"/>
+                          <Button x:Name="_removeBuildUpButton" Classes="remove-button" Tag="builduptime"
+                                  Click="RemoveOptionalTime_Click"/>
+                        </StackPanel>
+                        <Button x:Name="_addShutDownButton" Content="ShutDown (s)" Classes="add-component"
+                                Click="AddOptionalTime_Click" Tag="shutdowntime"/>
+                        <StackPanel x:Name="_shutDownRow" Orientation="Horizontal" Spacing="4" IsVisible="False">
+                          <TextBlock Text="ShutDown (s)" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_shutDownBox" Tag="shutdowntime" TextChanged="NumericBox_TextChanged"/>
+                          <Button x:Name="_removeShutDownButton" Classes="remove-button" Tag="shutdowntime"
+                                  Click="RemoveOptionalTime_Click"/>
+                        </StackPanel>
+                      </StackPanel>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Cost" VerticalAlignment="Center"/>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <TextBox x:Name="_costBox" Tag="cost" TextChanged="NumericBox_TextChanged"/>
+                        <TextBlock Text="Repeat Cost" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        <TextBox x:Name="_repeatCostBox" Tag="repeatcost" TextChanged="NumericBox_TextChanged"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock x:Name="_limitLabel" Text="Limit" VerticalAlignment="Top" Margin="0,6,0,0"
+                                 IsVisible="False"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="_addUseLimitButton" Content="Use Limit" Classes="add-component"
+                                Margin="0,0,12,0" Click="AddUseLimit_Click"/>
+                        <StackPanel x:Name="_useLimitRow" Orientation="Horizontal" Spacing="6"
+                                    Margin="0,0,12,0" IsVisible="False">
+                          <TextBlock Text="Global" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_limitGlobalBox" Tag="limitglobal" TextChanged="NumericBox_TextChanged"/>
+                          <TextBlock Text="Player" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_limitPlayerBox" Tag="limitplayer" TextChanged="NumericBox_TextChanged"/>
+                          <Button x:Name="_removeUseLimitButton" Classes="remove-button"
+                                  Click="RemoveUseLimit_Click"/>
+                        </StackPanel>
+                        <CheckBox x:Name="_singleActivationCheck" Content="Single Activation"
+                                  Margin="0,0,12,0"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <CheckBox x:Name="_exclusiveCheck" Content="Exclusive"/>
+                          <StackPanel x:Name="_exclusiveMessageRow" Orientation="Horizontal" Spacing="6"
+                                      IsVisible="False">
+                            <TextBlock Text="Message" VerticalAlignment="Center"/>
+                            <TextBox x:Name="_exclusiveMessageBox" Tag="exclusiveerrormsgid"
+                                     TextChanged="ResolvedStringBox_TextChanged"/>
+                          </StackPanel>
+                        </StackPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Placement" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <ComboBox x:Name="_placementBox" Width="100" MaxWidth="100" Margin="0,0,12,0"
+                                  SelectionChanged="PlacementBox_SelectionChanged"/>
+                        <WrapPanel x:Name="_placementFlagsRow" Orientation="Horizontal">
+                          <TextBlock Text="Flags" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                          <AutoCompleteBox x:Name="_placementFlagPicker" Width="50" MaxWidth="50"
+                                           Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                           SelectionChanged="PlacementFlagPicker_SelectionChanged"/>
+                          <WrapPanel x:Name="_placementFlagChips" Orientation="Horizontal"/>
+                        </WrapPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <StackPanel x:Name="_placementDetailsHost" Spacing="0">
+                      <Grid x:Name="_placementTypesRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                        <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                          <TextBlock x:Name="_targetTypeLabel" Text="Target Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                          <AutoCompleteBox x:Name="_targetTypePicker" Width="50" MaxWidth="50"
+                                           Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                           SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                          <WrapPanel x:Name="_targetTypeChips" Orientation="Horizontal" Margin="0,0,12,0"/>
+                          <TextBlock x:Name="_excludeTypeLabel" Text="Exclude Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                          <AutoCompleteBox x:Name="_excludeTypePicker" Width="50" MaxWidth="50"
+                                           Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                           SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                          <WrapPanel x:Name="_excludeTypeChips" Orientation="Horizontal"/>
+                        </WrapPanel>
+                      </Grid>
+                      <Grid x:Name="_placementOptionButtonsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                        <WrapPanel Grid.Column="1" x:Name="_placementOptionsFlow" Orientation="Horizontal">
+                            <Button x:Name="_addLosProtoUnitButton" Content="LOS Protounit"
+                                    Classes="add-component" Margin="0,0,6,4" Click="AddPlacementOption_Click"
+                                    Tag="losprotounit"/>
+                            <StackPanel x:Name="_losProtoUnitRow" Orientation="Horizontal" Spacing="6" Margin="0,0,6,4">
+                              <TextBlock x:Name="_losProtoUnitLabel" Text="LOS Protounit" VerticalAlignment="Center"/>
+                              <StackPanel x:Name="_losProtoUnitFields" Orientation="Horizontal" Spacing="4">
+                                <AutoCompleteBox x:Name="_losProtoUnitBox" Width="200" MaxWidth="200"
+                                                 FilterMode="Contains" MinimumPrefixLength="0"/>
+                                <Button x:Name="_removeLosProtoUnitButton" Classes="remove-button"
+                                        Tag="losprotounit" Click="RemovePlacementOption_Click"/>
+                              </StackPanel>
+                            </StackPanel>
+                            <Button x:Name="_addRestrictPlacementButton"
+                                    Content="Restrict placement from" Classes="add-component"
+                                    Margin="0,0,6,4" Tag="restrictplacementnear" Click="AddPlacementOption_Click"/>
+                            <StackPanel x:Name="_restrictPlacementRow" Orientation="Horizontal" Spacing="6" Margin="0,0,6,4">
+                              <TextBlock x:Name="_restrictPlacementLabel" Text="Restrict placement from"
+                                         VerticalAlignment="Center"/>
+                              <StackPanel x:Name="_restrictPlacementFields" Orientation="Horizontal" Spacing="6">
+                                <AutoCompleteBox x:Name="_restrictPlacementBox" Width="200" MaxWidth="200"
+                                                 FilterMode="Contains" MinimumPrefixLength="0"/>
+                                <TextBlock Text="Distance" VerticalAlignment="Center"/>
+                                <TextBox x:Name="_restrictDistanceBox" Tag="restrictplacementdistance"
+                                         TextChanged="RestrictDistance_TextChanged"/>
+                                <CheckBox x:Name="_restrictAddObstructionCheck" Content="Add Obstruction"/>
+                                <Button x:Name="_removeRestrictPlacementButton" Classes="remove-button"
+                                        Tag="restrictplacementnear" Click="RemovePlacementOption_Click"/>
+                              </StackPanel>
+                            </StackPanel>
+                            <Button x:Name="_addOverlapTypeButton" Content="Overlap Type"
+                                    Classes="add-component" Margin="0,0,6,4" Tag="overlaptype"
+                                    Click="AddPlacementOption_Click"/>
+                            <StackPanel x:Name="_overlapTypeRow" Orientation="Horizontal" Spacing="6" Margin="0,0,6,4">
+                              <TextBlock x:Name="_overlapTypeLabel" Text="Overlap Type" VerticalAlignment="Center"/>
+                              <StackPanel x:Name="_overlapTypeFields" Orientation="Horizontal" Spacing="4">
+                                <AutoCompleteBox x:Name="_overlapTypeBox" Width="200" MaxWidth="200"
+                                                 FilterMode="Contains" MinimumPrefixLength="0"/>
+                                <Button x:Name="_removeOverlapTypeButton" Classes="remove-button"
+                                        Tag="overlaptype" Click="RemovePlacementOption_Click"/>
+                              </StackPanel>
+                            </StackPanel>
+                            <WrapPanel x:Name="_placementRestrictionRows" Orientation="Horizontal"/>
+                            <Button x:Name="_addPlacementRestrictionButton" Content="Placement restriction"
+                                    Classes="add-component" Margin="0,0,6,4"
+                                    Click="AddPlacementRestriction_Click"/>
+                        </WrapPanel>
+                      </Grid>
+                    </StackPanel>
+                    <StackPanel x:Name="_otherAttributesRows">
+                    <Grid x:Name="_rangeIndicatorRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Range Indicator" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <ComboBox x:Name="_rangeIndicatorBox" Width="100" MaxWidth="100"
+                                  Margin="0,0,12,0" SelectionChanged="RangeIndicator_SelectionChanged"/>
+                        <TextBlock x:Name="_indicatorRangeLabel" Text="Range" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_indicatorRangeBox" Width="110" MaxWidth="110"
+                                 Margin="0,0,12,0" Tag="range" TextChanged="RangeIndicatorNumber_TextChanged"/>
+                        <TextBlock x:Name="_indicatorWidthLabel" Text="Width" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_indicatorWidthBox" Width="110" MaxWidth="110"
+                                 Margin="0,0,12,0" Tag="width" TextChanged="RangeIndicatorNumber_TextChanged"/>
+                        <TextBlock x:Name="_indicatorSpeedLabel" Text="Speed" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_indicatorSpeedBox" Width="110" MaxWidth="110"
+                                 Margin="0,0,12,0" Tag="speed" TextChanged="RangeIndicatorNumber_TextChanged"/>
+                        <Button x:Name="_addRangeDecalButton" Content="Custom Decal" Classes="add-component"
+                                Margin="0,0,6,0" Click="AddRangeDecal_Click"/>
+                        <StackPanel x:Name="_rangeDecalFields" Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="Custom Decal" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_rangeDecalBox" Width="240" MaxWidth="240"
+                                   TextChanged="RangeDecal_TextChanged"/>
+                          <Button x:Name="_removeRangeDecalButton" Classes="remove-button"
+                                  Click="RemoveRangeDecal_Click"/>
+                        </StackPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_rangeIndicatorProtoRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Range Indicator Proto" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <TextBlock Text="Proto" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <AutoCompleteBox x:Name="_rangeIndicatorProtoBox" Width="200" MaxWidth="200"
+                                         Margin="0,0,12,0" FilterMode="Contains" MinimumPrefixLength="0"/>
+                        <TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_rangeIndicatorProtoRadiusBox" Width="90" MaxWidth="90"
+                                 Margin="0,0,12,0" Tag="radius" TextChanged="RangeIndicatorProtoNumber_TextChanged"/>
+                        <TextBlock Text="Indicator Count" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_rangeIndicatorProtoCountBox" Width="90" MaxWidth="90"
+                                 Margin="0,0,12,0" Tag="indicatorcount" TextChanged="RangeIndicatorProtoNumber_TextChanged"/>
+                        <TextBlock Text="Speed" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_rangeIndicatorProtoSpeedBox" Width="90" MaxWidth="90"
+                                 Tag="speed" TextChanged="RangeIndicatorProtoNumber_TextChanged"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_radiusRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock x:Name="_radiusLabel" Text="Radius" VerticalAlignment="Center"/>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
+                        <TextBox x:Name="_radiusBox" Tag="radius" TextChanged="NumericBox_TextChanged"/>
+                        <CheckBox x:Name="_globalCheck" Content="Global" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid x:Name="_powerPlayerRelationRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Power Player Relation" VerticalAlignment="Center"/>
+                      <ComboBox Grid.Column="1" x:Name="_powerPlayerRelationBox" Width="200" MaxWidth="200"
+                                HorizontalAlignment="Left" SelectionChanged="PowerPlayerRelation_SelectionChanged"/>
+                    </Grid>
+                    <Grid x:Name="_attackTargetRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Attack target" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <TextBlock x:Name="_attackTargetTypeLabel" Text="Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <AutoCompleteBox x:Name="_attackTargetTypePicker" Width="50" MaxWidth="50"
+                                         Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                         SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                        <WrapPanel x:Name="_attackTargetTypeChips" Orientation="Horizontal" Margin="0,0,12,0"/>
+                        <TextBlock x:Name="_attackExcludeTypeLabel" Text="Exclude Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <AutoCompleteBox x:Name="_attackExcludeTypePicker" Width="50" MaxWidth="50"
+                                         Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                         SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                        <WrapPanel x:Name="_attackExcludeTypeChips" Orientation="Horizontal"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_addNotificationSectionsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="_addNotificationsButton" Content="Notifications" Classes="add-component"
+                                Margin="0,0,6,0" Click="AddNotifications_Click"/>
+                        <Button x:Name="_addMinimapNotificationsButton" Content="Minimap Notifications"
+                                Classes="add-component" Margin="0,0,6,0" Click="AddMinimapNotifications_Click"/>
+                        <Button x:Name="_addActiveVisibilityButton" Content="Active Power Visibility"
+                                Classes="add-component" Click="AddActiveVisibility_Click"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_notificationsSection" ColumnDefinitions="150,*" Margin="0,4,0,8">
+                      <TextBlock Text="Notification" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="_removeNotificationsButton" Classes="remove-button"
+                                Margin="0,0,6,4" Click="RemoveNotifications_Click"/>
+                        <Button x:Name="_addCastMessageButton" Content="Cast message" Classes="add-component"
+                                Margin="0,0,6,4" Tag="notificationformatid" Click="AddNotificationField_Click"/>
+                        <Grid x:Name="_castMessageRow" ColumnDefinitions="Auto,Auto,Auto" Margin="0,0,6,4">
+                          <TextBlock Text="Cast message" VerticalAlignment="Top" Margin="0,8,6,0"/>
+                          <TextBox Grid.Column="1" x:Name="_castMessageBox" Tag="notificationformatid"
+                                   AcceptsReturn="True" TextWrapping="Wrap" MinHeight="32"
+                                   TextChanged="ResolvedStringBox_TextChanged"/>
+                          <Button Grid.Column="2" x:Name="_removeCastMessageButton" Classes="remove-button"
+                                  Margin="6,0,0,0" Tag="notificationformatid" Click="RemoveNotificationField_Click"/>
+                        </Grid>
+                        <Button x:Name="_addCastSelfMessageButton" Content="Cast self-message"
+                                Classes="add-component" Margin="0,0,6,4" Tag="selfnotificationformatid"
+                                Click="AddNotificationField_Click"/>
+                        <Grid x:Name="_castSelfMessageRow" ColumnDefinitions="Auto,Auto,Auto" Margin="0,0,6,4">
+                          <TextBlock Text="Cast self-message" VerticalAlignment="Top" Margin="0,8,6,0"/>
+                          <TextBox Grid.Column="1" x:Name="_castSelfMessageBox" Tag="selfnotificationformatid"
+                                   AcceptsReturn="True" TextWrapping="Wrap" MinHeight="32"
+                                   TextChanged="ResolvedStringBox_TextChanged"/>
+                          <Button Grid.Column="2" x:Name="_removeCastSelfMessageButton" Classes="remove-button"
+                                  Margin="6,0,0,0" Tag="selfnotificationformatid"
+                                  Click="RemoveNotificationField_Click"/>
+                        </Grid>
+                        <Button x:Name="_addAlertPlayerButton" Content="Alert Player" Classes="add-component"
+                                Margin="0,0,6,4" Tag="messagealertplayerrelation"
+                                Click="AddNotificationField_Click"/>
+                        <Grid x:Name="_alertPlayerRow" ColumnDefinitions="Auto,Auto,Auto" Margin="0,0,6,4">
+                          <TextBlock Text="Alert Player" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                          <ComboBox Grid.Column="1" x:Name="_alertPlayerBox" Width="150" MaxWidth="150"
+                                    SelectionChanged="AlertPlayer_SelectionChanged"/>
+                          <Button Grid.Column="2" x:Name="_removeAlertPlayerButton" Classes="remove-button"
+                                  Margin="6,0,0,0" Tag="messagealertplayerrelation"
+                                  Click="RemoveNotificationField_Click"/>
+                        </Grid>
+                        <CheckBox x:Name="_displayAlertsCheck" Content="Display Alert" Margin="0,0,6,4"
+                                  VerticalAlignment="Center"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_minimapNotificationsSection" ColumnDefinitions="150,*" Margin="0,4,0,8">
+                      <TextBlock Text="Minimap Notification" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="_removeMinimapNotificationsButton" Classes="remove-button"
+                                Margin="0,0,6,0" Click="RemoveMinimapNotifications_Click"/>
+                        <TextBlock x:Name="_minimapSendToLabel" Text="Send to" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox x:Name="_minimapSendToBox" Width="120" MaxWidth="120" Margin="0,0,16,0"
+                                  SelectionChanged="MinimapSendTo_SelectionChanged"/>
+                        <TextBlock x:Name="_minimapDurationLabel" Text="Duration (s)" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox x:Name="_minimapDurationBox" Width="90" MaxWidth="90"
+                                 TextChanged="MinimapDuration_TextChanged"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_activeVisibilitySection" ColumnDefinitions="150,*" Margin="0,4,0,8">
+                      <TextBlock Text="Active Power Visibility" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="_removeActiveVisibilityButton" Classes="remove-button"
+                                Margin="0,0,6,0" Click="RemoveActiveVisibility_Click"/>
+                        <Button x:Name="_addActiveListVisibilityButton" Content="Active List Visibility"
+                                Classes="add-component" Margin="0,0,6,0" Click="AddActiveListVisibility_Click"/>
+                        <StackPanel x:Name="_activeListVisibilityFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock x:Name="_activeListVisibilityLabel" Text="Active List Visibility" VerticalAlignment="Center"/>
+                          <ComboBox x:Name="_activeListVisibilityBox" Width="150" MaxWidth="150"
+                                    SelectionChanged="ActiveListVisibility_SelectionChanged"/>
+                          <Button x:Name="_removeActiveListVisibilityButton" Classes="remove-button"
+                                  Click="RemoveActiveListVisibility_Click"/>
+                        </StackPanel>
+                        <CheckBox x:Name="_hideOnActiveListCheck" Content="Hide from List"
+                                  VerticalAlignment="Center"/>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_cameraShakeRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Camera Shake" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <StackPanel x:Name="_cameraDurationField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Duration (s)" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_cameraDurationBox" Tag="camerashake:duration" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                        <StackPanel x:Name="_cameraStrengthField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Strength" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_cameraStrengthBox" Tag="camerashake:strength" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                        <Button x:Name="_addCameraRangeButton" Content="Range" Classes="add-component"
+                                Margin="0,0,6,0" Click="AddCameraRange_Click"/>
+                        <StackPanel x:Name="_cameraRangeField" Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="Range" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_cameraRangeBox" Tag="camerashake:range" TextChanged="EffectAttribute_TextChanged"/>
+                          <Button x:Name="_removeCameraRangeButton" Classes="remove-button" Click="RemoveCameraRange_Click"/>
+                        </StackPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_terrainRumblingRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Terrain Rumbling" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <StackPanel x:Name="_terrainHeightField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Height" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_terrainHeightBox" Tag="terrainrumbling:height" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                        <StackPanel x:Name="_terrainWidthField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Width" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_terrainWidthBox" Tag="terrainrumbling:width" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                        <StackPanel x:Name="_terrainSpeedField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Speed" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_terrainSpeedBox" Tag="terrainrumbling:speed" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                        <StackPanel x:Name="_terrainFadeTimeField" Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="Fade time (s)" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_terrainFadeTimeBox" Tag="terrainrumbling:fadetime" TextChanged="EffectAttribute_TextChanged"/>
+                        </StackPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_soundSetsSection" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Sound set" VerticalAlignment="Top" Margin="0,8,0,0"/>
+                      <StackPanel Grid.Column="1" Spacing="6">
+                        <StackPanel x:Name="_soundSetRows" Spacing="6"/>
+                        <Button x:Name="_addSoundSetButton" Content="Add Sound set" Classes="add-component"
+                                HorizontalAlignment="Left" Click="AddSoundSet_Click"/>
+                      </StackPanel>
+                    </Grid>
+                    <Grid x:Name="_dualPowerMinDistanceRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="DualPowerMinDistance" VerticalAlignment="Center"/>
+                      <TextBox Grid.Column="1" x:Name="_dualPowerMinDistanceBox" Tag="dualpowermindistance"
+                               TextChanged="ExtraNumber_TextChanged"/>
+                    </Grid>
+                    <Grid x:Name="_powerBlockerRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Power Blocker" VerticalAlignment="Center"/>
+                      <TextBox Grid.Column="1" x:Name="_powerBlockerBox" Tag="powerblocker"
+                               TextChanged="ExtraNumber_TextChanged"/>
+                    </Grid>
+                    <Grid x:Name="_revealLosRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Reveal LOS" VerticalAlignment="Center"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <StackPanel x:Name="_revealRadiusField" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                          <TextBlock Text="Radius" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_revealRadiusBox" TextChanged="RevealRadius_TextChanged"/>
+                        </StackPanel>
+                        <StackPanel x:Name="_revealUnitField" Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="Revealer Unit" VerticalAlignment="Center"/>
+                          <AutoCompleteBox x:Name="_revealUnitBox" Width="200" MaxWidth="200"
+                                           FilterMode="Contains" MinimumPrefixLength="0"/>
+                        </StackPanel>
+                      </WrapPanel>
+                    </Grid>
+                    <Grid x:Name="_lightingRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Lighting" VerticalAlignment="Center"/>
+                      <AutoCompleteBox Grid.Column="1" x:Name="_lightingBox" Width="200" MaxWidth="200"
+                                       HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </Grid>
+                    <Grid x:Name="_accuracyRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Accuracy" VerticalAlignment="Center"/>
+                      <TextBox Grid.Column="1" x:Name="_accuracyBox" Tag="accuracy"
+                               TextChanged="ExtraNumber_TextChanged"/>
+                    </Grid>
+                    <Grid x:Name="_allyDamageRatioRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Ally Damage Ratio" VerticalAlignment="Center"/>
+                      <TextBox Grid.Column="1" x:Name="_allyDamageRatioBox" Tag="allydamageratio"
+                               TextChanged="ExtraNumber_TextChanged"/>
+                    </Grid>
+                    <Grid x:Name="_resetAbilityChargeRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Reset Ability Charge for" VerticalAlignment="Center"/>
+                      <AutoCompleteBox Grid.Column="1" x:Name="_resetAbilityChargeBox" Width="260" MaxWidth="260"
+                                       HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </Grid>
+                    <Grid x:Name="_playsBattleMusicRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                      <TextBlock Text="Plays battle Music" VerticalAlignment="Center"/>
+                      <CheckBox Grid.Column="1" x:Name="_playsBattleMusicCheck"
+                                VerticalAlignment="Center"/>
+                    </Grid>
+                    </StackPanel>
+                    <Grid x:Name="_otherAttributesPickerRow" ColumnDefinitions="150,*" Margin="0,8,0,4">
+                      <Button x:Name="_otherAttributesButton" Content="Other Attributes" Classes="add-component"
+                              HorizontalAlignment="Left" Click="OtherAttributes_Click"/>
+                      <AutoCompleteBox Grid.Column="1" x:Name="_otherAttributePicker" Width="240" MaxWidth="240"
+                                       HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"
+                                       SelectionChanged="OtherAttributePicker_SelectionChanged"/>
+                    </Grid>
+                  </StackPanel>
+                  <Border x:Name="_iconPreviewHost" Margin="594,4,12,4"
+                          HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                </Grid>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+          <TabItem Classes="editorTab" Header="Specific">
+            <ScrollViewer x:Name="_specificScroll" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Spacing="10" Margin="0,12,15,0">
+                <Grid ColumnDefinitions="150,*" Margin="0,4,0,8">
+                  <TextBlock Text="Power Type" VerticalAlignment="Center"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_powerTypeBox" Width="220" MaxWidth="220"
+                                   HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/>
+                </Grid>
+
+                <TextBlock Text="──── Specific attributes ────" FontWeight="Bold" FontSize="14"
+                           Foreground="#C59A52" Margin="0,3,0,5"/>
+                <StackPanel x:Name="_specificAttributeRows" Spacing="0"/>
+
+                <TextBlock x:Name="_otherSpecificHeader" Text="──── Other additional attributes ────"
+                           FontWeight="Bold" FontSize="14"
+                           Foreground="#C59A52" Margin="0,12,0,5"/>
+                <StackPanel x:Name="_otherSpecificAttributeRows" Spacing="0"/>
+                <Grid x:Name="_otherSpecificPickerRow" ColumnDefinitions="Auto,*" Margin="0,8,0,4">
+                  <Button x:Name="_otherSpecificAttributesButton" Content="Other Additional Attributes"
+                          Classes="add-component" HorizontalAlignment="Left"
+                          Click="OtherSpecificAttributes_Click"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_otherSpecificAttributePicker"
+                                   Width="240" MaxWidth="240" HorizontalAlignment="Left"
+                                   FilterMode="Contains" MinimumPrefixLength="0"
+                                   SelectionChanged="OtherSpecificAttributePicker_SelectionChanged"/>
+                </Grid>
+
+                <Grid x:Name="_cracksSoundRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Cracks Sound" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <TextBlock Text="Soundset" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <AutoCompleteBox x:Name="_cracksSoundBox" Width="240" MaxWidth="240"
+                                     Margin="0,0,12,0" FilterMode="Contains" MinimumPrefixLength="0"/>
+                    <TextBlock x:Name="_crackMinLabel" Text="Min Interval" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="_crackIntervalMinBox" Width="90" MaxWidth="90"
+                             Margin="0,0,12,0" Tag="crackintervalmin"
+                             TextChanged="SpecificNumber_TextChanged"/>
+                    <TextBlock x:Name="_crackMaxLabel" Text="Max Interval" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="_crackIntervalMaxBox" Width="90" MaxWidth="90"
+                             Tag="crackintervalmax" TextChanged="SpecificNumber_TextChanged"/>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeCracksSoundButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Cracks Sound"/>
+                </Grid>
+
+                <Grid x:Name="_timeFactorRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Time Factor" VerticalAlignment="Center"/>
+                  <TextBox Grid.Column="1" x:Name="_timeFactorBox" Width="90" MaxWidth="90"
+                           Tag="timefactor" TextChanged="SpecificNumber_TextChanged"/>
+                  <Button Grid.Column="2" x:Name="_removeTimeFactorButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Time Factor"/>
+                </Grid>
+
+                <Grid x:Name="_shockwaveTopRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_stunLengthLabel" Text="Stun lenght (s)" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_stunLengthFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <TextBox x:Name="_stunLengthBox" Width="90" MaxWidth="90"
+                               Tag="stunlength" TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeStunLengthButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Stun lenght"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_shockwaveVfxFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_shockwaveVfxInlineLabel" Text="Shockwave VFX" VerticalAlignment="Center"/>
+                      <AutoCompleteBox x:Name="_shockwaveVfxBox" Width="240" MaxWidth="240"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeShockwaveVfxButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Shockwave VFX"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_throwPropertiesRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Throw properties" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_throwDistanceFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock x:Name="_throwDistanceLabel" Text="Distance" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock x:Name="_minThrowDistanceLabel" Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_minThrowDistanceBox" Margin="0,0,8,0"
+                               Tag="minthrowdistance" TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock x:Name="_maxThrowDistanceLabel" Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_maxThrowDistanceBox"
+                               Tag="maxthrowdistance" TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_throwHeightFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock x:Name="_throwHeightLabel" Text="Height" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock x:Name="_minThrowHeightLabel" Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_minThrowHeightBox" Margin="0,0,8,0"
+                               Tag="minthrowheight" TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock x:Name="_maxThrowHeightLabel" Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_maxThrowHeightBox"
+                               Tag="maxthrowheight" TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_throwVelocityFields" Orientation="Horizontal" Margin="0,0,0,4">
+                      <TextBlock x:Name="_throwVelocityLabel" Text="Velocity" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock x:Name="_minThrowVelocityLabel" Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_minThrowVelocityBox" Margin="0,0,8,0"
+                               Tag="minthrowvelocity" TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock x:Name="_maxThrowVelocityLabel" Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_maxThrowVelocityBox"
+                               Tag="maxthrowvelocity" TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeThrowPropertiesButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Throw properties"/>
+                </Grid>
+
+                <Grid x:Name="_gaiaTreeTopRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_treeUnitMainLabel" Text="Tree Unit" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_treeUnitFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <AutoCompleteBox x:Name="_treeUnitBox" Width="240" MaxWidth="240"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeTreeUnitButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Tree Unit"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_treeAmountFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_treeAmountInlineLabel" Text="Tree amount" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_treeAmountBox" Tag="totalnumberoftrees"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeTreeAmountButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Tree amount"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_gaiaSpawnRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_treeSpawnMainLabel" Text="Tree Spawn Interval" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_treeSpawnIntervalFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <TextBlock Text="Min" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_treeSpawnIntervalMinBox" Tag="treespawnintervalmin"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock Text="Max" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_treeSpawnIntervalMaxBox" Tag="treespawnintervalmax"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeTreeSpawnIntervalButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Tree Spawn Interval"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_treeEffectVfxFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_treeEffectVfxInlineLabel" Text="Tree Effect VFX" VerticalAlignment="Center"/>
+                      <AutoCompleteBox x:Name="_treeEffectVfxBox" Width="240" MaxWidth="240"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeTreeEffectVfxButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Tree Effect VFX"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_growthRadiusRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Growth radius" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="_growthRadiusStartBox" Margin="0,0,12,0"
+                             Tag="growthradiusstart" TextChanged="SpecificNumber_TextChanged"/>
+                    <TextBlock Text="Increase rate" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="_growthRadiusIncreaseRateBox"
+                             Tag="growthradiusincreaserate" TextChanged="SpecificNumber_TextChanged"/>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeGrowthRadiusButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Growth radius"/>
+                </Grid>
+
+                <Grid x:Name="_effectVfxRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Effect VFX" VerticalAlignment="Center"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_effectVfxBox" Width="240" MaxWidth="240"
+                                   FilterMode="Contains" MinimumPrefixLength="0"/>
+                  <Button Grid.Column="2" x:Name="_removeEffectVfxButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect VFX"/>
+                </Grid>
+
+                <Grid x:Name="_damagePercentConversionRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Damage % Conversion" VerticalAlignment="Center"/>
+                  <TextBox Grid.Column="1" x:Name="_damagePercentConversionBox"
+                           Tag="percentdamageonconvert" TextChanged="SpecificNumber_TextChanged"/>
+                  <Button Grid.Column="2" x:Name="_removeDamagePercentConversionButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click"
+                          Tag="Damage Percent on Conversion"/>
+                </Grid>
+
+                <Grid x:Name="_vfxProtoRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="VFX Proto" VerticalAlignment="Center"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_vfxProtoBox" Width="240" MaxWidth="240"
+                                   FilterMode="Contains" MinimumPrefixLength="0"/>
+                  <Button Grid.Column="2" x:Name="_removeVfxProtoButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="VFX Proto"/>
+                </Grid>
+
+                <Grid x:Name="_effectTimeRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Effect time (s)" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <TextBlock x:Name="_unitEffectTimeLabel" Text="Unit" VerticalAlignment="Center"
+                               Margin="0,0,6,0"/>
+                    <TextBox x:Name="_unitEffectTimeSecondsBox" Margin="0,0,12,0"
+                             Tag="uniteffecttimeseconds" TextChanged="SpecificNumber_TextChanged"/>
+                    <TextBlock x:Name="_sharedEffectTimeLabel" Text="Shared All Targets"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="_sharedEffectTimeSecondsBox"
+                             Tag="sharedeffecttimeseconds" TextChanged="SpecificNumber_TextChanged"/>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeEffectTimeButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect time"/>
+                </Grid>
+
+                <Grid x:Name="_spiderPropertiesRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Spider properties" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_spiderUnitFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Unit" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_spiderUnitBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_spiderEggUnitFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Egg Unit" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_spiderEggUnitBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_spiderDoorFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Door" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_spiderDoorBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_spiderWarnFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Warn" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_spiderWarnBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_spiderAttackRangeFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Attack Range" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_spiderAttackRangeBox" Tag="spiderattackrange"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_spiderSpawnOffsetFields" Orientation="Horizontal" Margin="0,0,0,4">
+                      <TextBlock Text="Spawn Offset" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_spiderSpawnOffsetBox" Tag="spiderspawnoffset"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeSpiderPropertiesButton" Classes="remove-button"
+                          Margin="8,0,0,0" VerticalAlignment="Top"
+                          Click="RemoveSpecificAttribute_Click" Tag="Spider properties"/>
+                </Grid>
+
+                <Grid x:Name="_spiderCountRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_numberToCreateMainLabel" Text="Number to create" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_numberToCreateFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <TextBox x:Name="_numberToCreateBox" Tag="numbertocreate"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeNumberToCreateButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Number to create"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_separationDistanceFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_separationDistanceInlineLabel" Text="Separation Distance"
+                                 VerticalAlignment="Center"/>
+                      <TextBox x:Name="_separationDistanceBox" Tag="separationdistance"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeSeparationDistanceButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Separation Distance"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_hatchPropertiesRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Hatch properties" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_hatchTimeFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Time" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_hatchTimeBox" Tag="hatchtime" TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_hatchIntervalFields" Orientation="Horizontal" Margin="0,0,0,4">
+                      <TextBlock Text="Interval" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock x:Name="_hatchIntervalMinLabel" Text="Min" VerticalAlignment="Center"
+                                 Margin="0,0,6,0"/>
+                      <TextBox x:Name="_hatchIntervalMinBox" Margin="0,0,8,0"
+                               Tag="hatchintervalmin" TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock x:Name="_hatchIntervalMaxLabel" Text="Max" VerticalAlignment="Center"
+                                 Margin="0,0,6,0"/>
+                      <TextBox x:Name="_hatchIntervalMaxBox"
+                               Tag="hatchintervalmax" TextChanged="SpecificNumber_TextChanged"/>
+                    </StackPanel>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeHatchPropertiesButton" Classes="remove-button"
+                          Margin="8,0,0,0" VerticalAlignment="Top"
+                          Click="RemoveSpecificAttribute_Click" Tag="Hatch properties"/>
+                </Grid>
+
+                <Grid x:Name="_spiderTimingRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_warnTimeMainLabel" Text="Warn time" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_warnTimeFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <TextBox x:Name="_warnTimeBox" Tag="warntime" TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeWarnTimeButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Warn time"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_initialDelayFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_initialDelayInlineLabel" Text="Initial Delay" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_initialDelayBox" Tag="initialdelay"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeInitialDelayButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Initial Delay"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_unitEffectTimeFields" Orientation="Horizontal" Spacing="6"
+                                Margin="12,0,0,0">
+                      <TextBlock x:Name="_unitEffectTimeInlineLabel" Text="Unit Effect Time"
+                                 VerticalAlignment="Center"/>
+                      <TextBox x:Name="_unitEffectTimeBox" Tag="uniteffecttime"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeUnitEffectTimeButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Unit Effect Time"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_humanDeathSoundRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Human Death Sound" VerticalAlignment="Center"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_humanDeathSoundBox" Width="240" MaxWidth="240"
+                                   FilterMode="Contains" MinimumPrefixLength="0"/>
+                  <Button Grid.Column="2" x:Name="_removeHumanDeathSoundButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Human Death Sound"/>
+                </Grid>
+
+                <Grid x:Name="_vortexPropertiesRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Vortex properties" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_vortexLandVfxFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Land VFX" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_vortexLandVfxBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_vortexStartVfxFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Start VFX" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_vortexStartVfxBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_vortexStartLinkedFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Start Linked" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_vortexStartLinkedBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_vortexFinishLinkedFields" Orientation="Horizontal" Margin="0,0,0,4">
+                      <TextBlock Text="Finish Linked" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_vortexFinishLinkedBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                  </WrapPanel>
+                  <Button Grid.Column="2" x:Name="_removeVortexPropertiesButton" Classes="remove-button"
+                          Margin="8,0,0,0" VerticalAlignment="Top"
+                          Click="RemoveSpecificAttribute_Click" Tag="Vortex properties"/>
+                </Grid>
+
+                <Grid x:Name="_vortexDropRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_dropIntervalMainLabel" Text="Drop Interval" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_dropIntervalFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <TextBlock x:Name="_dropIntervalMinLabel" Text="Min" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_dropIntervalMinBox" Tag="dropintervalmin"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <TextBlock x:Name="_dropIntervalMaxLabel" Text="Max" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_dropIntervalMaxBox" Tag="dropintervalmax"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeDropIntervalButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Drop Interval"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_maxRetryFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_maxRetryInlineLabel" Text="Max Retry" VerticalAlignment="Center"/>
+                      <TextBox x:Name="_maxRetryBox" Tag="maxretryseconds"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeMaxRetryButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Max Retry"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_maxUnitHeightRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Max Unit Height" VerticalAlignment="Center"/>
+                  <TextBox Grid.Column="1" x:Name="_maxUnitHeightBox" Tag="maxunitheight"
+                           TextChanged="SpecificNumber_TextChanged"/>
+                  <Button Grid.Column="2" x:Name="_removeMaxUnitHeightButton" Classes="remove-button"
+                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Max Unit Height"/>
+                </Grid>
+
+                <Grid x:Name="_vortexSoundsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_liftSoundMainLabel" Text="Lift Sound" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                    <StackPanel x:Name="_liftSoundFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
+                      <AutoCompleteBox x:Name="_liftSoundBox" Width="240" MaxWidth="240"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeLiftSoundButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Lift Sound"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_landSoundFields" Orientation="Horizontal" Spacing="6">
+                      <TextBlock x:Name="_landSoundInlineLabel" Text="Land Sound" VerticalAlignment="Center"/>
+                      <AutoCompleteBox x:Name="_landSoundBox" Width="240" MaxWidth="240"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeLandSoundButton" Classes="remove-button"
+                              Click="RemoveSpecificAttribute_Click" Tag="Land Sound"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Grid>
+    </Border>
+
+    <GridSplitter x:Name="_previewSplitter" Grid.Column="1" Width="5"
+                  Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns"/>
+
+    <Border x:Name="_xmlPreviewPanel" Grid.Column="2" Classes="XmlPanel" BorderThickness="1,0,0,0">
+      <Grid>
+        <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
+          <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
+            <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center"/>
+            <Button Grid.Column="1" x:Name="_applyRawXmlButton" Classes="positive" Content="Apply"
+                    Padding="12,4" IsVisible="False" Click="ApplyRawXml_Click"/>
+          </Grid>
+          <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
+                                   FontFamily="Consolas" FontSize="12"
+                                   Background="{DynamicResource XmlEditorBrush}"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                   BorderBrush="{DynamicResource NormalBorderBrush}"
+                                   HorizontalScrollBarVisibility="Auto"
+                                   VerticalScrollBarVisibility="Auto"
+                                   TextChanged="RawXmlEditor_TextChanged"/>
+        </Grid>
+        <Button x:Name="_xmlPreviewToggleButton" Content="&#x25B6;"
+                Width="20" Height="24" MinWidth="20" MinHeight="24"
+                FontSize="10" Padding="0"
+                Background="{DynamicResource DeepPanelBrush}"
+                BorderBrush="{DynamicResource NormalBorderBrush}"
+                BorderThickness="0" CornerRadius="0"
+                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,8,0,0" ZIndex="1"
+                ToolTip.Tip="Collapse XML Preview" Click="XmlPreviewToggle_Click"/>
+      </Grid>
+    </Border>
+
+    <TextBlock Grid.Row="1" Grid.ColumnSpan="3" x:Name="_statusMessage"
+               Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
+               Margin="0,6,0,0" HorizontalAlignment="Center"/>
+  </Grid>
+</UserControl>
