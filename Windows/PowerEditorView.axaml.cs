@@ -29,6 +29,38 @@ public partial class PowerEditorView : UserControl
     private static readonly string[] SoundSetListeners =
         ["All", "Caster", "Enemy", "Ally", "AllExceptCaster", "IfOnScreenAll",
             "IfOnScreenCaster", "IfOnScreenEnemy", "IfOnScreenAlly", "IfOnScreenAllExceptCaster"];
+    private static readonly IReadOnlyDictionary<string, string[]> SpecificAttributeLayouts =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TartarianGate"] =
+            [
+                "Spawn Proto", "Max Spawn Amount", "Tartarian Gate", "Rumble Time",
+                "First Spawn delay", "Spawn interval", "Throw properties"
+            ],
+            ["Implode"] =
+            [
+                "Implode Protos", "Implode Sounds", "Pull properties", "Explosion",
+                "Sphere properties", "Damage interval", "Shear", "Implode delay",
+                "Implode Timing", "Orbit Radius Squared", "Angular Acceleration",
+                "Implode Camera Shake", "Throw properties"
+            ],
+            ["PSeeds"] = ["Farm Proto", "Number to Transform", "Farm VFX", "Stealth Level"],
+            ["EarthWall"] = ["Earth Wall", "Damage Tiers"],
+            ["Stealth"] = ["Vanish VFX", "Stealth Level"],
+            ["FavorForest"] =
+            [
+                "Rooted enemy VFX", "Tree Area VFX", "Tree VFX", "Stay Time",
+                "Root duration", "Root damage", "Slow Heal Multiplier"
+            ]
+        };
+    private static readonly HashSet<string> NonAdditionalSpecificAttributes =
+    [
+        "Implode Protos", "Implode Sounds", "Pull properties", "Explosion", "Sphere properties",
+        "Damage interval", "Shear", "Implode delay", "Implode Timing", "Orbit Radius Squared",
+        "Angular Acceleration", "Implode Camera Shake"
+        , "Farm Proto", "Farm VFX", "Earth Wall", "Damage Tiers", "Vanish VFX",
+        "Rooted enemy VFX", "Tree Area VFX", "Root duration", "Root damage"
+    ];
     private static readonly string[] PowerTypes =
     [
         "ArcadianMeadow", "Bolt", "Bronze", "CageUnit", "CeaseFire", "Chaos", "Curse",
@@ -73,6 +105,8 @@ public partial class PowerEditorView : UserControl
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly List<(TextBox Box, XElement Sound)> _soundNumericBoxes = [];
     private readonly List<(AutoCompleteBox Type, TextBox Radius, XElement Restriction)> _placementRestrictionFields = [];
+    private readonly List<(TextBox Segment, TextBox Reduction, XElement Tier)> _damageTierFields = [];
+    private readonly List<(AutoCompleteBox Type, TextBox Damage, XElement RootDamage)> _rootDamageFields = [];
     private readonly HashSet<string> _openOtherAttributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _openOtherSpecificAttributes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Button> _removeOtherAttributeButtons = new(StringComparer.OrdinalIgnoreCase);
@@ -179,11 +213,18 @@ public partial class PowerEditorView : UserControl
                      _hatchIntervalMaxBox, _warnTimeBox, _initialDelayBox,
                      _unitEffectTimeBox, _dropIntervalMinBox, _dropIntervalMaxBox,
                      _maxRetryBox, _maxUnitHeightBox,
+                     _maxSpawnNumberBox, _sinkHoleTimeBox, _sinkHoleShakeBox,
+                     _rumbleTimeBox, _firstSpawnDelayBox, _spawnIntervalMinBox,
+                     _spawnIntervalMaxBox,
                      _indicatorRangeBox, _indicatorWidthBox, _indicatorSpeedBox,
                      _minimapDurationBox, _cameraDurationBox, _cameraStrengthBox, _cameraRangeBox,
                      _terrainHeightBox, _terrainWidthBox, _terrainSpeedBox, _terrainFadeTimeBox,
                      _dualPowerMinDistanceBox, _powerBlockerBox, _revealRadiusBox,
                      _accuracyBox, _allyDamageRatioBox })
+            EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+        foreach (var box in ImplodeNumberBoxes()) EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+        foreach (var box in new[] { _numberToTransformBox, _wallSegmentCountBox, _stayTimeBox,
+                     _rootDurationBox, _slowHealMultiplierBox })
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorAutoCompleteService.ConfigureStrict(_powerTypeBox, PowerTypes, "", () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: false, preserveSuggestionOrder: true,
@@ -239,6 +280,37 @@ public partial class PowerEditorView : UserControl
                 valueCommitted: value => CommitVortexProto(box, value));
             EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
         }
+        foreach (var box in TartarianProtoBoxes())
+        {
+            EditorAutoCompleteService.ConfigureStrict(box, _protoUnitNames, "", () => _isPopulating,
+                preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
+                selectAllOnFirstClick: false,
+                valueCommitted: value => CommitTartarianProto(box, value));
+            EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
+        }
+        foreach (var box in ImplodeProtoBoxes())
+        {
+            EditorAutoCompleteService.ConfigureStrict(box, _protoUnitNames, "", () => _isPopulating,
+                preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
+                selectAllOnFirstClick: false, valueCommitted: value => CommitImplodeProto(box, value));
+            EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
+        }
+        foreach (var box in ImplodeSoundBoxes())
+        {
+            EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating, selectAllOnFirstClick: false);
+            EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
+            box.PropertyChanged += (_, change) =>
+            {
+                if (change.Property == AutoCompleteBox.TextProperty) ImplodeSound_TextChanged(box);
+            };
+        }
+        foreach (var box in NewPowerProtoBoxes())
+        {
+            EditorAutoCompleteService.ConfigureStrict(box, _protoUnitNames, "", () => _isPopulating,
+                preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
+                selectAllOnFirstClick: false, valueCommitted: value => CommitNewPowerProto(box, value));
+            EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
+        }
         _cracksSoundBox.PropertyChanged += (_, change) =>
         {
             if (change.Property == AutoCompleteBox.TextProperty) CracksSound_TextChanged();
@@ -258,7 +330,15 @@ public partial class PowerEditorView : UserControl
                    _damagePercentConversionRow, _vfxProtoRow, _effectTimeRow,
                    _spiderPropertiesRow, _spiderCountRow, _hatchPropertiesRow,
                    _spiderTimingRow, _humanDeathSoundRow, _vortexPropertiesRow,
-                   _vortexDropRow, _maxUnitHeightRow, _vortexSoundsRow })
+                   _vortexDropRow, _maxUnitHeightRow, _vortexSoundsRow,
+                   _tartarianSpawnRow, _tartarianGateRow, _rumbleTimeRow,
+                   _tartarianSpawnTimingRow, _implodeProtosRow, _implodeSoundsRow,
+                   _implodePullRow, _implodeExplosionRow, _implodeSpherePropertiesRow,
+                   _implodeDamageIntervalRow, _implodeShearRow, _implodeDelayRow,
+                   _implodeTimingRow, _implodeOrbitRadiusRow, _implodeAngularRow,
+                   _implodeCameraShakeRow, _pSeedsFarmRow, _pSeedsVfxRow, _stealthLevelRow,
+                   _earthWallRow, _damageTiersRow, _stealthVfxRow, _forestVfxRow,
+                   _forestTimingRow, _rootDamageRow, _slowHealMultiplierRow })
             if (row.Parent is Panel parent) parent.Children.Remove(row);
         _singleActivationCheck.IsCheckedChanged += (_, _) => PowerFlag_Changed(_singleActivationCheck);
         _exclusiveCheck.IsCheckedChanged += (_, _) => PowerFlag_Changed(_exclusiveCheck);
@@ -434,6 +514,10 @@ public partial class PowerEditorView : UserControl
                          _vortexStartLinkedBox, _vortexFinishLinkedBox,
                          _dropIntervalMinBox, _dropIntervalMaxBox, _maxRetryBox,
                          _maxUnitHeightBox, _liftSoundBox, _landSoundBox,
+                         _spawnProtoBox, _maxSpawnNumberBox, _tartarianGateUnitBox,
+                         _tartarianGateBirthBox, _tartarianGateFlameBox,
+                         _sinkHoleTimeBox, _sinkHoleShakeBox, _rumbleTimeBox,
+                         _firstSpawnDelayBox, _spawnIntervalMinBox, _spawnIntervalMaxBox,
                          _castMessageBox, _castSelfMessageBox, _alertPlayerBox,
                          _displayAlertsCheck, _minimapSendToBox, _minimapDurationBox,
                          _activeListVisibilityBox, _hideOnActiveListCheck,
@@ -450,6 +534,8 @@ public partial class PowerEditorView : UserControl
                          _limitGlobalBox, _limitPlayerBox, _singleActivationCheck, _exclusiveCheck,
                          _exclusiveMessageBox })
                 control.IsEnabled = IsModifiedMode;
+            foreach (var control in ImplodeControls()) control.IsEnabled = IsModifiedMode;
+            foreach (var control in NewPowerControls()) control.IsEnabled = IsModifiedMode;
 
             foreach (var box in new[]
                      { _activeTimeBox, _buildUpBox, _shutDownBox, _costBox, _repeatCostBox,
@@ -645,7 +731,56 @@ public partial class PowerEditorView : UserControl
         ("Max Retry", _vortexDropRow, ["maxretryseconds"]),
         ("Max Unit Height", _maxUnitHeightRow, ["maxunitheight"]),
         ("Lift Sound", _vortexSoundsRow, ["liftsoundset"]),
-        ("Land Sound", _vortexSoundsRow, ["landsoundset"])
+        ("Land Sound", _vortexSoundsRow, ["landsoundset"]),
+        ("Spawn Proto", _tartarianSpawnRow, ["spawnproto"]),
+        ("Max Spawn Amount", _tartarianSpawnRow, ["maxnumspawns"]),
+        ("Tartarian Gate", _tartarianGateRow,
+            ["tartariangateproto", "gatebirthproto", "gateflameproto", "sinkholetime",
+             "sinkholeshakestrength"]),
+        ("Rumble Time", _rumbleTimeRow, ["rumbletime"]),
+        ("First Spawn delay", _tartarianSpawnTimingRow, ["spawntimedelay"]),
+        ("Spawn interval", _tartarianSpawnTimingRow, ["spawnintervalmin", "spawnintervalmax"]),
+        ("Implode Protos", _implodeProtosRow, ["sphereproto", "shockwaveproto", "vfxpulleffectproto"]),
+        ("Implode Sounds", _implodeSoundsRow,
+            ["implodestartsoundset", "implodeexplodesoundset", "implodeexplosionwindupsoundset", "implodehitsoundset"]),
+        ("Pull properties", _implodePullRow,
+            ["pullradius", "unitescaperadius", "pullstrengthincrement", "maximumpullstrength",
+             "pullstrengthoverkillincrement", "pullstrengthadjustfactor", "unitacceleration"]),
+        ("Explosion", _implodeExplosionRow,
+            ["explosionwinduplength", "exploderadius", "poweraccumulationincrement",
+             "maximumaccumulatedpower", "explosiondelay", "shockwavevelocity"]),
+        ("Sphere properties", _implodeSpherePropertiesRow,
+            ["spherescalemultiplier", "spheretargetheight", "sphereheightadjustfactor",
+             "spheremovementdelay", "unitfloatadjustfactor"]),
+        ("Damage interval", _implodeDamageIntervalRow, ["damageintervalseconds"]),
+        ("Shear", _implodeShearRow, ["baseshearincrement", "shearmultiplier", "baseshearmax"]),
+        ("Implode delay", _implodeDelayRow,
+            ["unitimplodetimedelaymin", "unitimplodetimedelaymax", "unitimplodeendtimedelaymin",
+             "unitimplodeendtimedelaymax"]),
+        ("Implode Timing", _implodeTimingRow,
+            ["mintimeinstagestarting", "mintimeinstagepullingunits", "mintimeinstageexploding"]),
+        ("Orbit Radius Squared", _implodeOrbitRadiusRow,
+            ["innerorbitradiussquared", "middleorbitradiussquared", "outerorbitradiussquared"]),
+        ("Angular Acceleration", _implodeAngularRow,
+            ["innerorbitangularacceleration", "middleorbitangularacceleration", "outerorbitangularacceleration"]),
+        ("Implode Camera Shake", _implodeCameraShakeRow,
+            ["initialrumblecamerashakeduration", "initialrumblecamerashakestrength",
+             "unitdeathcamerashakeduration", "unitdeathcamerashakestrength",
+             "explosioncamerashakeduration", "explosioncamerashakestrength"]),
+        ("Farm Proto", _pSeedsFarmRow, ["farmproto"]),
+        ("Number to Transform", _pSeedsFarmRow, ["numbertotransform"]),
+        ("Farm VFX", _pSeedsVfxRow, ["pseedsfarmvfx", "pseedsfarmtargetvfx"]),
+        ("Stealth Level", _stealthLevelRow, ["stealthlevel"]),
+        ("Earth Wall", _earthWallRow, ["wallproto", "wallsegmentcount"]),
+        ("Damage Tiers", _damageTiersRow, ["damagetiers"]),
+        ("Vanish VFX", _stealthVfxRow, ["vanishvfx", "vanishunitvfx", "reappearunitvfx"]),
+        ("Rooted enemy VFX", _forestVfxRow, ["rootedenemyvfx"]),
+        ("Tree Area VFX", _forestVfxRow, ["treeareavfx"]),
+        ("Tree VFX", _forestVfxRow, ["treevfx"]),
+        ("Stay Time", _forestTimingRow, ["staytime"]),
+        ("Root duration", _forestTimingRow, ["rootedtime"]),
+        ("Root damage", _rootDamageRow, ["rooteddamage"]),
+        ("Slow Heal Multiplier", _slowHealMultiplierRow, ["slowhealmultiplier"])
     ];
 
     private static bool IsDefaultSpecificAttribute(string? powerType, string name)
@@ -667,7 +802,21 @@ public partial class PowerEditorView : UserControl
                 "Hatch properties" or "Warn time" or "Initial Delay" or "Human Death Sound") ||
            (powerType?.Equals("Vortex", StringComparison.OrdinalIgnoreCase) == true &&
             name is "Initial Delay" or "Unit Effect Time" or "Vortex properties" or
-                "Drop Interval" or "Max Retry" or "Max Unit Height" or "Lift Sound" or "Land Sound");
+                "Drop Interval" or "Max Retry" or "Max Unit Height" or "Lift Sound" or "Land Sound") ||
+           (powerType?.Equals("TartarianGate", StringComparison.OrdinalIgnoreCase) == true &&
+            name is "Spawn Proto" or "Max Spawn Amount" or "Tartarian Gate" or "Rumble Time" or
+                "First Spawn delay" or "Spawn interval" or "Throw properties") ||
+           (powerType?.Equals("Implode", StringComparison.OrdinalIgnoreCase) == true &&
+            SpecificAttributeLayouts["Implode"].Contains(name, StringComparer.OrdinalIgnoreCase)) ||
+           (powerType?.Equals("PSeeds", StringComparison.OrdinalIgnoreCase) == true &&
+            name is "Farm Proto" or "Number to Transform" or "Farm VFX" or "Stealth Level") ||
+           (powerType?.Equals("EarthWall", StringComparison.OrdinalIgnoreCase) == true &&
+            name is "Earth Wall" or "Damage Tiers") ||
+           (powerType?.Equals("Stealth", StringComparison.OrdinalIgnoreCase) == true &&
+            name is "Vanish VFX" or "Stealth Level") ||
+           (powerType?.Equals("FavorForest", StringComparison.OrdinalIgnoreCase) == true &&
+            name is "Rooted enemy VFX" or "Tree Area VFX" or "Tree VFX" or "Stay Time" or
+                "Root duration" or "Root damage" or "Slow Heal Multiplier");
 
     private void PopulateSpecificFields(XElement entry)
     {
@@ -723,6 +872,32 @@ public partial class PowerEditorView : UserControl
         _liftSoundBox.Text = PowerCatalog.FindField(entry, "liftsoundset")?.Value ?? "";
         _landSoundBox.ItemsSource = soundSuggestions;
         _landSoundBox.Text = PowerCatalog.FindField(entry, "landsoundset")?.Value ?? "";
+        foreach (var box in TartarianProtoBoxes())
+            PopulateStrictProtoBox(box, PowerCatalog.FindField(entry, TartarianProtoTag(box))?.Value);
+        foreach (var box in TartarianNumberBoxes())
+            box.Text = EditorNumericFieldStyle.FormatDisplay(
+                PowerCatalog.FindField(entry, (string)box.Tag!)?.Value);
+        foreach (var box in ImplodeProtoBoxes())
+            PopulateStrictProtoBox(box, PowerCatalog.FindField(entry, ImplodeProtoTag(box))?.Value);
+        var implodeSounds = GetSoundSetSuggestions();
+        foreach (var box in ImplodeSoundBoxes())
+        {
+            box.ItemsSource = implodeSounds;
+            box.Text = PowerCatalog.FindField(entry, ImplodeSoundTag(box))?.Value ?? "";
+        }
+        foreach (var box in ImplodeNumberBoxes())
+            box.Text = EditorNumericFieldStyle.FormatDisplay(
+                PowerCatalog.FindField(entry, (string)box.Tag!)?.Value);
+        foreach (var box in NewPowerProtoBoxes())
+            PopulateStrictProtoBox(box, PowerCatalog.FindField(entry, NewPowerProtoTag(box))?.Value);
+        foreach (var box in new[] { _numberToTransformBox, _wallSegmentCountBox, _stayTimeBox,
+                     _rootDurationBox, _slowHealMultiplierBox })
+            box.Text = EditorNumericFieldStyle.FormatDisplay(
+                PowerCatalog.FindField(entry, (string)box.Tag!)?.Value);
+        var stealthLevel = PowerCatalog.FindField(entry, "stealthlevel")?.Value.Trim();
+        _stealthLevelBox.SelectedIndex = stealthLevel == "1" ? 0 : stealthLevel == "2" ? 1 : -1;
+        RefreshDamageTiers(entry);
+        RefreshRootDamages(entry);
         RefreshSpecificAttributeRows();
     }
 
@@ -810,6 +985,241 @@ public partial class PowerEditorView : UserControl
         yield return _maxUnitHeightBox;
     }
 
+    private IEnumerable<AutoCompleteBox> TartarianProtoBoxes()
+    {
+        yield return _spawnProtoBox;
+        yield return _tartarianGateUnitBox;
+        yield return _tartarianGateBirthBox;
+        yield return _tartarianGateFlameBox;
+    }
+
+    private string TartarianProtoTag(AutoCompleteBox box)
+        => ReferenceEquals(box, _spawnProtoBox) ? "spawnproto" :
+           ReferenceEquals(box, _tartarianGateUnitBox) ? "tartariangateproto" :
+           ReferenceEquals(box, _tartarianGateBirthBox) ? "gatebirthproto" : "gateflameproto";
+
+    private IEnumerable<TextBox> TartarianNumberBoxes()
+    {
+        yield return _maxSpawnNumberBox;
+        yield return _sinkHoleTimeBox;
+        yield return _sinkHoleShakeBox;
+        yield return _rumbleTimeBox;
+        yield return _firstSpawnDelayBox;
+        yield return _spawnIntervalMinBox;
+        yield return _spawnIntervalMaxBox;
+    }
+
+    private IEnumerable<AutoCompleteBox> ImplodeProtoBoxes()
+    {
+        yield return _implodeSphereBox;
+        yield return _implodeShockwaveBox;
+        yield return _implodePullEffectBox;
+    }
+
+    private string ImplodeProtoTag(AutoCompleteBox box)
+        => ReferenceEquals(box, _implodeSphereBox) ? "sphereproto" :
+           ReferenceEquals(box, _implodeShockwaveBox) ? "shockwaveproto" : "vfxpulleffectproto";
+
+    private IEnumerable<AutoCompleteBox> ImplodeSoundBoxes()
+    {
+        yield return _implodeStartSoundBox;
+        yield return _implodeExplodeSoundBox;
+        yield return _implodeWindupSoundBox;
+        yield return _implodeHitSoundBox;
+    }
+
+    private string ImplodeSoundTag(AutoCompleteBox box)
+        => ReferenceEquals(box, _implodeStartSoundBox) ? "implodestartsoundset" :
+           ReferenceEquals(box, _implodeExplodeSoundBox) ? "implodeexplodesoundset" :
+           ReferenceEquals(box, _implodeWindupSoundBox) ? "implodeexplosionwindupsoundset" :
+           "implodehitsoundset";
+
+    private IEnumerable<TextBox> ImplodeNumberBoxes()
+    {
+        yield return _implodePullRadiusBox; yield return _implodeEscapeRadiusBox;
+        yield return _implodeStrengthIncrementBox; yield return _implodeMaxStrengthBox;
+        yield return _implodeOverkillIncrementBox; yield return _implodeStrengthAdjustBox;
+        yield return _implodeUnitAccelerationBox; yield return _implodeWindupLengthBox;
+        yield return _implodeExplosionRadiusBox; yield return _implodeAccumulationBox;
+        yield return _implodeMaxAccumulatedBox; yield return _implodeExplosionDelayBox;
+        yield return _implodeShockwaveVelocityBox; yield return _implodeSphereScaleBox;
+        yield return _implodeSphereHeightBox; yield return _implodeHeightAdjustBox;
+        yield return _implodeMovementDelayBox; yield return _implodeFloatAdjustBox;
+        yield return _implodeDamageIntervalBox; yield return _implodeBaseShearIncrementBox;
+        yield return _implodeShearMultiplierBox; yield return _implodeBaseShearMaxBox;
+        yield return _implodeDelayMinBox; yield return _implodeDelayMaxBox;
+        yield return _implodeEndDelayMinBox; yield return _implodeEndDelayMaxBox;
+        yield return _implodeMinStartingBox; yield return _implodeMinPullingBox;
+        yield return _implodeMinExplodingBox; yield return _implodeInnerRadiusBox;
+        yield return _implodeMiddleRadiusBox; yield return _implodeOuterRadiusBox;
+        yield return _implodeInnerAngularBox; yield return _implodeMiddleAngularBox;
+        yield return _implodeOuterAngularBox; yield return _implodeInitialShakeDurationBox;
+        yield return _implodeInitialShakeStrengthBox; yield return _implodeDeathShakeDurationBox;
+        yield return _implodeDeathShakeStrengthBox; yield return _implodeExplosionShakeDurationBox;
+        yield return _implodeExplosionShakeStrengthBox;
+    }
+
+    private IEnumerable<Control> ImplodeControls()
+        => ImplodeProtoBoxes().Cast<Control>().Concat(ImplodeSoundBoxes()).Concat(ImplodeNumberBoxes());
+
+    private IEnumerable<AutoCompleteBox> NewPowerProtoBoxes()
+    {
+        yield return _farmProtoBox; yield return _pSeedsFarmVfxBox; yield return _pSeedsFarmTargetVfxBox;
+        yield return _wallProtoBox; yield return _vanishCastVfxBox; yield return _vanishTargetVfxBox;
+        yield return _reappearVfxBox; yield return _rootedEnemyVfxBox; yield return _treeAreaVfxBox;
+        yield return _forestTreeVfxBox;
+    }
+
+    private string NewPowerProtoTag(AutoCompleteBox box)
+        => ReferenceEquals(box, _farmProtoBox) ? "farmproto" :
+           ReferenceEquals(box, _pSeedsFarmVfxBox) ? "pseedsfarmvfx" :
+           ReferenceEquals(box, _pSeedsFarmTargetVfxBox) ? "pseedsfarmtargetvfx" :
+           ReferenceEquals(box, _wallProtoBox) ? "wallproto" :
+           ReferenceEquals(box, _vanishCastVfxBox) ? "vanishvfx" :
+           ReferenceEquals(box, _vanishTargetVfxBox) ? "vanishunitvfx" :
+           ReferenceEquals(box, _reappearVfxBox) ? "reappearunitvfx" :
+           ReferenceEquals(box, _rootedEnemyVfxBox) ? "rootedenemyvfx" :
+           ReferenceEquals(box, _treeAreaVfxBox) ? "treeareavfx" : "treevfx";
+
+    private IEnumerable<Control> NewPowerControls()
+        => NewPowerProtoBoxes().Cast<Control>().Concat(new Control[]
+        {
+            _numberToTransformBox, _stealthLevelBox, _wallSegmentCountBox, _addDamageTierButton,
+            _stayTimeBox, _rootDurationBox, _addRootDamageButton, _slowHealMultiplierBox
+        });
+
+    private void RefreshDamageTiers(XElement entry)
+    {
+        _damageTierRows.Children.Clear();
+        _damageTierFields.Clear();
+        var container = PowerCatalog.FindField(entry, "damagetiers");
+        if (container != null)
+            foreach (var tier in container.Elements().Where(element =>
+                         element.Name.LocalName.Equals("damagetier", StringComparison.OrdinalIgnoreCase)))
+                BuildDamageTierRow(tier);
+        _addDamageTierButton.IsVisible = IsModifiedMode;
+    }
+
+    private void BuildDamageTierRow(XElement tier)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        row.Children.Add(new TextBlock { Text = "Segment number", VerticalAlignment = VerticalAlignment.Center });
+        var segment = new TextBox { Text = tier.Attribute("mindestroyed")?.Value ?? "" };
+        EditorNumericFieldStyle.ConfigureNumericTextBox(segment);
+        row.Children.Add(segment);
+        row.Children.Add(new TextBlock { Text = "HP Loss Multiplier", VerticalAlignment = VerticalAlignment.Center });
+        var reduction = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(tier.Value) };
+        EditorNumericFieldStyle.ConfigureNumericTextBox(reduction);
+        row.Children.Add(reduction);
+        var remove = new Button(); remove.Classes.Add("remove-button");
+        remove.IsVisible = IsModifiedMode;
+        remove.Click += (_, _) => RemoveDamageTier(tier);
+        row.Children.Add(remove);
+        segment.TextChanged += (_, _) => UpdateDamageTier(tier, segment, reduction);
+        reduction.TextChanged += (_, _) => UpdateDamageTier(tier, segment, reduction);
+        segment.IsEnabled = reduction.IsEnabled = IsModifiedMode;
+        _damageTierFields.Add((segment, reduction, tier));
+        _damageTierRows.Children.Add(row);
+    }
+
+    private void UpdateDamageTier(XElement tier, TextBox segment, TextBox reduction)
+    {
+        if (_isPopulating || !IsModifiedMode || _currentEntry == null) return;
+        if (!int.TryParse(segment.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
+            !double.TryParse(reduction.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+            !double.IsFinite(value)) return;
+        tier.SetAttributeValue("mindestroyed", segment.Text!.Trim());
+        tier.Value = reduction.Text!.Trim();
+        MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+    }
+
+    private void AddDamageTier_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
+        var container = PowerCatalog.FindField(_currentEntry, "damagetiers") ??
+                        PowerCatalog.SetField(_currentEntry, "damagetiers", "");
+        var tier = new XElement("damagetier", new XAttribute("mindestroyed", "0"), "0");
+        container.Add(tier);
+        BuildDamageTierRow(tier);
+        MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+    }
+
+    private void RemoveDamageTier(XElement tier)
+    {
+        var container = tier.Parent;
+        XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(tier);
+        if (container != null && !container.Elements().Any())
+            XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(container);
+        if (_currentEntry != null) RefreshDamageTiers(_currentEntry);
+        MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+    }
+
+    private void RefreshRootDamages(XElement entry)
+    {
+        _rootDamageRows.Children.Clear();
+        _rootDamageFields.Clear();
+        foreach (var damage in entry.Elements().Where(element =>
+                     element.Name.LocalName.Equals("rooteddamage", StringComparison.OrdinalIgnoreCase)))
+            BuildRootDamageRow(damage);
+        _addRootDamageButton.IsVisible = IsModifiedMode;
+    }
+
+    private void BuildRootDamageRow(XElement damage)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        row.Children.Add(new TextBlock { Text = "Unit Type", VerticalAlignment = VerticalAlignment.Center });
+        var type = new AutoCompleteBox { Width = 240, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0 };
+        EditorAutoCompleteService.ConfigureStrict(type, _unitOrTypeNames, damage.Value, () => _isPopulating,
+            preserveUnknownInitialValue: false, allowEmpty: false, selectAllOnFirstClick: false,
+            valueCommitted: value =>
+            {
+                if (!IsModifiedMode || value.Length == 0) return;
+                damage.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+            });
+        EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(type, _specificScroll);
+        var savedType = damage.Value.Trim();
+        type.SelectedItem = _unitOrTypeNames.FirstOrDefault(value =>
+            value.Equals(savedType, StringComparison.OrdinalIgnoreCase));
+        type.Text = savedType;
+        row.Children.Add(type);
+        row.Children.Add(new TextBlock { Text = "Damage", VerticalAlignment = VerticalAlignment.Center });
+        var amount = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(damage.Attribute("damage")?.Value) };
+        EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
+        amount.TextChanged += (_, _) =>
+        {
+            if (_isPopulating || !IsModifiedMode ||
+                !double.TryParse(amount.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+                !double.IsFinite(value) || value < 0) return;
+            damage.SetAttributeValue("damage", amount.Text!.Trim());
+            MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+        };
+        row.Children.Add(amount);
+        var remove = new Button(); remove.Classes.Add("remove-button"); remove.IsVisible = IsModifiedMode;
+        remove.Click += (_, _) =>
+        {
+            XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(damage);
+            if (_currentEntry != null) RefreshRootDamages(_currentEntry);
+            MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+        };
+        row.Children.Add(remove);
+        type.IsEnabled = amount.IsEnabled = IsModifiedMode;
+        _rootDamageFields.Add((type, amount, damage));
+        _rootDamageRows.Children.Add(row);
+    }
+
+    private void AddRootDamage_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
+        var damage = new XElement("rooteddamage", new XAttribute("damage", "0"), "");
+        var last = _currentEntry.Elements().LastOrDefault(element =>
+            element.Name.LocalName.Equals("rooteddamage", StringComparison.OrdinalIgnoreCase));
+        if (last != null) last.AddAfterSelf(damage);
+        else _currentEntry.Add(damage);
+        RefreshRootDamages(_currentEntry);
+        MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+    }
+
     private void RefreshSpecificAttributeRows()
     {
         var powerType = _currentEntry?.Attribute("type")?.Value.Trim();
@@ -823,7 +1233,11 @@ public partial class PowerEditorView : UserControl
                     _openOtherSpecificAttributes.Contains(spec.Name) || present);
             return (IsDefault: isDefault, Visible: visible);
         }, StringComparer.OrdinalIgnoreCase);
-        foreach (var rowGroup in specs.GroupBy(spec => spec.Row))
+        var fallbackOrder = specs.Select((spec, index) => (spec.Name, index))
+            .ToDictionary(item => item.Name, item => item.index, StringComparer.OrdinalIgnoreCase);
+        foreach (var rowGroup in specs.GroupBy(spec => spec.Row)
+                     .OrderBy(group => group.Min(spec =>
+                         GetSpecificAttributeOrder(powerType, spec.Name, fallbackOrder[spec.Name]))))
         {
             var row = rowGroup.Key;
             if (row.Parent is Panel parent) parent.Children.Remove(row);
@@ -987,6 +1401,79 @@ public partial class PowerEditorView : UserControl
         _removeLandSoundButton.IsVisible = IsModifiedMode && landSoundVisible &&
                                             !states["Land Sound"].IsDefault;
 
+        var spawnVisible = states["Spawn Proto"].Visible;
+        var maxSpawnVisible = states["Max Spawn Amount"].Visible;
+        _spawnMainLabel.IsVisible = spawnVisible || maxSpawnVisible;
+        _spawnMainLabel.Text = spawnVisible ? "Spawn Proto" : "Max Spawn Amount";
+        _spawnFields.IsVisible = spawnVisible;
+        _maxSpawnNumberFields.IsVisible = maxSpawnVisible;
+        _maxSpawnNumberInlineLabel.IsVisible = spawnVisible && maxSpawnVisible;
+        _removeSpawnButton.IsVisible = IsModifiedMode && spawnVisible && !states["Spawn Proto"].IsDefault;
+        _removeMaxSpawnNumberButton.IsVisible = IsModifiedMode && maxSpawnVisible &&
+                                                 !states["Max Spawn Amount"].IsDefault;
+
+        _removeTartarianGateButton.IsVisible = IsModifiedMode && states["Tartarian Gate"].Visible &&
+                                                !states["Tartarian Gate"].IsDefault;
+        SetSpecificGroupVisibility(_tartarianGateUnitFields, "tartariangateproto");
+        SetSpecificGroupVisibility(_tartarianGateBirthFields, "gatebirthproto");
+        SetSpecificGroupVisibility(_tartarianGateFlameFields, "gateflameproto");
+        SetSpecificGroupVisibility(_sinkHoleTimeFields, "sinkholetime");
+        SetSpecificGroupVisibility(_sinkHoleShakeFields, "sinkholeshakestrength");
+        _removeRumbleTimeButton.IsVisible = IsModifiedMode && states["Rumble Time"].Visible &&
+                                             !states["Rumble Time"].IsDefault;
+
+        var firstSpawnDelayVisible = states["First Spawn delay"].Visible;
+        var spawnIntervalVisible = states["Spawn interval"].Visible;
+        _firstSpawnDelayMainLabel.IsVisible = firstSpawnDelayVisible || spawnIntervalVisible;
+        _firstSpawnDelayMainLabel.Text = firstSpawnDelayVisible ? "First Spawn delay" : "Spawn interval";
+        _firstSpawnDelayFields.IsVisible = firstSpawnDelayVisible;
+        _spawnIntervalFields.IsVisible = spawnIntervalVisible;
+        _spawnIntervalInlineLabel.IsVisible = firstSpawnDelayVisible && spawnIntervalVisible;
+        _removeFirstSpawnDelayButton.IsVisible = IsModifiedMode && firstSpawnDelayVisible &&
+                                                  !states["First Spawn delay"].IsDefault;
+        _removeSpawnIntervalButton.IsVisible = IsModifiedMode && spawnIntervalVisible &&
+                                                !states["Spawn interval"].IsDefault;
+        var spawnIntervalMinPresent = _currentEntry != null &&
+            PowerCatalog.FindField(_currentEntry, "spawnintervalmin") != null;
+        var spawnIntervalMaxPresent = _currentEntry != null &&
+            PowerCatalog.FindField(_currentEntry, "spawnintervalmax") != null;
+        _spawnIntervalMinLabel.IsVisible = _spawnIntervalMinBox.IsVisible =
+            IsModifiedMode || spawnIntervalMinPresent;
+        _spawnIntervalMaxLabel.IsVisible = _spawnIntervalMaxBox.IsVisible =
+            IsModifiedMode || spawnIntervalMaxPresent;
+
+        var farmProtoVisible = states["Farm Proto"].Visible;
+        var numberTransformVisible = states["Number to Transform"].Visible;
+        _farmProtoMainLabel.Text = farmProtoVisible ? "Farm Proto" : "Number to Transform";
+        _farmProtoFields.IsVisible = farmProtoVisible;
+        _numberToTransformFields.IsVisible = numberTransformVisible;
+        _numberToTransformInlineLabel.IsVisible = farmProtoVisible && numberTransformVisible;
+        _removeNumberToTransformButton.IsVisible = IsModifiedMode && numberTransformVisible &&
+                                                    !states["Number to Transform"].IsDefault;
+        _removeStealthLevelButton.IsVisible = IsModifiedMode && states["Stealth Level"].Visible &&
+                                               !states["Stealth Level"].IsDefault;
+        _addDamageTierButton.IsVisible = IsModifiedMode && states["Damage Tiers"].Visible;
+
+        var rootedVfxVisible = states["Rooted enemy VFX"].Visible;
+        var treeAreaVisible = states["Tree Area VFX"].Visible;
+        var treeVfxVisible = states["Tree VFX"].Visible;
+        _rootedEnemyVfxFields.IsVisible = rootedVfxVisible;
+        _treeAreaVfxFields.IsVisible = treeAreaVisible;
+        _treeVfxFields.IsVisible = treeVfxVisible;
+        _removeForestTreeVfxButton.IsVisible = IsModifiedMode && treeVfxVisible &&
+                                                !states["Tree VFX"].IsDefault;
+        var stayTimeVisible = states["Stay Time"].Visible;
+        var rootDurationVisible = states["Root duration"].Visible;
+        _stayTimeMainLabel.Text = stayTimeVisible ? "Stay Time" : "Root duration";
+        _stayTimeFields.IsVisible = stayTimeVisible;
+        _rootDurationFields.IsVisible = rootDurationVisible;
+        _rootDurationInlineLabel.IsVisible = stayTimeVisible && rootDurationVisible;
+        _removeStayTimeButton.IsVisible = IsModifiedMode && stayTimeVisible &&
+                                           !states["Stay Time"].IsDefault;
+        _addRootDamageButton.IsVisible = IsModifiedMode && states["Root damage"].Visible;
+        _removeSlowHealMultiplierButton.IsVisible = IsModifiedMode &&
+            states["Slow Heal Multiplier"].Visible && !states["Slow Heal Multiplier"].IsDefault;
+
         var cracks = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "cracksoundset");
         var min = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "crackintervalmin");
         var max = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "crackintervalmax");
@@ -1011,7 +1498,8 @@ public partial class PowerEditorView : UserControl
         _otherSpecificAttributePicker.IsVisible = _otherSpecificAttributePickerOpen && IsModifiedMode;
         _otherSpecificAttributePicker.ItemsSource = SpecificAttributeSpecs()
             .Select(spec => spec.Name)
-            .Where(name => !IsDefaultSpecificAttribute(powerType, name) &&
+            .Where(name => !NonAdditionalSpecificAttributes.Contains(name) &&
+                           !IsDefaultSpecificAttribute(powerType, name) &&
                            !_openOtherSpecificAttributes.Contains(name))
             .ToList();
     }
@@ -1033,6 +1521,17 @@ public partial class PowerEditorView : UserControl
     private void SetSpecificGroupVisibility(Control group, string tag)
         => group.IsVisible = IsModifiedMode || (_currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, tag) != null);
+
+    private static int GetSpecificAttributeOrder(string? powerType, string name, int fallback)
+    {
+        if (powerType != null && SpecificAttributeLayouts.TryGetValue(powerType, out var layout))
+        {
+            var index = Array.FindIndex(layout,
+                value => value.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) return index;
+        }
+        return 1000 + fallback;
+    }
 
     private void CommitPowerType(string powerType)
     {
@@ -1189,6 +1688,39 @@ public partial class PowerEditorView : UserControl
             else if (name == "Max Unit Height") _maxUnitHeightBox.Text = "";
             else if (name == "Lift Sound") _liftSoundBox.Text = "";
             else if (name == "Land Sound") _landSoundBox.Text = "";
+            else if (name == "Spawn Proto")
+            {
+                _spawnProtoBox.SelectedItem = null;
+                _spawnProtoBox.Text = "";
+            }
+            else if (name == "Max Spawn Amount") _maxSpawnNumberBox.Text = "";
+            else if (name == "Tartarian Gate")
+            {
+                foreach (var box in TartarianProtoBoxes().Where(box =>
+                             !ReferenceEquals(box, _spawnProtoBox)))
+                {
+                    box.SelectedItem = null;
+                    box.Text = "";
+                }
+                _sinkHoleTimeBox.Text = "";
+                _sinkHoleShakeBox.Text = "";
+            }
+            else if (name == "Rumble Time") _rumbleTimeBox.Text = "";
+            else if (name == "First Spawn delay") _firstSpawnDelayBox.Text = "";
+            else if (name == "Spawn interval")
+            {
+                _spawnIntervalMinBox.Text = "";
+                _spawnIntervalMaxBox.Text = "";
+            }
+            else if (name == "Number to Transform") _numberToTransformBox.Text = "";
+            else if (name == "Stealth Level") _stealthLevelBox.SelectedIndex = -1;
+            else if (name == "Tree VFX")
+            {
+                _forestTreeVfxBox.SelectedItem = null;
+                _forestTreeVfxBox.Text = "";
+            }
+            else if (name == "Stay Time") _stayTimeBox.Text = "";
+            else if (name == "Slow Heal Multiplier") _slowHealMultiplierBox.Text = "";
         }
         finally { _isPopulating = wasPopulating; }
         RefreshSpecificAttributeRows();
@@ -1251,6 +1783,40 @@ public partial class PowerEditorView : UserControl
         SetOrRemoveSpecificField(VortexProtoTag(box), value);
     }
 
+    private void CommitTartarianProto(AutoCompleteBox box, string value)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry) || !box.IsVisible) return;
+        if (value.Length > 0 && !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase)) return;
+        SetOrRemoveSpecificField(TartarianProtoTag(box), value);
+    }
+
+    private void CommitImplodeProto(AutoCompleteBox box, string value)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry) || !box.IsVisible) return;
+        if (value.Length > 0 && !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase)) return;
+        SetOrRemoveSpecificField(ImplodeProtoTag(box), value);
+    }
+
+    private void ImplodeSound_TextChanged(AutoCompleteBox box)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry) || !box.IsVisible) return;
+        SetOrRemoveSpecificField(ImplodeSoundTag(box), box.Text?.Trim() ?? "");
+    }
+
+    private void CommitNewPowerProto(AutoCompleteBox box, string value)
+    {
+        if (_currentEntry == null || !CanEditProperties(_currentEntry) || !box.IsVisible) return;
+        if (value.Length > 0 && !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase)) return;
+        SetOrRemoveSpecificField(NewPowerProtoTag(box), value);
+    }
+
+    private void StealthLevel_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isPopulating || _currentEntry == null || !CanEditProperties(_currentEntry) ||
+            _stealthLevelBox.SelectedItem is not ComboBoxItem item || item.Content is not string value) return;
+        SetOrRemoveSpecificField("stealthlevel", value);
+    }
+
     private void SpecificNumber_TextChanged(object? sender, TextChangedEventArgs e)
     {
         if (sender is not TextBox { Tag: string tag } box || _currentEntry == null ||
@@ -1263,15 +1829,16 @@ public partial class PowerEditorView : UserControl
                 if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) || count < 0)
                     return;
             }
-            else if (tag == "numbertocreate")
+            else if (tag is "numbertocreate" or "maxnumspawns" or "numbertotransform" or "wallsegmentcount")
             {
-                if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) || count < 0)
+                if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) ||
+                    ((tag is "numbertocreate" or "maxnumspawns" or "wallsegmentcount") && count < 0))
                     return;
             }
             else if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture,
                          out var value) || !double.IsFinite(value) ||
                      ((tag is "timefactor" or "uniteffecttimeseconds" or "sharedeffecttimeseconds") &&
-                      value < 0) || (tag == "spiderattackrange" && value < 0))
+                      value < 0) || ((tag is "spiderattackrange" or "pullradius" or "staytime") && value < 0))
                 return;
         }
         SetOrRemoveSpecificField(tag, text);
@@ -3200,7 +3767,8 @@ public partial class PowerEditorView : UserControl
         {
             if (string.IsNullOrWhiteSpace(box.Text)) continue;
             var valid = (string)box.Tag! == "indicatorcount"
-                ? int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count >= 0
+                ? int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) &&
+                  (ReferenceEquals(box, _numberToTransformBox) || count >= 0)
                 : double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
                   double.IsFinite(number) && number >= 0;
             if (!valid) return $"Range Indicator Proto {box.Tag} must be a non-negative number.";
@@ -3217,17 +3785,25 @@ public partial class PowerEditorView : UserControl
         foreach (var box in new[] { _crackIntervalMinBox, _crackIntervalMaxBox, _timeFactorBox }
                      .Concat(ShockwaveNumberBoxes()).Concat(GaiaNumberBoxes())
                      .Concat(ValorTraitorChaosNumberBoxes()).Concat(SpiderNumberBoxes())
-                     .Concat(VortexNumberBoxes()))
+                     .Concat(VortexNumberBoxes()).Concat(TartarianNumberBoxes())
+                     .Concat(ImplodeNumberBoxes()).Concat(new[]
+                     { _numberToTransformBox, _wallSegmentCountBox, _stayTimeBox,
+                       _rootDurationBox, _slowHealMultiplierBox }))
         {
             if (!box.IsVisible || string.IsNullOrWhiteSpace(box.Text)) continue;
-            var valid = ReferenceEquals(box, _treeAmountBox) || ReferenceEquals(box, _numberToCreateBox)
+            var valid = ReferenceEquals(box, _treeAmountBox) || ReferenceEquals(box, _numberToCreateBox) ||
+                        ReferenceEquals(box, _maxSpawnNumberBox)
+                        || ReferenceEquals(box, _numberToTransformBox)
+                        || ReferenceEquals(box, _wallSegmentCountBox)
                 ? int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count >= 0
                 : double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) && double.IsFinite(value) &&
                   (!(ReferenceEquals(box, _timeFactorBox) ||
                      ReferenceEquals(box, _unitEffectTimeSecondsBox) ||
                      ReferenceEquals(box, _sharedEffectTimeSecondsBox) ||
-                     ReferenceEquals(box, _spiderAttackRangeBox)) || value >= 0);
+                     ReferenceEquals(box, _spiderAttackRangeBox) ||
+                     ReferenceEquals(box, _implodePullRadiusBox) ||
+                     ReferenceEquals(box, _stayTimeBox)) || value >= 0);
             if (!valid)
                 return ReferenceEquals(box, _timeFactorBox)
                     ? "Time Factor must be a non-negative number."
@@ -3238,8 +3814,18 @@ public partial class PowerEditorView : UserControl
                         ? "Tree amount must be a non-negative whole number."
                     : ReferenceEquals(box, _numberToCreateBox)
                         ? "Number to create must be a non-negative whole number."
+                    : ReferenceEquals(box, _maxSpawnNumberBox)
+                        ? "Max Spawn Amount must be a non-negative whole number."
+                    : ReferenceEquals(box, _numberToTransformBox)
+                        ? "Number to Transform must be a whole number."
+                    : ReferenceEquals(box, _wallSegmentCountBox)
+                        ? "Segment counts must be a non-negative whole number."
                     : ReferenceEquals(box, _spiderAttackRangeBox)
                         ? "Spider Attack Range must be a non-negative number."
+                    : ReferenceEquals(box, _implodePullRadiusBox)
+                        ? "Pull Radius must be a non-negative number."
+                    : ReferenceEquals(box, _stayTimeBox)
+                        ? "Stay Time must be a non-negative number."
                     : $"{box.Tag} must be a valid number.";
         }
         var shockwaveVfx = _shockwaveVfxBox.Text?.Trim() ?? "";
@@ -3268,6 +3854,45 @@ public partial class PowerEditorView : UserControl
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
                 return "Vortex properties must use valid Protounits.";
+        }
+        foreach (var box in TartarianProtoBoxes())
+        {
+            var value = box.Text?.Trim() ?? "";
+            if (box.IsVisible && value.Length > 0 &&
+                !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
+                return "Tartarian Gate attributes must use valid Protounits.";
+        }
+        foreach (var box in ImplodeProtoBoxes())
+        {
+            var value = box.Text?.Trim() ?? "";
+            if (box.IsVisible && value.Length > 0 &&
+                !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
+                return "Implode VFX fields must use valid Protounits.";
+        }
+        foreach (var box in NewPowerProtoBoxes())
+        {
+            var value = box.Text?.Trim() ?? "";
+            if (box.IsVisible && value.Length > 0 &&
+                !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
+                return "Specific VFX and unit fields must use valid Protounits.";
+        }
+        foreach (var (segment, reduction, tier) in _damageTierFields)
+        {
+            if (tier.Parent == null) continue;
+            if (!int.TryParse(segment.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
+                !double.TryParse(reduction.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
+                    out var value) || !double.IsFinite(value))
+                return "Damage Tiers require an integer Segment number and numeric wall-life reduction.";
+        }
+        foreach (var (type, damage, element) in _rootDamageFields)
+        {
+            if (element.Parent == null) continue;
+            var typeValue = type.Text?.Trim() ?? "";
+            if (!_unitOrTypeNames.Contains(typeValue, StringComparer.OrdinalIgnoreCase))
+                return "Root damage Unit Type must be a valid Protounit or Unit Type.";
+            if (!double.TryParse(damage.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
+                    out var value) || !double.IsFinite(value) || value < 0)
+                return "Root damage must be a non-negative number.";
         }
         var placement = PowerCatalog.FindField(_currentEntry!, "placement");
         if (!string.Equals(_placementBox.SelectedItem as string, "Skip", StringComparison.OrdinalIgnoreCase) &&
@@ -4000,13 +4625,44 @@ public partial class PowerEditorView : UserControl
         foreach (var box in VortexNumberBoxes()) box.Text = "";
         _liftSoundBox.Text = "";
         _landSoundBox.Text = "";
+        foreach (var box in TartarianProtoBoxes())
+        {
+            box.SelectedItem = null;
+            box.Text = "";
+        }
+        foreach (var box in TartarianNumberBoxes()) box.Text = "";
+        foreach (var box in ImplodeProtoBoxes())
+        {
+            box.SelectedItem = null;
+            box.Text = "";
+        }
+        foreach (var box in ImplodeSoundBoxes()) box.Text = "";
+        foreach (var box in ImplodeNumberBoxes()) box.Text = "";
+        foreach (var box in NewPowerProtoBoxes())
+        {
+            box.SelectedItem = null;
+            box.Text = "";
+        }
+        foreach (var box in new[] { _numberToTransformBox, _wallSegmentCountBox, _stayTimeBox,
+                     _rootDurationBox, _slowHealMultiplierBox }) box.Text = "";
+        _stealthLevelBox.SelectedIndex = -1;
+        _damageTierRows.Children.Clear(); _damageTierFields.Clear();
+        _rootDamageRows.Children.Clear(); _rootDamageFields.Clear();
         foreach (var row in new Control[]
                  { _cracksSoundRow, _timeFactorRow, _shockwaveTopRow, _throwPropertiesRow,
                    _gaiaTreeTopRow, _gaiaSpawnRow, _growthRadiusRow, _effectVfxRow,
                    _damagePercentConversionRow, _vfxProtoRow, _effectTimeRow,
                    _spiderPropertiesRow, _spiderCountRow, _hatchPropertiesRow,
                    _spiderTimingRow, _humanDeathSoundRow, _vortexPropertiesRow,
-                   _vortexDropRow, _maxUnitHeightRow, _vortexSoundsRow })
+                   _vortexDropRow, _maxUnitHeightRow, _vortexSoundsRow,
+                   _tartarianSpawnRow, _tartarianGateRow, _rumbleTimeRow,
+                   _tartarianSpawnTimingRow, _implodeProtosRow, _implodeSoundsRow,
+                   _implodePullRow, _implodeExplosionRow, _implodeSpherePropertiesRow,
+                   _implodeDamageIntervalRow, _implodeShearRow, _implodeDelayRow,
+                   _implodeTimingRow, _implodeOrbitRadiusRow, _implodeAngularRow,
+                   _implodeCameraShakeRow, _pSeedsFarmRow, _pSeedsVfxRow, _stealthLevelRow,
+                   _earthWallRow, _damageTiersRow, _stealthVfxRow, _forestVfxRow,
+                   _forestTimingRow, _rootDamageRow, _slowHealMultiplierRow })
         {
             if (row.Parent is Panel parent) parent.Children.Remove(row);
             row.IsVisible = false;
@@ -4147,6 +4803,10 @@ public partial class PowerEditorView : UserControl
                      _vortexStartLinkedBox, _vortexFinishLinkedBox,
                      _dropIntervalMinBox, _dropIntervalMaxBox, _maxRetryBox,
                      _maxUnitHeightBox, _liftSoundBox, _landSoundBox,
+                     _spawnProtoBox, _maxSpawnNumberBox, _tartarianGateUnitBox,
+                     _tartarianGateBirthBox, _tartarianGateFlameBox,
+                     _sinkHoleTimeBox, _sinkHoleShakeBox, _rumbleTimeBox,
+                     _firstSpawnDelayBox, _spawnIntervalMinBox, _spawnIntervalMaxBox,
                      _castMessageBox, _castSelfMessageBox, _alertPlayerBox,
                      _displayAlertsCheck, _minimapSendToBox, _minimapDurationBox,
                      _activeListVisibilityBox, _hideOnActiveListCheck,
@@ -4164,6 +4824,8 @@ public partial class PowerEditorView : UserControl
                      _singleActivationCheck, _exclusiveCheck,
                      _exclusiveMessageBox })
             control.IsEnabled = false;
+        foreach (var control in ImplodeControls()) control.IsEnabled = false;
+        foreach (var control in NewPowerControls()) control.IsEnabled = false;
         RefreshActiveRolloverVisibility();
         SetRawXml("");
         XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, true);

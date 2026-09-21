@@ -1612,7 +1612,9 @@ public sealed class PowerEditorWorkflowTests
                     "Spider properties", "Number to create", "Separation Distance", "Hatch properties",
                     "Warn time", "Initial Delay", "Human Death Sound", "Unit Effect Time",
                     "Vortex properties", "Drop Interval", "Max Retry", "Max Unit Height",
-                    "Lift Sound", "Land Sound"],
+                    "Lift Sound", "Land Sound", "Spawn Proto", "Max Spawn Amount", "Tartarian Gate",
+                    "Rumble Time", "First Spawn delay", "Spawn interval", "Number to Transform",
+                    "Stealth Level", "Tree VFX", "Stay Time", "Slow Heal Multiplier"],
                 picker.ItemsSource!.Cast<string>());
             picker.SelectedItem = "Cracks Sound";
             Assert.False(picker.IsVisible);
@@ -1684,6 +1686,7 @@ public sealed class PowerEditorWorkflowTests
             var specific = GetPrivateField<StackPanel>(editor, "_specificAttributeRows");
             Assert.Same(specific, GetPrivateField<Grid>(editor, "_shockwaveTopRow").Parent);
             Assert.Same(specific, GetPrivateField<Grid>(editor, "_throwPropertiesRow").Parent);
+            Assert.Same(GetPrivateField<Grid>(editor, "_throwPropertiesRow"), specific.Children[^1]);
             Assert.True(GetPrivateField<StackPanel>(editor, "_stunLengthFields").IsVisible);
             Assert.True(GetPrivateField<StackPanel>(editor, "_shockwaveVfxFields").IsVisible);
             Assert.False(GetPrivateField<Button>(editor, "_removeStunLengthButton").IsVisible);
@@ -2007,6 +2010,237 @@ public sealed class PowerEditorWorkflowTests
         Assert.Equal("25", power.Element("maxunitheight")?.Value);
         Assert.Equal("CustomLift", power.Element("liftsoundset")?.Value);
         Assert.Equal("CustomLand", power.Element("landsoundset")?.Value);
+    }
+
+    [Fact]
+    public void TartarianGateTypeWritesItsSpecificAttributesAndReusesThrowProperties()
+    {
+        using var workspace = new TestWorkspace(
+            nameof(TartarianGateTypeWritesItsSpecificAttributesAndReusesThrowProperties));
+        var path = workspace.WriteText("powers_mods.xml",
+            "<powersmod><power name=\"P\" type=\"TartarianGate\" /></powersmod>");
+        var editor = AvaloniaTestHost.Run(() => new PowerEditorView([], path, protoUnitNames:
+            ["TartarianSpawn", "TartarianGate", "TartarianGateBirth", "TartarianGateFlame"]));
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SetModifiedMode(true);
+            editor.SelectPower("P");
+            var specific = GetPrivateField<StackPanel>(editor, "_specificAttributeRows");
+            Assert.Same(specific, GetPrivateField<Grid>(editor, "_tartarianSpawnRow").Parent);
+            Assert.Same(specific, GetPrivateField<Grid>(editor, "_tartarianGateRow").Parent);
+            Assert.Same(specific, GetPrivateField<Grid>(editor, "_tartarianSpawnTimingRow").Parent);
+            Assert.Same(specific, GetPrivateField<Grid>(editor, "_throwPropertiesRow").Parent);
+            Assert.False(GetPrivateField<Button>(editor, "_removeThrowPropertiesButton").IsVisible);
+
+            GetPrivateField<AutoCompleteBox>(editor, "_spawnProtoBox").SelectedItem = "TartarianSpawn";
+            GetPrivateField<TextBox>(editor, "_maxSpawnNumberBox").Text = "7";
+            GetPrivateField<AutoCompleteBox>(editor, "_tartarianGateUnitBox").SelectedItem = "TartarianGate";
+            GetPrivateField<AutoCompleteBox>(editor, "_tartarianGateBirthBox").SelectedItem = "TartarianGateBirth";
+            GetPrivateField<AutoCompleteBox>(editor, "_tartarianGateFlameBox").SelectedItem = "TartarianGateFlame";
+            GetPrivateField<TextBox>(editor, "_sinkHoleTimeBox").Text = "3";
+            GetPrivateField<TextBox>(editor, "_sinkHoleShakeBox").Text = "0.08";
+            GetPrivateField<TextBox>(editor, "_rumbleTimeBox").Text = "3";
+            GetPrivateField<TextBox>(editor, "_firstSpawnDelayBox").Text = "1";
+            GetPrivateField<TextBox>(editor, "_spawnIntervalMinBox").Text = "1";
+            GetPrivateField<TextBox>(editor, "_spawnIntervalMaxBox").Text = "2";
+            foreach (var (field, value) in new[]
+                     {
+                         ("_minThrowDistanceBox", "6"), ("_maxThrowDistanceBox", "9"),
+                         ("_minThrowHeightBox", "1"), ("_maxThrowHeightBox", "2.5"),
+                         ("_minThrowVelocityBox", "11"), ("_maxThrowVelocityBox", "15")
+                     })
+                GetPrivateField<TextBox>(editor, field).Text = value;
+        });
+
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+        var power = FindPower(XDocument.Load(path), "P");
+        Assert.Equal("TartarianSpawn", power.Element("spawnproto")?.Value);
+        Assert.Equal("7", power.Element("maxnumspawns")?.Value);
+        Assert.Equal("TartarianGate", power.Element("tartariangateproto")?.Value);
+        Assert.Equal("TartarianGateBirth", power.Element("gatebirthproto")?.Value);
+        Assert.Equal("TartarianGateFlame", power.Element("gateflameproto")?.Value);
+        Assert.Equal("3", power.Element("sinkholetime")?.Value);
+        Assert.Equal("0.08", power.Element("sinkholeshakestrength")?.Value);
+        Assert.Equal("3", power.Element("rumbletime")?.Value);
+        Assert.Equal("1", power.Element("spawntimedelay")?.Value);
+        Assert.Equal("1", power.Element("spawnintervalmin")?.Value);
+        Assert.Equal("2", power.Element("spawnintervalmax")?.Value);
+        Assert.Equal("6", power.Element("minthrowdistance")?.Value);
+        Assert.Equal("15", power.Element("maxthrowvelocity")?.Value);
+    }
+
+    [Fact]
+    public void ImplodeTypeWritesItsDedicatedGroupsAndKeepsThemOutOfAdditionalAttributes()
+    {
+        using var workspace = new TestWorkspace(
+            nameof(ImplodeTypeWritesItsDedicatedGroupsAndKeepsThemOutOfAdditionalAttributes));
+        var path = workspace.WriteText("powers_mods.xml",
+            "<powersmod><power name=\"P\" type=\"Implode\" /></powersmod>");
+        var editor = AvaloniaTestHost.Run(() => new PowerEditorView(
+            [new PowerDefinition("Sounds", true, XElement.Parse(
+                "<power name=\"Sounds\"><implodestartsoundset>ImplodeBirth</implodestartsoundset>" +
+                "<implodeexplodesoundset>ImplodeDeath</implodeexplodesoundset></power>"))],
+            path, protoUnitNames: ["ImplodeSphere", "ImplodeShockwave", "VFXImplodePullEffect"]));
+        var numericFields = new Dictionary<string, string>
+        {
+            ["_implodePullRadiusBox"] = "25", ["_implodeEscapeRadiusBox"] = "30",
+            ["_implodeStrengthIncrementBox"] = "0.1", ["_implodeMaxStrengthBox"] = "1",
+            ["_implodeOverkillIncrementBox"] = "0.1", ["_implodeStrengthAdjustBox"] = "0.06",
+            ["_implodeUnitAccelerationBox"] = "4", ["_implodeWindupLengthBox"] = "1.396",
+            ["_implodeExplosionRadiusBox"] = "30", ["_implodeAccumulationBox"] = "0.1",
+            ["_implodeMaxAccumulatedBox"] = "1", ["_implodeExplosionDelayBox"] = "1.6",
+            ["_implodeShockwaveVelocityBox"] = "67.2", ["_implodeSphereScaleBox"] = "1.2",
+            ["_implodeSphereHeightBox"] = "3", ["_implodeHeightAdjustBox"] = "2",
+            ["_implodeMovementDelayBox"] = "2", ["_implodeFloatAdjustBox"] = "0.3",
+            ["_implodeDamageIntervalBox"] = "999", ["_implodeBaseShearIncrementBox"] = "0.1",
+            ["_implodeShearMultiplierBox"] = "0.2", ["_implodeBaseShearMaxBox"] = "1",
+            ["_implodeDelayMinBox"] = "0.15", ["_implodeDelayMaxBox"] = "0.25",
+            ["_implodeEndDelayMinBox"] = "0.01", ["_implodeEndDelayMaxBox"] = "0.1",
+            ["_implodeMinStartingBox"] = "3", ["_implodeMinPullingBox"] = "4",
+            ["_implodeMinExplodingBox"] = "3", ["_implodeInnerRadiusBox"] = "25",
+            ["_implodeMiddleRadiusBox"] = "100", ["_implodeOuterRadiusBox"] = "225",
+            ["_implodeInnerAngularBox"] = "14", ["_implodeMiddleAngularBox"] = "2.5",
+            ["_implodeOuterAngularBox"] = "0.5", ["_implodeInitialShakeDurationBox"] = "3",
+            ["_implodeInitialShakeStrengthBox"] = "0.05", ["_implodeDeathShakeDurationBox"] = "0.1",
+            ["_implodeDeathShakeStrengthBox"] = "0.1", ["_implodeExplosionShakeDurationBox"] = "0.8",
+            ["_implodeExplosionShakeStrengthBox"] = "0.3"
+        };
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SetModifiedMode(true);
+            editor.SelectPower("P");
+            var specific = GetPrivateField<StackPanel>(editor, "_specificAttributeRows");
+            Assert.Same(GetPrivateField<Grid>(editor, "_throwPropertiesRow"), specific.Children[^1]);
+            GetPrivateField<Button>(editor, "_otherSpecificAttributesButton")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.DoesNotContain("Pull properties",
+                GetPrivateField<AutoCompleteBox>(editor, "_otherSpecificAttributePicker")
+                    .ItemsSource!.Cast<string>());
+
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeSphereBox").SelectedItem = "ImplodeSphere";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeShockwaveBox").SelectedItem = "ImplodeShockwave";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodePullEffectBox").SelectedItem = "VFXImplodePullEffect";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeStartSoundBox").Text = "ImplodeBirth";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeExplodeSoundBox").Text = "ImplodeDeath";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeWindupSoundBox").Text = "CustomWindup";
+            GetPrivateField<AutoCompleteBox>(editor, "_implodeHitSoundBox").Text = "CustomHit";
+            foreach (var (field, value) in numericFields)
+                GetPrivateField<TextBox>(editor, field).Text = value;
+            foreach (var (field, value) in new[]
+                     {
+                         ("_minThrowDistanceBox", "15"), ("_maxThrowDistanceBox", "25"),
+                         ("_minThrowHeightBox", "1"), ("_maxThrowHeightBox", "2"),
+                         ("_minThrowVelocityBox", "15"), ("_maxThrowVelocityBox", "22")
+                     })
+                GetPrivateField<TextBox>(editor, field).Text = value;
+        });
+
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+        var power = FindPower(XDocument.Load(path), "P");
+        Assert.Equal("ImplodeSphere", power.Element("sphereproto")?.Value);
+        Assert.Equal("ImplodeShockwave", power.Element("shockwaveproto")?.Value);
+        Assert.Equal("VFXImplodePullEffect", power.Element("vfxpulleffectproto")?.Value);
+        Assert.Equal("ImplodeBirth", power.Element("implodestartsoundset")?.Value);
+        Assert.Equal("CustomHit", power.Element("implodehitsoundset")?.Value);
+        AvaloniaTestHost.Run(() =>
+        {
+            foreach (var (field, value) in numericFields)
+            {
+                var box = GetPrivateField<TextBox>(editor, field);
+                Assert.Equal(value, power.Element((string)box.Tag!)?.Value);
+            }
+        });
+        Assert.Equal("15", power.Element("minthrowdistance")?.Value);
+        Assert.Equal("22", power.Element("maxthrowvelocity")?.Value);
+    }
+
+    [Fact]
+    public void PSeedsEarthWallStealthAndFavorForestWriteTheirSpecificXml()
+    {
+        using var workspace = new TestWorkspace(nameof(PSeedsEarthWallStealthAndFavorForestWriteTheirSpecificXml));
+        var path = workspace.WriteText("powers_mods.xml",
+            "<powersmod><power name=\"Seeds\" type=\"PSeeds\"/><power name=\"Wall\" type=\"EarthWall\"/>" +
+            "<power name=\"Vanish\" type=\"Stealth\"/><power name=\"Forest\" type=\"FavorForest\">" +
+            "<rooteddamage damage=\"6\">Unit</rooteddamage></power></powersmod>");
+        var protos = new[] { "FarmShennong", "VFXSeeds", "VFXTarget", "EarthWall", "VFXCast",
+            "VFXUnit", "VFXReappear", "VFXRoot", "VFXArea", "VFXTree" };
+        var editor = AvaloniaTestHost.Run(() => new PowerEditorView([], path,
+            protoUnitNames: protos, unitTypeNames: ["Hero", "Unit"]));
+        AvaloniaTestHost.Run(() => editor.SetModifiedMode(true));
+
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SelectPower("Seeds");
+            GetPrivateField<AutoCompleteBox>(editor, "_farmProtoBox").SelectedItem = "FarmShennong";
+            GetPrivateField<TextBox>(editor, "_numberToTransformBox").Text = "2";
+            GetPrivateField<AutoCompleteBox>(editor, "_pSeedsFarmVfxBox").SelectedItem = "VFXSeeds";
+            GetPrivateField<AutoCompleteBox>(editor, "_pSeedsFarmTargetVfxBox").SelectedItem = "VFXTarget";
+            GetPrivateField<ComboBox>(editor, "_stealthLevelBox").SelectedIndex = 1;
+        });
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SelectPower("Wall");
+            GetPrivateField<AutoCompleteBox>(editor, "_wallProtoBox").SelectedItem = "EarthWall";
+            GetPrivateField<TextBox>(editor, "_wallSegmentCountBox").Text = "42";
+            GetPrivateField<Button>(editor, "_addDamageTierButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var row = GetPrivateField<StackPanel>(editor, "_damageTierRows").Children.OfType<StackPanel>().Last();
+            var boxes = row.Children.OfType<TextBox>().ToArray(); boxes[0].Text = "1"; boxes[1].Text = "0.125";
+        });
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SelectPower("Vanish");
+            GetPrivateField<AutoCompleteBox>(editor, "_vanishCastVfxBox").SelectedItem = "VFXCast";
+            GetPrivateField<AutoCompleteBox>(editor, "_vanishTargetVfxBox").SelectedItem = "VFXUnit";
+            GetPrivateField<AutoCompleteBox>(editor, "_reappearVfxBox").SelectedItem = "VFXReappear";
+            GetPrivateField<ComboBox>(editor, "_stealthLevelBox").SelectedIndex = 0;
+        });
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+
+        AvaloniaTestHost.Run(() =>
+        {
+            editor.SelectPower("Forest");
+            GetPrivateField<AutoCompleteBox>(editor, "_rootedEnemyVfxBox").SelectedItem = "VFXRoot";
+            GetPrivateField<AutoCompleteBox>(editor, "_treeAreaVfxBox").SelectedItem = "VFXArea";
+            GetPrivateField<AutoCompleteBox>(editor, "_forestTreeVfxBox").SelectedItem = "VFXTree";
+            GetPrivateField<TextBox>(editor, "_stayTimeBox").Text = "10";
+            GetPrivateField<TextBox>(editor, "_rootDurationBox").Text = "1.5";
+            GetPrivateField<TextBox>(editor, "_slowHealMultiplierBox").Text = "0.5";
+            var existing = GetPrivateField<StackPanel>(editor, "_rootDamageRows")
+                .Children.OfType<StackPanel>().Single();
+            Assert.Equal("Unit", existing.Children.OfType<AutoCompleteBox>().Single().Text);
+            Assert.Contains("add-component", GetPrivateField<Button>(editor, "_addRootDamageButton").Classes);
+            Assert.Contains("add-component", GetPrivateField<Button>(editor, "_addDamageTierButton").Classes);
+            Assert.Equal(VerticalAlignment.Top, GetPrivateField<Grid>(editor, "_forestVfxRow")
+                .Children.OfType<TextBlock>().Single().VerticalAlignment);
+            GetPrivateField<Button>(editor, "_addRootDamageButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var row = GetPrivateField<StackPanel>(editor, "_rootDamageRows").Children.OfType<StackPanel>().Last();
+            row.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Hero";
+            row.Children.OfType<TextBox>().Single().Text = "3";
+        });
+        Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
+
+        var document = XDocument.Load(path);
+        var seeds = FindPower(document, "Seeds");
+        Assert.Equal("FarmShennong", seeds.Element("farmproto")?.Value);
+        Assert.Equal("2", seeds.Element("numbertotransform")?.Value);
+        Assert.Equal("2", seeds.Element("stealthlevel")?.Value);
+        Assert.Equal("VFXTarget", seeds.Element("pseedsfarmtargetvfx")?.Value);
+        var wall = FindPower(document, "Wall");
+        Assert.Equal("42", wall.Element("wallsegmentcount")?.Value);
+        Assert.Equal("1", wall.Element("damagetiers")?.Element("damagetier")?.Attribute("mindestroyed")?.Value);
+        Assert.Equal("0.125", wall.Element("damagetiers")?.Element("damagetier")?.Value);
+        Assert.Equal("1", FindPower(document, "Vanish").Element("stealthlevel")?.Value);
+        var forest = FindPower(document, "Forest");
+        Assert.Equal("VFXTree", forest.Element("treevfx")?.Value);
+        var rootDamages = forest.Elements("rooteddamage").ToArray();
+        Assert.Equal("Unit", rootDamages[0].Value);
+        Assert.Equal("6", rootDamages[0].Attribute("damage")?.Value);
+        Assert.Equal("Hero", rootDamages[1].Value);
+        Assert.Equal("3", rootDamages[1].Attribute("damage")?.Value);
     }
 
     private static XElement FindPower(XContainer container, string name)
