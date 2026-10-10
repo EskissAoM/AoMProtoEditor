@@ -66,6 +66,12 @@ public sealed class TechnologyDataRound13RegressionTests
         Assert.Contains("ReadBarXmbXml(entry, stream)", code, StringComparison.Ordinal);
         Assert.Contains("tactic.Nodes().OfType<XText>()", code, StringComparison.Ordinal);
         Assert.Contains("AddLooseTactics(ResolveBaseGameplayDirectory())", code, StringComparison.Ordinal);
+        var powerViewStart = code.IndexOf("private void EnsurePowerView()", StringComparison.Ordinal);
+        var powerViewEnd = code.IndexOf("private GameIdentifierReferenceMigrationPlan PreparePowerReferenceMigration",
+            powerViewStart, StringComparison.Ordinal);
+        var powerView = code[powerViewStart..powerViewEnd];
+        Assert.Contains("GetTechnologyTacticDefinitionNames());", powerView, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetAvailableTacticsNames()", powerView, StringComparison.Ordinal);
     }
 
     private static string ReadSource(params string[] parts)

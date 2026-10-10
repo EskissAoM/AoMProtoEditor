@@ -8,13 +8,15 @@ namespace AoMDivineDataEditor.Classes;
 /// </summary>
 public static class ModReferenceFileCatalog
 {
+    private const int MaximumReferenceFileCount = 20_000;
+
     public static IReadOnlyList<TechnologyReferenceFile> Discover(string? modRootDirectory)
     {
         if (string.IsNullOrWhiteSpace(modRootDirectory) || !Directory.Exists(modRootDirectory))
             return [];
 
         var files = new List<TechnologyReferenceFile>();
-        foreach (var path in Directory.EnumerateFiles(modRootDirectory, "*", SearchOption.AllDirectories))
+        foreach (var path in ContainedFileEnumeration.EnumerateFiles(modRootDirectory))
         {
             var extension = Path.GetExtension(path);
             if (!extension.Equals(".xml", StringComparison.OrdinalIgnoreCase) &&
@@ -28,6 +30,12 @@ public static class ModReferenceFileCatalog
                 fullPath,
                 InferDocumentKind(fullPath),
                 Path.GetRelativePath(modRootDirectory, fullPath)));
+            if (files.Count > MaximumReferenceFileCount)
+            {
+                throw new InvalidOperationException(
+                    $"Reference discovery found more than {MaximumReferenceFileCount:N0} editable XML/tactics files. " +
+                    "The operation was cancelled to keep memory and scan time bounded.");
+            }
         }
 
         return files

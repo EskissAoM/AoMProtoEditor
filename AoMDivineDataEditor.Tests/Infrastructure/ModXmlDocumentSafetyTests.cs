@@ -95,6 +95,25 @@ public sealed class ModXmlDocumentSafetyTests
     }
 
     [Fact]
+    public void Commands_allow_repeatable_shared_and_prequeue_command_elements()
+    {
+        var result = Validate("""
+            <protounitcommandmods>
+              <protounitcommand>
+                <name>TransformBuilding</name>
+                <sharedcommand>TransformLumber</sharedcommand>
+                <sharedcommand>TransformLivestock</sharedcommand>
+                <removecommandprequeueonprequeue>BuildLumber</removecommandprequeueonprequeue>
+                <removecommandprequeueonprequeue>BuildLivestock</removecommandprequeueonprequeue>
+              </protounitcommand>
+            </protounitcommandmods>
+            """, ModXmlDocumentKind.ProtoUnitCommands);
+
+        Assert.True(result.IsSafeToEdit);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
     public void Tactics_rejects_duplicate_and_nested_named_action_definitions()
     {
         var result = Validate("""
@@ -156,6 +175,22 @@ public sealed class ModXmlDocumentSafetyTests
 
         Assert.Contains("could not be read exactly", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(truncated, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Loader_prohibits_dtds_and_external_entities_without_changing_file()
+    {
+        using var temp = new TestWorkspace(nameof(ModXmlDocumentSafetyTests));
+        var path = temp.GetPath("powers_mods.xml");
+        const string xml = "<!DOCTYPE powersmod [<!ENTITY external SYSTEM 'file:///does-not-exist'>]>" +
+                           "<powersmod><power name='P' type='Rain'>&external;</power></powersmod>";
+        File.WriteAllText(path, xml);
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            ModXmlDocumentSafety.LoadExisting(path, ModXmlDocumentKind.Powers));
+
+        Assert.Contains("could not be read exactly", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(xml, File.ReadAllText(path));
     }
 
     [Fact]

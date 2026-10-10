@@ -66,4 +66,33 @@ public sealed class TargetFilterEditor : StackPanel
         SimpleTargetField.IsVisible = !IsMultiple;
         MultipleTargetsField.IsVisible = IsMultiple;
     }
+
+    /// <summary>
+    /// Builds one labeled multiple-target chip group. The label is part of the
+    /// read-only presentation contract; only the picker is omitted in read-only mode.
+    /// </summary>
+    public static StackPanel CreateChipGroup(
+        string title,
+        AutoCompleteBox picker,
+        WrapPanel chips,
+        bool isReadOnly)
+    {
+        var host = new StackPanel { Spacing = 2, Width = 330 };
+        var header = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        header.Children.Add(new TextBlock
+        {
+            Text = title + ":",
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        if (!isReadOnly)
+            header.Children.Add(picker);
+        host.Children.Add(header);
+        host.Children.Add(chips);
+        return host;
+    }
 }

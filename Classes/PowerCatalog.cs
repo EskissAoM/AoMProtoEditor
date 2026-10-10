@@ -107,6 +107,58 @@ public static class PowerCatalog
             var newline = whitespace.Value.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
             whitespace.Value = newline + indentation;
         }
+
+        // The first TempUnit editor could append repeated children without their
+        // indentation text node. Repair that narrowly scoped historical output.
+        if (!string.Equals(entry.Attribute("type")?.Value, "TempUnit",
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        var parentIndentation = GetNodeIndent(entry) ?? "  ";
+        var childIndentation = entry.Elements().Select(GetNodeIndent)
+            .FirstOrDefault(value => value != null) ??
+            parentIndentation + (parentIndentation.Contains('\t') ? "\t" : "  ");
+        foreach (var child in entry.Elements().ToList())
+        {
+            if (child.PreviousNode is not XText previous || !string.IsNullOrWhiteSpace(previous.Value))
+                child.AddBeforeSelf(new XText("\n" + childIndentation));
+            else
+            {
+                var lastNewline = previous.Value.LastIndexOf('\n');
+                var currentIndentation = lastNewline >= 0 ? previous.Value[(lastNewline + 1)..] : "";
+                if (!currentIndentation.Equals(childIndentation, StringComparison.Ordinal))
+                    previous.Value = (lastNewline >= 0 ? previous.Value[..(lastNewline + 1)] : "\n") +
+                                     childIndentation;
+            }
+        }
+        if (entry.LastNode is not XText trailing || !string.IsNullOrWhiteSpace(trailing.Value))
+            entry.Add(new XText("\n" + parentIndentation));
+        else
+        {
+            var lastNewline = trailing.Value.LastIndexOf('\n');
+            var currentIndentation = lastNewline >= 0 ? trailing.Value[(lastNewline + 1)..] : "";
+            if (!currentIndentation.Equals(parentIndentation, StringComparison.Ordinal))
+                trailing.Value = (lastNewline >= 0 ? trailing.Value[..(lastNewline + 1)] : "\n") +
+                                 parentIndentation;
+        }
+    }
+
+    public static void NormalizeNestedElementIndentation(XElement container)
+    {
+        ArgumentNullException.ThrowIfNull(container);
+        var parentIndentation = GetNodeIndent(container) ?? "    ";
+        var indentUnit = parentIndentation.Contains('\t') ? "\t" : "  ";
+        var childIndentation = parentIndentation + indentUnit;
+        foreach (var child in container.Elements().ToList())
+        {
+            if (child.PreviousNode is XText previous && string.IsNullOrWhiteSpace(previous.Value))
+                previous.Value = "\n" + childIndentation;
+            else
+                child.AddBeforeSelf(new XText("\n" + childIndentation));
+        }
+        if (container.LastNode is XText trailing && string.IsNullOrWhiteSpace(trailing.Value))
+            trailing.Value = "\n" + parentIndentation;
+        else
+            container.Add(new XText("\n" + parentIndentation));
     }
 
     public static string GetSectionMarker(PowerDocumentSection section)
@@ -186,12 +238,26 @@ public static class PowerCatalog
         => documents
             .SelectMany(GetPowerElements)
             .Where(power => isBuiltIn || IsModCatalogPower(power))
-            .Select(power => new PowerDefinition(GetName(power), isBuiltIn, new XElement(power)))
+            .Select(power => CreateDefinition(power, isBuiltIn))
             .Where(definition => definition.Name.Length > 0)
             .GroupBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private static PowerDefinition CreateDefinition(XElement power, bool isBuiltIn)
+    {
+        var clone = new XElement(power);
+        var name = GetName(clone);
+        if (isBuiltIn && name.Equals("ShiftingSands", StringComparison.OrdinalIgnoreCase))
+        {
+            var rangeIndicators = clone.Elements().Where(element =>
+                element.Name.LocalName.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var duplicate in rangeIndicators.Take(Math.Max(0, rangeIndicators.Count - 1)))
+                XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(duplicate);
+        }
+        return new PowerDefinition(name, isBuiltIn, clone);
+    }
 
     public static IReadOnlyList<PowerDefinition> ExtractDefinitions(XContainer container, bool isBuiltIn)
     {

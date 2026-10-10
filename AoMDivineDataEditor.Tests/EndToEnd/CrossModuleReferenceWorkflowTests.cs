@@ -103,4 +103,60 @@ public sealed class CrossModuleReferenceWorkflowTests
         Assert.Equal(original, File.ReadAllBytes(path));
     }
 
+    [Fact]
+    public void Plan_skips_irrelevant_malformed_xml_but_guards_it_against_late_changes()
+    {
+        using var workspace = new TestWorkspace(
+            nameof(Plan_skips_irrelevant_malformed_xml_but_guards_it_against_late_changes));
+        var path = workspace.WriteText("game/data/gameplay/custom.xml", "<unfinished>");
+
+        var plan = GameIdentifierReferenceMigrationPlan.Prepare(
+            ModReferenceFileCatalog.Discover(workspace.RootPath),
+            GameIdentifierKind.Ability,
+            [new KeyValuePair<string, string>("OldPower", "NewPower")]);
+
+        Assert.Empty(plan.Paths);
+        Assert.Contains(Path.GetFullPath(path), plan.ExpectedStates.Keys,
+            StringComparer.OrdinalIgnoreCase);
+        File.WriteAllText(path, "<root><castpower>OldPower</castpower></root>");
+        var commitRan = false;
+
+        Assert.Throws<IOException>(() =>
+            FileIntegrityTransaction.Execute([], plan.ExpectedStates, () => commitRan = true));
+        Assert.False(commitRan);
+    }
+
+    [Fact]
+    public void Catalog_does_not_follow_directory_links_outside_the_mod_root()
+    {
+        using var workspace = new TestWorkspace(
+            nameof(Catalog_does_not_follow_directory_links_outside_the_mod_root));
+        var modRoot = workspace.CreateDirectory("mod");
+        var external = workspace.CreateDirectory("external");
+        var externalPath = Path.Combine(external, "outside.xml");
+        File.WriteAllText(externalPath, "<root />");
+        var linkPath = Path.Combine(modRoot, "linked");
+        try
+        {
+            Directory.CreateSymbolicLink(linkPath, external);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        try
+        {
+            var files = ModReferenceFileCatalog.Discover(modRoot);
+            Assert.DoesNotContain(files, file =>
+                file.Path.Equals(externalPath, StringComparison.OrdinalIgnoreCase) ||
+                file.Label.Contains("outside.xml", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(linkPath))
+                Directory.Delete(linkPath);
+        }
+    }
+
 }

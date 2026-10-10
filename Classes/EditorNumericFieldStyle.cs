@@ -1,6 +1,9 @@
 using System;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 
 namespace AoMDivineDataEditor.Classes;
@@ -13,6 +16,7 @@ namespace AoMDivineDataEditor.Classes;
 public static class EditorNumericFieldStyle
 {
     public const double CompactWidth = 90;
+    private static readonly ConditionalWeakTable<TextBox, object> InputFilters = new();
 
     public static TextBox ConfigureNumericTextBox(TextBox textBox)
     {
@@ -22,6 +26,15 @@ public static class EditorNumericFieldStyle
         textBox.HorizontalContentAlignment = HorizontalAlignment.Left;
         textBox.Text = FormatNumericDisplay(textBox.Text);
         textBox.LostFocus += (_, _) => textBox.Text = FormatNumericDisplay(textBox.Text);
+        if (!InputFilters.TryGetValue(textBox, out _))
+        {
+            InputFilters.Add(textBox, new object());
+            textBox.AddHandler(InputElement.TextInputEvent, (_, args) =>
+            {
+                if (args.Text?.Any(ch => !char.IsDigit(ch) && ch is not '.' and not '-') == true)
+                    args.Handled = true;
+            }, RoutingStrategies.Tunnel);
+        }
         return textBox;
     }
 

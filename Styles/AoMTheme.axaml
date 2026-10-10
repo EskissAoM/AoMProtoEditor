@@ -119,6 +119,10 @@
     <Setter Property="BorderBrush" Value="#B58A47" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
+  <Style Selector="AutoCompleteBox.invalid-field">
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
   <Style Selector="TextBox:disabled, AutoCompleteBox:disabled, ComboBox:disabled, NumericUpDown:disabled">
     <Setter Property="Background" Value="#141615" />
     <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />

@@ -518,6 +518,7 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.DoesNotContain("Content = \"Attach Bone\"", onHit, StringComparison.Ordinal);
         Assert.Contains("ItemsSource = new[] { \"Simple\", \"Multiple\" }", onHit, StringComparison.Ordinal);
         Assert.Contains("new TargetFilterEditor(", onHit, StringComparison.Ordinal);
+        Assert.Contains("TargetFilterEditor.CreateChipGroup(", onHit, StringComparison.Ordinal);
         Assert.Contains("targetFiltersSection.RefreshModeVisibility();", onHit, StringComparison.Ordinal);
         Assert.Contains("currentSupportedType.Equals(\"SelfModify\"", onHit, StringComparison.Ordinal);
         Assert.Contains("currentSupportedType.Equals(\"SelfStealth\"", onHit, StringComparison.Ordinal);
@@ -903,7 +904,7 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
     }
 
     [Fact]
-    public void AutoRangedModify_UsesCompactModifyTargetsAndSeparatedProtoButtons()
+    public void AutoRangedModify_UsesSharedDamageBonusesAndRemovableProtoUnitOptions()
     {
         var source = ReadProtoEditorSource();
         var start = source.IndexOf("else if (IsAutoRangedModifyActionType(actionType)", StringComparison.Ordinal);
@@ -916,9 +917,37 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.DoesNotContain("Text = \"Damage Target Type:\"", autoRanged, StringComparison.Ordinal);
         Assert.Contains("Text = \"Target:\"", autoRanged, StringComparison.Ordinal);
         Assert.Contains("autoRangedUnitTypeSuggestions\n                    .Concat(GetAvailableTrainUnitNames())", autoRanged, StringComparison.Ordinal);
-        Assert.Contains("var forbidProtoUnitButtonHost = targetProtoUnitRow != null", autoRanged, StringComparison.Ordinal);
-        Assert.Contains("state.AdditionalFieldsContainer.Children.Add(forbidProtoUnitButtonHost);", autoRanged, StringComparison.Ordinal);
-        Assert.Contains("Margin = new Thickness(10, 0, 12, 6)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content = \"+ Bonus\"", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("bodyStack.Children.Add(state.BonusSectionContainer);", source, StringComparison.Ordinal);
+        Assert.Contains("Text = \"Damage Bonuses:\"", source, StringComparison.Ordinal);
+        Assert.Contains("state.AddDamageBonusButton = btnAddBonus;", source, StringComparison.Ordinal);
+        Assert.Contains("var showsAutoRangedDamageBonuses = IsAutoRangedModifyActionType(actionType);", source, StringComparison.Ordinal);
+        Assert.Contains("x.Tag.Equals(\"damagebonus\", StringComparison.OrdinalIgnoreCase)", source, StringComparison.Ordinal);
+        Assert.Contains("var protoUnitOptionsRow = new WrapPanel", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("var openProtoUnitRows = new List<Control>();", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("AddOptionalProtoUnitList(\"modifyprotoid\", \"Target Proto Unit\");", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("AddOptionalProtoUnitList(\"forbidunittype\", \"Forbid Proto Unit\");", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("openProtoUnitRows.Add(openRow);", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("foreach (var openProtoUnitRow in openProtoUnitRows)", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("BlockInheritedStructuredProtoActionRemovalAsync(state, tag, label)", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("Classes = { \"remove-button\" }", autoRanged, StringComparison.Ordinal);
+        Assert.Contains("Margin = new Thickness(protoUnitOptionsRow.Children.Count > 0 ? 10 : 0, 2, 0, 2)", autoRanged, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DamageDamageAreaAndBonusOptions_ShareAFlowingOptionalButtonRow()
+    {
+        var source = ReadProtoEditorSource();
+
+        Assert.Contains("public WrapPanel DamageOptionButtonsRow", source, StringComparison.Ordinal);
+        Assert.Contains("state.AddDamageButton", source, StringComparison.Ordinal);
+        Assert.Contains("state.AddDamageAreaButton", source, StringComparison.Ordinal);
+        Assert.Contains("state.AddDamageBonusButton", source, StringComparison.Ordinal);
+        Assert.Contains("var hasOpenDamageOption = (state.DamageSectionContainer.IsVisible && state.DamageRows.Count > 0)", source, StringComparison.Ordinal);
+        Assert.Contains("PlaceButton(state.AddDamageButton, state.DamageRows.Count > 0", source, StringComparison.Ordinal);
+        Assert.Contains("PlaceButton(state.AddDamageBonusButton, state.BonusRows.Count > 0", source, StringComparison.Ordinal);
+        Assert.Contains("lastSectionIndex + 1", source, StringComparison.Ordinal);
+        Assert.Contains("ArrangeProtoActionDamageOptionButtons(state);", source, StringComparison.Ordinal);
     }
 
     [Fact]

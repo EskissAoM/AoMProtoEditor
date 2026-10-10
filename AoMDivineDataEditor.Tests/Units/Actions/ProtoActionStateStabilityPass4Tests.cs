@@ -1,5 +1,6 @@
 using System.Xml.Linq;
 using AoMDivineDataEditor.Classes;
+using AoMDivineDataEditor.Windows;
 using Xunit;
 
 namespace AoMDivineDataEditor.Tests;
@@ -120,7 +121,38 @@ public sealed class ProtoActionStateStabilityPass4Tests
         Assert.Contains("state.RenderRevision++;", source, StringComparison.Ordinal);
         Assert.Contains("renderState.RenderRevision != renderRevision", source, StringComparison.Ordinal);
         Assert.Contains("_isPopulating = true;", source, StringComparison.Ordinal);
-        Assert.Contains("if (isBusy?.Invoke() == true)", autocompleteSource, StringComparison.Ordinal);
+        Assert.Contains("bool Busy() => isBusy?.Invoke() == true;", autocompleteSource,
+            StringComparison.Ordinal);
+        Assert.Contains("lifetime != visualLifetime", autocompleteSource, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Attack", "Attack", false)]
+    [InlineData("Attack", " attack ", false)]
+    [InlineData("Attack", "Dropsite", true)]
+    [InlineData("Attack", "", false)]
+    public void ProtoActionTypeSelection_DistinguishesNavigationFromAnEdit(
+        string renderedType,
+        string selectedType,
+        bool expectedChange)
+    {
+        Assert.Equal(
+            expectedChange,
+            ProtoEditorWindow.IsProtoActionTypeSelectionChange(renderedType, selectedType));
+    }
+
+    [Fact]
+    public void ProtoActionCardNavigation_SuppressesDelayedControlInitializationOnlyForNavigation()
+    {
+        var source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "Windows", "ProtoEditorWindow.axaml.cs")));
+
+        Assert.Contains("void SelectAction(ProtoActionWidgetState? action, bool isNavigation = false)", source,
+            StringComparison.Ordinal);
+        Assert.Contains("SelectAction(actionState, isNavigation: true);", source, StringComparison.Ordinal);
+        Assert.Contains("SuppressEditorChangeTrackingWhileControlsSettle();", source, StringComparison.Ordinal);
+        Assert.Contains("SelectAction(AddProtoActionWidget(newPa, isNewCustomAction: true));", source,
+            StringComparison.Ordinal);
     }
 
     [Fact]

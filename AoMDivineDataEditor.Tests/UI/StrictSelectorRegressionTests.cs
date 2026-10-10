@@ -83,6 +83,60 @@ public sealed class StrictSelectorRegressionTests
     }
 
     [Fact]
+    public void ConfiguredStrictSelectorAcceptsAProgrammaticallyPopulatedLegacyBaseline()
+    {
+        AvaloniaTestHost.Run(() =>
+        {
+            var isPopulating = false;
+            var committed = new List<string>();
+            var selector = new AutoCompleteBox();
+            EditorAutoCompleteService.ConfigureStrict(selector, ["KnownOne", "KnownTwo"], "",
+                () => isPopulating, preserveUnknownInitialValue: false,
+                valueCommitted: committed.Add);
+
+            isPopulating = true;
+            selector.SelectedItem = null;
+            selector.Text = "ModOnlyValue";
+            isPopulating = false;
+
+            selector.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal("ModOnlyValue", selector.Text);
+            Assert.Equal(["ModOnlyValue"], committed);
+        });
+    }
+
+    [Fact]
+    public void ConfiguredStrictSelectorCancelsQueuedCommitWhenItsCardIsDetached()
+    {
+        AvaloniaTestHost.Run(() =>
+        {
+            var committed = new List<string>();
+            var selector = new AutoCompleteBox { Text = "KnownOne" };
+            EditorAutoCompleteService.ConfigureStrict(selector, ["KnownOne", "KnownTwo"], "KnownOne",
+                valueCommitted: committed.Add);
+            var card = new Border { Child = selector };
+            var host = new StackPanel { Children = { card } };
+            var window = new Window { Content = host };
+            window.Show();
+            try
+            {
+                selector.Text = "invalid";
+                selector.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
+                host.Children.Remove(card);
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Empty(committed);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    [Fact]
     public void HotkeyContexts_MergeNestedBaseAndModContextsWithoutDuplicates()
     {
         var baseDocument = XDocument.Parse("""

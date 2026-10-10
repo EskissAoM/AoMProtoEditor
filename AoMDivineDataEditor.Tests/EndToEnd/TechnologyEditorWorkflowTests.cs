@@ -14,8 +14,10 @@ namespace AoMDivineDataEditor.Tests;
 /// validation, strings, reference migration, and atomic file writes meet.
 /// </summary>
 [Trait("Category", TestCategories.EndToEnd)]
-public sealed class TechnologyEditorWorkflowTests
+public sealed class TechnologyEditorWorkflowTests : IDisposable
 {
+    public void Dispose() => AvaloniaTestHost.CollectUiGarbage();
+
     [Fact]
     public void OpeningAnUntouchedCustomTechnologyPreservesExactFileBytesAndCleanState()
     {

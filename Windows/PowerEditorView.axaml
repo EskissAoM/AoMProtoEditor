@@ -5,7 +5,21 @@
              x:Class="AoMDivineDataEditor.Windows.PowerEditorView"
              Background="Transparent"
              Foreground="{DynamicResource PrimaryTextBrush}">
-  <Grid x:Name="_mainGrid" RowDefinitions="*,Auto">
+  <UserControl.Styles>
+    <Style Selector="Button.remove-button">
+      <Setter Property="Margin" Value="2,0,0,4"/>
+    </Style>
+    <Style Selector="Border.temp-unit-card">
+      <Setter Property="BorderBrush" Value="{DynamicResource NormalBorderBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="2"/>
+      <Setter Property="Padding" Value="10"/>
+      <Setter Property="Margin" Value="0,0,12,4"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+  </UserControl.Styles>
+  <Grid x:Name="_mainGrid">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="4*"/>
       <ColumnDefinition Width="5"/>
@@ -13,7 +27,7 @@
     </Grid.ColumnDefinitions>
 
     <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
-      <Grid RowDefinitions="Auto,*">
+      <Grid RowDefinitions="Auto,*,Auto">
         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Power :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
           <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
@@ -33,6 +47,16 @@
                       <TextBox Grid.Column="1" x:Name="_displayNameBox" Tag="displaynameid"
                                Margin="0,4,8,4" TextChanged="ResolvedStringBox_TextChanged"/>
                     </Grid>
+                    <Button x:Name="_addOrderHintButton" Content="Order hint"
+                            Classes="add-component" HorizontalAlignment="Left"
+                            Margin="150,4,0,4" Padding="8,3" Click="AddOrderHint_Click"/>
+                    <Grid x:Name="_orderHintRow" ColumnDefinitions="150,Auto,Auto" IsVisible="False">
+                      <TextBlock Text="Order hint" VerticalAlignment="Center" Margin="0,4,6,4"/>
+                      <TextBox Grid.Column="1" x:Name="_orderHintBox" Width="50" MaxWidth="50"
+                               Margin="0,4,0,4" TextChanged="OrderHint_TextChanged"/>
+                      <Button Grid.Column="2" x:Name="_removeOrderHintButton" Classes="remove-button"
+                              Margin="2,4,0,4" Click="RemoveOrderHint_Click"/>
+                    </Grid>
                     <Grid ColumnDefinitions="150,*">
                       <TextBlock Text="Rollover" VerticalAlignment="Top" Margin="0,10,6,4"/>
                       <TextBox Grid.Column="1" x:Name="_rolloverBox" Tag="rolloverid"
@@ -50,7 +74,7 @@
                                ScrollViewer.VerticalScrollBarVisibility="Auto"
                                TextChanged="ResolvedStringBox_TextChanged"/>
                       <Button Grid.Column="2" x:Name="_removeActiveRolloverButton" Classes="remove-button"
-                              Margin="4,4,0,4" Click="RemoveActiveRollover_Click"/>
+                              Margin="2,4,0,4" Click="RemoveActiveRollover_Click"/>
                     </Grid>
                     <Grid ColumnDefinitions="150,*">
                       <TextBlock Text="Icon" VerticalAlignment="Center" Margin="0,4,6,4"/>
@@ -60,6 +84,8 @@
                       <TextBlock Text="Active Time (s)" VerticalAlignment="Center"/>
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                         <TextBox x:Name="_activeTimeBox" Tag="activetime" TextChanged="NumericBox_TextChanged"/>
+                        <CheckBox x:Name="_activeTimeOnTargetCheck" Content="Active Time On Target"
+                                  VerticalAlignment="Center"/>
                         <Button x:Name="_addBuildUpButton" Content="BuildUp (s)" Classes="add-component"
                                 Click="AddOptionalTime_Click" Tag="builduptime"/>
                         <StackPanel x:Name="_buildUpRow" Orientation="Horizontal" Spacing="4" IsVisible="False">
@@ -73,18 +99,26 @@
                         <StackPanel x:Name="_shutDownRow" Orientation="Horizontal" Spacing="4" IsVisible="False">
                           <TextBlock Text="ShutDown (s)" VerticalAlignment="Center"/>
                           <TextBox x:Name="_shutDownBox" Tag="shutdowntime" TextChanged="NumericBox_TextChanged"/>
+                          <TextBlock Text="Fade" VerticalAlignment="Center"/>
+                          <TextBox x:Name="_shutDownFadeBox" Tag="shutdownfadetime"
+                                   TextChanged="NumericBox_TextChanged"/>
                           <Button x:Name="_removeShutDownButton" Classes="remove-button" Tag="shutdowntime"
                                   Click="RemoveOptionalTime_Click"/>
                         </StackPanel>
                       </StackPanel>
                     </Grid>
-                    <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
+                    <Grid x:Name="_generalCostRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
                       <TextBlock Text="Cost" VerticalAlignment="Center"/>
-                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                        <TextBox x:Name="_costBox" Tag="cost" TextChanged="NumericBox_TextChanged"/>
-                        <TextBlock Text="Repeat Cost" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                        <TextBox x:Name="_costBox" Tag="cost" Margin="0,0,14,0"
+                                 TextChanged="NumericBox_TextChanged"/>
+                        <CheckBox x:Name="_powerCloneCopyCostCheck" Content="Copy Target"
+                                  VerticalAlignment="Center" Margin="8,0,14,0"/>
+                        <TextBlock Text="Repeat Cost" VerticalAlignment="Center" Margin="0,0,6,0"/>
                         <TextBox x:Name="_repeatCostBox" Tag="repeatcost" TextChanged="NumericBox_TextChanged"/>
-                      </StackPanel>
+                        <CheckBox x:Name="_powerCloneCopyRepeatCostCheck" Content="Copy Target"
+                                  VerticalAlignment="Center" Margin="8,0,0,0"/>
+                      </WrapPanel>
                     </Grid>
                     <Grid ColumnDefinitions="150,*" Margin="0,4,0,4">
                       <TextBlock x:Name="_limitLabel" Text="Limit" VerticalAlignment="Top" Margin="0,6,0,0"
@@ -250,18 +284,26 @@
                     </Grid>
                     <Grid x:Name="_attackTargetRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
                       <TextBlock Text="Attack target" VerticalAlignment="Center"/>
-                      <WrapPanel Grid.Column="1" Orientation="Horizontal">
-                        <TextBlock x:Name="_attackTargetTypeLabel" Text="Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <AutoCompleteBox x:Name="_attackTargetTypePicker" Width="50" MaxWidth="50"
-                                         Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
-                                         SelectionChanged="PlacementTypePicker_SelectionChanged"/>
-                        <WrapPanel x:Name="_attackTargetTypeChips" Orientation="Horizontal" Margin="0,0,12,0"/>
-                        <TextBlock x:Name="_attackExcludeTypeLabel" Text="Exclude Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <AutoCompleteBox x:Name="_attackExcludeTypePicker" Width="50" MaxWidth="50"
-                                         Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
-                                         SelectionChanged="PlacementTypePicker_SelectionChanged"/>
-                        <WrapPanel x:Name="_attackExcludeTypeChips" Orientation="Horizontal"/>
-                      </WrapPanel>
+                      <Grid Grid.Column="1" ColumnDefinitions="*,*" ColumnSpacing="12">
+                        <Grid ColumnDefinitions="Auto,*">
+                          <WrapPanel Orientation="Horizontal">
+                            <TextBlock x:Name="_attackTargetTypeLabel" Text="Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <AutoCompleteBox x:Name="_attackTargetTypePicker" Width="50" MaxWidth="50"
+                                             Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                             SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                          </WrapPanel>
+                          <WrapPanel Grid.Column="1" x:Name="_attackTargetTypeChips" Orientation="Horizontal"/>
+                        </Grid>
+                        <Grid Grid.Column="1" ColumnDefinitions="Auto,*">
+                          <WrapPanel Orientation="Horizontal">
+                            <TextBlock x:Name="_attackExcludeTypeLabel" Text="Exclude Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <AutoCompleteBox x:Name="_attackExcludeTypePicker" Width="50" MaxWidth="50"
+                                             Margin="0,0,6,0" FilterMode="Contains" MinimumPrefixLength="0"
+                                             SelectionChanged="PlacementTypePicker_SelectionChanged"/>
+                          </WrapPanel>
+                          <WrapPanel Grid.Column="1" x:Name="_attackExcludeTypeChips" Orientation="Horizontal"/>
+                        </Grid>
+                      </Grid>
                     </Grid>
                     <Grid x:Name="_addNotificationSectionsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
                       <WrapPanel Grid.Column="1" Orientation="Horizontal">
@@ -285,8 +327,8 @@
                           <TextBox Grid.Column="1" x:Name="_castMessageBox" Tag="notificationformatid"
                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="32"
                                    TextChanged="ResolvedStringBox_TextChanged"/>
-                          <Button Grid.Column="2" x:Name="_removeCastMessageButton" Classes="remove-button"
-                                  Margin="6,0,0,0" Tag="notificationformatid" Click="RemoveNotificationField_Click"/>
+                        <Button Grid.Column="2" x:Name="_removeCastMessageButton" Classes="remove-button"
+                                  Margin="2,0,0,0" Tag="notificationformatid" Click="RemoveNotificationField_Click"/>
                         </Grid>
                         <Button x:Name="_addCastSelfMessageButton" Content="Cast self-message"
                                 Classes="add-component" Margin="0,0,6,4" Tag="selfnotificationformatid"
@@ -296,8 +338,8 @@
                           <TextBox Grid.Column="1" x:Name="_castSelfMessageBox" Tag="selfnotificationformatid"
                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="32"
                                    TextChanged="ResolvedStringBox_TextChanged"/>
-                          <Button Grid.Column="2" x:Name="_removeCastSelfMessageButton" Classes="remove-button"
-                                  Margin="6,0,0,0" Tag="selfnotificationformatid"
+                        <Button Grid.Column="2" x:Name="_removeCastSelfMessageButton" Classes="remove-button"
+                                  Margin="2,0,0,0" Tag="selfnotificationformatid"
                                   Click="RemoveNotificationField_Click"/>
                         </Grid>
                         <Button x:Name="_addAlertPlayerButton" Content="Alert Player" Classes="add-component"
@@ -307,8 +349,8 @@
                           <TextBlock Text="Alert Player" VerticalAlignment="Center" Margin="0,0,6,0"/>
                           <ComboBox Grid.Column="1" x:Name="_alertPlayerBox" Width="150" MaxWidth="150"
                                     SelectionChanged="AlertPlayer_SelectionChanged"/>
-                          <Button Grid.Column="2" x:Name="_removeAlertPlayerButton" Classes="remove-button"
-                                  Margin="6,0,0,0" Tag="messagealertplayerrelation"
+                        <Button Grid.Column="2" x:Name="_removeAlertPlayerButton" Classes="remove-button"
+                                  Margin="2,0,0,0" Tag="messagealertplayerrelation"
                                   Click="RemoveNotificationField_Click"/>
                         </Grid>
                         <CheckBox x:Name="_displayAlertsCheck" Content="Display Alert" Margin="0,0,6,4"
@@ -501,16 +543,16 @@
                     <TextBox x:Name="_crackIntervalMaxBox" Width="90" MaxWidth="90"
                              Tag="crackintervalmax" TextChanged="SpecificNumber_TextChanged"/>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeCracksSoundButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Cracks Sound"/>
+                      <Button Grid.Column="2" x:Name="_removeCracksSoundButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Cracks Sound"/>
                 </Grid>
 
                 <Grid x:Name="_timeFactorRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
                   <TextBlock Text="Time Factor" VerticalAlignment="Center"/>
                   <TextBox Grid.Column="1" x:Name="_timeFactorBox" Width="90" MaxWidth="90"
                            Tag="timefactor" TextChanged="SpecificNumber_TextChanged"/>
-                  <Button Grid.Column="2" x:Name="_removeTimeFactorButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Time Factor"/>
+                      <Button Grid.Column="2" x:Name="_removeTimeFactorButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Time Factor"/>
                 </Grid>
 
                 <Grid x:Name="_shockwaveTopRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
@@ -524,7 +566,7 @@
                     </StackPanel>
                     <StackPanel x:Name="_shockwaveVfxFields" Orientation="Horizontal" Spacing="6">
                       <TextBlock x:Name="_shockwaveVfxInlineLabel" Text="Shockwave VFX" VerticalAlignment="Center"/>
-                      <AutoCompleteBox x:Name="_shockwaveVfxBox" Width="240" MaxWidth="240"
+                      <AutoCompleteBox x:Name="_shockwaveVfxBox" Width="200" MaxWidth="200"
                                        FilterMode="Contains" MinimumPrefixLength="0"/>
                       <Button x:Name="_removeShockwaveVfxButton" Classes="remove-button"
                               Click="RemoveSpecificAttribute_Click" Tag="Shockwave VFX"/>
@@ -562,16 +604,35 @@
                       <TextBox x:Name="_maxThrowVelocityBox"
                                Tag="maxthrowvelocity" TextChanged="SpecificNumber_TextChanged"/>
                     </StackPanel>
+                    <WrapPanel x:Name="_throwSizeLimitHost" Margin="14,0,0,4">
+                      <TextBlock Text="Size Limit" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <TextBox x:Name="_throwSizeLimitBox" Tag="throwsizelimit" Margin="0,0,8,0"
+                               TextChanged="SpecificNumber_TextChanged"/>
+                      <Button x:Name="_removeThrowSizeLimitButton" Classes="remove-button"
+                              Click="RemoveThrowSizeLimit_Click"/>
+                    </WrapPanel>
+                    <WrapPanel x:Name="_throwExcludeThrowHost" Margin="14,0,0,4">
+                      <TextBlock Text="Exclude From Throw" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_throwExcludeThrowPicker" Width="50" Margin="0,0,4,0"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <WrapPanel x:Name="_throwExcludeThrowChips"/>
+                          <Button x:Name="_removeThrowExcludeThrowButton" Classes="remove-button"
+                              Margin="2,0,0,0" Click="RemoveThrowExclusion_Click" Tag="excludefromthrow"/>
+                    </WrapPanel>
+                    <Button x:Name="_addThrowExcludeThrowButton" Content="Exclude From Throw"
+                            Classes="add-component" Margin="6,0,0,4" Click="AddThrowExcludeThrow_Click"/>
+                    <Button x:Name="_addThrowSizeLimitButton" Content="Size Limit"
+                            Classes="add-component" Margin="6,0,0,4" Click="AddThrowSizeLimit_Click"/>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeThrowPropertiesButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Throw properties"/>
+                      <Button Grid.Column="2" x:Name="_removeThrowPropertiesButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Throw properties"/>
                 </Grid>
 
                 <Grid x:Name="_gaiaTreeTopRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
                   <TextBlock x:Name="_treeUnitMainLabel" Text="Tree Unit" VerticalAlignment="Center"/>
                   <WrapPanel Grid.Column="1" Orientation="Horizontal">
                     <StackPanel x:Name="_treeUnitFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
-                      <AutoCompleteBox x:Name="_treeUnitBox" Width="240" MaxWidth="240"
+                      <AutoCompleteBox x:Name="_treeUnitBox" Width="200" MaxWidth="200"
                                        FilterMode="Contains" MinimumPrefixLength="0"/>
                       <Button x:Name="_removeTreeUnitButton" Classes="remove-button"
                               Click="RemoveSpecificAttribute_Click" Tag="Tree Unit"/>
@@ -601,7 +662,7 @@
                     </StackPanel>
                     <StackPanel x:Name="_treeEffectVfxFields" Orientation="Horizontal" Spacing="6">
                       <TextBlock x:Name="_treeEffectVfxInlineLabel" Text="Tree Effect VFX" VerticalAlignment="Center"/>
-                      <AutoCompleteBox x:Name="_treeEffectVfxBox" Width="240" MaxWidth="240"
+                      <AutoCompleteBox x:Name="_treeEffectVfxBox" Width="200" MaxWidth="200"
                                        FilterMode="Contains" MinimumPrefixLength="0"/>
                       <Button x:Name="_removeTreeEffectVfxButton" Classes="remove-button"
                               Click="RemoveSpecificAttribute_Click" Tag="Tree Effect VFX"/>
@@ -619,33 +680,33 @@
                     <TextBox x:Name="_growthRadiusIncreaseRateBox"
                              Tag="growthradiusincreaserate" TextChanged="SpecificNumber_TextChanged"/>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeGrowthRadiusButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Growth radius"/>
+                      <Button Grid.Column="2" x:Name="_removeGrowthRadiusButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Growth radius"/>
                 </Grid>
 
                 <Grid x:Name="_effectVfxRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
                   <TextBlock Text="Effect VFX" VerticalAlignment="Center"/>
-                  <AutoCompleteBox Grid.Column="1" x:Name="_effectVfxBox" Width="240" MaxWidth="240"
+                  <AutoCompleteBox Grid.Column="1" x:Name="_effectVfxBox" Width="200" MaxWidth="200"
                                    FilterMode="Contains" MinimumPrefixLength="0"/>
-                  <Button Grid.Column="2" x:Name="_removeEffectVfxButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect VFX"/>
+                      <Button Grid.Column="2" x:Name="_removeEffectVfxButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect VFX"/>
                 </Grid>
 
                 <Grid x:Name="_damagePercentConversionRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
                   <TextBlock Text="Damage % Conversion" VerticalAlignment="Center"/>
                   <TextBox Grid.Column="1" x:Name="_damagePercentConversionBox"
                            Tag="percentdamageonconvert" TextChanged="SpecificNumber_TextChanged"/>
-                  <Button Grid.Column="2" x:Name="_removeDamagePercentConversionButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click"
+                      <Button Grid.Column="2" x:Name="_removeDamagePercentConversionButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click"
                           Tag="Damage Percent on Conversion"/>
                 </Grid>
 
                 <Grid x:Name="_vfxProtoRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
                   <TextBlock Text="VFX Proto" VerticalAlignment="Center"/>
-                  <AutoCompleteBox Grid.Column="1" x:Name="_vfxProtoBox" Width="240" MaxWidth="240"
+                  <AutoCompleteBox Grid.Column="1" x:Name="_vfxProtoBox" Width="200" MaxWidth="200"
                                    FilterMode="Contains" MinimumPrefixLength="0"/>
-                  <Button Grid.Column="2" x:Name="_removeVfxProtoButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="VFX Proto"/>
+                      <Button Grid.Column="2" x:Name="_removeVfxProtoButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="VFX Proto"/>
                 </Grid>
 
                 <Grid x:Name="_effectTimeRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
@@ -660,8 +721,8 @@
                     <TextBox x:Name="_sharedEffectTimeSecondsBox"
                              Tag="sharedeffecttimeseconds" TextChanged="SpecificNumber_TextChanged"/>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeEffectTimeButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect time"/>
+                      <Button Grid.Column="2" x:Name="_removeEffectTimeButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Effect time"/>
                 </Grid>
 
                 <Grid x:Name="_spiderPropertiesRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
@@ -698,8 +759,8 @@
                                TextChanged="SpecificNumber_TextChanged"/>
                     </StackPanel>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeSpiderPropertiesButton" Classes="remove-button"
-                          Margin="8,0,0,0" VerticalAlignment="Top"
+                      <Button Grid.Column="2" x:Name="_removeSpiderPropertiesButton" Classes="remove-button"
+                          Margin="2,0,0,0" VerticalAlignment="Top"
                           Click="RemoveSpecificAttribute_Click" Tag="Spider properties"/>
                 </Grid>
 
@@ -742,8 +803,8 @@
                                Tag="hatchintervalmax" TextChanged="SpecificNumber_TextChanged"/>
                     </StackPanel>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeHatchPropertiesButton" Classes="remove-button"
-                          Margin="8,0,0,0" VerticalAlignment="Top"
+                      <Button Grid.Column="2" x:Name="_removeHatchPropertiesButton" Classes="remove-button"
+                          Margin="2,0,0,0" VerticalAlignment="Top"
                           Click="RemoveSpecificAttribute_Click" Tag="Hatch properties"/>
                 </Grid>
 
@@ -778,8 +839,8 @@
                   <TextBlock Text="Human Death Sound" VerticalAlignment="Center"/>
                   <AutoCompleteBox Grid.Column="1" x:Name="_humanDeathSoundBox" Width="240" MaxWidth="240"
                                    FilterMode="Contains" MinimumPrefixLength="0"/>
-                  <Button Grid.Column="2" x:Name="_removeHumanDeathSoundButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Human Death Sound"/>
+                      <Button Grid.Column="2" x:Name="_removeHumanDeathSoundButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Human Death Sound"/>
                 </Grid>
 
                 <Grid x:Name="_vortexPropertiesRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
@@ -806,8 +867,8 @@
                                        FilterMode="Contains" MinimumPrefixLength="0"/>
                     </StackPanel>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeVortexPropertiesButton" Classes="remove-button"
-                          Margin="8,0,0,0" VerticalAlignment="Top"
+                      <Button Grid.Column="2" x:Name="_removeVortexPropertiesButton" Classes="remove-button"
+                          Margin="2,0,0,0" VerticalAlignment="Top"
                           Click="RemoveSpecificAttribute_Click" Tag="Vortex properties"/>
                 </Grid>
 
@@ -838,8 +899,8 @@
                   <TextBlock Text="Max Unit Height" VerticalAlignment="Center"/>
                   <TextBox Grid.Column="1" x:Name="_maxUnitHeightBox" Tag="maxunitheight"
                            TextChanged="SpecificNumber_TextChanged"/>
-                  <Button Grid.Column="2" x:Name="_removeMaxUnitHeightButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Max Unit Height"/>
+                      <Button Grid.Column="2" x:Name="_removeMaxUnitHeightButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Max Unit Height"/>
                 </Grid>
 
                 <Grid x:Name="_vortexSoundsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
@@ -865,7 +926,7 @@
                   <TextBlock x:Name="_spawnMainLabel" Text="Spawn Proto" VerticalAlignment="Center"/>
                   <WrapPanel Grid.Column="1" Orientation="Horizontal">
                     <StackPanel x:Name="_spawnFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0">
-                      <AutoCompleteBox x:Name="_spawnProtoBox" Width="240" MaxWidth="240"
+                      <AutoCompleteBox x:Name="_spawnProtoBox" Width="200" MaxWidth="200"
                                        FilterMode="Contains" MinimumPrefixLength="0"/>
                       <Button x:Name="_removeSpawnButton" Classes="remove-button"
                               Click="RemoveSpecificAttribute_Click" Tag="Spawn Proto"/>
@@ -878,7 +939,20 @@
                       <Button x:Name="_removeMaxSpawnNumberButton" Classes="remove-button"
                               Click="RemoveSpecificAttribute_Click" Tag="Max Spawn Amount"/>
                     </StackPanel>
+                    <Button x:Name="_addTartarianRevealerButton" Content="Revealer Unit"
+                            Classes="add-component" Margin="8,0,0,0"
+                            Click="AddTartarianRevealer_Click"/>
                   </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_tartarianRevealerRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4">
+                  <TextBlock Text="Revealer Unit" VerticalAlignment="Center"/>
+                  <AutoCompleteBox Grid.Column="1" x:Name="_tartarianRevealerBox"
+                                   Width="200" MaxWidth="200" FilterMode="Contains"
+                                   MinimumPrefixLength="0"/>
+                  <Button Grid.Column="2" x:Name="_removeTartarianRevealerButton"
+                          Classes="remove-button" Margin="2,0,0,0" VerticalAlignment="Center"
+                          Click="RemoveTartarianRevealer_Click"/>
                 </Grid>
 
                 <Grid x:Name="_tartarianGateRow" ColumnDefinitions="150,*,Auto" Margin="0,4,0,4">
@@ -910,8 +984,8 @@
                                TextChanged="SpecificNumber_TextChanged"/>
                     </StackPanel>
                   </WrapPanel>
-                  <Button Grid.Column="2" x:Name="_removeTartarianGateButton" Classes="remove-button"
-                          Margin="8,0,0,0" VerticalAlignment="Top"
+                      <Button Grid.Column="2" x:Name="_removeTartarianGateButton" Classes="remove-button"
+                          Margin="2,0,0,0" VerticalAlignment="Top"
                           Click="RemoveSpecificAttribute_Click" Tag="Tartarian Gate"/>
                 </Grid>
 
@@ -919,8 +993,8 @@
                   <TextBlock Text="Rumble Time" VerticalAlignment="Center"/>
                   <TextBox Grid.Column="1" x:Name="_rumbleTimeBox" Tag="rumbletime"
                            TextChanged="SpecificNumber_TextChanged"/>
-                  <Button Grid.Column="2" x:Name="_removeRumbleTimeButton" Classes="remove-button"
-                          Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Rumble Time"/>
+                      <Button Grid.Column="2" x:Name="_removeRumbleTimeButton" Classes="remove-button"
+                          Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Rumble Time"/>
                 </Grid>
 
                 <Grid x:Name="_tartarianSpawnTimingRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
@@ -1038,14 +1112,14 @@
                 <Grid x:Name="_pSeedsFarmRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
                   <TextBlock x:Name="_farmProtoMainLabel" Text="Farm Proto" VerticalAlignment="Center"/>
                   <WrapPanel Grid.Column="1">
-                    <StackPanel x:Name="_farmProtoFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0"><AutoCompleteBox x:Name="_farmProtoBox" Width="240" MaxWidth="240" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_farmProtoFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0"><AutoCompleteBox x:Name="_farmProtoBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
                     <StackPanel x:Name="_numberToTransformFields" Orientation="Horizontal" Spacing="6"><TextBlock x:Name="_numberToTransformInlineLabel" Text="Number to Transform" VerticalAlignment="Center"/><TextBox x:Name="_numberToTransformBox" Tag="numbertotransform" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeNumberToTransformButton" Classes="remove-button" Click="RemoveSpecificAttribute_Click" Tag="Number to Transform"/></StackPanel>
                   </WrapPanel>
                 </Grid>
-                <Grid x:Name="_pSeedsVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Farm VFX" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_pSeedsFarmVfxBox" Width="240" MaxWidth="240" Margin="0,0,14,0" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal"><TextBlock Text="Farm Target VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_pSeedsFarmTargetVfxBox" Width="240" MaxWidth="240" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
-                <Grid x:Name="_stealthLevelRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4"><TextBlock Text="Stealth Level" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="_stealthLevelBox" Width="100" SelectionChanged="StealthLevel_SelectionChanged"><ComboBoxItem Content="1"/><ComboBoxItem Content="2"/></ComboBox><Button Grid.Column="2" x:Name="_removeStealthLevelButton" Classes="remove-button" Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Stealth Level"/></Grid>
+                <Grid x:Name="_pSeedsVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Farm VFX" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_pSeedsFarmVfxBox" Width="200" MaxWidth="200" Margin="0,0,14,0" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal"><TextBlock Text="Farm Target VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_pSeedsFarmTargetVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_stealthLevelRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4"><TextBlock Text="Stealth Level" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="_stealthLevelBox" Width="100" SelectionChanged="StealthLevel_SelectionChanged"><ComboBoxItem Content="1"/><ComboBoxItem Content="2"/></ComboBox><Button Grid.Column="2" x:Name="_removeStealthLevelButton" Classes="remove-button" Margin="2,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Stealth Level"/></Grid>
 
-                <Grid x:Name="_earthWallRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Wall proto" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_wallProtoBox" Width="240" MaxWidth="240" Margin="0,0,14,0" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal"><TextBlock Text="Segment counts" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_wallSegmentCountBox" Tag="wallsegmentcount" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthWallRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Wall proto" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_wallProtoBox" Width="200" MaxWidth="200" Margin="0,0,14,0" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal"><TextBlock Text="Segment counts" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_wallSegmentCountBox" Tag="wallsegmentcount" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
                 <Grid x:Name="_damageTiersRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Damage Tiers" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><StackPanel x:Name="_damageTierRows" Spacing="4"/><Button x:Name="_addDamageTierButton" Content="Add Damage Tier" Classes="add-component" HorizontalAlignment="Left" Margin="0,4,0,0" Click="AddDamageTier_Click"/></StackPanel></Grid>
 
                 <Grid x:Name="_stealthVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Vanish VFX" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="On Cast" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_vanishCastVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="On Target" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_vanishTargetVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Reappear" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_reappearVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
@@ -1053,11 +1127,490 @@
                 <Grid x:Name="_forestVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Forest VFX" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_rootedEnemyVfxFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Rooted enemy" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_rootedEnemyVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_treeAreaVfxFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Tree Area" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_treeAreaVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_treeVfxFields" Orientation="Horizontal" Spacing="6"><TextBlock Text="Tree VFX" VerticalAlignment="Center"/><AutoCompleteBox x:Name="_forestTreeVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeForestTreeVfxButton" Classes="remove-button" Click="RemoveSpecificAttribute_Click" Tag="Tree VFX"/></StackPanel></WrapPanel></Grid>
                 <Grid x:Name="_forestTimingRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock x:Name="_stayTimeMainLabel" Text="Stay Time" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_stayTimeFields" Orientation="Horizontal" Spacing="6" Margin="0,0,12,0"><TextBox x:Name="_stayTimeBox" Tag="staytime" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeStayTimeButton" Classes="remove-button" Click="RemoveSpecificAttribute_Click" Tag="Stay Time"/></StackPanel><StackPanel x:Name="_rootDurationFields" Orientation="Horizontal" Spacing="6"><TextBlock x:Name="_rootDurationInlineLabel" Text="Root duration" VerticalAlignment="Center"/><TextBox x:Name="_rootDurationBox" Tag="rootedtime" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
                 <Grid x:Name="_rootDamageRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Root damage" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><StackPanel x:Name="_rootDamageRows" Spacing="4"/><Button x:Name="_addRootDamageButton" Content="Add Root damage" Classes="add-component" HorizontalAlignment="Left" Margin="0,4,0,0" Click="AddRootDamage_Click"/></StackPanel></Grid>
-                <Grid x:Name="_slowHealMultiplierRow" ColumnDefinitions="150,Auto,Auto" Margin="0,4,0,4"><TextBlock Text="Slow Heal Multiplier" VerticalAlignment="Center"/><TextBox Grid.Column="1" x:Name="_slowHealMultiplierBox" Tag="slowhealmultiplier" TextChanged="SpecificNumber_TextChanged"/><Button Grid.Column="2" x:Name="_removeSlowHealMultiplierButton" Classes="remove-button" Margin="8,0,0,0" Click="RemoveSpecificAttribute_Click" Tag="Slow Heal Multiplier"/></Grid>
+                <Grid x:Name="_slowHealMultiplierRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_restorationHealingMainLabel" Text="Slow Heal Multiplier" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_restorationHealSpeedFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock x:Name="_restorationHealSpeedInlineLabel" Text="Heal speed" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_restorationHealSpeedBox" Tag="healspeed" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_slowHealFields" Orientation="Horizontal" Spacing="6" Margin="0,0,14,4"><TextBlock x:Name="_slowHealInlineLabel" Text="Slow Heal Multiplier" VerticalAlignment="Center"/><TextBox x:Name="_slowHealMultiplierBox" Tag="slowhealmultiplier" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeSlowHealMultiplierButton" Classes="remove-button" Click="RemoveSpecificAttribute_Click" Tag="Slow Heal Multiplier"/></StackPanel>
+                    <StackPanel x:Name="_restorationScanFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Scan interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_restorationScanIntervalBox" Tag="scaninterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_tempUnitCreateRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Create Unit" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="8">
+                    <StackPanel x:Name="_tempUnitCreateRows" Spacing="8"/>
+                    <Button x:Name="_addTempUnitCreateButton" Content="Add Create" Classes="add-component"
+                            HorizontalAlignment="Left" Click="AddTempUnitCreate_Click"/>
+                  </StackPanel>
+                </Grid>
+                <Grid x:Name="_tempUnitAttachRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Attach Unit" VerticalAlignment="Center"/>
+                  <StackPanel Grid.Column="1" x:Name="_tempUnitAttachHost" Orientation="Horizontal" Spacing="6"/>
+                </Grid>
+                <Grid x:Name="_tempUnitAgeRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Age Adjustment" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <StackPanel x:Name="_tempUnitAgeRows" Spacing="4"/>
+                    <Button x:Name="_addTempUnitAgeButton" Content="Add Age Adjustment" Classes="add-component"
+                            HorizontalAlignment="Left" Click="AddTempUnitAge_Click"/>
+                  </StackPanel>
+                </Grid>
+                <Grid x:Name="_tempUnitPlacementRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Placement" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <CheckBox x:Name="_tempUnitSmoothRotationCheck" Content="Smooth rotation" Margin="0,0,16,0"/>
+                    <CheckBox x:Name="_tempUnitForcePlacementCheck" Content="Force Placement" Margin="0,0,16,0"/>
+                    <CheckBox x:Name="_tempUnitForceOrientationCheck" Content="Force Orientation"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_freyrsGiftCreateRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Create Age Unit" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="8">
+                    <StackPanel x:Name="_freyrsGiftCreateRows" Spacing="8"/>
+                    <Button x:Name="_addFreyrsGiftCreateButton" Content="Add Create" Classes="add-component"
+                            HorizontalAlignment="Left" Click="AddFreyrsGiftCreate_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_vibrantGenerationRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Generate Interval" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBox x:Name="_vibrantGenerateIntervalBox" Tag="generateinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Tree Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><WrapPanel x:Name="_vibrantTreeUnitsHost" Orientation="Horizontal"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Tree VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_vibrantTreeVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_vibrantRotateRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Rotate Speed" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><TextBlock Text="Min" VerticalAlignment="Center"/><TextBox x:Name="_vibrantRotateMinBox" Tag="minrotatespeed" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center"/><TextBox x:Name="_vibrantRotateMaxBox" Tag="maxrotatespeed" TextChanged="SpecificNumber_TextChanged"/></StackPanel></Grid>
+                <Grid x:Name="_vibrantGrowthRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Growth" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><TextBlock Text="Min" VerticalAlignment="Center"/><TextBox x:Name="_vibrantGrowthMinBox" Tag="mingrowspeed" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center"/><TextBox x:Name="_vibrantGrowthMaxBox" Tag="maxgrowspeed" TextChanged="SpecificNumber_TextChanged"/></StackPanel></Grid>
+                <Grid x:Name="_vibrantScaleRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Scale" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><TextBlock Text="Min" VerticalAlignment="Center"/><TextBox x:Name="_vibrantScaleMinBox" Tag="minscale" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center"/><TextBox x:Name="_vibrantScaleMaxBox" Tag="maxscale" TextChanged="SpecificNumber_TextChanged"/></StackPanel></Grid>
+
+                <Grid x:Name="_restorationVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Heal VFX" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Heal" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_restorationHealVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Area" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_restorationAreaVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_droughtTerrainCreepRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><Grid><TextBlock x:Name="_terrainCreepLabel" Text="Terrain Creep" VerticalAlignment="Top" Margin="0,9,0,0"/><Button x:Name="_addTerrainCreepButton" Content="Terrain Creep" Classes="add-component" HorizontalAlignment="Left" Click="AddTerrainCreep_Click"/></Grid><StackPanel Grid.Column="1" x:Name="_droughtTerrainCreepHost" Spacing="4"/></Grid>
+                <Grid x:Name="_droughtVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock x:Name="_droughtVfxMainLabel" Text="Land VFX" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_droughtLandVfxFields" Orientation="Horizontal" Margin="0,0,14,4"><AutoCompleteBox x:Name="_droughtLandVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_droughtWaveUnitFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock x:Name="_droughtWaveUnitInlineLabel" Text="Wave Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_droughtWaveUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_droughtInitialDamageRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Initial damage" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><StackPanel x:Name="_droughtInitialDamageRows" Spacing="4"/><Button x:Name="_addDroughtInitialDamageButton" Content="Add Initial damage" Classes="add-component" HorizontalAlignment="Left" Click="AddDroughtInitialDamage_Click"/></StackPanel></Grid>
+                <Grid x:Name="_droughtBurnTimeRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Burn Time" VerticalAlignment="Center"/><TextBox Grid.Column="1" HorizontalAlignment="Left" x:Name="_droughtBurnTimeBox" Tag="burntime" TextChanged="SpecificNumber_TextChanged"/></Grid>
+
+                <Grid x:Name="_greatFloodWaveRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Wave Unit" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_greatFloodWaveUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Count" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodWaveCountBox" Tag="wavecount" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodWaveRadiusBox" Tag="waveradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Spacing" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodSpacingBox" Tag="spacingdistance" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_greatFloodVelocityRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Velocity" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Initial" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodInitialVelocityBox" Tag="initialvelocity" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Final" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodFinalVelocityBox" Tag="finalvelocity" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Ramp Time" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodRampTimeBox" Tag="ramptime" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_greatFloodAttackRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock x:Name="_greatFloodAttackMainLabel" Text="Attack" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_greatFloodAttackActionFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Action name" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_greatFloodAttackNameBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_greatFloodAttackIntervalFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock x:Name="_greatFloodAttackIntervalLabel" Text="Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatFloodAttackIntervalBox" Tag="attackinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_greatFloodDamageCapRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Damage Cap" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><StackPanel x:Name="_greatFloodDamageCapRows" Spacing="4"/><Button x:Name="_addGreatFloodDamageCapButton" Content="Damage Cap" Classes="add-component" HorizontalAlignment="Left" Click="AddGreatFloodDamageCap_Click"/></StackPanel></Grid>
+
+                <Grid x:Name="_shiftingSandsPortalRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Portal" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_shiftingSandsStartPortalFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Starting location" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_shiftingSandsStartPortalBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_shiftingSandsDestinationPortalFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Destination" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_shiftingSandsDestinationPortalBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_shiftingSandsTimingRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock x:Name="_shiftingSandsTimingMainLabel" Text="Fade Time" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_shiftingSandsFadeTimeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBox x:Name="_shiftingSandsFadeTimeBox" Tag="unitfadetime" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_shiftingSandsSpawnTimeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock x:Name="_shiftingSandsSpawnTimeLabel" Text="Spawn time" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_shiftingSandsSpawnTimeBox" Tag="outportalspawntime" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_shiftingSandsScanIntervalFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock x:Name="_shiftingSandsScanIntervalLabel" Text="Scan Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_shiftingSandsScanIntervalBox" Tag="scaninterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_shiftingSandsPlacementRadiusRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Placement Radius" VerticalAlignment="Center"/><TextBox Grid.Column="1" HorizontalAlignment="Left" x:Name="_shiftingSandsPlacementRadiusBox" Tag="placementradius" TextChanged="SpecificNumber_TextChanged"/></Grid>
+
+                <Grid x:Name="_locustSwarmRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Swarm Unit" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_locustSwarmUnitFields" Orientation="Horizontal" Margin="0,0,14,4"><AutoCompleteBox x:Name="_locustSwarmUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_locustSwarmCountFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Count" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_locustSwarmCountBox" Tag="swarmcount" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_locustSwarmRadiusFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_locustSwarmRadiusBox" Tag="swarmradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_locustWayPointsRow" ColumnDefinitions="150,*" Margin="0,4,0,4">
+                  <TextBlock Text="Swarm Way Points" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_locustWayPointCountFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Number" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_locustWayPointCountBox" Tag="swarmwaypoints" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_locustWayPointOffsetFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Offset" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_locustWayPointOffsetBox" Tag="swarmwaypointoffset" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_locustDamageIntervalRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Damage Interval" VerticalAlignment="Center"/><TextBox Grid.Column="1" HorizontalAlignment="Left" x:Name="_locustDamageIntervalBox" Tag="damageinterval" TextChanged="SpecificNumber_TextChanged"/></Grid>
+
+                <Grid x:Name="_boltUnitsRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Strike Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_boltStrikeUnitFields" Orientation="Horizontal"><AutoCompleteBox x:Name="_boltStrikeUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_boltSparksVfxFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Sparks VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_boltSparksVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_boltScorchVfxFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Scorch VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_boltScorchVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_boltStrikePositionRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Strike position" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Height" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_boltStrikeHeightBox" Tag="strikeheight" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Offset" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_boltStrikeMinOffsetBox" Tag="strikeminoffset" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_boltStrikeMaxOffsetBox" Tag="strikemaxoffset" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_pestilencePenaltyRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Penalty (%)" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_pestilenceRofFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="ROF" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_pestilenceRofPenaltyBox" Tag="rofpercentpenalty" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_pestilenceTrainRateFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Train Rate" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_pestilenceTrainRatePenaltyBox" Tag="trainratepenalty" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_pestilenceScanFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Scan interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_pestilenceScanIntervalBox" Tag="rescaninterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_pestilenceVfxRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Pestilence VFX" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Small" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_pestilenceSmallVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Large" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_pestilenceLargeVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_bronzeArmorRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Armor" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="8"><StackPanel x:Name="_bronzeArmorRows" Spacing="8"/><Button x:Name="_addBronzeArmorButton" Content="Add Armor" Classes="add-component" HorizontalAlignment="Left" Click="AddBronzeArmor_Click"/></StackPanel></Grid>
+
+                <Grid x:Name="_teleportPortalRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Portal" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Starting location" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_teleportStartPortalBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Destination" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_teleportDestinationPortalBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_greatHuntMaxFoodRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock Text="Max food duplicated" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="4"><StackPanel x:Name="_greatHuntMaxFoodRows" Spacing="4"/><Button x:Name="_addGreatHuntMaxFoodButton" Content="Add Max food" Classes="add-component" HorizontalAlignment="Left" Click="AddGreatHuntMaxFood_Click"/></StackPanel></Grid>
+                <Grid x:Name="_greatHuntExtrasRow" ColumnDefinitions="150,*" Margin="0,4,0,4"><TextBlock x:Name="_greatHuntExtrasLabel" Text="Spawn if no target" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_greatHuntSpawnFields" Orientation="Horizontal"><AutoCompleteBox x:Name="_greatHuntSpawnIfNoTargetBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_greatHuntFoodFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock x:Name="_greatHuntFoodInlineLabel" Text="Food ratio" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_greatHuntFoodRatioBox" Tag="spawnfoodratio"/></StackPanel><StackPanel x:Name="_greatHuntVfxFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock x:Name="_greatHuntVfxInlineLabel" Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_greatHuntVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_spyIndicatorRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Spy Indicator" VerticalAlignment="Center"/><AutoCompleteBox Grid.Column="1" x:Name="_spyIndicatorBox" Width="200" MaxWidth="200" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></Grid>
+                <Grid x:Name="_stampedeRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Stampede Unit" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1">
+                    <WrapPanel>
+                      <AutoCompleteBox x:Name="_stampedeUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Scale" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_stampedeScaleBox"/></StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Anim Rate" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_stampedeAnimRateBox"/></StackPanel>
+                    </WrapPanel>
+                    <WrapPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Attack Action" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_stampedeAttackActionBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Attack Interval (ms)" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_stampedeAttackIntervalBox"/></StackPanel>
+                    </WrapPanel>
+                  </StackPanel>
+                </Grid>
+                <Grid x:Name="_stampedeFullLengthRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Full lenght" VerticalAlignment="Center"/><CheckBox Grid.Column="1" x:Name="_stampedeFullLengthCheck"/></Grid>
+
+                <Grid x:Name="_swapEntriesRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Swap" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="6"><StackPanel x:Name="_swapEntryRows" Spacing="6"/><Button x:Name="_addSwapEntryButton" Content="Add Swap" Classes="add-component" HorizontalAlignment="Left" Click="AddSwapEntry_Click"/></StackPanel></Grid>
+                <Grid x:Name="_swapMinMaxRow" ColumnDefinitions="150,*" Margin="0,4"><Button x:Name="_addSwapMinMaxButton" Content="Min/Max amount" Classes="add-component" HorizontalAlignment="Left" Click="AddSwapMinMax_Click"/><WrapPanel Grid.Column="1" x:Name="_swapMinMaxFields"><TextBlock Text="Amount" VerticalAlignment="Center" Margin="0,0,8,4"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_swapMinAmountBox" Width="90" Margin="0,0,10,4"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_swapMaxAmountBox" Width="90" Margin="0,0,8,4"/><Button x:Name="_removeSwapMinMaxButton" Classes="remove-button" Click="RemoveSwapMinMax_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_swapOptionalRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Options" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1" x:Name="_swapOptionalFields"/>
+                </Grid>
+                <Grid x:Name="_swapFlagsRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Flags" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_swapFlagPicker" Width="50" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_swapFlagChips"/></WrapPanel></Grid>
+
+                <Grid x:Name="_curseResourcesRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Max Resources" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBox x:Name="_curseMaxResourcesBox" Tag="maxresources" Margin="0,0,14,4" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Convert Ratio" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_curseConvertRatioBox" Tag="resourceconvertratio" TextChanged="SpecificNumber_TextChanged"/></WrapPanel></Grid>
+                <Grid x:Name="_curseSwapRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Swap Delay" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBox x:Name="_curseSwapDelayBox" Tag="swapdelay" Margin="0,0,14,4" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_curseVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></WrapPanel></Grid>
+
+                <Grid x:Name="_gustMainRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Gust Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_gustUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Length" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_gustLengthBox" Tag="gustlength"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Speed" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_gustSpeedBox" Tag="gustspeed"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Factor" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_gustMinFactorBox" Tag="gustminspeedfactor" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_gustMaxFactorBox" Tag="gustmaxspeedfactor"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_gustTimingRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Starting time" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBox x:Name="_gustBlowTimeBox" Tag="blowtime" Margin="0,0,14,4"/><TextBlock Text="Gust Duration" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_gustTimeBox" Tag="gusttime"/></WrapPanel></Grid>
+                <Grid x:Name="_gustDamageRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Damaging unit" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_gustDamagingUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Damage action" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_gustDamageActionBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></WrapPanel></Grid>
+                <Grid x:Name="_gustThrowSizeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Throw Max Size" VerticalAlignment="Center"/><TextBox Grid.Column="1" x:Name="_gustThrowSizeBox" Tag="throwsizelimit" HorizontalAlignment="Left"/></Grid>
+
+                <Grid x:Name="_divineAttackRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attack Unit" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_divineAttackUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Attack action" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_divineAttackActionBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Delay" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_divineAttackDelayBox" Tag="attackdelay"/></WrapPanel></Grid>
+                <Grid x:Name="_divineDamageRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Damage" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBlock Text="Width" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_divineDamageWidthBox" Tag="damagewidth" Margin="0,0,14,4"/><TextBlock Text="Depth" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_divineDamageDepthBox" Tag="damagedepth" Margin="0,0,14,4"/><TextBlock Text="Hit Decal" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_divineHitDecalBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></WrapPanel></Grid>
+                <Grid x:Name="_divineCameraDelayRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Camera Shake Delay" VerticalAlignment="Center"/><TextBox Grid.Column="1" x:Name="_divineCameraDelayBox" Tag="camerashakedelay" HorizontalAlignment="Left"/></Grid>
+
+                <Grid x:Name="_lureUnitRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Lure Unit" VerticalAlignment="Center"/><AutoCompleteBox Grid.Column="1" x:Name="_lureUnitBox" Width="200" MaxWidth="200" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></Grid>
+                <Grid x:Name="_lureAttractTypeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attract Type" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_lureAttractTypePicker" Width="50" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_lureAttractTypeChips"/></WrapPanel></Grid>
+                <Grid x:Name="_lureAttractionRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attraction" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Range" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lureMinRangeBox" Tag="minrange" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lureMaxRangeBox" Tag="maxrange"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Rate" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lureAttractRateBox" Tag="attractrate"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Variance" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lureVarianceBox" Tag="variance"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Distance to count against Cap" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lureCapDistanceBox" Tag="attractiondistancetocountagainstcap"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_lureSpawnRow" ColumnDefinitions="150,*" Margin="0,4"><Button x:Name="_addLureSpawnButton" Content="Spawn" Classes="add-component" HorizontalAlignment="Left" Click="AddLureSpawn_Click"/><WrapPanel Grid.Column="1" x:Name="_lureSpawnFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Spawn" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lureSpawnProtoBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lureSpawnVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><Button x:Name="_removeLureSpawnButton" Classes="remove-button" Click="RemoveLureSpawn_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_lureAgeInfoRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Age info" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="4"><StackPanel x:Name="_lureAgeInfoRows" Spacing="4"/><Button x:Name="_addLureAgeInfoButton" Content="Add Age info" Classes="add-component" HorizontalAlignment="Left" Click="AddLureAgeInfo_Click"/></StackPanel></Grid>
+
+                <Grid x:Name="_undermineAttackRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attack Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_undermineAttackUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Damage Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_undermineDamageRadiusBox" Tag="damageradius"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_undermineAttackIntervalBox" Tag="attackintervalseconds"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_undermineTargetRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attack target" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="4"><WrapPanel x:Name="_undermineTargetRows" Orientation="Horizontal"/><Button x:Name="_addUndermineTargetButton" Content="Add Attack target" Classes="add-component" HorizontalAlignment="Left" Click="AddUndermineTarget_Click"/></StackPanel></Grid>
+                <Grid x:Name="_undermineDeformRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Deform Depth" VerticalAlignment="Center"/><TextBox Grid.Column="1" x:Name="_undermineDeformBox" Tag="deformdepth" HorizontalAlignment="Left"/></Grid>
+
+                <Grid x:Name="_forestFireUnitsRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attack Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_forestFireAttackUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Embers Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_forestFireEmbersUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_forestFireVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_forestFireBurnRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Burn" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Lenght" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_forestFireBurnLengthBox" Tag="burnlength"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Fade Lenght" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_forestFireFadeLengthBox" Tag="burnfadelength"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Embers Lifespan" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_forestFireEmbersLifespanBox" Tag="emberlifespan"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_forestFireSearchRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Tree Destruction Time" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><TextBox x:Name="_forestFireTreeDestructionBox" Tag="treedestructionseconds" Margin="0,0,14,4"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Tree Search Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_forestFireTreeSearchRadiusBox" Tag="treesearchradius"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Damage Search Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_forestFireDamageSearchRadiusBox" Tag="damagesearchradius"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_tempestStrikeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strike Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1" x:Name="_tempestStrikeContent"><AutoCompleteBox x:Name="_tempestStrikeUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestStrikeIntervalRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strike Interval" VerticalAlignment="Center"/><WrapPanel Grid.Column="1" x:Name="_strikeIntervalFields"><TextBlock x:Name="_strikeIntervalInlineLabel" Text="Interval" VerticalAlignment="Center" Margin="0,0,8,4"/><StackPanel x:Name="_slowestStrikeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock x:Name="_slowestStrikeLabel" Text="Slowest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestSlowestStrikeBox" Tag="sloweststriketime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_fastestStrikeFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock x:Name="_fastestStrikeLabel" Text="Fastest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestFastestStrikeBox" Tag="fasteststriketime" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_tempestStrikePositionRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strike Position" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><TextBlock Text="Height" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_tempestStrikeHeightBox" Tag="strikeheight" Margin="0,0,14,4" TextChanged="SpecificNumber_TextChanged"/><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Offset" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestStrikeMinOffsetBox" Tag="strikeminoffset" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestStrikeMaxOffsetBox" Tag="strikemaxoffset" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_tempestSoundRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestSoundButton" Content="Soundset" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestSound_Click"/><TextBlock x:Name="_tempestSoundLabel" Text="Soundset" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestSoundFields"><TextBlock Text="Strike" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_tempestStrikeSoundBox" Width="200" MaxWidth="200" Margin="0,0,8,4" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTempestSoundButton" Classes="remove-button" Click="RemoveTempestSound_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestLargeStrikeRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestLargeStrikeButton" Content="Large Strike" Classes="add-component" HorizontalAlignment="Left" VerticalAlignment="Top" Click="AddTempestLargeStrike_Click"/><TextBlock x:Name="_tempestLargeStrikeLabel" Text="Large Strike" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><StackPanel Grid.Column="1" x:Name="_tempestLargeStrikeFields" Spacing="4"><WrapPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_tempestLargeStrikeUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><Button x:Name="_removeTempestLargeStrikeButton" Classes="remove-button" Click="RemoveTempestLargeStrike_Click"/></WrapPanel><WrapPanel x:Name="_tempestLargeTimingRow"><TextBlock Text="Interval Timing" VerticalAlignment="Center" Margin="0,0,8,4"/><WrapPanel x:Name="_tempestLargeTimingRows"/><Button x:Name="_addTempestLargeTimingButton" Content="Add Interval Timing" Classes="add-component" Margin="0,0,8,4" Click="AddTempestLargeTiming_Click"/></WrapPanel><WrapPanel x:Name="_tempestLargeOptionsRow"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Placement Avoids" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_tempestAvoidPicker" Width="50" Margin="0,0,4,0" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_tempestAvoidChips"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Soundset" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_tempestLargeSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></StackPanel></Grid>
+                <Grid x:Name="_tempestAttackRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestAttackButton" Content="Area Attack" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestAttack_Click"/><TextBlock x:Name="_tempestAttackLabel" Text="Area Attack" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestAttackFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Action" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_tempestAreaAttackActionBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><CheckBox x:Name="_tempestRadialTargetingCheck" Content="Radial Targeting" VerticalAlignment="Center" Margin="0,0,8,4"/><Button x:Name="_removeTempestAttackButton" Classes="remove-button" Click="RemoveTempestAttack_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestVfxRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestVfxButton" Content="VFX" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestVfx_Click"/><TextBlock x:Name="_tempestVfxLabel" Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestVfxFields"><WrapPanel x:Name="_tempestEffectHost"><TextBlock Text="Effect" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_tempestEffectBox" Width="200" MaxWidth="200" Margin="0,0,8,4" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTempestEffectButton" Classes="remove-button" Tag="effectproto" Click="RemoveTempestVfxField_Click"/></WrapPanel><WrapPanel x:Name="_tempestGroundHost"><TextBlock Text="Ground" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_tempestGroundBox" Width="200" MaxWidth="200" Margin="0,0,8,4" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTempestGroundButton" Classes="remove-button" Tag="groundvfxproto" Click="RemoveTempestVfxField_Click"/></WrapPanel><WrapPanel x:Name="_tempestImpactHost"><TextBlock Text="Ground Impact" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_tempestImpactBox" Width="200" MaxWidth="200" Margin="0,0,8,4" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTempestImpactButton" Classes="remove-button" Tag="groundimpactvfxproto" Click="RemoveTempestVfxField_Click"/></WrapPanel><WrapPanel x:Name="_tempestIceHost"><TextBlock Text="Ice Sheet" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_tempestIceBox" Width="200" MaxWidth="200" Margin="0,0,8,4" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTempestIceButton" Classes="remove-button" Tag="icesheetvfxproto" Click="RemoveTempestVfxField_Click"/></WrapPanel><Button x:Name="_addTempestEffectButton" Content="Effect" Classes="add-component" Click="AddTempestVfxField_Click" Tag="effectproto"/><Button x:Name="_addTempestGroundButton" Content="Ground" Classes="add-component" Click="AddTempestVfxField_Click" Tag="groundvfxproto"/><Button x:Name="_addTempestImpactButton" Content="Ground Impact" Classes="add-component" Click="AddTempestVfxField_Click" Tag="groundimpactvfxproto"/><Button x:Name="_addTempestIceButton" Content="Ice Sheet" Classes="add-component" Click="AddTempestVfxField_Click" Tag="icesheetvfxproto"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestCloudsRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestCloudsButton" Content="Clouds" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestClouds_Click"/><TextBlock x:Name="_tempestCloudsLabel" Text="Clouds" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestCloudFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Build Up" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestCloudBuildStartBox" Tag="cloudbuildupstarttime" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="End" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestCloudBuildEndBox" Tag="cloudbuildupendtime"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Fade Out" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestCloudFadeStartBox" Tag="cloudfadeoutstarttime" Margin="0,0,8,0"/><TextBlock Text="End" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestCloudFadeEndBox" Tag="cloudfadeoutendtime"/></StackPanel><Button x:Name="_removeTempestCloudsButton" Classes="remove-button" Click="RemoveTempestClouds_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestDriftRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestDriftButton" Content="Drift Time" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestDrift_Click"/><TextBlock x:Name="_tempestDriftLabel" Text="Drift Time" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestDriftFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Slowest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestSlowestDriftBox" Tag="slowestdrifttime"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Fastest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestFastestDriftBox" Tag="fastestdrifttime"/></StackPanel><Button x:Name="_removeTempestDriftButton" Classes="remove-button" Click="RemoveTempestDrift_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_tempestTreeBendRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addTempestTreeBendButton" Content="Tree Bend" Classes="add-component" HorizontalAlignment="Left" Click="AddTempestTreeBend_Click"/><TextBlock x:Name="_tempestTreeBendLabel" Text="Tree Bend" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_tempestTreeBendFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Strength" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestStrengthMinBox" Tag="treebendminstrength" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestStrengthMaxBox" Tag="treebendmaxstrength"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Period" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestPeriodMinBox" Tag="treebendminperiod" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestPeriodMaxBox" Tag="treebendmaxperiod"/></StackPanel><StackPanel x:Name="_tempestAmplitudeHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Amplitude" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestAmplitudeMinBox" Tag="treebendminamplitude" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestAmplitudeMaxBox" Tag="treebendmaxamplitude"/></StackPanel><StackPanel x:Name="_tempestAngleHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Angle offset" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestAngleOffsetBox" Tag="treebendangleoffset"/></StackPanel><StackPanel x:Name="_tempestTreeDurationHost" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tempestTreeDurationBox" Tag="treebendingduration"/></StackPanel><Button x:Name="_removeTempestTreeBendButton" Classes="remove-button" Click="RemoveTempestTreeBend_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_lightningVfxRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_lightningSparksHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Sparks" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lightningSparksBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_lightningGroundSparksHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Ground Sparks" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lightningGroundSparksBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_lightningScorchHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Scorch" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lightningScorchBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><WrapPanel x:Name="_lightningRainVfxHost" Margin="0,0,14,4"><TextBlock Text="Rain" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lightningRainVfxBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeLightningRainVfxButton" Classes="remove-button" Tag="rainvfxproto" Click="RemoveLightningVfx_Click"/></WrapPanel><WrapPanel x:Name="_lightningCloudVfxHost" Margin="0,0,14,4"><TextBlock Text="Clouds" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_lightningCloudVfxBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeLightningCloudVfxButton" Classes="remove-button" Tag="cloudvfxproto" Click="RemoveLightningVfx_Click"/></WrapPanel><Button x:Name="_addLightningRainVfxButton" Content="Rain" Classes="add-component" Margin="0,0,6,4" Tag="rainvfxproto" Click="AddLightningVfx_Click"/><Button x:Name="_addLightningCloudVfxButton" Content="Clouds" Classes="add-component" Margin="0,0,6,4" Tag="cloudvfxproto" Click="AddLightningVfx_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_lightningRainRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addLightningRainButton" Content="Rain" Classes="add-component" HorizontalAlignment="Left" Click="AddLightningRain_Click"/><TextBlock x:Name="_lightningRainLabel" Text="Rain" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_lightningRainFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Build Up" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lightningRainBuildStartBox" Tag="rainbuildupstarttime" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="End" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lightningRainBuildEndBox" Tag="rainbuildupendtime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Fade Out" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lightningRainFadeStartBox" Tag="rainfadeoutstarttime" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="End" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_lightningRainFadeEndBox" Tag="rainfadeoutendtime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><Button x:Name="_removeLightningRainButton" Classes="remove-button" Click="RemoveLightningRain_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_earthquakeAttackRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Attack Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_earthquakeAttackUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel x:Name="_earthquakeIntervalHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeIntervalBox" Tag="attackinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_earthquakeTreeAccuracyHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Accuracy against Tree" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeTreeAccuracyBox" Tag="attacktreeaccuracy" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthquakeRadiusRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Zone Radius" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_earthquakeEpicenterRadiusHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Epicenter" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeEpicenterRadiusBox" Tag="epicenterzoneradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_earthquakeMiddleRadiusHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Middle" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeMiddleRadiusBox" Tag="middlezoneradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_earthquakeOuterRadiusHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Outer" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeOuterRadiusBox" Tag="outerzoneradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthquakeDamageRatioRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Zone Damage Ratio" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_earthquakeEpicenterDamageHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Epicenter" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeEpicenterDamageBox" Tag="epicenterzonedamageratio" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_earthquakeMiddleDamageHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Middle" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeMiddleDamageBox" Tag="middlezonedamageratio" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_earthquakeOuterDamageHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Outer" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthquakeOuterDamageBox" Tag="outerzonedamageratio" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthquakeDustVfxRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addEarthquakeDustVfxButton" Content="Dust VFX" Classes="add-component" HorizontalAlignment="Left" Click="AddEarthquakeDustVfx_Click"/><TextBlock x:Name="_earthquakeDustVfxLabel" Text="Dust VFX" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_earthquakeDustVfxFields"><StackPanel x:Name="_earthquakeDustSmallHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Small" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthquakeDustSmallBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_earthquakeDustMediumHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Medium" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthquakeDustMediumBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_earthquakeDustLargeHost" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Large" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthquakeDustLargeBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><Button x:Name="_removeEarthquakeDustVfxButton" Classes="remove-button" Click="RemoveEarthquakeDustVfx_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_thunderBurstMainRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock x:Name="_thunderBurstAmountLabel" Text="Amount" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><TextBox x:Name="_thunderBurstAmountBox" Tag="amount" Margin="0,0,14,4" TextChanged="SpecificNumber_TextChanged"/><StackPanel x:Name="_thunderBurstDelayHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Delay" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_thunderBurstDelayBox" Tag="delay" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_thunderBurstRadiusIncreaseHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Radius Increase each Strike" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_thunderBurstRadiusIncreaseBox" Tag="radiusincreasestep" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_thunderBurstStunDurationHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Stun Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_thunderBurstStunDurationBox" Tag="stunduration" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_thunderBurstVfxRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_thunderBurstStartingVfxHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Starting" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_thunderBurstStartingVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_thunderBurstChargingVfxHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Charging" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_thunderBurstChargingVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_thunderBurstBurstVfxHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Burst" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_thunderBurstBurstVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_typhoonDragonRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock x:Name="_typhoonDragonLabel" Text="Dragon Unit" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <AutoCompleteBox x:Name="_typhoonDragonUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/>
+                    <StackPanel x:Name="_typhoonDragonSpawnDelayHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Spawn Delay" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonDragonSpawnDelayBox" Tag="dragonspawndelayseconds" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_typhoonDragonAttackIntervalHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Attack Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonDragonAttackIntervalBox" Tag="dragonattackinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_typhoonMainRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Typhoon" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1">
+                    <WrapPanel><StackPanel x:Name="_typhoonUnitHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_typhoonUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_typhoonSpawnDelayHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Spawn Delay" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonSpawnDelayBox" Tag="typhoonspawndelayseconds" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel>
+                    <WrapPanel>
+                      <StackPanel x:Name="_typhoonRainUnitFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Rain Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_typhoonRainUnitBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeTyphoonRainUnitButton" Classes="remove-button" Margin="2,0,0,0" Click="RemoveTyphoonRainUnit_Click"/></StackPanel>
+                      <Button x:Name="_addTyphoonRainUnitButton" Content="Rain Unit" Classes="add-component" Margin="0,0,8,4" Click="AddTyphoonRainUnit_Click"/>
+                    </WrapPanel>
+                    <WrapPanel><StackPanel x:Name="_typhoonAttackDelayHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Attack Delay" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonAttackDelayBox" Tag="typhoonattackdelayseconds" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_typhoonAttackIntervalHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Attack Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonAttackIntervalBox" Tag="typhoonattackinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel>
+                    <WrapPanel x:Name="_typhoonRadiusHost" Margin="0,0,0,4"><TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,8,0"/><StackPanel x:Name="_typhoonRadiusStartHost" Orientation="Horizontal"><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonRadiusStartBox" Tag="typhoonradiusstart" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_typhoonRadiusEndHost" Orientation="Horizontal"><TextBlock Text="End" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonRadiusEndBox" Tag="typhoonradiusend" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_typhoonRadiusExpansionHost" Orientation="Horizontal"><TextBlock Text="Expansion Rate" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_typhoonRadiusExpansionBox" Tag="typhoonradiusexpansionseconds" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_frostFreezeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Freeze" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><WrapPanel><StackPanel x:Name="_frostExpansionHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Expansion Time" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostExpansionBox" Tag="freezeexpansiontime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_frostTransitionHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Transition to Frozen" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostTransitionBox" Tag="freezetransitiontime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_frostDurationHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostDurationBox" Tag="freezeholdtime" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel><StackPanel x:Name="_frostStrikeIntervalHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Strike Interval" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostStrikeMinBox" Tag="fasteststriketime" Margin="0,0,8,0" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostStrikeMaxBox" Tag="sloweststriketime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><WrapPanel><StackPanel x:Name="_frostArmorHost" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Armor Amount" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostArmorBox" Tag="armoramount" Margin="0,0,8,0"/><Button x:Name="_removeFrostArmorButton" Classes="remove-button" Click="RemoveFrostArmor_Click"/></StackPanel><Button x:Name="_addFrostArmorButton" Content="Armor Amount" Classes="add-component" Margin="0,0,8,4" Click="AddFrostArmor_Click"/></WrapPanel></StackPanel></Grid>
+                <Grid x:Name="_frostVfxRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_frostStormHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Storm" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_frostStormBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_frostSnowDriftHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Snow Drift" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_frostSnowDriftBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_frostDriftRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addFrostDriftButton" Content="Drift" Classes="add-component" HorizontalAlignment="Left" Click="AddFrostDrift_Click"/><TextBlock x:Name="_frostDriftLabel" Text="Drift" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_frostDriftHost"><StackPanel x:Name="_frostSlowestDriftHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Slowest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostSlowestDriftBox" Tag="slowestdrifttime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_frostFastestDriftHost" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Fastest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_frostFastestDriftBox" Tag="fastestdrifttime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><Button x:Name="_removeFrostDriftButton" Classes="remove-button" Click="RemoveFrostDrift_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_witherMainRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Wave Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_witherWaveUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel x:Name="_witherDurationHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_witherDurationBox" Tag="waveduration" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_witherVfxIntervalHost" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="VFX Interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_witherVfxIntervalBox" Tag="vfxinterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_witherKillTypesRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addWitherKillTypesButton" Content="Kill Unit Type" Classes="add-component" HorizontalAlignment="Left" Click="AddWitherKillTypes_Click"/><TextBlock x:Name="_witherKillTypesLabel" Text="Kill Unit Type" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_witherKillTypesFields"><AutoCompleteBox x:Name="_witherKillTypePicker" Width="50" Margin="0,0,4,4" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_witherKillTypeChips"/><Button x:Name="_removeWitherKillTypesButton" Classes="remove-button" Margin="2,0,0,4" Click="RemoveWitherKillTypes_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_witherDamageRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addWitherDamageButton" Content="% Max HP Damage" Classes="add-component" HorizontalAlignment="Left" Click="AddWitherDamage_Click"/><TextBlock x:Name="_witherDamageLabel" Text="% Max HP Damage" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_witherDamageFields"><TextBox x:Name="_witherDamageBox" Tag="damagepercentofmaxhp" Margin="0,0,8,4"/><Button x:Name="_removeWitherDamageButton" Classes="remove-button" Click="RemoveWitherDamage_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_witherCreepGeneratorsRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addWitherCreepGeneratorsButton" Content="Creep Generators" Classes="add-component" HorizontalAlignment="Left" Click="AddWitherCreepGenerators_Click"/><TextBlock x:Name="_witherCreepGeneratorsLabel" Text="Creep Generators" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_witherCreepGeneratorsFields"><TextBlock Text="Amount" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_witherCreepGeneratorsBox" Tag="creepgenerators" Margin="0,0,8,4" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeWitherCreepGeneratorsButton" Classes="remove-button" Click="RemoveWitherCreepGenerators_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_arcadianPlacementRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Terrain Placement Check" VerticalAlignment="Center"/><AutoCompleteBox Grid.Column="1" x:Name="_arcadianPlacementBox" Width="200" MaxWidth="200" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></Grid>
+                <Grid x:Name="_arcadianSpawnRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Spawn" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_arcadianDamageReceiverHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Damage Receiver" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_arcadianDamageReceiverBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_arcadianBlockerHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Blocker" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_arcadianBlockerBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel x:Name="_arcadianBlockerDurationHost" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Blocker Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_arcadianBlockerDurationBox" Tag="blockerradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_arcadianVfxHost" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_arcadianVfxBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeArcadianVfxButton" Classes="remove-button" Click="RemoveArcadianVfx_Click"/></StackPanel><Button x:Name="_addArcadianVfxButton" Content="VFX" Classes="add-component" Margin="0,0,8,4" Click="AddArcadianVfx_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_arcadianGrassRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="VFX Grass" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1" Spacing="4"><WrapPanel x:Name="_arcadianGrassRows"/><Button x:Name="_addArcadianGrassButton" Content="Add VFX Grass" Classes="add-component" HorizontalAlignment="Left" Click="AddArcadianGrass_Click"/></StackPanel></Grid>
+
+                <Grid x:Name="_underworldEidolonRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Eidolon" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Count" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldEidolonMinBox" Tag="eidolonmin" Margin="0,0,8,0"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldEidolonMaxBox" Tag="maxeidoloncount"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Number for Each Sacrificed" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldEidolonStepBox" Tag="eidolonstep"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Valid Type" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldEidolonTypeBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_underworldMultiplierFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Multipliers" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="Max HP" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldMaxHpMultiplierBox" Tag="eidolonmaxhpmultiplier" Margin="0,0,8,0"/><TextBlock Text="Max Speed" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldMaxSpeedMultiplierBox" Tag="eidolonmaxspeedmultiplier" Margin="0,0,8,0"/><Button x:Name="_removeUnderworldMultipliersButton" Classes="remove-button" Click="RemoveUnderworldMultipliers_Click"/></StackPanel>
+                    <Button x:Name="_addUnderworldMultipliersButton" Content="Multipliers" Classes="add-component" Margin="0,0,8,4" Click="AddUnderworldMultipliers_Click"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_underworldSpawnRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Spawn" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldSpawnRadiusBox" Tag="eidolonspawnradius"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldSpawnDurationBox" Tag="eidolonspawnduration"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_underworldVfxRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addUnderworldVfxButton" Content="VFX" Classes="add-component" HorizontalAlignment="Left" Click="AddUnderworldVfx_Click"/><TextBlock x:Name="_underworldVfxLabel" Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_underworldVfxFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Start" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldStartVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Eidolon Spawn" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldEidolonSpawnVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="For Units Without Birth Anim" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldNoBirthVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Effect" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldEffectVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><Button x:Name="_removeUnderworldVfxButton" Classes="remove-button" VerticalAlignment="Center" Click="RemoveUnderworldVfx_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_underworldLightingRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <Grid><Button x:Name="_addUnderworldLightingButton" Content="Lighting" Classes="add-component" HorizontalAlignment="Left" Click="AddUnderworldLighting_Click"/><TextBlock x:Name="_underworldLightingLabel" Text="Lighting" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid>
+                  <WrapPanel Grid.Column="1" x:Name="_underworldLightingFields">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Light Set" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldLightSetBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="BuildUp (s)" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldLightBuildUpBox" Tag="lightsetbuilduptime"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Duration (s)" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldLightDurationBox" Tag="lightsetduration"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="ShutDown (s)" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_underworldLightShutdownBox" Tag="lightsetshutdowntime"/><Button x:Name="_removeUnderworldLightingButton" Classes="remove-button" Margin="2,0,0,0" VerticalAlignment="Center" Click="RemoveUnderworldLighting_Click"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_underworldTechEffectRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addUnderworldTechEffectButton" Content="Tech Effect" Classes="add-component" HorizontalAlignment="Left" Click="AddUnderworldTechEffect_Click"/><TextBlock x:Name="_underworldTechEffectLabel" Text="Tech Effect" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_underworldTechEffectFields"><AutoCompleteBox x:Name="_underworldTechEffectBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel x:Name="_underworldOnlyIfTechFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Only if Tech Active" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_underworldOnlyIfTechBox" Width="200" MaxWidth="200" Margin="0,0,2,0" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeUnderworldOnlyIfTechButton" Classes="remove-button" VerticalAlignment="Center" Click="RemoveUnderworldOnlyIfTech_Click"/></StackPanel><Button x:Name="_addUnderworldOnlyIfTechButton" Content="Only if Tech Active" Classes="add-component" Margin="0,0,8,4" Click="AddUnderworldOnlyIfTech_Click"/><Button x:Name="_removeUnderworldTechEffectButton" Classes="remove-button" VerticalAlignment="Center" Click="RemoveUnderworldTechEffect_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_underworldSuddenDeathRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addUnderworldSuddenDeathButton" Content="Sudden Death" Classes="add-component" HorizontalAlignment="Left" Click="AddUnderworldSuddenDeath_Click"/><TextBlock x:Name="_underworldSuddenDeathLabel" Text="Sudden Death" VerticalAlignment="Center"/></Grid><WrapPanel Grid.Column="1" x:Name="_underworldSuddenDeathFields"><TextBlock Text="Sudden Death Target HP Multiplier" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_underworldSuddenDeathBox" Tag="suddendeathhpmultiplier" Margin="0,0,8,4"/><Button x:Name="_removeUnderworldSuddenDeathButton" Classes="remove-button" Click="RemoveUnderworldSuddenDeath_Click"/></WrapPanel></Grid>
+
+                <Grid x:Name="_powerCloneSlotRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Power Slot" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="_powerCloneSlotBox" Width="90" HorizontalAlignment="Left" SelectionChanged="PowerCloneSlot_SelectionChanged"/></Grid>
+                <Grid x:Name="_powerCloneVfxRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="VFX" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Orientation="Horizontal"><TextBlock Text="Placement" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_powerClonePlacementVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></Grid>
+                <Grid x:Name="_powerCloneReplacementRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Duplicate Replacement" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><CheckBox x:Name="_powerCloneSeededCheck" Content="Seeded" VerticalAlignment="Center" Margin="0,0,14,4"/><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Replacement Power" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_powerCloneReplacementPicker" Width="50" Margin="0,0,4,0" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_powerCloneReplacementChips"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_ceaseFireVfxRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Effect" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_ceaseFireVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Attach To" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_ceaseFireAttachBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_prosperityVfxRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Large" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_prosperityLargeVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Small" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_prosperitySmallVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_prosperityTypesRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Affected Type" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_prosperityTypePicker" Width="50" Margin="0,0,4,4" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_prosperityTypeChips"/></WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_sharedEffectsRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Effects" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <StackPanel x:Name="_sharedEffectRows" Spacing="8"/>
+                    <Button x:Name="_addSharedEffectButton" Content="Add Effect" Classes="add-component" HorizontalAlignment="Left" Click="AddSharedEffect_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_effectInAreaMainRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Effect In Area" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Area VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_effectInAreaAreaVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="*Requires to have HandAttack and tactics" FontStyle="Italic" VerticalAlignment="Center" Margin="8,0,0,0"/></StackPanel>
+                    <StackPanel x:Name="_effectInAreaRepeatDelayFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Repeat Delay" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_effectInAreaRepeatDelayBox" Tag="repeatdelay" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeEffectInAreaRepeatDelayButton" Classes="remove-button" Click="RemoveEffectInAreaRepeatDelay_Click"/></StackPanel>
+                    <Button x:Name="_addEffectInAreaRepeatDelayButton" Content="Repeat Delay" Classes="add-component" Margin="0,0,8,4" Click="AddEffectInAreaRepeatDelay_Click"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_effectInAreaOnHitRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="On Hit Effect" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <StackPanel x:Name="_effectInAreaOnHitRows" Spacing="8"/>
+                    <Button x:Name="_addEffectInAreaOnHitButton" Content="Add On Hit Effect" Classes="add-component" HorizontalAlignment="Left" Click="AddEffectInAreaOnHit_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_rainMainRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Rain" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1">
+                    <WrapPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Target Large" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_rainLargeTargetBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_rainLargeVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    </WrapPanel>
+                    <WrapPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Target Small" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_rainSmallTargetBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_rainSmallVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    </WrapPanel>
+                  </StackPanel>
+                </Grid>
+                <Grid x:Name="_rainEffectsRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Effects" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <StackPanel x:Name="_rainEffectRows" Spacing="8"/>
+                    <Button x:Name="_addRainEffectButton" Content="Add Effect" Classes="add-component" HorizontalAlignment="Left" Click="AddRainEffect_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_switchingTypeRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Type" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <ComboBox x:Name="_switchingTierTypeBox" Width="180" Margin="0,0,14,4" SelectionChanged="SwitchingTierType_SelectionChanged"/>
+                    <StackPanel x:Name="_switchingIntervalFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Interval (s)" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_switchingIntervalBox" Tag="interval" TextChanged="SwitchingInterval_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_switchingProgressRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Progress" VerticalAlignment="Center"/>
+                  <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,4"><TextBlock Text="Visual" VerticalAlignment="Center" Margin="0,0,6,0"/><ComboBox x:Name="_switchingProgressTypeBox" Width="170" VerticalAlignment="Center" SelectionChanged="SwitchingProgressType_SelectionChanged"/></StackPanel>
+                    <StackPanel x:Name="_switchingTimerRolloverFields" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,4"><TextBlock Text="Timer Rollover" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_switchingTimerRolloverBox" Width="240" MinHeight="32" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" TextChanged="SwitchingStringBox_TextChanged"/><Button x:Name="_removeSwitchingTimerRolloverButton" Classes="remove-button" VerticalAlignment="Center" Margin="2,0,0,0" Click="RemoveSwitchingTimerRollover_Click"/></StackPanel>
+                    <Button x:Name="_addSwitchingTimerRolloverButton" Content="Timer Rollover" Classes="add-component" VerticalAlignment="Center" Margin="0,0,8,4" Click="AddSwitchingTimerRollover_Click"/>
+                    <CheckBox x:Name="_switchingSkipFirstNotificationCheck" Content="Skip First Notification" VerticalAlignment="Center" Margin="0,0,0,4" IsCheckedChanged="SwitchingSkipFirstNotification_Changed"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_switchingVfxAttachRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <Grid><Button x:Name="_addSwitchingVfxAttachButton" Content="VFX Attach To" Classes="add-component" HorizontalAlignment="Left" Click="AddSwitchingVfxAttach_Click"/><TextBlock x:Name="_switchingVfxAttachLabel" Text="VFX Attach To" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid>
+                  <WrapPanel Grid.Column="1" x:Name="_switchingVfxAttachFields"><TextBlock Text="Target" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_switchingVfxAttachPicker" Width="50" Margin="0,0,4,4" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_switchingVfxAttachChips"/><Button x:Name="_removeSwitchingVfxAttachButton" Classes="remove-button" Click="RemoveSwitchingVfxAttach_Click"/></WrapPanel>
+                </Grid>
+                <Grid x:Name="_switchingEffectsRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Effects" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="8"><StackPanel x:Name="_switchingEffectContainers" Spacing="8"/><Button x:Name="_addSwitchingEffectContainerButton" Content="Add Effects" Classes="add-component" HorizontalAlignment="Left" Click="AddSwitchingEffectContainer_Click"/></StackPanel>
+                </Grid>
+
+                <Grid x:Name="_newMoonResearchRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Research" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Max Free Amount" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_newMoonMaxFreeBox" Tag="maxfreeresearches" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Rate" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_newMoonRateBox" Tag="freeresearchrate" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_modifyVfxRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <Grid><Button x:Name="_addModifyVfxButton" Content="VFX" Classes="add-component" HorizontalAlignment="Left" Click="AddModifyVfx_Click"/><TextBlock x:Name="_modifyVfxLabel" Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid>
+                  <WrapPanel Grid.Column="1" x:Name="_modifyVfxFields">
+                    <StackPanel x:Name="_modifyVfxTargetFields" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,4"><TextBlock Text="Target" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_modifyVfxTargetBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Bone" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_modifyVfxBoneBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeModifyVfxTargetButton" Classes="remove-button" VerticalAlignment="Center" Margin="2,0,0,0" Click="RemoveModifyVfxOption_Click" Tag="target"/></StackPanel>
+                    <Button x:Name="_addModifyVfxTargetButton" Content="Target" Classes="add-component" Margin="0,0,8,4" Click="AddModifyVfxOption_Click" Tag="target"/>
+                    <StackPanel x:Name="_modifyVfxBirthFields" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,4"><TextBlock Text="Birth" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_modifyVfxBirthBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeModifyVfxBirthButton" Classes="remove-button" VerticalAlignment="Center" Margin="2,0,0,0" Click="RemoveModifyVfxOption_Click" Tag="birth"/></StackPanel>
+                    <Button x:Name="_addModifyVfxBirthButton" Content="Birth" Classes="add-component" Margin="0,0,8,4" Click="AddModifyVfxOption_Click" Tag="birth"/>
+                    <Button x:Name="_removeModifyVfxButton" Classes="remove-button" VerticalAlignment="Center" Margin="2,0,0,4" Click="RemoveModifyVfx_Click"/>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_unitModifyRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Unit Modify" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <CheckBox x:Name="_unitModifyKillOnEffectEndCheck"
+                              Content="Kill On Effect End" HorizontalAlignment="Left"
+                              IsCheckedChanged="UnitModifyKillOnEffectEnd_Changed"/>
+                    <StackPanel x:Name="_unitModifyRows" Spacing="8"/>
+                    <Button x:Name="_addUnitModifyButton" Content="Add Unit Modify" Classes="add-component" HorizontalAlignment="Left" Click="AddUnitModify_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_foxCharmAffectedNumberRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Affected Number" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <StackPanel x:Name="_foxCharmAgeRows" Spacing="4"/>
+                    <Button x:Name="_addFoxCharmAgeButton" Content="Add Affected Number"
+                            Classes="add-component" HorizontalAlignment="Left"
+                            Click="AddFoxCharmAge_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <Grid x:Name="_foxCharmVfxRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <Grid>
+                    <Button x:Name="_addFoxCharmVfxButton" Content="VFX" Classes="add-component"
+                            HorizontalAlignment="Left" Click="AddFoxCharmVfx_Click"/>
+                    <TextBlock x:Name="_foxCharmVfxLabel" Text="VFX" VerticalAlignment="Top"
+                               Margin="0,9,0,0"/>
+                  </Grid>
+                  <WrapPanel Grid.Column="1" x:Name="_foxCharmVfxFields">
+                    <StackPanel x:Name="_foxCharmUnitVfxFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Unit" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_foxCharmUnitVfxBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_foxCharmTargetVfxFields" Orientation="Horizontal" Margin="0,0,14,4">
+                      <TextBlock Text="Target" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_foxCharmTargetVfxBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                    </StackPanel>
+                    <StackPanel x:Name="_foxCharmAreaVfxFields" Orientation="Horizontal" Margin="0,0,2,4">
+                      <TextBlock Text="Area" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <AutoCompleteBox x:Name="_foxCharmAreaVfxBox" Width="200" MaxWidth="200"
+                                       FilterMode="Contains" MinimumPrefixLength="0"/>
+                      <Button x:Name="_removeFoxCharmVfxButton" Classes="remove-button"
+                              VerticalAlignment="Center" Margin="2,0,0,0"
+                              Click="RemoveFoxCharmVfx_Click"/>
+                    </StackPanel>
+                  </WrapPanel>
+                </Grid>
+
+                <Grid x:Name="_fimbulWolfRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Wolf" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_fimbulWolfUnitFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Unit" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_fimbulWolfPicker" Width="50" Margin="0,0,4,0" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_fimbulWolfChips"/></StackPanel>
+                    <TextBlock x:Name="_fimbulWolfAmountLabel" Text="Amount" VerticalAlignment="Center" Margin="0,0,8,4"/>
+                    <StackPanel x:Name="_fimbulWolfSoftCapFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Soft Cap" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulWolfSoftCapBox" Tag="wolfcountsoftcap" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_fimbulWolfHardCapFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Hard Cap" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulWolfHardCapBox" Tag="wolfcounthardcap" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_fimbulWolfVfxFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="VFX" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_fimbulWolfVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeFimbulWolfVfxButton" Classes="remove-button" Click="RemoveFimbulWolfVfx_Click"/></StackPanel>
+                    <Button x:Name="_addFimbulWolfVfxButton" Content="VFX" Classes="add-component" Margin="0,0,8,4" Click="AddFimbulWolfVfx_Click"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_fimbulMainPackRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Main Pack" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_fimbulMainPackSizeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Size" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulMainPackSizeBox" Tag="packsize" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_fimbulMainPackTargetFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Target" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_fimbulMainPackTargetBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_fimbulMainPackRadiusFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Spawn Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulMainPackRadiusBox" Tag="packspawnradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_fimbulExtraSpawnsFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Extra Spawns" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulExtraSpawnsBox" Tag="numextramainpackspawns" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeFimbulExtraSpawnsButton" Classes="remove-button" Click="RemoveFimbulExtraSpawns_Click"/></StackPanel>
+                    <Button x:Name="_addFimbulExtraSpawnsButton" Content="Extra Spawns" Classes="add-component" Margin="0,0,8,4" Click="AddFimbulExtraSpawns_Click"/>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_fimbulSecondaryPackRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <TextBlock Text="Secondary Pack" VerticalAlignment="Top" Margin="0,9,0,0"/>
+                  <WrapPanel Grid.Column="1">
+                    <StackPanel x:Name="_fimbulSecondaryPackSizeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Size" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulSecondaryPackSizeBox" Tag="minipacksize" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                    <StackPanel x:Name="_fimbulSecondaryPackTargetFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Target" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_fimbulSecondaryPackTargetBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel>
+                    <StackPanel x:Name="_fimbulSecondaryPackRadiusFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Spawn Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBlock Text="Min" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulSecondaryPackRadiusBox" Tag="minpacktargetspawnradius" TextChanged="SpecificNumber_TextChanged"/><TextBlock Text="Max" VerticalAlignment="Center" Margin="8,0,6,0"/><TextBox x:Name="_fimbulSecondaryPackMaxRadiusBox" Tag="maxpacktargetspawnradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel>
+                  </WrapPanel>
+                </Grid>
+                <Grid x:Name="_fimbulWanderRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Wander" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_fimbulWanderDistanceFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Distance" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulWanderDistanceBox" Tag="packwanderdistance" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_fimbulMaxWanderDistanceFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Max Distance" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulMaxWanderDistanceBox" Tag="maxpackwanderdistance" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_fimbulTargetSystemRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Target system" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_fimbulScanIntervalFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Scan interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulScanIntervalBox" Tag="packscaninterval" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_fimbulEvalRadiusFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Eval Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulEvalRadiusBox" Tag="spawntargetevalradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_fimbulSearchRadiusFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Search Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulSearchRadiusBox" Tag="packattacksearchradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_fimbulSnowDriftRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><TextBlock x:Name="_fimbulSnowDriftLabel" Text="Snow Drift" VerticalAlignment="Top" Margin="0,9,0,0"/><Button x:Name="_addFimbulSnowDriftOptionalButton" Content="Snow Drift" Classes="add-component" HorizontalAlignment="Left" Click="AddFimbulSnowDriftOptional_Click"/></Grid><StackPanel Grid.Column="1" Spacing="4"><WrapPanel x:Name="_fimbulSnowDriftRows"/><Button x:Name="_addFimbulSnowDriftButton" Content="Add Snow Drift" Classes="add-component" HorizontalAlignment="Left" Click="AddFimbulSnowDrift_Click"/></StackPanel></Grid>
+                <Grid x:Name="_fimbulSoundStrikeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strike Time" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel x:Name="_fimbulSlowestStrikeFields" Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Slowest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulSlowestStrikeBox" Tag="sloweststriketime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel x:Name="_fimbulFastestStrikeFields" Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Fastest" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_fimbulFastestStrikeBox" Tag="fasteststriketime" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_cageMainRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Caged Unit" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Float Height" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_cageFloatHeightBox" Tag="targetfloatheight" TextChanged="SpecificNumber_TextChanged"/></StackPanel><CheckBox x:Name="_cageKillAfterEndCheck" Content="Kill After End" IsChecked="True" VerticalAlignment="Center" Margin="0,0,0,4"/></WrapPanel></Grid>
+                <Grid x:Name="_cageKillSimilarRow" ColumnDefinitions="150,*" Margin="0,4">
+                  <Grid><Button x:Name="_addCageKillSimilarButton" Content="Kill Similar" Classes="add-component" HorizontalAlignment="Left" Click="AddCageKillSimilar_Click"/><TextBlock x:Name="_cageKillSimilarLabel" Text="Kill Similar" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid>
+                  <Grid Grid.Column="1" x:Name="_cageKillSimilarFields" ColumnDefinitions="*,Auto">
+                    <StackPanel Spacing="4">
+                      <WrapPanel Margin="0,0,8,0"><TextBlock Text="Target Unit Type" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_cageSimilarTypePicker" Width="50" Margin="0,0,4,4" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_cageSimilarTypeChips"/></WrapPanel>
+                      <WrapPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Resource Cap" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_cageResourceCapBox" Tag="resourcevaluecap" TextChanged="SpecificNumber_TextChanged"/></StackPanel><TextBlock Text="Resource Multiplier" VerticalAlignment="Center" Margin="0,0,6,4"/><WrapPanel x:Name="_cageResourceMultiplierRows"/><Button x:Name="_addCageResourceMultiplierButton" Content="Add Resource Multiplier" Classes="add-component" Margin="0,0,8,4" Click="AddCageResourceMultiplier_Click"/></WrapPanel>
+                    </StackPanel>
+                    <Button Grid.Column="1" x:Name="_removeCageKillSimilarButton" Classes="remove-button" VerticalAlignment="Top" Click="RemoveCageKillSimilar_Click"/>
+                  </Grid>
+                </Grid>
+                <Grid x:Name="_cageVfxRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addCageVfxButton" Content="VFX" Classes="add-component" HorizontalAlignment="Left" Click="AddCageVfx_Click"/><TextBlock x:Name="_cageVfxLabel" Text="VFX" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_cageVfxFields"><StackPanel x:Name="_cageVfxAreaFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Area" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxAreaBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageVfxAreaButton" Classes="remove-button" Click="RemoveCageVfxOption_Click" Tag="vfxarea"/></StackPanel><Button x:Name="_addCageVfxAreaButton" Content="Area" Classes="add-component" Margin="0,0,8,4" Click="AddCageVfxOption_Click" Tag="vfxarea"/><StackPanel x:Name="_cageVfxMainTargetFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Main Target" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxMainTargetBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Bone" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxMainTargetBoneBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageVfxMainTargetButton" Classes="remove-button" Click="RemoveCageVfxOption_Click" Tag="vfxmaintarget"/></StackPanel><Button x:Name="_addCageVfxMainTargetButton" Content="Main Target" Classes="add-component" Margin="0,0,8,4" Click="AddCageVfxOption_Click" Tag="vfxmaintarget"/><StackPanel x:Name="_cageVfxMainImpactFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Main Target Impact" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxMainImpactBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageVfxMainImpactButton" Classes="remove-button" Click="RemoveCageVfxOption_Click" Tag="vfxmaintargetimpact"/></StackPanel><Button x:Name="_addCageVfxMainImpactButton" Content="Main Target Impact" Classes="add-component" Margin="0,0,8,4" Click="AddCageVfxOption_Click" Tag="vfxmaintargetimpact"/><StackPanel x:Name="_cageVfxMarkAnimFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Mark Anim" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxMarkAnimBox" Width="200" MaxWidth="200" Margin="0,0,8,0" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Bone" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxMarkAnimBoneBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageVfxMarkAnimButton" Classes="remove-button" Click="RemoveCageVfxOption_Click" Tag="vfxmarkanim"/></StackPanel><Button x:Name="_addCageVfxMarkAnimButton" Content="Mark Anim" Classes="add-component" Margin="0,0,8,4" Click="AddCageVfxOption_Click" Tag="vfxmarkanim"/><StackPanel x:Name="_cageVfxAdditionalImpactFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Additional Targets Impact" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageVfxAdditionalImpactBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageVfxAdditionalImpactButton" Classes="remove-button" Click="RemoveCageVfxOption_Click" Tag="vfxadditionalimpact"/></StackPanel><Button x:Name="_addCageVfxAdditionalImpactButton" Content="Additional Targets Impact" Classes="add-component" Margin="0,0,8,4" Click="AddCageVfxOption_Click" Tag="vfxadditionalimpact"/><Button x:Name="_removeCageVfxButton" Classes="remove-button" Click="RemoveCageVfx_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_cageSoundRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addCageSoundButton" Content="Soundset" Classes="add-component" HorizontalAlignment="Left" Click="AddCageSound_Click"/><TextBlock x:Name="_cageSoundLabel" Text="Soundset" VerticalAlignment="Center"/></Grid><StackPanel Grid.Column="1" x:Name="_cageSoundFields" Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Additional Target Impact" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_cageAdditionalImpactSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/><Button x:Name="_removeCageSoundButton" Classes="remove-button" Click="RemoveCageSound_Click"/></StackPanel></Grid>
+
+                <Grid x:Name="_earthMonsterUnitRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Earth Monster Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_earthMonsterUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Strike Action" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterStrikeActionBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Crush Action" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterCrushActionBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthMonsterStrikeRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strike" VerticalAlignment="Top" Margin="0,9,0,0"/><StackPanel Grid.Column="1"><WrapPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Number of Additional Strikes" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterAdditionalStrikesBox" Tag="numberofadditionalstrikes" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Interval between Strikes" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterStrikeIntervalBox" Tag="secondsbetweenstrikes" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Unit Limit" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterUnitLimitBox" Tag="strikeunitlimit" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel><WrapPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Min Group Search" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterMinGroupBox" Tag="minimumgroupsize" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Group Search Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterGroupRadiusBox" Tag="groupsearchradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Avoid Previous Strike Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterAvoidRadiusBox" Tag="previousstrikeavoidanceradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></StackPanel></Grid>
+                <Grid x:Name="_earthMonsterRegurgitateRow" ColumnDefinitions="150,*" Margin="0,4"><Grid><Button x:Name="_addEarthMonsterRegurgitateButton" Content="Regurgitate" Classes="add-component" HorizontalAlignment="Left" Click="AddEarthMonsterRegurgitate_Click"/><TextBlock x:Name="_earthMonsterRegurgitateLabel" Text="Regurgitate" VerticalAlignment="Top" Margin="0,9,0,0"/></Grid><WrapPanel Grid.Column="1" x:Name="_earthMonsterRegurgitateFields"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Timing" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterRegurgitateTimingBox" Tag="regurgitatetime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterRegurgitateDurationBox" Tag="regurgitateunitstime" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Height" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterRegurgitateHeightBox" Tag="regurgitateheight" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Anim" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterRegurgitateAnimBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,8,4"><TextBlock Text="Anim Duration" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterRegurgitateAnimDurationBox" Tag="regurgitateanimtime" TextChanged="SpecificNumber_TextChanged"/><Button x:Name="_removeEarthMonsterRegurgitateButton" Classes="remove-button" Click="RemoveEarthMonsterRegurgitate_Click"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthMonsterChompRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Chomp" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Swallow Timer" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterSwallowTimerBox" Tag="chompthrowswallowtimer" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Throw Height" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterChompHeightBox" Tag="chompthrowheight" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthMonsterSwallowRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Swallow" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Orientation="Horizontal"><TextBlock Text="Player Relation" VerticalAlignment="Center" Margin="0,0,6,0"/><ComboBox x:Name="_earthMonsterSwallowRelationBox" Width="200" SelectionChanged="EarthMonsterSwallowRelation_SelectionChanged"/></StackPanel></Grid>
+                <Grid x:Name="_earthMonsterThrowRadiusRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Throw Radius" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Upward" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterThrowUpwardBox" Tag="throwupwardsradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Outward" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_earthMonsterThrowOutwardBox" Tag="throwoutwardsradius" TextChanged="SpecificNumber_TextChanged"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_earthMonsterLandImpactRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Land Impact VFX" VerticalAlignment="Center"/><AutoCompleteBox Grid.Column="1" x:Name="_earthMonsterLandImpactBox" Width="200" MaxWidth="200" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></Grid>
+                <Grid x:Name="_earthMonsterSoundsRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Soundset" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Emerge" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterEmergeSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Chomp" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterChompSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Regurgitate" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_earthMonsterRegurgitateSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_meteorUnitRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Meteor Unit" VerticalAlignment="Center"/><AutoCompleteBox Grid.Column="1" x:Name="_meteorUnitBox" Width="200" MaxWidth="200" HorizontalAlignment="Left" FilterMode="Contains" MinimumPrefixLength="0"/></Grid>
+                <Grid x:Name="_meteorStrikesRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Strikes Amount" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Standard Strikes" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_meteorStandardStrikesBox" Tag="numberofstrikes"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Priority Strikes" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_meteorPriorityStrikesBox" Tag="numberofprioritystrikes"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Min Group Size" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_meteorMinGroupSizeBox" Tag="minimumgroupsize"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Group Search Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_meteorGroupSearchRadiusBox" Tag="groupsearchradius"/></StackPanel><CheckBox x:Name="_meteorLargestGroupCheck" Content="Use Largest Group Below Min Size" VerticalAlignment="Center" Margin="0,0,14,4"/><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Secondary Accuracy" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_meteorSecondaryAccuracyBox" Tag="secondaryaccuracy"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_meteorSplashRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Splash VFX" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBlock Text="Land" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_meteorLandVfxBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><TextBlock Text="Water" VerticalAlignment="Center" Margin="0,0,6,4"/><AutoCompleteBox x:Name="_meteorWaterVfxBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></WrapPanel></Grid>
+                <Grid x:Name="_meteorSoundsRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Soundset" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="First Approach" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_meteorFirstApproachSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="First Strike" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_meteorFirstStrikeSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Strike" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_meteorStrikeSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Approach" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_meteorApproachSoundBox" Width="200" MaxWidth="200" FilterMode="Contains" MinimumPrefixLength="0"/></StackPanel></WrapPanel></Grid>
+
+                <Grid x:Name="_tornadoMainRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Tornado Unit" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><AutoCompleteBox x:Name="_tornadoUnitBox" Width="200" MaxWidth="200" Margin="0,0,14,4" FilterMode="Contains" MinimumPrefixLength="0"/><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Damage interval" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoDamageIntervalBox" Tag="damageinterval"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Search and Damage Scale Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoGreaterDamageRadiusBox" Tag="greaterdamageradius"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Waypoints Number" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoWaypointCountBox" Tag="numberofwaypoints"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,4"><TextBlock Text="Spiral Size" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoSpiralSizeBox" Tag="spiralsize"/></StackPanel></WrapPanel></Grid>
+                <Grid x:Name="_tornadoFunnelRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Funnel" VerticalAlignment="Top" Margin="0,9,0,0"/><WrapPanel Grid.Column="1"><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Radius" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoFunnelRadiusBox" Tag="funnelradius"/></StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,14,4"><TextBlock Text="Height" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="_tornadoFunnelHeightBox" Tag="funnelheight"/></StackPanel><WrapPanel x:Name="_throwExcludePullHost" Margin="0,0,14,4"><TextBlock Text="Exclude From Pull" VerticalAlignment="Center" Margin="0,0,6,0"/><AutoCompleteBox x:Name="_throwExcludePullPicker" Width="50" Margin="0,0,4,0" FilterMode="Contains" MinimumPrefixLength="0"/><WrapPanel x:Name="_throwExcludePullChips"/><Button x:Name="_removeThrowExcludePullButton" Classes="remove-button" Margin="2,0,0,0" Click="RemoveThrowExclusion_Click" Tag="excludefrompullingintofunnel"/></WrapPanel><Button x:Name="_addThrowExcludePullButton" Content="Exclude From Pull" Classes="add-component" Margin="0,0,8,4" Click="AddThrowExcludePull_Click"/></WrapPanel></Grid>
+                <Grid x:Name="_tornadoDebrisRow" ColumnDefinitions="150,*" Margin="0,4"><TextBlock Text="Debris Velocity" VerticalAlignment="Center"/><WrapPanel Grid.Column="1"><TextBlock Text="XZ" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_tornadoDebrisXzBox" Tag="debrisxzvelocity" Margin="0,0,14,4"/><TextBlock Text="Y" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_tornadoDebrisYBox" Tag="debrisyvelocity" Margin="0,0,14,4"/><TextBlock Text="Angular" VerticalAlignment="Center" Margin="0,0,6,4"/><TextBox x:Name="_tornadoDebrisAngularBox" Tag="debrisangularvelocity"/></WrapPanel></Grid>
               </StackPanel>
             </ScrollViewer>
           </TabItem>
         </TabControl>
+        <TextBlock Grid.Row="2" x:Name="_statusMessage"
+                   Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
+                   Margin="0,6,0,0" HorizontalAlignment="Center"/>
       </Grid>
     </Border>
 
@@ -1092,9 +1645,5 @@
                 ToolTip.Tip="Collapse XML Preview" Click="XmlPreviewToggle_Click"/>
       </Grid>
     </Border>
-
-    <TextBlock Grid.Row="1" Grid.ColumnSpan="3" x:Name="_statusMessage"
-               Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
-               Margin="0,6,0,0" HorizontalAlignment="Center"/>
   </Grid>
 </UserControl>

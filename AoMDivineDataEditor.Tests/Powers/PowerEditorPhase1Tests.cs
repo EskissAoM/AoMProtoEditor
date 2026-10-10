@@ -178,7 +178,8 @@ public sealed class PowerEditorPhase1Tests
         Assert.Contains("ShowEntityKindAsync(EditorEntityKind.Powers)", mainCode, StringComparison.Ordinal);
         Assert.Contains("GetPowerNames(modified: selectedIndex == 1)", mainCode, StringComparison.Ordinal);
         Assert.Contains("SelectPower(selectedName)", mainCode, StringComparison.Ordinal);
-        Assert.Contains("AddPowerAsync(duplicateSelected: true)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("AddPowerFromBrowserAsync(duplicateSelected: true)", mainCode, StringComparison.Ordinal);
+        Assert.Contains("await _powerView.AddPowerAsync(duplicateSelected)", mainCode, StringComparison.Ordinal);
         Assert.Contains("DeleteCurrentPowerAsync", mainCode, StringComparison.Ordinal);
         Assert.Contains("await _powerView.SaveAsync()", mainCode, StringComparison.Ordinal);
         Assert.Contains("PowerCatalog.ModFileName", mainCode, StringComparison.Ordinal);
@@ -193,6 +194,10 @@ public sealed class PowerEditorPhase1Tests
                 StringSplitOptions.None).Length - 1);
 
         Assert.Contains("Text=\"XML Preview\"", viewXaml, StringComparison.Ordinal);
+        Assert.Contains("<Grid x:Name=\"_mainGrid\">", viewXaml, StringComparison.Ordinal);
+        Assert.Contains("<Grid RowDefinitions=\"Auto,*,Auto\">", viewXaml, StringComparison.Ordinal);
+        Assert.Contains("<TextBlock Grid.Row=\"2\" x:Name=\"_statusMessage\"", viewXaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Grid.ColumnSpan=\"3\" x:Name=\"_statusMessage\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("Header=\"Properties\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("Header=\"Specific\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("<TextBox Grid.Column=\"1\" x:Name=\"_nameBox\" Width=\"380\"", viewXaml, StringComparison.Ordinal);

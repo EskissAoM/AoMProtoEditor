@@ -1,4 +1,5 @@
 using System.Text;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace AoMDivineDataEditor.Classes;
@@ -53,20 +54,15 @@ public sealed class ModDeletionInspection
 /// </summary>
 public static class ModDeletionSafety
 {
-    private const long MaximumUnknownFileSize = 8L * 1024 * 1024;
-    private const long MaximumKnownTextFileSize = 64L * 1024 * 1024;
+    private const long MaximumKnownTextFileSize = 512L * 1024 * 1024;
+    private const long MaximumReferenceXmlFileSize = 256L * 1024 * 1024;
+    private const long MaximumCandidateBytes = 2L * 1024 * 1024 * 1024;
+    private const int MaximumCandidateFileCount = 20_000;
+    private const int ScanBufferCharacters = 64 * 1024;
 
     private static readonly HashSet<string> KnownTextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".txt", ".cfg", ".ini", ".json", ".lua", ".xs", ".trg", ".xml", ".tactics",
-        ".xaml", ".csv", ".tsv", ".md", ".script", ".rule", ".data", ".xmb"
-    };
-
-    private static readonly HashSet<string> KnownBinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".ico", ".dds", ".tga",
-        ".wav", ".mp3", ".ogg", ".wem", ".bnk", ".zip", ".7z", ".rar", ".bar",
-        ".grn", ".gr2", ".brg", ".mesh", ".model", ".anim", ".exe", ".dll", ".pdb"
+        ".txt", ".xml", ".tactics"
     };
 
     public static ModDeletionInspection InspectIdentifier(
@@ -106,7 +102,7 @@ public static class ModDeletionSafety
                 var before = FileIntegrityTransaction.CaptureState(path);
                 try
                 {
-                    document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+                    document = LoadReferenceDocument(path);
                 }
                 catch (Exception exception)
                 {
@@ -185,8 +181,8 @@ public static class ModDeletionSafety
             var unresolved = candidates.Where(id => !referenced.Contains(id)).ToList();
             if (unresolved.Count == 0)
                 break;
-            var contents = ReadStableBytes(fullPath, "string cleanup");
-            foreach (var id in unresolved.Where(id => ContainsWholeToken(contents, id)))
+            var found = FindWholeTokensInStableFile(fullPath, unresolved, "string cleanup");
+            foreach (var id in found)
                 referenced.Add(id);
         }
 
@@ -207,10 +203,10 @@ public static class ModDeletionSafety
                 continue;
             }
 
-            var contents = ReadStableBytes(fullPath, "deletion reference checking");
-            if (ContainsWholeToken(contents, identifier) ||
-                identifier.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase) &&
-                ContainsWholeToken(contents, identifier[..^".tactics".Length]))
+            var searchValues = identifier.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase)
+                ? new[] { identifier, identifier[..^".tactics".Length] }
+                : new[] { identifier };
+            if (FindWholeTokensInStableFile(fullPath, searchValues, "deletion reference checking").Count > 0)
             {
                 yield return new ModDeletionReference(
                     identifier,
@@ -228,7 +224,9 @@ public static class ModDeletionSafety
         if (string.IsNullOrWhiteSpace(modRootDirectory) || !Directory.Exists(modRootDirectory))
             yield break;
 
-        foreach (var path in Directory.EnumerateFiles(modRootDirectory, "*", SearchOption.AllDirectories))
+        var candidateCount = 0;
+        long candidateBytes = 0;
+        foreach (var path in ContainedFileEnumeration.EnumerateFiles(modRootDirectory))
         {
             var extension = Path.GetExtension(path);
             if (!includeXmlAndTactics &&
@@ -237,30 +235,78 @@ public static class ModDeletionSafety
             {
                 continue;
             }
-            if (KnownBinaryExtensions.Contains(extension))
+            // Files with extensions outside the supported text catalog are not game
+            // reference sources. Do not guess their encoding or inspect their payload.
+            if (!KnownTextExtensions.Contains(extension))
                 continue;
 
             var size = new FileInfo(path).Length;
-            var limit = KnownTextExtensions.Contains(extension) ? MaximumKnownTextFileSize : MaximumUnknownFileSize;
-            if (size > limit)
+            if (size > MaximumKnownTextFileSize)
             {
                 throw new InvalidOperationException(
                     $"Deletion safety checking was cancelled because '{path}' is too large to inspect conservatively. No files were written.");
+            }
+            candidateCount++;
+            candidateBytes = checked(candidateBytes + size);
+            if (candidateCount > MaximumCandidateFileCount || candidateBytes > MaximumCandidateBytes)
+            {
+                throw new InvalidOperationException(
+                    "Deletion safety checking was cancelled because the mod contains too many candidate files " +
+                    "or more than 2 GiB of candidate text. No files were written.");
             }
             yield return path;
         }
     }
 
-    private static byte[] ReadStableBytes(string path, string operation)
+    private static IReadOnlySet<string> FindWholeTokensInStableFile(
+        string path,
+        IReadOnlyCollection<string> tokens,
+        string operation)
     {
+        var remaining = tokens
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (remaining.Count == 0)
+            return found;
+
         try
         {
             var before = FileIntegrityTransaction.CaptureState(path);
-            var bytes = File.ReadAllBytes(path);
+            using (var stream = new FileStream(
+                       path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                       bufferSize: 128 * 1024, FileOptions.SequentialScan))
+            {
+                var encoding = DetectTextEncoding(stream);
+                using var reader = new StreamReader(
+                    stream, encoding, detectEncodingFromByteOrderMarks: true,
+                    bufferSize: 128 * 1024, leaveOpen: false);
+                var buffer = new char[ScanBufferCharacters];
+                var maximumTokenLength = remaining.Max(token => token.Length);
+                var overlap = "";
+                while (remaining.Count > 0)
+                {
+                    var read = reader.Read(buffer, 0, buffer.Length);
+                    if (read == 0)
+                        break;
+                    var text = overlap + new string(buffer, 0, read);
+                    // A token ending exactly at a non-final buffer edge cannot be
+                    // classified until the following character is available.
+                    var searchableText = reader.EndOfStream ? text : text + "_";
+                    foreach (var token in remaining.Where(token => ContainsWholeToken(searchableText, token)).ToList())
+                    {
+                        found.Add(token);
+                        remaining.Remove(token);
+                    }
+                    var retained = Math.Min(maximumTokenLength + 1, text.Length);
+                    overlap = retained == 0 ? "" : text[^retained..];
+                }
+            }
             var after = FileIntegrityTransaction.CaptureState(path);
             if (before != after)
                 throw new IOException($"'{path}' changed while it was being inspected.");
-            return bytes;
+            return found;
         }
         catch (Exception exception)
         {
@@ -270,14 +316,45 @@ public static class ModDeletionSafety
         }
     }
 
-    internal static bool ContainsWholeToken(byte[] contents, string token)
+    private static Encoding DetectTextEncoding(Stream stream)
     {
-        if (contents.Length == 0 || string.IsNullOrWhiteSpace(token))
-            return false;
+        Span<byte> prefix = stackalloc byte[4];
+        var read = stream.Read(prefix);
+        stream.Position = 0;
+        if (read >= 3 && prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF)
+            return Encoding.UTF8;
+        if (read >= 2 && prefix[0] == 0xFF && prefix[1] == 0xFE)
+            return Encoding.Unicode;
+        if (read >= 2 && prefix[0] == 0xFE && prefix[1] == 0xFF)
+            return Encoding.BigEndianUnicode;
+        if (read >= 2 && prefix[1] == 0 && prefix[0] != 0)
+            return Encoding.Unicode;
+        if (read >= 2 && prefix[0] == 0 && prefix[1] != 0)
+            return Encoding.BigEndianUnicode;
+        return Encoding.UTF8;
+    }
 
-        return ContainsWholeToken(Encoding.UTF8.GetString(contents), token) ||
-               ContainsWholeToken(Encoding.Unicode.GetString(contents), token) ||
-               ContainsWholeToken(Encoding.BigEndianUnicode.GetString(contents), token);
+    private static XDocument LoadReferenceDocument(string path)
+    {
+        var length = new FileInfo(path).Length;
+        if (length > MaximumReferenceXmlFileSize)
+        {
+            throw new InvalidOperationException(
+                $"'{path}' is larger than {MaximumReferenceXmlFileSize / (1024 * 1024):N0} MiB.");
+        }
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = MaximumReferenceXmlFileSize * 2,
+            IgnoreComments = false,
+            IgnoreWhitespace = false
+        };
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 128 * 1024, FileOptions.SequentialScan);
+        using var reader = XmlReader.Create(stream, settings);
+        return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
     }
 
     internal static bool ContainsWholeToken(string contents, string token)

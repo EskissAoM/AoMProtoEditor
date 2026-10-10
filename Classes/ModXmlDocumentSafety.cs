@@ -62,6 +62,7 @@ public sealed record SafeModXmlLoadResult(
 /// </summary>
 public static class ModXmlDocumentSafety
 {
+    private const long MaximumEditableXmlBytes = 256L * 1024 * 1024;
     private static readonly StringComparer NameComparer = StringComparer.OrdinalIgnoreCase;
 
     private static readonly IReadOnlyDictionary<ModXmlDocumentKind, string> ExpectedRoots =
@@ -100,7 +101,7 @@ public static class ModXmlDocumentSafety
     {
         "name", "type", "displaynameid", "rollovertextid", "shortrollovertextid",
         "activerollovertextid", "disabledrollovertextid", "buildlimittextid", "icon",
-        "cursor", "associatedtech", "prereqcommand", "sharedcommand", "transformtype"
+        "cursor", "associatedtech", "prereqcommand", "transformtype"
     };
 
     private static readonly HashSet<string> AbilityAssociationSingletonElements = new(NameComparer)
@@ -182,9 +183,22 @@ public static class ModXmlDocumentSafety
         try
         {
             var before = FileIntegrityTransaction.CaptureState(fullPath);
+            if (before.Length > MaximumEditableXmlBytes)
+            {
+                throw new IOException(
+                    $"The XML file is larger than {MaximumEditableXmlBytes / (1024 * 1024):N0} MiB.");
+            }
             XDocument document;
             using (var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                document = XDocument.Load(stream, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
+            using (var reader = XmlReader.Create(stream, new XmlReaderSettings
+                   {
+                       DtdProcessing = DtdProcessing.Prohibit,
+                       XmlResolver = null,
+                       MaxCharactersInDocument = MaximumEditableXmlBytes * 2,
+                       IgnoreComments = false,
+                       IgnoreWhitespace = false
+                   }))
+                document = XDocument.Load(reader, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
             var after = FileIntegrityTransaction.CaptureState(fullPath);
             if (before != after)
                 throw new IOException("The file changed while it was being read. Open it again to load one consistent version.");

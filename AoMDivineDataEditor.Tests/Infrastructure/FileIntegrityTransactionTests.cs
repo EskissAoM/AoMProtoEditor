@@ -279,6 +279,129 @@ public sealed class FileIntegrityTransactionTests
         }
     }
 
+    [Fact]
+    public void Execute_ValidatesExpectedGuardFilesOutsideTheWriteSet()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var writePath = Path.Combine(directory, "write.xml");
+            var guardPath = Path.Combine(directory, "guard.xml");
+            File.WriteAllText(writePath, "write before");
+            File.WriteAllText(guardPath, "guard before");
+            var expected = FileIntegrityTransaction.CaptureStates([guardPath]);
+            File.WriteAllText(guardPath, "changed elsewhere");
+            var commitRan = false;
+
+            var exception = Assert.Throws<IOException>(() =>
+                FileIntegrityTransaction.Execute([writePath], expected, () => commitRan = true));
+
+            Assert.False(commitRan);
+            Assert.Contains("changed outside the editor", exception.Message, StringComparison.Ordinal);
+            Assert.Equal("write before", File.ReadAllText(writePath));
+            Assert.Equal("changed elsewhere", File.ReadAllText(guardPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_RestoresAnExistingFileIfAFailedCommitReplacesItWithASymbolicLink()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "power.xml");
+            var externalPath = Path.Combine(directory, "external.xml");
+            var probePath = Path.Combine(directory, "link-probe.xml");
+            File.WriteAllText(path, "original power");
+            File.WriteAllText(externalPath, "external content");
+
+            try
+            {
+                File.CreateSymbolicLink(probePath, externalPath);
+                File.Delete(probePath);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            Assert.Throws<InvalidOperationException>(() =>
+                FileIntegrityTransaction.Execute([path], () =>
+                {
+                    File.Delete(path);
+                    File.CreateSymbolicLink(path, externalPath);
+                    throw new InvalidOperationException("commit failed");
+                }));
+
+            Assert.Equal("original power", File.ReadAllText(path));
+            Assert.Equal("external content", File.ReadAllText(externalPath));
+            Assert.False((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CaptureState_RejectsTargetsInsideSymbolicLinkDirectories()
+    {
+        var directory = CreateTemporaryDirectory();
+        var targetDirectory = Path.Combine(directory, "target");
+        var linkedDirectory = Path.Combine(directory, "linked");
+        try
+        {
+            Directory.CreateDirectory(targetDirectory);
+            File.WriteAllText(Path.Combine(targetDirectory, "power.xml"), "content");
+            try
+            {
+                Directory.CreateSymbolicLink(linkedDirectory, targetDirectory);
+            }
+            catch (Exception linkException) when (linkException is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var exception = Assert.Throws<IOException>(() =>
+                FileIntegrityTransaction.CaptureState(Path.Combine(linkedDirectory, "power.xml")));
+
+            Assert.Contains("linked directories", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(linkedDirectory))
+                Directory.Delete(linkedDirectory);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_UsesBoundedManagedMemoryForLargeSnapshots()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "large-power.xml");
+            using (var stream = File.Create(path))
+                stream.SetLength(16L * 1024 * 1024);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            FileIntegrityTransaction.Execute([path], () => { });
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(allocated < 8L * 1024 * 1024,
+                $"A 16 MiB snapshot allocated {allocated:N0} managed bytes instead of using its disk-backed backup.");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CreateTemporaryDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "AoMDivineDataEditor.Tests", Guid.NewGuid().ToString("N"));

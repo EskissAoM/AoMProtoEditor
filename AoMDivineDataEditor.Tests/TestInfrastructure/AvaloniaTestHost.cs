@@ -52,6 +52,21 @@ internal static class AvaloniaTestHost
             return true;
         });
 
+    /// <summary>
+    /// Releases completed, unrooted UI graphs between tests. PowerEditorView is a large,
+    /// eagerly-created control tree and a long sequence of workflow tests can otherwise
+    /// grow the shared testhost working set faster than the runtime elects to compact it.
+    /// </summary>
+    public static void CollectUiGarbage()
+    {
+        if (!Instance.IsValueCreated)
+            return;
+        Run(() => Dispatcher.UIThread.RunJobs());
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+    }
+
     private sealed class Host
     {
         private readonly ManualResetEventSlim _ready = new(false);

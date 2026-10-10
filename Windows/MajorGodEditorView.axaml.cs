@@ -17,18 +17,6 @@ public partial class MajorGodEditorView : UserControl
     private static readonly string[] ResolvedStringTags = ["displaynameid", "rollovernameid", "titleid"];
     private static readonly string[] ImageTags = ["icon", "portrait", "breakoutportrait"];
     private static readonly string[] StartingModes = ["Supremacy", "Deathmatch", "Lightning"];
-    private static readonly (string Label, string Attribute)[] TerrainCreepFlags =
-    [
-        ("avoidUnbuildable", "avoidunbuildable"),
-        ("avoidImpassable", "avoidimpassable"),
-        ("avoidShallowWater", "avoidshallowwater"),
-        ("allowDisconnectedGrowth", "allowdisconnectedgrowth")
-    ];
-    private static readonly string[] TerrainCreepBuildabilityValues =
-    [
-        "Buildable", "Unbuildable", "UnbuildableSelf", "UnbuildableOthers",
-        "UnbuildableAllies", "UnbuildableEnemies"
-    ];
     private static readonly (string Label, string Tag)[] BonusGoalFlags =
     [
         ("ForceSpawn", "forcespawn"),
@@ -1899,7 +1887,7 @@ public partial class MajorGodEditorView : UserControl
         void Render()
         {
             chips.Children.Clear();
-            var selected = TerrainCreepFlags.Where(definition =>
+            var selected = MajorGodCatalog.TerrainCreepFlags.Where(definition =>
                 FindAttribute(creep, definition.Attribute) != null).ToList();
             foreach (var definition in selected)
             {
@@ -1915,7 +1903,7 @@ public partial class MajorGodEditorView : UserControl
             if (picker != null)
             {
                 var used = selected.Select(definition => definition.Attribute).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                picker.ItemsSource = TerrainCreepFlags.Where(definition => !used.Contains(definition.Attribute))
+                picker.ItemsSource = MajorGodCatalog.TerrainCreepFlags.Where(definition => !used.Contains(definition.Attribute))
                     .Select(definition => definition.Label).ToList();
             }
         }
@@ -1925,7 +1913,7 @@ public partial class MajorGodEditorView : UserControl
             picker.SelectionChanged += (_, _) =>
             {
                 if (!CanEditCurrent() || picker.SelectedItem is not string label) return;
-                var definition = TerrainCreepFlags.First(candidate =>
+                var definition = MajorGodCatalog.TerrainCreepFlags.First(candidate =>
                     candidate.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
                 SetAttribute(creep, definition.Attribute, "");
                 MarkCurrentDirty();
@@ -1962,7 +1950,7 @@ public partial class MajorGodEditorView : UserControl
         else
         {
             var current = buildability.Value.Trim();
-            var options = TerrainCreepBuildabilityValues.Append(current)
+            var options = MajorGodCatalog.TerrainCreepBuildabilityValues.Append(current)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var combo = new ComboBox
@@ -3874,7 +3862,7 @@ public partial class MajorGodEditorView : UserControl
                 ValidateNonNegativeFloatAttribute(creep, "strength", "Terrain Creep Strength");
 
             if (FindAttribute(creep, "buildability") is { } buildability &&
-                !TerrainCreepBuildabilityValues.Contains(buildability.Value.Trim(), StringComparer.OrdinalIgnoreCase))
+                !MajorGodCatalog.TerrainCreepBuildabilityValues.Contains(buildability.Value.Trim(), StringComparer.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException("Terrain Creep Buildability must be a valid buildability mode.");
             }

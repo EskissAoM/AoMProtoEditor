@@ -44,7 +44,7 @@ public sealed class ModDeletionSafetyTests
         try
         {
             var tacticsPath = Path.Combine(directory, "custom.tactics");
-            var customPath = Path.Combine(directory, "custom.rule");
+            var customPath = Path.Combine(directory, "custom.txt");
             File.WriteAllText(tacticsPath, "<tactics><action><projectile>TargetUnit</projectile></action></tactics>");
             File.WriteAllText(customPath, "spawn_target = TargetUnit");
 
@@ -97,7 +97,7 @@ public sealed class ModDeletionSafetyTests
         var directory = CreateTemporaryDirectory();
         try
         {
-            File.WriteAllText(Path.Combine(directory, "custom.rule"), "TargetUnitElite");
+            File.WriteAllText(Path.Combine(directory, "custom.txt"), "TargetUnitElite");
 
             var result = ModDeletionSafety.InspectIdentifier(
                 [], GameIdentifierKind.ProtoUnit, "TargetUnit", directory);
@@ -118,7 +118,7 @@ public sealed class ModDeletionSafetyTests
         {
             File.WriteAllText(Path.Combine(directory, "shared.xml"), "<root><displaynameid>STR_SHARED</displaynameid></root>");
             File.WriteAllText(Path.Combine(directory, "unit.tactics"), "<root><label>STR_TACTICS</label></root>");
-            File.WriteAllText(Path.Combine(directory, "custom.rule"), "label = STR_CUSTOM");
+            File.WriteAllText(Path.Combine(directory, "custom.txt"), "label = STR_CUSTOM");
             File.WriteAllBytes(Path.Combine(directory, "utf16.txt"), Encoding.Unicode.GetBytes("label = STR_UTF16"));
 
             var referenced = ModDeletionSafety.FindReferencedStringIds(
@@ -151,6 +151,99 @@ public sealed class ModDeletionSafetyTests
                 [path]);
 
             Assert.Empty(referenced);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindReferencedStringIds_FindsAWholeTokenAcrossStreamingBufferBoundaries()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var token = "STR_BOUNDARY_REFERENCE";
+            var prefixLength = 64 * 1024 - token.Length / 2;
+            File.WriteAllText(Path.Combine(directory, "large.txt"), new string('x', prefixLength) + " " + token + " ");
+
+            var referenced = ModDeletionSafety.FindReferencedStringIds(directory, [token]);
+
+            Assert.Contains(token, referenced);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InspectIdentifier_RejectsExternalEntityDocumentsWithoutReadingTheEntity()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var secretPath = Path.Combine(directory, "secret.txt");
+            var xmlPath = Path.Combine(directory, "custom.xml");
+            File.WriteAllText(secretPath, "TargetUnit");
+            File.WriteAllText(xmlPath,
+                $"<!DOCTYPE root [<!ENTITY external SYSTEM '{new Uri(secretPath).AbsoluteUri}'>]>" +
+                "<root><futureReference>&external;</futureReference></root>");
+
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                ModDeletionSafety.InspectIdentifier(
+                    ModReferenceFileCatalog.Discover(directory),
+                    GameIdentifierKind.ProtoUnit,
+                    "TargetUnit",
+                    directory));
+
+            Assert.Contains("could not be inspected safely", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindReferencedStringIds_StreamsLargeFilesOnceForAllCandidates()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "large.txt"), new string('x', 4 * 1024 * 1024));
+            var candidates = Enumerable.Range(0, 128).Select(index => $"STR_MISSING_{index}").ToArray();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var referenced = ModDeletionSafety.FindReferencedStringIds(directory, candidates);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Empty(referenced);
+            Assert.True(allocated < 64L * 1024 * 1024,
+                $"Scanning one 4 MiB file allocated {allocated:N0} managed bytes; candidates must share one streaming pass.");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void UnknownExtensionFilesAreNotInspectedAsGameReferences()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            foreach (var extension in new[] { ".json", ".lua", ".xs", ".unsupported" })
+                File.WriteAllText(Path.Combine(directory, "unrelated" + extension), "TargetUnit STR_UNKNOWN");
+
+            var deletion = ModDeletionSafety.InspectIdentifier(
+                [], GameIdentifierKind.ProtoUnit, "TargetUnit", directory);
+            var strings = ModDeletionSafety.FindReferencedStringIds(directory, ["STR_UNKNOWN"]);
+
+            Assert.False(deletion.IsBlocked);
+            Assert.Empty(strings);
         }
         finally
         {

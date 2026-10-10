@@ -193,6 +193,30 @@ public sealed class OptionalFieldHostTests
     }
 
     [Fact]
+    public void TargetFilterChipGroup_KeepsItsLabelInReadOnlyMode()
+    {
+        AvaloniaTestHost.Run(() =>
+        {
+            var readOnlyPicker = new AutoCompleteBox();
+            var readOnlyChips = new WrapPanel();
+            var readOnly = TargetFilterEditor.CreateChipGroup(
+                "Attack Type", readOnlyPicker, readOnlyChips, isReadOnly: true);
+            var readOnlyHeader = Assert.IsType<StackPanel>(readOnly.Children[0]);
+
+            Assert.Equal("Attack Type:", Assert.IsType<TextBlock>(readOnlyHeader.Children[0]).Text);
+            Assert.DoesNotContain(readOnlyPicker, readOnlyHeader.Children);
+            Assert.Same(readOnlyChips, readOnly.Children[1]);
+
+            var editablePicker = new AutoCompleteBox();
+            var editable = TargetFilterEditor.CreateChipGroup(
+                "Ignore Type", editablePicker, new WrapPanel(), isReadOnly: false);
+            var editableHeader = Assert.IsType<StackPanel>(editable.Children[0]);
+            Assert.Equal("Ignore Type:", Assert.IsType<TextBlock>(editableHeader.Children[0]).Text);
+            Assert.Contains(editablePicker, editableHeader.Children);
+        });
+    }
+
+    [Fact]
     public void OnHitEffectEditor_OwnsTheSharedCardShellOnly()
     {
         AvaloniaTestHost.Run(() =>
@@ -209,12 +233,41 @@ public sealed class OptionalFieldHostTests
 
             Assert.Same(type, editor.TypeField);
             Assert.Same(active, editor.ActiveField);
+            Assert.Contains("editor-card", editor.CardSurface.Classes);
+            Assert.IsType<Border>(editor.CardSurface);
             Assert.Same(editor.Header, editor.Body.Children[0]);
             Assert.Contains(type, editor.Header.Children);
             Assert.Contains(active, editor.Header.Children);
             Assert.Contains(marker, editor.Header.Children);
             Assert.NotNull(editor.RemoveButton);
             Assert.Contains(editor.RemoveButton!, editor.Header.Children);
+
+            var window = new Window { Content = editor };
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.Equal(1, editor.CardSurface.BorderThickness.Left);
+            Assert.Equal(1, editor.CardSurface.BorderThickness.Top);
+            window.Close();
+        });
+    }
+
+    [Fact]
+    public void OnHitEffectEditor_CanHideActiveWithoutRemovingTheCardSurface()
+    {
+        AvaloniaTestHost.Run(() =>
+        {
+            var active = new CheckBox();
+            var editor = new OnHitEffectEditor(
+                new AutoCompleteBox(),
+                active,
+                isReadOnly: false,
+                isSupported: true,
+                showActiveField: false);
+
+            Assert.DoesNotContain(active, editor.Header.Children);
+            Assert.DoesNotContain(editor.Header.Children.OfType<TextBlock>(), label => label.Text == "Active:");
+            Assert.Contains("editor-card", editor.CardSurface.Classes);
+            Assert.NotNull(editor.RemoveButton);
         });
     }
 

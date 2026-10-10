@@ -125,12 +125,27 @@ public sealed class ApplicationResourceTests
         Assert.Contains("AddRawEffectXmlEditor", technologyCode, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(box)", technologyCode, StringComparison.Ordinal);
         Assert.Contains("editor.Options.AllowScrollBelowDocument = false", syntaxEditorCode, StringComparison.Ordinal);
+        Assert.Contains("editor.TextArea.TextView.Margin = new Avalonia.Thickness(0, 0, 0, 4)", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("Caret.CaretBrush = isReadOnly", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("Brushes.Transparent", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("name=\"XmlTag\"", highlighting, StringComparison.Ordinal);
         Assert.Contains("name=\"AttributeName\"", highlighting, StringComparison.Ordinal);
         Assert.Contains("name=\"AttributeValue\"", highlighting, StringComparison.Ordinal);
         Assert.Contains("name=\"Comment\"", highlighting, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void God_and_power_preview_hosts_do_not_split_the_full_view_with_the_status_row()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        foreach (var fileName in new[] { "MajorGodEditorView.axaml", "PowerEditorView.axaml" })
+        {
+            var xaml = File.ReadAllText(Path.Combine(root, "Windows", fileName));
+            Assert.Contains("<Grid x:Name=\"_mainGrid\">", xaml, StringComparison.Ordinal);
+            Assert.Contains("<Grid RowDefinitions=\"Auto,*,Auto\">", xaml, StringComparison.Ordinal);
+            Assert.Contains("<TextBlock Grid.Row=\"2\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Grid.ColumnSpan=\"3\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
+        }
     }
 
     private static void EnsureHeadlessApplication()

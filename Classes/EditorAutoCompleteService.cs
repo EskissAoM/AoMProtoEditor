@@ -43,8 +43,17 @@ public static class EditorAutoCompleteService
         bool suppressAutoOpen = false;
         bool userInteracted = false;
         bool selectAllAfterPointerRelease = false;
+        int visualLifetime = 0;
+
+        autoCompleteBox.DetachedFromVisualTree += (_, _) =>
+        {
+            visualLifetime++;
+            selectAllAfterPointerRelease = false;
+            suppressAutoOpen = true;
+        };
 
         bool Busy() => isBusy?.Invoke() == true;
+        Visual VisualOwner() => autoCompleteBox.GetVisualAncestors().LastOrDefault() ?? autoCompleteBox;
 
         void SelectAllAfterPointerFocus()
         {
@@ -52,9 +61,12 @@ public static class EditorAutoCompleteService
                 return;
 
             selectAllAfterPointerRelease = false;
+            var lifetime = visualLifetime;
+            var visualOwner = VisualOwner();
             Dispatcher.UIThread.Post(() =>
             {
-                if (Busy() || !autoCompleteBox.IsEnabled)
+                if (lifetime != visualLifetime || !ReferenceEquals(visualOwner, VisualOwner()) ||
+                    Busy() || !autoCompleteBox.IsEnabled)
                     return;
 
                 var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
@@ -71,9 +83,12 @@ public static class EditorAutoCompleteService
             if (Busy() || !autoCompleteBox.IsEnabled || suppressAutoOpen)
                 return;
 
+            var lifetime = visualLifetime;
+            var visualOwner = VisualOwner();
             Dispatcher.UIThread.Post(() =>
             {
-                if (!Busy() && autoCompleteBox.IsEnabled && !suppressAutoOpen)
+                if (lifetime == visualLifetime && ReferenceEquals(visualOwner, VisualOwner()) &&
+                    !Busy() && autoCompleteBox.IsEnabled && !suppressAutoOpen)
                     autoCompleteBox.IsDropDownOpen = true;
             });
         }
@@ -162,15 +177,27 @@ public static class EditorAutoCompleteService
 
         autoCompleteBox.ItemsSource = suggestionList;
         EnableDropdown(autoCompleteBox, isBusy, selectAllOnFirstClick);
+        int visualLifetime = 0;
+        bool applyingSelection = false;
+
+        autoCompleteBox.DetachedFromVisualTree += (_, _) =>
+        {
+            visualLifetime++;
+            applyingSelection = false;
+        };
+        Visual VisualOwner() => autoCompleteBox.GetVisualAncestors().LastOrDefault() ?? autoCompleteBox;
 
         void KeepStartVisible()
         {
             if (!keepStartVisibleAfterCommit)
                 return;
 
+            var lifetime = visualLifetime;
+            var visualOwner = VisualOwner();
             Dispatcher.UIThread.Post(() =>
             {
-                if (isBusy?.Invoke() == true)
+                if (lifetime != visualLifetime || !ReferenceEquals(visualOwner, VisualOwner()) ||
+                    isBusy?.Invoke() == true)
                     return;
 
                 var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
@@ -194,7 +221,16 @@ public static class EditorAutoCompleteService
 
         string lastValidValue = suggestionList.FirstOrDefault(x => x.Equals(normalizedInitial, StringComparison.OrdinalIgnoreCase))
             ?? (preserveUnknownInitialValue ? normalizedInitial : string.Empty);
-        bool applyingSelection = false;
+
+        // Editors configure reusable selectors once, then populate them for each selected record.
+        // Treat values assigned during population as the current baseline even when a mod value is
+        // absent from the loaded catalog. Otherwise a focus/lost-focus cycle can replace untouched
+        // legacy data with the previous record's value (or with an empty string).
+        autoCompleteBox.PropertyChanged += (_, change) =>
+        {
+            if (change.Property == AutoCompleteBox.TextProperty && isBusy?.Invoke() == true)
+                lastValidValue = autoCompleteBox.Text?.Trim() ?? string.Empty;
+        };
 
         autoCompleteBox.SelectionChanged += (_, _) =>
         {
@@ -202,6 +238,12 @@ public static class EditorAutoCompleteService
                 return;
 
             lastValidValue = selectedValue;
+            if (!autoCompleteBox.IsEnabled)
+            {
+                if (!string.Equals(autoCompleteBox.Text, selectedValue, StringComparison.Ordinal))
+                    autoCompleteBox.Text = selectedValue;
+                return;
+            }
             if (!deferSelectionCommit)
             {
                 autoCompleteBox.Text = selectedValue;
@@ -211,11 +253,14 @@ public static class EditorAutoCompleteService
             }
 
             applyingSelection = true;
+            var lifetime = visualLifetime;
+            var visualOwner = VisualOwner();
             Dispatcher.UIThread.Post(() =>
             {
                 try
                 {
-                    if (isBusy?.Invoke() == true)
+                    if (lifetime != visualLifetime || !ReferenceEquals(visualOwner, VisualOwner()) ||
+                        isBusy?.Invoke() == true)
                         return;
 
                     if (!string.Equals(autoCompleteBox.Text, selectedValue, StringComparison.Ordinal))
@@ -232,12 +277,16 @@ public static class EditorAutoCompleteService
 
         autoCompleteBox.LostFocus += (_, _) =>
         {
-            if (isBusy?.Invoke() == true)
+            if (isBusy?.Invoke() == true || !autoCompleteBox.IsEnabled)
                 return;
 
+            var lifetime = visualLifetime;
+            var visualOwner = VisualOwner();
             Dispatcher.UIThread.Post(() =>
             {
-                if (isBusy?.Invoke() == true || applyingSelection)
+                if (lifetime != visualLifetime || !ReferenceEquals(visualOwner, VisualOwner()) ||
+                    isBusy?.Invoke() == true ||
+                    !autoCompleteBox.IsEnabled || applyingSelection)
                     return;
 
                 var input = autoCompleteBox.Text?.Trim() ?? string.Empty;

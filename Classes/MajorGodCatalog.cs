@@ -9,6 +9,19 @@ public sealed record MajorGodDefinition(string Name, bool IsBuiltIn, XElement So
 
 public static class MajorGodCatalog
 {
+    public static readonly (string Label, string Attribute)[] TerrainCreepFlags =
+    [
+        ("avoidUnbuildable", "avoidunbuildable"),
+        ("avoidImpassable", "avoidimpassable"),
+        ("avoidShallowWater", "avoidshallowwater"),
+        ("allowDisconnectedGrowth", "allowdisconnectedgrowth")
+    ];
+
+    public static readonly string[] TerrainCreepBuildabilityValues =
+    [
+        "Buildable", "Unbuildable", "UnbuildableSelf", "UnbuildableOthers",
+        "UnbuildableAllies", "UnbuildableEnemies"
+    ];
     public const string SharedDataDisplayName = "Shared data";
     public const string BaseFileName = "major_gods.xml.xmb";
     public const string AlternateBaseFileName = "major_gods.xmb";

@@ -541,6 +541,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required StackPanel DamageExtrasContainer { get; set; }
         public required StackPanel BonusSectionContainer { get; set; }
         public required StackPanel RampageLayoutContainer { get; set; }
+        public WrapPanel DamageOptionButtonsRow { get; } = new()
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 4, 0, 2)
+        };
+        public Button? AddDamageButton { get; set; }
+        public Button? AddDamageBonusButton { get; set; }
+        public Button? AddDamageAreaButton { get; set; }
+        public Panel? DamageRowsContainer { get; set; }
+        public Panel? DamageBonusRowsContainer { get; set; }
         public Dictionary<string, Control> AdditionalFieldControls { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, List<ProtoActionStructuredFieldRowState>> StructuredFieldRows { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<DamageRowState> DamageRows { get; } = [];
@@ -4573,20 +4583,30 @@ public partial class ProtoEditorWindow : SimpleWindow
             PowerCatalog.LoadLooseBaseDocuments(ResolveBaseGameplayDirectory()),
             isBuiltIn: true));
 
-        _powerView = new PowerEditorView(
+        var powerCatalogs = new PowerEditorCatalogs(
+            iconPaths: _baseGameIconPaths.Concat(_customIconPaths),
+            protoUnitNames: GetTechnologyProtoUnitNames(),
+            unitTypeNames: GetKnownUnitTypeNames(),
+            terrainCreepNames: GetKnownTerrainCreepNames(),
+            protoActionNames: GetTechnologyProtoActionNames(),
+            technologyNames: GetAvailableTechNames(),
+            animationNames: GetGlobalProtoActionAnimationNames(),
+            boneNames: GetAvailableProtoActionModelAttachmentBones(),
+            tacticNames: GetTechnologyTacticDefinitionNames());
+        var powerHostServices = new PowerEditorHostServices(
+            PrepareReferenceMigration: PreparePowerReferenceMigration,
+            AdoptReferenceMigration: AdoptPowerReferenceMigration,
+            EnsureCanDeleteAsync: EnsurePowerCanBeDeletedAsync,
+            DialogOwner: this,
+            ResolveStringAsync: ResolveDisplayStringAsync,
+            SaveStringsAsync: SavePowerStringValuesAsync,
+            IconPreviewService: _iconPreviewService);
+        _powerView = new PowerEditorView(new PowerEditorComposition(
             definitions.Values,
             GetCurrentModGameplayFilePath(PowerCatalog.ModFileName),
-            PreparePowerReferenceMigration,
-            AdoptPowerReferenceMigration,
-            EnsurePowerCanBeDeletedAsync,
-            this,
-            ResolveDisplayStringAsync,
-            SavePowerStringValuesAsync,
-            _baseGameIconPaths.Concat(_customIconPaths),
-            _iconPreviewService,
             GetCurrentModStringsPath(),
-            GetTechnologyProtoUnitNames(),
-            GetKnownUnitTypeNames());
+            powerCatalogs,
+            powerHostServices));
         _powerView.BrowserStateChanged += PowerView_BrowserStateChanged;
         _powerView.DirtyStateChanged += PowerView_DirtyStateChanged;
         _powerView.Saved += PowerView_Saved;
@@ -4643,7 +4663,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                              !_powerView.GetPowerNames(modified: true)
                                  .Contains(previousName!, StringComparer.OrdinalIgnoreCase);
             if (wasRenamed)
+            {
                 RenameOpenDocumentTabs(EditorEntityKind.Powers, previousName!, currentName);
+                RenamePendingAbilityDraftReferences(previousName!, currentName);
+            }
             else if (changedDocument && !_activeDocumentTab.IsMain)
                 SetMainDocumentTarget(EditorEntityKind.Powers, _powerView.IsModifiedMode, currentName);
             _activeDocumentTab.IsModified = _powerView.IsModifiedMode;
@@ -4667,6 +4690,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             _abilityDrafts.Clear();
             _unitAbilityDrafts.Clear();
+            if (!string.IsNullOrWhiteSpace(_currentUnitName))
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
         }
         if (_technologyView?.IsDirty != true)
             RefreshTechnologyViewAfterTechTypeChanges();
@@ -4803,10 +4828,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (_activeEntityKind == EditorEntityKind.Powers)
         {
-            if (_powerView == null)
-                return;
-            await _powerView.AddPowerAsync();
-            ShowAddedPowerInModifiedBrowser();
+            await AddPowerFromBrowserAsync(duplicateSelected: false);
             return;
         }
 
@@ -4841,7 +4863,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             var deletedName = _powerView.CurrentPowerName;
             await _powerView.DeleteCurrentPowerAsync();
-            if (!string.IsNullOrWhiteSpace(deletedName))
+            if (!string.IsNullOrWhiteSpace(deletedName) &&
+                !_powerView.GetPowerNames(modified: true)
+                    .Contains(deletedName, StringComparer.OrdinalIgnoreCase))
                 RemoveDeletedDocumentTabs(EditorEntityKind.Powers, deletedName);
             RefreshUnitList();
             return;
@@ -4886,6 +4910,28 @@ public partial class ProtoEditorWindow : SimpleWindow
         SetMainDocumentTarget(EditorEntityKind.Powers, isModified: true, _powerView.CurrentPowerName);
         RefreshUnitList();
         RestoreEntityBrowserSelection();
+    }
+
+    private async Task AddPowerFromBrowserAsync(bool duplicateSelected)
+    {
+        if (_powerView == null)
+            return;
+
+        // AddPowerAsync switches the Power editor to the modified source before it publishes its
+        // browser-state change. Treat that source switch as part of this command; otherwise the
+        // shared Original/Modified tab handler sees user navigation and validates the newly-created,
+        // intentionally untyped Power before the user can choose its Type.
+        _documentTabActivationInProgress = true;
+        try
+        {
+            await _powerView.AddPowerAsync(duplicateSelected);
+        }
+        finally
+        {
+            _documentTabActivationInProgress = false;
+        }
+
+        ShowAddedPowerInModifiedBrowser();
     }
 
     private async Task AddTechnologyFromBrowserAsync(bool duplicateSelected)
@@ -5078,8 +5124,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             else if (entityKind == EditorEntityKind.Powers && _powerView != null)
             {
-                await _powerView.AddPowerAsync(duplicateSelected: true);
-                ShowAddedPowerInModifiedBrowser();
+                await AddPowerFromBrowserAsync(duplicateSelected: true);
             }
         };
         menu.Items.Add(copyItem);
@@ -5474,6 +5519,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         _editorTabsInitialized = true;
     }
 
+    private void SuppressEditorChangeTrackingWhileControlsSettle()
+    {
+        _suppressEditorChangeTracking = true;
+        _editorTabSettleTimer.Stop();
+        _editorTabSettleTimer.Start();
+    }
+
     private void EditorTab_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (!_editorTabsInitialized || _isPopulating)
@@ -5482,9 +5534,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         // A tab's controls can raise delayed initialization events the first
         // time Avalonia realizes it. They are not user edits and must not cause
         // the raw XML preview to be projected/reformatted.
-        _suppressEditorChangeTracking = true;
-        _editorTabSettleTimer.Stop();
-        _editorTabSettleTimer.Start();
+        SuppressEditorChangeTrackingWhileControlsSettle();
     }
 
     private void ScheduleXmlPreviewRefresh()
@@ -11378,6 +11428,8 @@ public partial class ProtoEditorWindow : SimpleWindow
               .Where(x => !IsManagedIdleStatBonusFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedDistanceModifyFieldTag(actionType, x.Tag))
               .Where(x => !IsManagedCoreMinRangeFieldTag(actionType, x.Tag))
+              .Where(x => !(IsAutoRangedModifyActionType(actionType) &&
+                            x.Tag.Equals("damagebonus", StringComparison.OrdinalIgnoreCase)))
               .Where(x => !x.Tag.Equals("modifyunittype", StringComparison.OrdinalIgnoreCase))
               .Where(x => !usedTags.Contains(x.Tag))
             .OrderBy(x => x.Label, StringComparer.OrdinalIgnoreCase)
@@ -11710,10 +11762,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (state.DamageSectionContainer.Children.Count > 1)
                 state.DamageSectionContainer.Children[1].IsVisible = conditionalShieldDamageEnabled;
         }
+        var showsAutoRangedDamageBonuses = IsAutoRangedModifyActionType(actionType);
         state.BonusSectionContainer.IsVisible = !selfOnlyAutoBoost && conditionalShieldDamageEnabled &&
-                                                (IsRampageActionType(actionType) ||
+                                                (showsAutoRangedDamageBonuses ||
+                                                 IsRampageActionType(actionType) ||
                                                  IsAutoBoostActionType(actionType) ||
                                                  ShouldShowProtoActionHardcodedField(state, effectiveAction, actionType, "damagebonus"));
+        if (state.AddDamageButton != null)
+            state.AddDamageButton.IsVisible = showDamageSection;
+        if (state.AddDamageBonusButton != null)
+            state.AddDamageBonusButton.IsVisible = state.BonusSectionContainer.IsVisible;
     }
 
     private static bool IsConditionalShieldDamageEnabled(ProtoActionWidgetState state, ProtoAction effectiveAction)
@@ -12209,6 +12267,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         ArrangeDistanceModifyStructuredLayout(state, actionType);
         ArrangeDrainResurrectionStructuredLayout(state, actionType);
         ArrangeEmpowerLayout(state, actionType);
+        ArrangeProtoActionDamageOptionButtons(state);
         RefreshProtoActionSourceMarkers(state);
         }
         finally
@@ -13372,6 +13431,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void ReorderProtoActionSectionContainers(ProtoActionWidgetState state, string actionType)
     {
         var container = state.BodyContainer;
+        container.Children.Remove(state.DamageOptionButtonsRow);
 
         var allSections = new Control[]
         {
@@ -17400,65 +17460,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (stackRow.Children.Count > 0)
                     state.AdditionalFieldsContainer.Children.Add(stackRow);
 
-                var isHealRate = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "")
-                    .Equals("HealRate", StringComparison.OrdinalIgnoreCase);
-                if (isHealRate)
-                {
-                    var bonusSection = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
-                    bonusSection.Children.Add(new TextBlock { Text = "Damage Bonuses:", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 2) });
-                    var bonusRowsPanel = new WrapPanel { Orientation = Orientation.Horizontal };
-                    bonusSection.Children.Add(bonusRowsPanel);
-                    var existingBonuses = state.BonusRows.Count > 0
-                        ? state.BonusRows.Select(row => (Type: row.TypeAcb.Text?.Trim() ?? "", Value: row.ValTb.Text?.Trim() ?? "")).ToList()
-                        : effectiveAction.DamageBonuses.Select(bonus => (Type: bonus.UnitType, Value: bonus.Multiplier)).ToList();
-                    state.BonusRows.Clear();
-                    var bonusSuggestions = GetKnownUnitTypeNames()
-                        .Concat(_barData?.UnitNames ?? [])
-                        .Where(value => !string.IsNullOrWhiteSpace(value))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-                    void AddAutoRangedBonusRow(string type, string value)
-                    {
-                        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 8, 0) };
-                        var typeEditor = new AutoCompleteBox { Text = type, FilterMode = AutoCompleteFilterMode.Contains, ItemsSource = bonusSuggestions, Width = 180, IsEnabled = !_isReadOnly };
-                        EnableDropdownAutoComplete(typeEditor);
-                        var valueEditor = new TextBox { Text = value, Width = 80, IsEnabled = !_isReadOnly };
-                        AttachProtoActionDecimalBehavior(valueEditor);
-                        row.Children.Add(typeEditor);
-                        row.Children.Add(valueEditor);
-                        var rowState = new BonusRowState { RowPanel = row, TypeAcb = typeEditor, ValTb = valueEditor };
-                        state.BonusRows.Add(rowState);
-                        if (!_isReadOnly)
-                        {
-                            var removeButton = new Button { Classes = { "remove-button" } };
-                            removeButton.Click += async (_, _) =>
-                            {
-                                if (!await CheckStartLocalMod()) return;
-                                state.BonusRows.Remove(rowState);
-                                bonusRowsPanel.Children.Remove(row);
-                                MarkDirty();
-                            };
-                            row.Children.Add(removeButton);
-                        }
-                        bonusRowsPanel.Children.Add(row);
-                    }
-                    foreach (var bonus in existingBonuses)
-                        AddAutoRangedBonusRow(bonus.Type, bonus.Value);
-                    if (!_isReadOnly)
-                    {
-                        var addBonusButton = new Button { Content = "+ Bonus", Classes = { "add-component" }, Margin = new Thickness(0, 2, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
-                        addBonusButton.Click += async (_, _) =>
-                        {
-                            if (!await CheckStartLocalMod()) return;
-                            AddAutoRangedBonusRow("AbstractInfantry", "1.0");
-                            MarkDirty();
-                        };
-                        bonusSection.Children.Add(addBonusButton);
-                    }
-                    state.AdditionalFieldsContainer.Children.Add(bonusSection);
-                }
-
                 var isInventoryAmount = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "")
                     .Equals("InventoryAmount", StringComparison.OrdinalIgnoreCase);
                 if (isInventoryAmount)
@@ -17725,24 +17726,54 @@ public partial class ProtoEditorWindow : SimpleWindow
                 else if (forbiddenUnitTypes.Count > 0)
                     state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow("forbidabstracttype", "Forbid Unit Type", forbiddenUnitTypes));
 
-                WrapPanel? AddOptionalProtoUnitList(string tag, string label, WrapPanel closedButtonHost)
+                var protoUnitOptionsRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+                var openProtoUnitRows = new List<Control>();
+                void AddOptionalProtoUnitList(string tag, string label)
                 {
                     var values = GetAutoRangedList(tag);
                     if (_isReadOnly)
                     {
                         if (values.Count > 0)
-                            state.AdditionalFieldsContainer.Children.Add(CreateAutoRangedUnitTypeReadOnlyRow(tag, label, values));
-                        return null;
+                            openProtoUnitRows.Add(CreateAutoRangedUnitTypeReadOnlyRow(tag, label, values));
+                        return;
                     }
 
                     if (values.Count > 0 || state.ForcedVisibleFieldTags.Contains(tag))
                     {
                         var openRow = CreateAutoRangedListRow(tag, label, autoRangedProtoUnitSuggestions, values);
-                        state.AdditionalFieldsContainer.Children.Add(openRow);
-                        return openRow;
+                        openRow.Margin = new Thickness(0, 2, 0, 2);
+                        var removeButton = new Button
+                        {
+                            Classes = { "remove-button" },
+                            Margin = new Thickness(6, 0, 0, 0),
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                        removeButton.Click += async (_, _) =>
+                        {
+                            if (await BlockInheritedStructuredProtoActionRemovalAsync(state, tag, label))
+                                return;
+                            if (!await CheckStartLocalMod())
+                                return;
+
+                            state.ForcedVisibleFieldTags.Remove(tag);
+                            state.CustomValues["autorangedmodify." + tag] = "";
+                            state.Model.AdditionalElements.RemoveAll(element =>
+                                element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
+                            RefreshProtoActionMetadataPanels(state);
+                            MarkDirty();
+                        };
+                        openRow.Children.Add(removeButton);
+                        openProtoUnitRows.Add(openRow);
+                        return;
                     }
 
-                    var addButton = new Button { Content = label, Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 2, 0, 2) };
+                    var addButton = new Button
+                    {
+                        Content = label,
+                        Classes = { "add-component" },
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(protoUnitOptionsRow.Children.Count > 0 ? 10 : 0, 2, 0, 2)
+                    };
                     addButton.Click += async (_, _) =>
                     {
                         if (!await CheckStartLocalMod()) return;
@@ -17750,24 +17781,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     };
-                    closedButtonHost.Children.Add(addButton);
-                    return null;
+                    protoUnitOptionsRow.Children.Add(addButton);
                 }
-                var protoUnitOptionButtons = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-                state.AdditionalFieldsContainer.Children.Add(protoUnitOptionButtons);
-                WrapPanel? targetProtoUnitRow = null;
                 if (!IsAreaMutateActionType(actionType))
-                    targetProtoUnitRow = AddOptionalProtoUnitList("modifyprotoid", "Target Proto Unit", protoUnitOptionButtons);
-                var forbidProtoUnitButtonHost = targetProtoUnitRow != null
-                    ? new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) }
-                    : protoUnitOptionButtons;
-                if (targetProtoUnitRow != null)
-                    state.AdditionalFieldsContainer.Children.Add(forbidProtoUnitButtonHost);
-                AddOptionalProtoUnitList("forbidunittype", "Forbid Proto Unit", forbidProtoUnitButtonHost);
-                if (protoUnitOptionButtons.Children.Count == 0)
-                    state.AdditionalFieldsContainer.Children.Remove(protoUnitOptionButtons);
-                if (targetProtoUnitRow != null && forbidProtoUnitButtonHost.Children.Count == 0)
-                    state.AdditionalFieldsContainer.Children.Remove(forbidProtoUnitButtonHost);
+                    AddOptionalProtoUnitList("modifyprotoid", "Target Proto Unit");
+                AddOptionalProtoUnitList("forbidunittype", "Forbid Proto Unit");
+                if (protoUnitOptionsRow.Children.Count > 0)
+                    state.AdditionalFieldsContainer.Children.Add(protoUnitOptionsRow);
+                foreach (var openProtoUnitRow in openProtoUnitRows)
+                    state.AdditionalFieldsContainer.Children.Add(openProtoUnitRow);
 
                 var targetFlagOptions = new[]
                 {
@@ -24352,6 +24374,56 @@ public partial class ProtoEditorWindow : SimpleWindow
         header.IsVisible = state.DamageRows.Count > 0 || state.BonusRows.Count > 0 || hasDamageArea;
     }
 
+    private static void ArrangeProtoActionDamageOptionButtons(ProtoActionWidgetState state)
+    {
+        var row = state.DamageOptionButtonsRow;
+        row.Children.Clear();
+
+        void PlaceButton(Button? button, bool optionIsOpen, Panel? openSection)
+        {
+            if (button == null)
+                return;
+            if (button.Parent is Panel parent)
+                parent.Children.Remove(button);
+
+            if (!button.IsVisible)
+                return;
+            if (optionIsOpen && openSection != null)
+            {
+                button.Margin = new Thickness(2, 0, 0, 0);
+                openSection.Children.Add(button);
+                return;
+            }
+
+            button.Margin = new Thickness(row.Children.Count == 0 ? 0 : 8, 0, 0, 0);
+            row.Children.Add(button);
+        }
+
+        PlaceButton(state.AddDamageButton, state.DamageRows.Count > 0, state.DamageRowsContainer);
+        PlaceButton(state.AddDamageAreaButton, optionIsOpen: false, openSection: null);
+        PlaceButton(state.AddDamageBonusButton, state.BonusRows.Count > 0, state.DamageBonusRowsContainer);
+
+        if (row.Parent is Panel previousParent)
+            previousParent.Children.Remove(row);
+        if (row.Children.Count == 0)
+            return;
+
+        var container = state.BodyContainer;
+        var damageIndex = container.Children.IndexOf(state.DamageSectionContainer);
+        var bonusIndex = container.Children.IndexOf(state.BonusSectionContainer);
+        var firstSectionIndex = new[] { damageIndex, bonusIndex }.Where(index => index >= 0).DefaultIfEmpty(container.Children.Count).Min();
+        var lastSectionIndex = Math.Max(damageIndex, bonusIndex);
+        var hasOpenDamageOption = (state.DamageSectionContainer.IsVisible && state.DamageRows.Count > 0) ||
+                                  (state.BonusSectionContainer.IsVisible && state.BonusRows.Count > 0) ||
+                                  state.DamageExtrasContainer.Children
+                                      .OfType<Control>()
+                                      .Any(control => string.Equals(control.Tag as string, DamageAreaRowTag, StringComparison.Ordinal));
+        var insertIndex = hasOpenDamageOption && lastSectionIndex >= 0
+            ? lastSectionIndex + 1
+            : firstSectionIndex;
+        container.Children.Insert(Math.Clamp(insertIndex, 0, container.Children.Count), row);
+    }
+
     private static void InitializeDamageAreaDefaults(ProtoActionWidgetState state, bool requireAreaSortMode)
     {
         if (!state.CustomValues.ContainsKey(DamageAreaTargetsInitializedStateKey))
@@ -24371,6 +24443,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void RenderProtoActionDamageExtras(ProtoActionWidgetState state, Dictionary<string, string> currentValues)
     {
+        if (state.AddDamageAreaButton?.Parent is Panel previousDamageAreaButtonParent)
+            previousDamageAreaButtonParent.Children.Remove(state.AddDamageAreaButton);
+        state.AddDamageAreaButton = null;
         state.DamageExtrasContainer.Children.Clear();
         RefreshProtoActionDamageHeader(state);
 
@@ -24730,7 +24805,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 RefreshProtoActionMetadataPanels(state);
                 MarkDirty();
             };
-            state.DamageExtrasContainer.Children.Add(addDamageAreaButton);
+            state.AddDamageAreaButton = addDamageAreaButton;
         }
 
         RefreshProtoActionDamageHeader(state);
@@ -28244,18 +28319,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IEnumerable<string> initialValues,
                         List<AutoCompleteBox> storedValues)
                     {
-                        var host = new StackPanel { Spacing = 2, Width = 330 };
-                        var pickerRow = new StackPanel
-                        {
-                            Orientation = Orientation.Horizontal,
-                            Spacing = 8,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        pickerRow.Children.Add(new TextBlock
-                        {
-                            Text = title + ":",
-                            VerticalAlignment = VerticalAlignment.Center
-                        });
                         var picker = new AutoCompleteBox
                         {
                             FilterMode = AutoCompleteFilterMode.Contains,
@@ -28264,12 +28327,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
                         EnableDropdownAutoComplete(picker);
-                        pickerRow.Children.Add(picker);
-                        if (!_isReadOnly)
-                            host.Children.Add(pickerRow);
-
                         var chips = new WrapPanel { Orientation = Orientation.Horizontal };
-                        host.Children.Add(chips);
+                        var host = TargetFilterEditor.CreateChipGroup(
+                            title, picker, chips, _isReadOnly);
 
                         void RefreshPickerSuggestions()
                         {
@@ -32429,6 +32489,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             return "";
 
         return _protoActionTypeSuggestions.FirstOrDefault(x => x.Equals(normalized, StringComparison.OrdinalIgnoreCase)) ?? "";
+    }
+
+    internal static bool IsProtoActionTypeSelectionChange(string? renderedType, string? selectedType)
+    {
+        var selected = selectedType?.Trim() ?? "";
+        return selected.Length > 0 &&
+               !selected.Equals(renderedType?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
     }
 
     private void EnableDropdownAutoComplete(AutoCompleteBox autoCompleteBox, bool selectAllOnFirstClick = true)
@@ -46886,10 +46953,18 @@ public partial class ProtoEditorWindow : SimpleWindow
             return true;
         }
 
-        void SelectAction(ProtoActionWidgetState? action)
+        void SelectAction(ProtoActionWidgetState? action, bool isNavigation = false)
         {
             if (!ReferenceEquals(action, selectedAction) && BlockForDuplicateSelectedActionName())
                 return;
+
+            if (isNavigation && !ReferenceEquals(action, selectedAction) && !_isPopulating)
+            {
+                // Revealing an existing action card can realize nested selectors and
+                // raise delayed initialization events. Those events are navigation,
+                // not edits; Add/Copy callers intentionally do not request this guard.
+                SuppressEditorChangeTrackingWhileControlsSettle();
+            }
 
             selectedAction = action;
             _selectedProtoActionIndex = action == null ? 0 : Math.Max(0, _protoActionWidgets.IndexOf(action));
@@ -47125,7 +47200,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         if (wasDragging && dropTarget != null)
                             MoveActionGroup(actionState, dropTarget, insertAfter);
                         else
-                            SelectAction(actionState);
+                            SelectAction(actionState, isNavigation: true);
                         args.Handled = true;
                     }, RoutingStrategies.Tunnel, handledEventsToo: true);
                     actionButton.AddHandler(InputElement.PointerCaptureLostEvent, (_, _) =>
@@ -47140,7 +47215,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 actionButton.Click += (_, _) =>
                 {
-                    SelectAction(actionState);
+                    SelectAction(actionState, isNavigation: true);
                 };
                 actionState.ActionSelectorButton = actionButton;
                 actionSelectorPanel.Children.Add(actionButton);
@@ -47894,6 +47969,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (typeAcb.SelectedItem is not string selectedType || string.IsNullOrWhiteSpace(selectedType))
                     return;
 
+                // AutoCompleteBox can raise a deferred SelectionChanged when an
+                // existing action card becomes visible. Re-selecting its already
+                // rendered type is navigation, not an edit.
+                if (!IsProtoActionTypeSelectionChange(lastRenderedActionType, selectedType))
+                    return;
+
                 ApplyProtoActionTypeSelection(selectedType);
                 if (await CheckStartLocalMod())
                     MarkDirty();
@@ -48046,6 +48127,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         state.DamageSectionContainer.Children.Add(dmgLabel);
 
         var dmgContainer = new WrapPanel { Orientation = Orientation.Horizontal };
+        state.DamageRowsContainer = dmgContainer;
         state.DamageSectionContainer.Children.Add(dmgContainer);
 
         var damageTypeLabel = new TextBlock
@@ -48098,7 +48180,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (state.DamageRows.Count >= ProtoConstants.KnownDamageTypes.Count())
             {
                 if (addDamageButton != null)
-                    dmgContainer.Children.Remove(addDamageButton);
+                    addDamageButton.IsVisible = false;
                 return;
             }
 
@@ -48126,12 +48208,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                         return;
 
                     AddDamageRow(nextType, "0");
+                    ArrangeProtoActionDamageOptionButtons(state);
                     MarkDirty();
                 };
+                state.AddDamageButton = addDamageButton;
             }
 
-            dmgContainer.Children.Remove(addDamageButton);
-            dmgContainer.Children.Add(addDamageButton);
+            addDamageButton.IsVisible = state.DamageSectionContainer.IsVisible;
         }
 
         void AddDamageRow(string dtype, string dval)
@@ -48205,6 +48288,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshDamageTypeOptions();
                         RefreshDamageSectionPresentation();
                         EnsureAddDamageButton();
+                        ArrangeProtoActionDamageOptionButtons(state);
                         MarkDirty();
                     }
                 };
@@ -48224,25 +48308,23 @@ public partial class ProtoEditorWindow : SimpleWindow
         RefreshDamageSectionPresentation();
         EnsureAddDamageButton();
 
-        if (!IsAutoRangedModifyActionType(resolvedType))
-            bodyStack.Children.Add(state.BonusSectionContainer);
+        bodyStack.Children.Add(state.BonusSectionContainer);
         bodyStack.Children.Add(state.AdditionalFieldsContainer);
         bodyStack.Children.Add(state.StructuredFieldsContainer);
         bodyStack.Children.Add(state.OnHitEffectsContainer);
         bodyStack.Children.Add(state.FlagsContainer);
         bodyStack.Children.Add(state.OptionalFieldsContainer);
 
-        if (!IsAutoRangedModifyActionType(resolvedType))
-        {
             var bonusContainer = new WrapPanel
             {
                 Orientation = Orientation.Horizontal
             };
+            state.DamageBonusRowsContainer = bonusContainer;
             state.BonusSectionContainer.Children.Add(bonusContainer);
 
             var bonusLabel = new TextBlock
             {
-                Text = "Bonuses:",
+                Text = "Damage Bonuses:",
                 Margin = new Thickness(0, 4, 10, 6),
                 VerticalAlignment = VerticalAlignment.Center,
                 IsVisible = false
@@ -48261,9 +48343,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (btnAddBonus == null)
                     return;
-
-                bonusContainer.Children.Remove(btnAddBonus);
-                bonusContainer.Children.Add(btnAddBonus);
+                btnAddBonus.IsVisible = state.BonusSectionContainer.IsVisible;
             }
 
             void AddBonusRow(string btype, string bval)
@@ -48374,6 +48454,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             state.BonusRows.Remove(rowState);
                             bonusContainer.Children.Remove(rowPanel);
                             RefreshBonusSectionPresentation();
+                            ArrangeProtoActionDamageOptionButtons(state);
                             MarkDirty();
                         }
                     };
@@ -48407,12 +48488,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed)
                     {
                         AddBonusRow("", "1.0");
+                        ArrangeProtoActionDamageOptionButtons(state);
                         MarkDirty();
                     }
                 };
-                bonusContainer.Children.Add(btnAddBonus);
+                state.AddDamageBonusButton = btnAddBonus;
             }
-        }
 
         state.DamageSectionContainer.Children.Add(state.DamageExtrasContainer);
         RefreshProtoActionDamageHeader(state);
@@ -50574,6 +50655,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             GameIdentifierReferencePolicy.RenameProtoActionReferences(unit, rename.OldName, rename.NewName);
 
         ProtoUnitStatsXmlPreserver.PreserveUnmanagedContent(originalUnit, unit);
+        ProtoUnitXmlOrderPolicy.NormalizeForEditor(unit);
     }
 
     internal static void SyncStackProtoActionReference(XElement unit, string? actionName)

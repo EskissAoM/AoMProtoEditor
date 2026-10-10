@@ -5,7 +5,7 @@
              x:Class="AoMDivineDataEditor.Windows.MajorGodEditorView"
              Background="Transparent"
              Foreground="{DynamicResource PrimaryTextBrush}">
-  <Grid x:Name="_mainGrid" RowDefinitions="*,Auto">
+  <Grid x:Name="_mainGrid">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="4*"/>
       <ColumnDefinition Width="5"/>
@@ -13,7 +13,7 @@
     </Grid.ColumnDefinitions>
 
     <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
-      <Grid RowDefinitions="Auto,*">
+      <Grid RowDefinitions="Auto,*,Auto">
         <Grid x:Name="_majorGodIdentityRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Major God :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
           <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
@@ -218,6 +218,9 @@
             </ScrollViewer>
           </TabItem>
         </TabControl>
+        <TextBlock Grid.Row="2" x:Name="_statusMessage"
+                   Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
+                   Margin="0,6,0,0" HorizontalAlignment="Center"/>
       </Grid>
     </Border>
 
@@ -252,9 +255,5 @@
                 ToolTip.Tip="Collapse XML Preview" Click="XmlPreviewToggle_Click"/>
       </Grid>
     </Border>
-
-    <TextBlock Grid.Row="1" Grid.ColumnSpan="3" x:Name="_statusMessage"
-               Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
-               Margin="0,6,0,0" HorizontalAlignment="Center"/>
   </Grid>
 </UserControl>

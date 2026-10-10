@@ -116,6 +116,10 @@ public sealed class MajorGodPhase1Tests
         Assert.Contains("x:Name=\"_xmlPreviewToggleButton\"", xaml, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinition Width=\"4*\"", xaml, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinition Width=\"1*\" MinWidth=\"250\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("<Grid x:Name=\"_mainGrid\">", xaml, StringComparison.Ordinal);
+        Assert.Contains("<Grid RowDefinitions=\"Auto,*,Auto\">", xaml, StringComparison.Ordinal);
+        Assert.Contains("<TextBlock Grid.Row=\"2\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Grid.ColumnSpan=\"3\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_cultureBox\" Width=\"200\" MaxWidth=\"200\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_rolloverNameBox\"", xaml, StringComparison.Ordinal);
         Assert.Contains("MinHeight=\"96\" AcceptsReturn=\"True\" TextWrapping=\"Wrap\"", xaml, StringComparison.Ordinal);
@@ -753,12 +757,13 @@ public sealed class MajorGodPhase1Tests
     public void TerrainCreepEditor_UsesGameAndModCatalogsAndStructuredControls()
     {
         var editor = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "MajorGodEditorView.axaml.cs"));
+        var catalog = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Classes", "MajorGodCatalog.cs"));
         var window = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "ProtoEditorWindow.axaml.cs"));
 
         Assert.Contains("BuildTerrainCreepsEditor", editor, StringComparison.Ordinal);
         Assert.Contains("CreateSpecialAttributeAutoComplete(creep, \"creep\", _terrainCreepNames)", editor, StringComparison.Ordinal);
         Assert.Contains("\"maxradius\"", editor, StringComparison.Ordinal);
-        Assert.Contains("\"allowDisconnectedGrowth\"", editor, StringComparison.Ordinal);
+        Assert.Contains("\"allowDisconnectedGrowth\"", catalog, StringComparison.Ordinal);
         Assert.Contains("TerrainCreepBuildabilityValues", editor, StringComparison.Ordinal);
         Assert.Contains("Text = \"Update Interval (s)\"", editor, StringComparison.Ordinal);
         Assert.Contains("CreateInlineLabel(\"Prevent Placement of\")", editor, StringComparison.Ordinal);

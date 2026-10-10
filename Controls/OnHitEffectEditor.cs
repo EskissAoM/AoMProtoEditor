@@ -13,6 +13,7 @@ public sealed class OnHitEffectEditor : Border
 {
     public AutoCompleteBox TypeField { get; }
     public CheckBox ActiveField { get; }
+    public Border CardSurface { get; }
     public StackPanel Body { get; }
     public Grid Header { get; }
     public Button? RemoveButton { get; }
@@ -22,15 +23,20 @@ public sealed class OnHitEffectEditor : Border
         CheckBox activeField,
         bool isReadOnly,
         bool isSupported,
-        Control? sourceMarker = null)
+        Control? sourceMarker = null,
+        bool showActiveField = true)
     {
         TypeField = typeField;
         ActiveField = activeField;
 
-        Classes.Add("editor-card");
-
         Body = new StackPanel { Spacing = 4 };
-        Child = Body;
+        CardSurface = new Border
+        {
+            Child = Body,
+            Classes = { "editor-card" },
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        Child = CardSurface;
 
         Header = new Grid
         {
@@ -49,17 +55,20 @@ public sealed class OnHitEffectEditor : Border
         Grid.SetColumn(TypeField, 1);
         Header.Children.Add(TypeField);
 
-        var activeLabel = new TextBlock
+        if (showActiveField)
         {
-            Text = "Active:",
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 4, 8, 4)
-        };
-        Grid.SetColumn(activeLabel, 2);
-        Header.Children.Add(activeLabel);
+            var activeLabel = new TextBlock
+            {
+                Text = "Active:",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 4, 8, 4)
+            };
+            Grid.SetColumn(activeLabel, 2);
+            Header.Children.Add(activeLabel);
 
-        Grid.SetColumn(ActiveField, 3);
-        Header.Children.Add(ActiveField);
+            Grid.SetColumn(ActiveField, 3);
+            Header.Children.Add(ActiveField);
+        }
 
         if (!isSupported)
         {

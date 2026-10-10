@@ -20,7 +20,10 @@ public static class XmlSyntaxEditorService
         editor.Options.IndentationSize = 2;
         editor.Options.EnableHyperlinks = false;
         editor.Options.EnableEmailHyperlinks = false;
+        // Keep the final XML line clear of the horizontal scrollbar without
+        // allowing the document to scroll through an entire empty viewport.
         editor.Options.AllowScrollBelowDocument = false;
+        editor.TextArea.TextView.Margin = new Avalonia.Thickness(0, 0, 0, 4);
         SetReadOnly(editor, editor.IsReadOnly);
     }
 
