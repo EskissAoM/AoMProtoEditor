@@ -22,6 +22,10 @@ public sealed class TransformCommandAssignmentState
     public string SnapshotCommandName { get; set; } = "";
     public XElement? LoadedCommandSnapshot { get; set; }
     public XElement? LoadedTransformSnapshot { get; set; }
+    public TransformAssociatedTechnologyDefinition? AssociatedTechnology { get; set; }
+    public bool AssociatedTechnologyIsBuiltIn { get; set; }
+    public XElement? LoadedAssociatedTechnologySnapshot { get; set; }
+    public bool RenameOwnedBundleOnSave { get; set; }
 }
 
 /// <summary>

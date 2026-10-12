@@ -12738,7 +12738,7 @@ public partial class PowerEditorView : UserControl
         _isPopulating = true;
         try
         {
-            _rawXmlEditor.Text = text;
+            _rawXmlEditor.Text = XmlSyntaxEditorService.PreparePreviewText(text);
         }
         finally
         {

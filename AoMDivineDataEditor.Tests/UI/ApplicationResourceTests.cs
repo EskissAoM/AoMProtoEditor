@@ -125,7 +125,8 @@ public sealed class ApplicationResourceTests
         Assert.Contains("AddRawEffectXmlEditor", technologyCode, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(box)", technologyCode, StringComparison.Ordinal);
         Assert.Contains("editor.Options.AllowScrollBelowDocument = false", syntaxEditorCode, StringComparison.Ordinal);
-        Assert.Contains("editor.TextArea.TextView.Margin = new Avalonia.Thickness(0, 0, 0, 4)", syntaxEditorCode, StringComparison.Ordinal);
+        Assert.Contains("XmlSyntaxEditorService.PreparePreviewText(text)", unitCode, StringComparison.Ordinal);
+        Assert.DoesNotContain("editor.TextArea.TextView.Margin", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("Caret.CaretBrush = isReadOnly", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("Brushes.Transparent", syntaxEditorCode, StringComparison.Ordinal);
         Assert.Contains("name=\"XmlTag\"", highlighting, StringComparison.Ordinal);

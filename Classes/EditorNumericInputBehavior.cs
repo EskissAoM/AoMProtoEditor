@@ -62,6 +62,22 @@ public static class EditorNumericInputBehavior
             textBox.Text = lastAcceptedText;
             restoring = false;
         };
+
+        textBox.LostFocus += (_, _) =>
+        {
+            var current = textBox.Text?.Trim() ?? "";
+            var normalized = NormalizeCommittedText(current, kind);
+            if (!string.Equals(current, normalized, StringComparison.Ordinal))
+                textBox.Text = normalized;
+        };
+    }
+
+    internal static string NormalizeCommittedText(string text, ProtoUnitNumericKind kind)
+    {
+        var validation = ProtoUnitStatsNumericRules.Validate(
+            text,
+            new ProtoUnitNumericRule("Value", kind, AllowEmpty: true));
+        return validation.IsValid ? validation.NormalizedValue : text;
     }
 
     public static void AttachUnsignedDecimal(TextBox textBox)

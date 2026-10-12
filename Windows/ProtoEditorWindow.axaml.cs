@@ -264,6 +264,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly Dictionary<string, string> _pendingUnitStringUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingUnitStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _pendingUnitRenames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<OwnedTransformCommandBundle>> _pendingOwnedTransformBundleDeletions = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ProtoActionRenameOperation> _pendingProtoActionRenames = [];
     private bool _unitSelectionChangeInProgress;
     private Task _unitSelectionChangeTask = Task.CompletedTask;
@@ -3244,6 +3245,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _pendingUnitStringUpdates.Clear();
         _pendingUnitStringRemovals.Clear();
         _pendingUnitRenames.Clear();
+        _pendingOwnedTransformBundleDeletions.Clear();
         _pendingProtoActionRenames.Clear();
         _pendingUnitRenameRemovedStringIds.Clear();
     }
@@ -3401,6 +3403,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         _unitAbilityDrafts.Remove(savedName);
         _duplicatedUnitRechargeFallbacks.Remove(currentName);
         _duplicatedUnitRechargeFallbacks.Remove(savedName);
+        _pendingOwnedTransformBundleDeletions.Remove(currentName);
+        _pendingOwnedTransformBundleDeletions.Remove(savedName);
 
         foreach (var rename in _pendingUnitRenames.Where(entry =>
                      entry.Key.Equals(savedName, StringComparison.OrdinalIgnoreCase) ||
@@ -4113,7 +4117,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetExternalTechnologyReferences,
             PrepareExternalTechnologyReferenceMigration,
             AdoptExternalTechnologyReferenceMigration,
-            GetTechnologyDeletionReferences,
+            technologyName => GetTechnologyDeletionReferences(technologyName),
             technologySavedAsync: AdoptSavedTechnologyLifecycleAsync,
             hasLinkedMinorGod: HasCustomMinorGodForTechnology,
             confirmLinkedMinorGodRemovalAsync: ConfirmLinkedMinorGodRemovalAsync,
@@ -4227,7 +4231,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         return TechnologyReferenceIndex.Build(sources, knownTechnologyNames);
     }
 
-    private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyDeletionReferences(string technologyName)
+    private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyDeletionReferences(
+        string technologyName,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides = null)
     {
         var sources = new List<TechnologyReferenceSource>();
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -4240,9 +4246,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
         {
             excluded.Add(Path.GetFullPath(_modFilePath));
+            var protoDocument = documentOverrides != null &&
+                                documentOverrides.TryGetValue(Path.GetFullPath(_modFilePath), out var overriddenProto)
+                ? overriddenProto
+                : _modXmlDoc;
             sources.Add(new TechnologyReferenceSource(
                 "Mod ProtoUnits",
-                _modXmlDoc,
+                protoDocument,
                 TechnologyReferenceDocumentKind.ProtoUnits,
                 _modFilePath,
                 CanMigrate: true));
@@ -4252,6 +4262,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                      file.Kind != TechnologyReferenceDocumentKind.MinorGods &&
                      !excluded.Contains(Path.GetFullPath(file.Path))))
         {
+            var fullPath = Path.GetFullPath(file.Path);
+            if (documentOverrides != null && documentOverrides.TryGetValue(fullPath, out var overrideDocument))
+            {
+                excluded.Add(fullPath);
+                sources.Add(new TechnologyReferenceSource(
+                    file.Label, overrideDocument, file.Kind, file.Path, CanMigrate: true));
+                continue;
+            }
             var before = FileIntegrityTransaction.CaptureState(file.Path);
             XDocument document;
             try
@@ -5837,9 +5855,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void SetXmlPreviewText(string text)
     {
-        _lastRenderedXmlPreview = text;
+        var displayText = XmlSyntaxEditorService.PreparePreviewText(text);
+        _lastRenderedXmlPreview = displayText;
         _isUpdatingXmlPreviewText = true;
-        _xmlPreviewText.Text = text;
+        _xmlPreviewText.Text = displayText;
         _isUpdatingXmlPreviewText = false;
         _isXmlPreviewDirty = false;
     }
@@ -33595,6 +33614,576 @@ public partial class ProtoEditorWindow : SimpleWindow
         return result;
     }
 
+    private TransformAssociatedTechnologyDefinition? LoadTransformAssociatedTechnology(
+        string technologyName,
+        out bool isBuiltIn)
+    {
+        isBuiltIn = false;
+        if (string.IsNullOrWhiteSpace(technologyName))
+            return null;
+
+        static XElement? Find(XDocument document, string name)
+            => document.Root?.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase) &&
+                element.Attributes().Any(attribute =>
+                    attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+                    attribute.Value.Trim().Equals(name, StringComparison.OrdinalIgnoreCase)));
+
+        var modPath = GetCurrentModGameplayFilePath("techtree_mods.xml");
+        if (!string.IsNullOrWhiteSpace(modPath) && File.Exists(modPath))
+        {
+            var document = XDocument.Load(modPath, LoadOptions.PreserveWhitespace);
+            var validation = TechnologyDocumentSafety.ValidateModDocument(document);
+            if (!validation.IsValid)
+                throw new InvalidDataException(validation.ToDisplayMessage(modPath));
+            var custom = Find(document, technologyName);
+            if (custom != null)
+                return TransformAssociatedTechnologyDefinition.FromElement(custom);
+        }
+
+        foreach (var document in GetBaseTechtreeDocumentsFromLoadedBar())
+        {
+            var builtIn = Find(document, technologyName);
+            if (builtIn == null)
+                continue;
+            isBuiltIn = true;
+            return TransformAssociatedTechnologyDefinition.FromElement(builtIn);
+        }
+        return null;
+    }
+
+    private static XElement? FindTechnologyByName(XDocument document, string name)
+        => document.Root?.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase) &&
+            element.Attributes().Any(attribute =>
+                attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+                attribute.Value.Trim().Equals(name, StringComparison.OrdinalIgnoreCase)));
+
+    private (XDocument Commands, XDocument Transforms, XDocument Technologies) BuildTransformBundleSourceDocuments(
+        XElement sourceUnit,
+        XDocument commandMods,
+        XDocument transformMods,
+        XDocument technologyMods)
+    {
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+
+        static XDocument CopyEntries(XDocument document, string rootName)
+            => new(new XElement(rootName,
+                document.Root?.Elements().Select(element => new XElement(element)) ?? []));
+
+        static XElement? FindCommand(XDocument document, string name)
+            => document.Root?.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                GetProtoUnitCommandName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        var commands = CopyEntries(commandMods, "protounitcommandmods");
+        var transforms = CopyEntries(transformMods, "unittransformmods");
+        var technologies = CopyEntries(technologyMods, "techtreemods");
+        var assignedCommandNames = sourceUnit.Elements()
+            .Where(element => element.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase) ||
+                              element.Name.LocalName.Equals("transformcommand", StringComparison.OrdinalIgnoreCase))
+            .Select(element => element.Value.Trim())
+            .Where(name => name.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var commandName in assignedCommandNames)
+        {
+            if (FindCommand(commands, commandName) == null &&
+                _protoUnitCommandCatalog.TryGetValue(commandName, out var catalogCommand))
+                commands.Root!.Add(new XElement(catalogCommand));
+
+            var commandElement = FindCommand(commands, commandName);
+            if (commandElement == null)
+                continue;
+
+            if (FindProtoUnitTransformByCommand(transforms, commandName) == null)
+            {
+                var transform = LoadProtoUnitTransformDefinition(commandName);
+                if (transform != null)
+                    transforms.Root!.Add(transform.ToElement());
+            }
+
+            var command = ProtoUnitCommandDefinition.FromElement(commandElement);
+            var technologyName = command.Values.GetValueOrDefault("associatedtech", "").Trim();
+            if (technologyName.Length == 0 || FindTechnologyByName(technologies, technologyName) != null)
+                continue;
+
+            var technology = LoadTransformAssociatedTechnology(technologyName, out _);
+            if (technology != null)
+                technologies.Root!.Add(technology.ToElement());
+        }
+
+        return (commands, transforms, technologies);
+    }
+
+    private async Task<bool> DuplicateOwnedTransformBundlesForUnitAsync(
+        XElement sourceUnit,
+        XElement duplicatedUnit,
+        string duplicatedUnitName)
+    {
+        try
+        {
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+                ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+                ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+                ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+            var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+            var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyFile.Document);
+            if (!technologyValidation.IsValid)
+                throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+
+            var sourceDocuments = BuildTransformBundleSourceDocuments(
+                sourceUnit,
+                commandFile.Document,
+                transformFile.Document,
+                technologyFile.Document);
+            var owned = TransformCommandBundleLifecycle.FindOwnedBundles(
+                sourceUnit,
+                sourceDocuments.Commands,
+                sourceDocuments.Transforms);
+            if (owned.Count == 0)
+                return true;
+
+            var builtInTechnologyNames = LoadTechNamesFromBar();
+            foreach (var bundle in owned)
+            {
+                var newName = TransformAssociatedTechnologyDefinition.BuildOwnedName(duplicatedUnitName, bundle.ToUnit);
+                if (_protoUnitCommandCatalog.ContainsKey(newName))
+                    throw new InvalidOperationException($"Command '{newName}' already exists.");
+                if (builtInTechnologyNames.Contains(newName, StringComparer.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Technology '{newName}' already exists in Data.bar.");
+            }
+
+            TransformCommandBundleLifecycle.Duplicate(
+                sourceUnit,
+                duplicatedUnit,
+                duplicatedUnitName,
+                sourceDocuments.Commands,
+                sourceDocuments.Transforms,
+                sourceDocuments.Technologies,
+                commandFile.Document,
+                transformFile.Document,
+                technologyFile.Document);
+            ModDocumentPersistence.Execute(
+                [commandFile, transformFile, technologyFile],
+                additionalPaths: null,
+                additionalExpectedStates: null,
+                () =>
+                {
+                    SaveProtoUnitCommandMods(commandFile.Document);
+                    SaveProtoUnitTransformMods(transformFile.Document);
+                    SaveAbilityXmlDocument(technologyFile.Document, technologyPath);
+                });
+            _protoUnitCommandCatalogLoaded = false;
+            _cachedCommandNames = null;
+            _cachedTechNames = null;
+            RefreshTechnologyViewAfterTechTypeChanges();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Duplicate Transform commands",
+                $"The unit was not duplicated because its owned Transform commands could not be duplicated. {exception.Message}")
+                .ShowDialog(this);
+            return false;
+        }
+    }
+
+    private void SavePendingOwnedTransformBundleUnitRenames()
+    {
+        if (_pendingUnitRenames.Count == 0 || _modXmlRoot == null)
+            return;
+
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+            ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+        var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+        var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+        var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+        var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyFile.Document);
+        if (!technologyValidation.IsValid)
+            throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+
+        var bundleRenames = new List<(OwnedTransformCommandBundle Old, OwnedTransformCommandBundle New)>();
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        var builtInTechnologyNames = LoadTechNamesFromBar();
+        foreach (var rename in _pendingUnitRenames)
+        {
+            var renamedUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, rename.Value);
+            if (renamedUnit == null)
+                continue;
+            var lookupUnit = new XElement(renamedUnit);
+            lookupUnit.SetAttributeValue("name", rename.Key);
+            foreach (var bundle in TransformCommandBundleLifecycle.FindOwnedBundles(
+                         lookupUnit, commandFile.Document, transformFile.Document))
+            {
+                var newBundleName = TransformAssociatedTechnologyDefinition.BuildOwnedName(rename.Value, bundle.ToUnit);
+                if (_protoUnitCommandCatalog.ContainsKey(newBundleName) &&
+                    !newBundleName.Equals(bundle.CommandName, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Command '{newBundleName}' already exists.");
+                if (builtInTechnologyNames.Contains(newBundleName, StringComparer.OrdinalIgnoreCase) &&
+                    !newBundleName.Equals(bundle.TechnologyName, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Technology '{newBundleName}' already exists in Data.bar.");
+            }
+            bundleRenames.AddRange(TransformCommandBundleLifecycle.RenameUnit(
+                renamedUnit,
+                rename.Key,
+                rename.Value,
+                commandFile.Document,
+                transformFile.Document,
+                technologyFile.Document));
+        }
+        if (bundleRenames.Count == 0)
+            return;
+
+        var localSources = new[]
+        {
+            new TechnologyReferenceSource("Mod ProtoUnits", _modXmlDoc!, TechnologyReferenceDocumentKind.ProtoUnits, _modFilePath, CanMigrate: true),
+            new TechnologyReferenceSource("Mod commands", commandFile.Document, TechnologyReferenceDocumentKind.ProtoUnitCommands, commandPath, CanMigrate: true),
+            new TechnologyReferenceSource("Mod transforms", transformFile.Document, TechnologyReferenceDocumentKind.UnitTransforms, transformPath, CanMigrate: true),
+            new TechnologyReferenceSource("Mod technologies", technologyFile.Document, TechnologyReferenceDocumentKind.Techtree, technologyPath, CanMigrate: true)
+        };
+        foreach (var rename in bundleRenames)
+        {
+            GameIdentifierReferencePolicy.RenameReferences(
+                _modXmlDoc!, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+            GameIdentifierReferencePolicy.RenameReferences(
+                commandFile.Document, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+            GameIdentifierReferencePolicy.RenameReferences(
+                transformFile.Document, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+            GameIdentifierReferencePolicy.RenameReferences(
+                technologyFile.Document, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+            foreach (var source in localSources)
+                TechnologyReferenceIndex.RenameRecognizedReferences(source, rename.Old.TechnologyName, rename.New.TechnologyName);
+        }
+
+        var excluded = new[] { _modFilePath, commandPath, transformPath, technologyPath }
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var files = GetGameIdentifierReferenceFiles()
+            .Where(file => !excluded.Contains(Path.GetFullPath(file.Path)))
+            .ToList();
+        var commandMigration = GameIdentifierReferenceMigrationPlan.Prepare(
+            files,
+            GameIdentifierKind.ProtoUnitCommand,
+            bundleRenames.Select(rename =>
+                new KeyValuePair<string, string>(rename.Old.CommandName, rename.New.CommandName)));
+        commandMigration.Save(SaveXmlDocumentAtomic);
+
+        // Prepare after saving command migrations so a document that references both
+        // identifiers retains both sets of changes.
+        var technologyMigration = TechnologyReferenceMigrationPlan.Prepare(
+            files,
+            bundleRenames.Select(rename =>
+                    new TechnologyRenameOperation(rename.Old.TechnologyName, rename.New.TechnologyName))
+                .ToList());
+        if (technologyMigration.UnknownReferences.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Technology '{technologyMigration.UnknownReferences[0].TechnologyName}' was not renamed because " +
+                $"'{technologyMigration.UnknownReferences[0].DisplayLocation}' uses an unsupported reference field. No files were written.");
+        }
+        technologyMigration.Save(SaveXmlDocumentAtomic);
+
+        SaveProtoUnitCommandMods(commandFile.Document);
+        SaveProtoUnitTransformMods(transformFile.Document);
+        SaveAbilityXmlDocument(technologyFile.Document, technologyPath);
+    }
+
+    private async Task<IReadOnlyList<OwnedTransformCommandBundle>?> PreflightOwnedTransformBundleUnitDeletionAsync(
+        XElement unit,
+        XDocument candidateProtoDocument)
+    {
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+            ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+        var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+        var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+        var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+        var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyFile.Document);
+        if (!technologyValidation.IsValid)
+            throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+
+        var bundles = TransformCommandBundleLifecycle.FindOwnedBundles(
+            unit, commandFile.Document, transformFile.Document);
+        if (bundles.Count == 0)
+            return bundles;
+
+        TransformCommandBundleLifecycle.Delete(
+            bundles, commandFile.Document, transformFile.Document, technologyFile.Document);
+        var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(_modFilePath!)] = candidateProtoDocument,
+            [Path.GetFullPath(commandPath)] = commandFile.Document,
+            [Path.GetFullPath(transformPath)] = transformFile.Document,
+            [Path.GetFullPath(technologyPath)] = technologyFile.Document
+        };
+        foreach (var bundle in bundles)
+        {
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.ProtoUnitCommand,
+                    bundle.CommandName,
+                    "Command",
+                    overrides))
+                return null;
+
+            var references = TechnologyReferenceIndex.FindReferencesTo(
+                    [new TechnologyReferenceSource(
+                        "Mod technologies",
+                        technologyFile.Document,
+                        TechnologyReferenceDocumentKind.Techtree,
+                        technologyPath,
+                        CanMigrate: true)],
+                    bundle.TechnologyName)
+                .Concat(GetTechnologyDeletionReferences(bundle.TechnologyName, overrides))
+                .DistinctBy(reference => $"{reference.Path}\0{reference.Owner}\0{reference.Field}", StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (references.Count == 0)
+                continue;
+            await DeletionBlockedDialog.ShowAsync(
+                this,
+                "Technology",
+                bundle.TechnologyName,
+                references.Select(reference => reference.DisplayLocation));
+            return null;
+        }
+        return bundles;
+    }
+
+    private async Task<OwnedTransformCommandBundle?> PreflightTransformCommandRemovalAsync(
+        string commandName,
+        string ignoredUnitName)
+    {
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+            ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+        var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+        var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+        var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+        var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyFile.Document);
+        if (!technologyValidation.IsValid)
+            throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+
+        var commandElement = commandFile.Document.Root?.Elements().FirstOrDefault(element =>
+            element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+            GetProtoUnitCommandName(element).Equals(commandName, StringComparison.OrdinalIgnoreCase));
+        if (commandElement == null)
+            throw new InvalidOperationException($"Custom command '{commandName}' no longer exists.");
+        var command = ProtoUnitCommandDefinition.FromElement(commandElement);
+        var associatedTechnology = command.Values.GetValueOrDefault("associatedtech", "").Trim();
+        var transformElement = FindProtoUnitTransformByCommand(transformFile.Document, commandName);
+        var transform = transformElement == null
+            ? new ProtoUnitTransformDefinition { Command = commandName }
+            : ProtoUnitTransformDefinition.FromElement(transformElement);
+        var ownsTechnology = transformElement != null &&
+                             TransformAssociatedTechnologyDefinition.IsOwnedIdentity(
+                                 commandName, transform.From, associatedTechnology);
+        var pending = new OwnedTransformCommandBundle(
+            commandName,
+            ownsTechnology ? associatedTechnology : "",
+            transform.From,
+            transform.To);
+
+        commandElement.Remove();
+        transformElement?.Remove();
+        if (ownsTechnology)
+            FindTechnologyByName(technologyFile.Document, associatedTechnology)?.Remove();
+
+        var candidateProto = _modXmlDoc == null ? new XDocument(new XElement("protomods")) : new XDocument(_modXmlDoc);
+        if (candidateProto.Root != null)
+        {
+            var ignoredUnit = ProtoXmlHandler.GetUnitElement(candidateProto.Root, ignoredUnitName);
+            ignoredUnit?.Elements().Where(element =>
+                    (element.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase) ||
+                     element.Name.LocalName.Equals("transformcommand", StringComparison.OrdinalIgnoreCase)) &&
+                    element.Value.Trim().Equals(commandName, StringComparison.OrdinalIgnoreCase))
+                .Remove();
+        }
+
+        var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(_modFilePath!)] = candidateProto,
+            [Path.GetFullPath(commandPath)] = commandFile.Document,
+            [Path.GetFullPath(transformPath)] = transformFile.Document,
+            [Path.GetFullPath(technologyPath)] = technologyFile.Document
+        };
+        if (!await EnsureIdentifierCanBeDeletedAsync(
+                GameIdentifierKind.ProtoUnitCommand,
+                commandName,
+                "Command",
+                overrides))
+            return null;
+
+        if (!ownsTechnology)
+            return pending;
+
+        var references = TechnologyReferenceIndex.FindReferencesTo(
+                [new TechnologyReferenceSource(
+                    "Mod technologies",
+                    technologyFile.Document,
+                    TechnologyReferenceDocumentKind.Techtree,
+                    technologyPath,
+                    CanMigrate: true)],
+                associatedTechnology)
+            .Concat(GetTechnologyDeletionReferences(associatedTechnology, overrides))
+            .DistinctBy(reference => $"{reference.Path}\0{reference.Owner}\0{reference.Field}", StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (references.Count == 0)
+            return pending;
+
+        await DeletionBlockedDialog.ShowAsync(
+            this,
+            "Technology",
+            associatedTechnology,
+            references.Select(reference => reference.DisplayLocation));
+        return null;
+    }
+
+    private async Task<bool> ValidatePendingTransformCommandRemovalsAsync()
+    {
+        var bundles = _pendingOwnedTransformBundleDeletions.Values
+            .SelectMany(value => value)
+            .DistinctBy(bundle => bundle.CommandName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (bundles.Count == 0)
+            return true;
+
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
+            ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
+            ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+            ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+        var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+        var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+        var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+        foreach (var bundle in bundles)
+        {
+            if (!commandFile.Document.Descendants().Any(element =>
+                    element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                    GetProtoUnitCommandName(element).Equals(bundle.CommandName, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Custom command '{bundle.CommandName}' no longer exists.");
+        }
+
+        TransformCommandBundleLifecycle.Delete(
+            bundles, commandFile.Document, transformFile.Document, technologyFile.Document);
+        var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(_modFilePath!)] = _modXmlDoc == null
+                ? new XDocument(new XElement("protomods"))
+                : new XDocument(_modXmlDoc),
+            [Path.GetFullPath(commandPath)] = commandFile.Document,
+            [Path.GetFullPath(transformPath)] = transformFile.Document,
+            [Path.GetFullPath(technologyPath)] = technologyFile.Document
+        };
+        foreach (var bundle in bundles)
+        {
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.ProtoUnitCommand,
+                    bundle.CommandName,
+                    "Command",
+                    overrides))
+                return false;
+            if (string.IsNullOrWhiteSpace(bundle.TechnologyName))
+                continue;
+
+            var references = TechnologyReferenceIndex.FindReferencesTo(
+                    [new TechnologyReferenceSource(
+                        "Mod technologies",
+                        technologyFile.Document,
+                        TechnologyReferenceDocumentKind.Techtree,
+                        technologyPath,
+                        CanMigrate: true)],
+                    bundle.TechnologyName)
+                .Concat(GetTechnologyDeletionReferences(bundle.TechnologyName, overrides))
+                .DistinctBy(reference => $"{reference.Path}\0{reference.Owner}\0{reference.Field}", StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (references.Count == 0)
+                continue;
+            await DeletionBlockedDialog.ShowAsync(
+                this,
+                "Technology",
+                bundle.TechnologyName,
+                references.Select(reference => reference.DisplayLocation));
+            return false;
+        }
+        return true;
+    }
+
+    private IReadOnlySet<string> SavePendingOwnedTransformBundleDeletions()
+    {
+        var bundles = _pendingOwnedTransformBundleDeletions.Values.SelectMany(value => value)
+            .DistinctBy(bundle => bundle.CommandName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (bundles.Count == 0)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
+        var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")!;
+        var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+        var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+        var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+        var deletedStringIds = bundles
+            .Select(bundle => commandFile.Document.Root?.Elements().FirstOrDefault(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                GetProtoUnitCommandName(element).Equals(bundle.CommandName, StringComparison.OrdinalIgnoreCase)))
+            .Where(element => element != null)
+            .SelectMany(element => GetProtoUnitCommandStringIds(element!))
+            .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        TransformCommandBundleLifecycle.Delete(
+            bundles, commandFile.Document, transformFile.Document, technologyFile.Document);
+        SaveProtoUnitCommandMods(commandFile.Document);
+        SaveProtoUnitTransformMods(transformFile.Document);
+        SaveAbilityXmlDocument(technologyFile.Document, technologyPath);
+        return deletedStringIds;
+    }
+
+    private void SavePendingTransformCommandStringCleanup(IEnumerable<string> candidateIds)
+    {
+        var candidates = candidateIds
+            .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (candidates.Count == 0)
+            return;
+
+        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
+        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
+        var commandDocument = ModDocumentPersistence.Prepare(
+            commandPath, ModXmlDocumentKind.ProtoUnitCommands).Document;
+        var transformDocument = ModDocumentPersistence.Prepare(
+            transformPath, ModXmlDocumentKind.UnitTransforms).Document;
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
+        var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
+            candidates,
+            [commandDocument, transformDocument],
+            [commandPath, transformPath]);
+        var changed = false;
+        foreach (var id in safeRemovals)
+            changed |= entries.Remove(id);
+        if (!changed)
+            return;
+        SaveCurrentModStringEntries(entries, StringTableSection.UnitCommands);
+    }
+
     private static void RenameProtoUnitTransformCommandReference(XDocument document, string oldName, string newName)
     {
         var transform = FindProtoUnitTransformByCommand(document, oldName);
@@ -33955,6 +34544,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GetProtoUnitCommandName(element).Equals(oldName, StringComparison.OrdinalIgnoreCase));
             if (command == null)
                 return false;
+
             if (!IsProtoUnitCommandNameAvailable(newName, oldName))
                 throw new InvalidOperationException($"Command '{newName}' already exists.");
 
@@ -34056,6 +34646,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (command == null)
                 return false;
 
+            var commandDefinition = ProtoUnitCommandDefinition.FromElement(command);
+            var associatedTechnologyName = commandDefinition.Values.GetValueOrDefault("associatedtech", "").Trim();
+
             var deletedStringIds = GetProtoUnitCommandStringIds(command)
                 .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -34065,20 +34658,78 @@ public partial class ProtoEditorWindow : SimpleWindow
             var transformDoc = transformFile.Document;
             var transform = FindProtoUnitTransformByCommand(transformDoc, name);
             var transformChanged = transform != null;
+            var transformDefinition = transform == null ? null : ProtoUnitTransformDefinition.FromElement(transform);
             transform?.Remove();
+
+            PreparedModXmlDocument? technologyFile = null;
+            XDocument? technologyDoc = null;
+            var technologyChanged = false;
+            if (transformDefinition != null &&
+                TransformAssociatedTechnologyDefinition.IsOwnedIdentity(
+                    name,
+                    transformDefinition.From,
+                    associatedTechnologyName))
+            {
+                var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+                    ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
+                technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+                technologyDoc = technologyFile.Document;
+                var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyDoc);
+                if (!technologyValidation.IsValid)
+                    throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+                var technology = FindTechnologyByName(technologyDoc, associatedTechnologyName);
+                if (technology != null)
+                {
+                    technology.Remove();
+                    technologyChanged = true;
+                }
+            }
 
             var documentOverrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
             {
                 [Path.GetFullPath(commandPath)] = doc,
                 [Path.GetFullPath(transformPath)] = transformDoc
             };
+            if (technologyFile != null && technologyDoc != null)
+                documentOverrides[Path.GetFullPath(technologyFile.Path)] = technologyDoc;
             XDocument? candidateProto = null;
             if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
             {
                 candidateProto = new XDocument(_modXmlDoc);
                 if (!string.IsNullOrWhiteSpace(ignoredUnitName) && candidateProto.Root != null)
-                    ProtoXmlHandler.GetUnitElement(candidateProto.Root, ignoredUnitName)?.Remove();
+                {
+                    var ignoredUnit = ProtoXmlHandler.GetUnitElement(candidateProto.Root, ignoredUnitName);
+                    ignoredUnit?.Elements().Where(element =>
+                            (element.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase) ||
+                             element.Name.LocalName.Equals("transformcommand", StringComparison.OrdinalIgnoreCase)) &&
+                            element.Value.Trim().Equals(name, StringComparison.OrdinalIgnoreCase))
+                        .Remove();
+                }
                 documentOverrides[Path.GetFullPath(_modFilePath)] = candidateProto;
+            }
+
+            if (technologyChanged && technologyFile != null && technologyDoc != null)
+            {
+                var technologyReferences = TechnologyReferenceIndex.FindReferencesTo(
+                        [new TechnologyReferenceSource(
+                            "Mod technologies",
+                            technologyDoc,
+                            TechnologyReferenceDocumentKind.Techtree,
+                            technologyFile.Path,
+                            CanMigrate: true)],
+                        associatedTechnologyName)
+                    .Concat(GetTechnologyDeletionReferences(associatedTechnologyName, documentOverrides))
+                    .DistinctBy(reference => $"{reference.Path}\0{reference.Owner}\0{reference.Field}", StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (technologyReferences.Count > 0)
+                {
+                    await DeletionBlockedDialog.ShowAsync(
+                        this,
+                        "Technology",
+                        associatedTechnologyName,
+                        technologyReferences.Select(reference => reference.DisplayLocation));
+                    return false;
+                }
             }
 
             if (!await EnsureIdentifierCanBeDeletedAsync(
@@ -34088,10 +34739,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     documentOverrides))
                 return false;
 
-            var approvedStringIds = await ReviewOrphanStringsAsync(
-                deletedStringIds,
-                $"Deleting command '{name}'",
-                this);
+            // Generated command strings are implementation details of the command.
+            // Remove every now-unreferenced STR_PUC_* entry automatically instead of
+            // asking whether the user wants to leave those strings orphaned.
+            var approvedStringIds = deletedStringIds;
             Dictionary<string, string>? stringEntries = null;
             var stringsChanged = false;
             var stringPath = GetCurrentModStringsPath();
@@ -34115,8 +34766,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (stringsChanged)
                 paths.Add(stringPath);
             var expected = CaptureExpectedEditorFileStates(paths);
+            var documents = new List<PreparedModXmlDocument> { commandFile };
+            if (transformChanged)
+                documents.Add(transformFile);
+            if (technologyChanged && technologyFile != null)
+                documents.Add(technologyFile);
             ModDocumentPersistence.Execute(
-                transformChanged ? [commandFile, transformFile] : [commandFile],
+                documents,
                 paths,
                 expected,
                 () =>
@@ -34124,11 +34780,18 @@ public partial class ProtoEditorWindow : SimpleWindow
                 SaveProtoUnitCommandMods(doc);
                 if (transformChanged)
                     SaveProtoUnitTransformMods(transformDoc);
+                if (technologyChanged && technologyFile != null && technologyDoc != null)
+                    SaveAbilityXmlDocument(technologyDoc, technologyFile.Path);
                 if (stringsChanged && stringEntries != null)
                     SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
             });
             if (stringsChanged && stringEntries != null)
                 AdoptSavedModStringEntries(stringEntries);
+            if (technologyChanged)
+            {
+                _cachedTechNames = null;
+                RefreshTechnologyViewAfterTechTypeChanges();
+            }
             return true;
         }
         catch (Exception ex)
@@ -34324,7 +34987,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         EnsureProtoUnitCommandCatalogLoaded(force: true);
         var creatingNew = string.IsNullOrWhiteSpace(sourceName);
-        var creatingCopy = creatingNew || !desiredName.Equals(sourceName, StringComparison.OrdinalIgnoreCase);
+        var renamingOwnedBundle = state.RenameOwnedBundleOnSave &&
+                                  !creatingNew &&
+                                  !desiredName.Equals(sourceName, StringComparison.OrdinalIgnoreCase);
+        var creatingCopy = creatingNew ||
+                           !desiredName.Equals(sourceName, StringComparison.OrdinalIgnoreCase) && !renamingOwnedBundle;
         if (!creatingCopy && state.SourceIsBuiltIn)
         {
             await new Prompt(
@@ -34334,9 +35001,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         }
 
-        if (creatingCopy && !ProtoUnitCommandNamePolicy.IsAvailable(desiredName, _protoUnitCommandCatalog.Keys))
+        if ((creatingCopy || renamingOwnedBundle) &&
+            !ProtoUnitCommandNamePolicy.IsAvailable(desiredName, _protoUnitCommandCatalog.Keys))
         {
             await new Prompt(PromptType.Error, "Command already exists", $"A command named '{desiredName}' already exists.").ShowDialog(this);
+            return false;
+        }
+        if ((creatingCopy || renamingOwnedBundle) &&
+            LoadTechNamesFromBar().Contains(desiredName, StringComparer.OrdinalIgnoreCase))
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Technology already exists",
+                $"A technology named '{desiredName}' already exists in Data.bar. Choose another target unit.").ShowDialog(this);
             return false;
         }
 
@@ -34346,10 +35023,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
             var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
                 ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")
+                ?? throw new InvalidOperationException("The active mod technology file path could not be resolved.");
             var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
             var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
             var commandDoc = commandFile.Document;
             var transformDoc = transformFile.Document;
+            var technologyDoc = technologyFile.Document;
 
             ProtoUnitCommandDefinition updated;
             XElement? existingCustom = null;
@@ -34380,6 +35061,49 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return false;
             }
 
+            if (renamingOwnedBundle)
+            {
+                var existingTechnology = FindTechnologyByName(technologyDoc, sourceName)
+                    ?? throw new InvalidOperationException(
+                        $"Owned Transform technology '{sourceName}' could not be found.");
+                if (state.LoadedAssociatedTechnologySnapshot != null &&
+                    !XNode.DeepEquals(
+                        NormalizeXmlElementForComparison(existingTechnology),
+                        NormalizeXmlElementForComparison(state.LoadedAssociatedTechnologySnapshot)))
+                {
+                    throw new IOException(
+                        $"Technology '{sourceName}' changed on disk after it was opened. Reload the Transform command before saving so those changes are not overwritten.");
+                }
+
+                var rename = TransformCommandBundleLifecycle.RenameTarget(
+                    sourceName,
+                    state.TransformDefinition.To,
+                    commandDoc,
+                    transformDoc,
+                    technologyDoc);
+                existingCustom = commandDoc.Descendants().First(element =>
+                    element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
+                    GetProtoUnitCommandName(element).Equals(desiredName, StringComparison.OrdinalIgnoreCase));
+                updated = ProtoUnitCommandDefinition.FromElement(existingCustom);
+
+                GameIdentifierReferencePolicy.RenameReferences(
+                    commandDoc, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+                GameIdentifierReferencePolicy.RenameReferences(
+                    transformDoc, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+                GameIdentifierReferencePolicy.RenameReferences(
+                    technologyDoc, GameIdentifierKind.ProtoUnitCommand, rename.Old.CommandName, rename.New.CommandName);
+                foreach (var source in new[]
+                         {
+                             new TechnologyReferenceSource("Mod commands", commandDoc, TechnologyReferenceDocumentKind.ProtoUnitCommands),
+                             new TechnologyReferenceSource("Mod transforms", transformDoc, TechnologyReferenceDocumentKind.UnitTransforms),
+                             new TechnologyReferenceSource("Mod technologies", technologyDoc, TechnologyReferenceDocumentKind.Techtree)
+                         })
+                {
+                    TechnologyReferenceIndex.RenameRecognizedReferences(
+                        source, rename.Old.TechnologyName, rename.New.TechnologyName);
+                }
+            }
+
             updated.Name = desiredName;
             var stringTags = ProtoUnitCommandStringTags.ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var tag in ProtoUnitCommandDefinition.ValueFieldTags)
@@ -34403,7 +35127,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 updated.Flags,
                 state.IsMultiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique);
 
-            var prepared = PrepareProtoUnitCommandStrings(updated, creatingCopy && !creatingNew ? sourceName : desiredName, state.StringTexts);
+            var prepared = PrepareProtoUnitCommandStrings(
+                updated,
+                creatingNew ? desiredName : sourceName,
+                state.StringTexts);
             if (creatingCopy)
                 commandDoc.Root!.Add(updated.ToElement());
             else
@@ -34416,13 +35143,50 @@ public partial class ProtoEditorWindow : SimpleWindow
             updatedTransform.Command = desiredName;
             transformDoc.Root!.Add(updatedTransform.ToElement());
 
+            var savesAssociatedTechnology = state.AssociatedTechnology != null && !state.AssociatedTechnologyIsBuiltIn;
+            if (savesAssociatedTechnology)
+            {
+                var associatedName = updated.Values.GetValueOrDefault("associatedtech", "").Trim();
+                if (string.IsNullOrWhiteSpace(associatedName))
+                    throw new InvalidOperationException("The Transform command requires an associated technology.");
+                state.AssociatedTechnology!.Name = associatedName;
+
+                var existingTechnology = FindTechnologyByName(technologyDoc, associatedName);
+                var replacingOwnedTechnology = !creatingCopy && existingTechnology != null;
+                if (creatingCopy && existingTechnology != null)
+                    throw new InvalidOperationException($"Technology '{associatedName}' already exists. Choose another target unit or rename the conflicting technology first.");
+                if (!renamingOwnedBundle && replacingOwnedTechnology && state.LoadedAssociatedTechnologySnapshot != null &&
+                    !XNode.DeepEquals(
+                        NormalizeXmlElementForComparison(existingTechnology!),
+                        NormalizeXmlElementForComparison(state.LoadedAssociatedTechnologySnapshot)))
+                {
+                    throw new IOException(
+                        $"Technology '{associatedName}' changed on disk after it was opened. Reload the Transform command before saving so those changes are not overwritten.");
+                }
+
+                var technologyElement = state.AssociatedTechnology.ToElement();
+                if (replacingOwnedTechnology)
+                    existingTechnology!.ReplaceWith(technologyElement);
+                else
+                    technologyDoc.Root!.Add(technologyElement);
+
+                var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyDoc);
+                if (!technologyValidation.IsValid)
+                    throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
+            }
+
             var stringPath = GetCurrentModStringsPath();
             var expected = CaptureExpectedEditorFileStates([stringPath]);
-            ModDocumentPersistence.Execute([commandFile, transformFile], [stringPath], expected, () =>
+            var preparedDocuments = savesAssociatedTechnology
+                ? new[] { commandFile, transformFile, technologyFile }
+                : new[] { commandFile, transformFile };
+            ModDocumentPersistence.Execute(preparedDocuments, [stringPath], expected, () =>
             {
                 SaveCurrentModStringEntries(prepared.Entries, StringTableSection.UnitCommands, updateSession: false);
                 SaveProtoUnitCommandMods(commandDoc);
                 SaveProtoUnitTransformMods(transformDoc);
+                if (savesAssociatedTechnology)
+                    SaveAbilityXmlDocument(technologyDoc, technologyPath);
             });
             AdoptSavedModStringEntries(prepared.Entries);
 
@@ -34448,9 +35212,28 @@ public partial class ProtoEditorWindow : SimpleWindow
             state.LoadedCommandSnapshot = savedCommand == null ? null : NormalizeProtoUnitCommandForComparison(savedCommand);
             var savedTransform = FindProtoUnitTransformByCommand(transformDoc, desiredName);
             state.LoadedTransformSnapshot = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
+            state.LoadedAssociatedTechnologySnapshot = savesAssociatedTechnology
+                ? state.AssociatedTechnology?.ToElement()
+                : null;
+            if (renamingOwnedBundle && _modXmlDoc != null)
+            {
+                GameIdentifierReferencePolicy.RenameReferences(
+                    _modXmlDoc, GameIdentifierKind.ProtoUnitCommand, sourceName, desiredName);
+                TechnologyReferenceIndex.RenameRecognizedReferences(
+                    new TechnologyReferenceSource(
+                        "Mod ProtoUnits", _modXmlDoc, TechnologyReferenceDocumentKind.ProtoUnits),
+                    sourceName,
+                    desiredName);
+            }
+            state.RenameOwnedBundleOnSave = false;
             state.DefinitionDirty = false;
             EnsureProtoUnitCommandCatalogLoaded();
             _cachedCommandNames = null;
+            if (savesAssociatedTechnology)
+            {
+                _cachedTechNames = null;
+                RefreshTechnologyViewAfterTechTypeChanges();
+            }
             return true;
         }
         catch (Exception ex)
@@ -45795,64 +46578,28 @@ public partial class ProtoEditorWindow : SimpleWindow
             state.StringTexts = await ResolveProtoUnitCommandStringTextsAsync(state.Definition);
             state.SourceCommandName = state.CommandName;
             state.SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(state.CommandName) && !IsCustomProtoUnitCommand(state.CommandName);
+            var associatedTechName = state.Definition.Values.GetValueOrDefault("associatedtech", "").Trim();
+            state.AssociatedTechnology = LoadTransformAssociatedTechnology(
+                associatedTechName,
+                out var associatedTechnologyIsBuiltIn);
+            state.AssociatedTechnologyIsBuiltIn = associatedTechnologyIsBuiltIn;
+            state.LoadedAssociatedTechnologySnapshot = state.AssociatedTechnologyIsBuiltIn
+                ? null
+                : state.AssociatedTechnology?.ToElement();
             if (!state.SourceIsBuiltIn)
                 CaptureInlineTransformSourceSnapshots(state);
             state.DefinitionDirty = false;
         }
 
+        bool TransformEditorBusy() => _isPopulating || _suppressEditorChangeTracking;
+
         void MarkTransformDefinitionDirty(TransformCommandAssignmentState state, Button saveButton)
         {
-            if (_isReadOnly)
+            if (_isReadOnly || TransformEditorBusy())
                 return;
             state.DefinitionDirty = true;
             saveButton.IsVisible = true;
             MarkDirty();
-        }
-
-        async Task<bool> PersistTransformAssignmentsNowAsync()
-        {
-            if (_modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
-                return true;
-
-            var dirtyBefore = _isDirty;
-            var documentBackup = new XDocument(_modXmlDoc);
-            try
-            {
-                var uniqueState = _transformCommandAssignments.UniqueAssignment;
-                var regularNames = GetAvailableCommandNames()
-                    .Where(name => !IsTransformUniqueCommand(name) && !IsTransformMultipleCommand(name))
-                    .ToList();
-                var entries = CollectValidCommandEntries(_unitCommandRows, regularNames);
-                entries.AddRange(_transformCommandAssignments.BuildCommandEntries(
-                    IsTransformUniqueCommand,
-                    IsTransformMultipleCommand));
-                var paths = new[] { _modFilePath };
-                FileIntegrityTransaction.Execute(
-                    paths,
-                    CaptureExpectedEditorFileStates(paths),
-                    () =>
-                    {
-                        ProtoXmlHandler.SetTransformCommandEntry(unit, uniqueState == null
-                            ? null
-                            : new ProtoCommandEntry { Value = uniqueState.CommandName.Trim() });
-                        RefreshTransformCommandStatsReference();
-                        ProtoXmlHandler.SetCommandEntries(unit, entries);
-                        SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
-                    });
-                _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
-                _isDirty = dirtyBefore;
-                _statusMessage.Text = "Transform assignment removed.";
-                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _modXmlDoc = documentBackup;
-                _modXmlRoot = documentBackup.Root;
-                _isDirty = dirtyBefore;
-                await new Prompt(PromptType.Error, "Save failed", $"Could not save the Transform assignment change:\n{ex.Message}").ShowDialog(this);
-                return false;
-            }
         }
 
         async Task RenderTransformAssignmentAsync(TransformCommandAssignmentState state)
@@ -45945,7 +46692,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowCb.Margin = new Thickness(0, 0, 8, 0);
                 rowCb.SelectionChanged += async (_, _) =>
                 {
-                    if (_isPopulating)
+                    if (TransformEditorBusy())
                         return;
                     if (!await CheckStartLocalMod())
                         return;
@@ -45960,7 +46707,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 columnCb.Margin = new Thickness(0, 0, 8, 0);
                 columnCb.SelectionChanged += async (_, _) =>
                 {
-                    if (_isPopulating)
+                    if (TransformEditorBusy())
                         return;
                     if (!await CheckStartLocalMod())
                         return;
@@ -45972,86 +46719,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 header.Children.Add(columnCb);
             }
 
-            Control commandNameEditorControl;
-            TextBox? commandNameTextBox = null;
-            AutoCompleteBox? commandNameAutoComplete = null;
-            if (!_isReadOnly && string.IsNullOrWhiteSpace(state.SourceCommandName))
-            {
-                var suggestions = GetTransformCommandNames(state.IsMultiple)
-                    .Where(name => !_transformCommandAssignments.Any(other =>
-                        !ReferenceEquals(other, state) && other.CommandName.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                    .ToList();
-                commandNameAutoComplete = new AutoCompleteBox
-                {
-                    Text = state.CommandName,
-                    ItemsSource = suggestions,
-                    FilterMode = AutoCompleteFilterMode.Contains,
-                    Width = 240,
-                    MaxWidth = 240,
-                    HorizontalAlignment = HorizontalAlignment.Left
-                };
-                EditorTextFieldStyle.ConfigureSelector(commandNameAutoComplete);
-                commandNameAutoComplete.Width = 240;
-                commandNameAutoComplete.MaxWidth = 240;
-                EditorFieldAppearance.ApplyStandard(commandNameAutoComplete);
-                EditorAutoCompleteService.EnableDropdown(commandNameAutoComplete, () => _isPopulating, selectAllOnFirstClick: false);
-                commandNameAutoComplete.TextChanged += (_, _) =>
-                {
-                    if (_isPopulating) return;
-                    var nextName = commandNameAutoComplete.Text?.Trim() ?? "";
-                    if (state.CommandName.Equals(nextName, StringComparison.Ordinal)) return;
-                    state.CommandName = nextName;
-                    definition.Name = nextName;
-                    transformDefinition.Command = nextName;
-                    if (!state.IsMultiple)
-                        RefreshTransformCommandStatsReference();
-                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
-                    RenderTransformTabs();
-                };
-                commandNameAutoComplete.SelectionChanged += (_, _) =>
-                {
-                    if (_isPopulating || commandNameAutoComplete.SelectedItem is not string selected) return;
-                    Dispatcher.UIThread.Post(async () =>
-                    {
-                        if (_transformCommandAssignments.Any(other =>
-                            !ReferenceEquals(other, state) && other.CommandName.Equals(selected, StringComparison.OrdinalIgnoreCase)))
-                            return;
-                        state.CommandName = selected;
-                        state.SourceCommandName = selected;
-                        state.SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(selected) && !IsCustomProtoUnitCommand(selected);
-                        state.SnapshotCommandName = "";
-                        state.LoadedCommandSnapshot = null;
-                        state.LoadedTransformSnapshot = null;
-                        state.Definition = null;
-                        state.TransformDefinition = LoadProtoUnitTransformDefinition(selected);
-                        state.StringTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                        state.DefinitionDirty = false;
-                        if (!state.IsMultiple)
-                            RefreshTransformCommandStatsReference();
-                        RenderTransformTabs();
-                        await RenderTransformAssignmentAsync(state);
-                    }, DispatcherPriority.Background);
-                };
-                commandNameEditorControl = commandNameAutoComplete;
-            }
-            else
-            {
-                commandNameTextBox = ProtoUnitCommandFieldFactory.CreateTextBox(state.CommandName, 240, !_isReadOnly);
-                commandNameTextBox.TextChanged += (_, _) =>
-                {
-                    if (_isReadOnly || _isPopulating) return;
-                    var nextName = commandNameTextBox.Text?.Trim() ?? "";
-                    if (state.CommandName.Equals(nextName, StringComparison.Ordinal)) return;
-                    state.CommandName = nextName;
-                    definition.Name = nextName;
-                    transformDefinition.Command = nextName;
-                    if (!state.IsMultiple)
-                        RefreshTransformCommandStatsReference();
-                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
-                    RenderTransformTabs();
-                };
-                commandNameEditorControl = commandNameTextBox;
-            }
+            // Inline Transform command identities are owned by the source/target pair.
+            // The standalone command editor remains available for legacy/manual identities.
+            var commandNameTextBox = ProtoUnitCommandFieldFactory.CreateTextBox(state.CommandName, 240, enabled: false);
+            Control commandNameEditorControl = commandNameTextBox;
             Grid.SetRow(commandNameEditorControl, 1);
             Grid.SetColumn(commandNameEditorControl, 2);
             header.Children.Add(commandNameEditorControl);
@@ -46069,7 +46740,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 typeCombo.SelectionChanged += (_, _) =>
                 {
-                    if (_isPopulating || typeCombo.SelectedItem as string != "Transform (Multiple)")
+                    if (TransformEditorBusy() || typeCombo.SelectedItem as string != "Transform (Multiple)")
                         return;
 
                     state.IsMultiple = true;
@@ -46116,56 +46787,70 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var existingSourceName = state.SourceCommandName.Trim();
                     var existingCustom = !string.IsNullOrWhiteSpace(existingSourceName) &&
                                          IsCustomProtoUnitCommand(existingSourceName);
-                    var choice = ProtoUnitTransformRemovalChoice.OnlyThisUnit; // Original/Data.bar: detach from this ProtoUnit only.
-                    if (existingCustom)
+                    var associatedName = definition.Values.GetValueOrDefault("associatedtech", "").Trim();
+                    var isOwnedTransformBundle = existingCustom &&
+                                                 TransformAssociatedTechnologyDefinition.IsOwnedIdentity(
+                                                     existingSourceName,
+                                                     transformDefinition.From ?? "",
+                                                     associatedName);
+                    var choice = isOwnedTransformBundle
+                        ? ProtoUnitTransformRemovalChoice.RemoveTotally
+                        : ProtoUnitTransformRemovalChoice.OnlyThisUnit; // Original/Data.bar: detach from this ProtoUnit only.
+                    if (existingCustom && !isOwnedTransformBundle)
                     {
                         choice = await ProtoUnitTransformRemovalDialog.ShowAsync(this, existingSourceName);
                         if (choice == ProtoUnitTransformRemovalChoice.Cancel)
                             return;
                     }
 
-                    var oldIndex = _transformCommandAssignments.IndexOf(state);
+                    OwnedTransformCommandBundle? pendingDeletion = null;
+                    if (choice == ProtoUnitTransformRemovalChoice.RemoveTotally && existingCustom)
+                    {
+                        try
+                        {
+                            pendingDeletion = await PreflightTransformCommandRemovalAsync(
+                                existingSourceName,
+                                currentTransformUnitName);
+                        }
+                        catch (Exception exception)
+                        {
+                            await new Prompt(
+                                PromptType.Error,
+                                "Remove Transform command",
+                                exception.Message).ShowDialog(this);
+                            return;
+                        }
+                        if (pendingDeletion == null)
+                            return;
+                    }
+
                     _transformCommandAssignments.Remove(state);
                     RefreshTransformCommandStatsReference();
                     if (ReferenceEquals(activeTransformState, state))
                         activeTransformState = _transformCommandAssignments.FirstOrDefault();
 
-                    if (string.IsNullOrWhiteSpace(existingSourceName))
+                    if (pendingDeletion != null)
                     {
-                        RenderTransformTabs();
-                        transformCardHost.Children.Clear();
-                        if (activeTransformState != null)
-                            await RenderTransformAssignmentAsync(activeTransformState);
-                        RefreshTransformAddArea();
-                        return;
-                    }
-
-                    if (!await PersistTransformAssignmentsNowAsync())
-                    {
-                        _transformCommandAssignments.Insert(Math.Clamp(oldIndex, 0, _transformCommandAssignments.Count), state);
-                        activeTransformState = state;
-                        RenderTransformTabs();
-                        await RenderTransformAssignmentAsync(state);
-                        return;
-                    }
-
-                    if (choice == ProtoUnitTransformRemovalChoice.RemoveTotally && existingCustom)
-                    {
-                        var deleted = await DeleteProtoUnitCommandCoreAsync(existingSourceName, currentTransformUnitName);
-                        if (!deleted)
+                        if (!_pendingOwnedTransformBundleDeletions.TryGetValue(
+                                currentTransformUnitName,
+                                out var pendingForUnit))
                         {
-                            await new Prompt(
-                                PromptType.Error,
-                                "Command kept",
-                                $"'{existingSourceName}' was removed from this ProtoUnit, but its command definition could not be deleted because it is still used or referenced elsewhere.").ShowDialog(this);
+                            pendingForUnit = [];
+                            _pendingOwnedTransformBundleDeletions[currentTransformUnitName] = pendingForUnit;
                         }
+                        pendingForUnit.RemoveAll(bundle => bundle.CommandName.Equals(
+                            pendingDeletion.CommandName,
+                            StringComparison.OrdinalIgnoreCase));
+                        pendingForUnit.Add(pendingDeletion);
                     }
 
+                    MarkDirty();
                     RenderTransformTabs();
                     transformCardHost.Children.Clear();
                     if (activeTransformState != null)
                         await RenderTransformAssignmentAsync(activeTransformState);
                     RefreshTransformAddArea();
+                    _statusMessage.Text = "Transform removal pending. Save to apply or discard to restore it.";
                 };
                 Grid.SetRow(remove, 0);
                 Grid.SetRowSpan(remove, 2);
@@ -46210,7 +46895,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var displayNameEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("displaynameid", ""), 240, definitionEditorEnabled);
             displayNameEditor.TextChanged += (_, _) =>
             {
-                if (!definitionEditorEnabled || _isPopulating) return;
+                if (!definitionEditorEnabled || TransformEditorBusy()) return;
                 var next = displayNameEditor.Text ?? "";
                 if (state.StringTexts.GetValueOrDefault("displaynameid", "").Equals(next, StringComparison.Ordinal)) return;
                 state.StringTexts["displaynameid"] = next;
@@ -46222,6 +46907,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var iconEditor = new AssetPathEditor { Width = 240, IsEnabled = definitionEditorEnabled };
             iconEditor.Configure(definition.Values.GetValueOrDefault("icon", ""), context.IconPaths, value =>
             {
+                if (TransformEditorBusy())
+                    return Task.CompletedTask;
                 if (!definition.Values.GetValueOrDefault("icon", "").Equals(value, StringComparison.Ordinal))
                 {
                     definition.Values["icon"] = value;
@@ -46233,12 +46920,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             AddLabel("Rollover", 1, 0);
             var rolloverEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("rollovertextid", ""), 603, definitionEditorEnabled);
-            rolloverEditor.MinHeight = 54;
             rolloverEditor.AcceptsReturn = true;
             rolloverEditor.TextWrapping = TextWrapping.Wrap;
+            rolloverEditor.MinLines = 1;
+            rolloverEditor.MaxLines = 5;
             rolloverEditor.TextChanged += (_, _) =>
             {
-                if (!definitionEditorEnabled || _isPopulating) return;
+                if (!definitionEditorEnabled || TransformEditorBusy()) return;
                 var next = rolloverEditor.Text ?? "";
                 if (state.StringTexts.GetValueOrDefault("rollovertextid", "").Equals(next, StringComparison.Ordinal)) return;
                 state.StringTexts["rollovertextid"] = next;
@@ -46258,26 +46946,154 @@ public partial class ProtoEditorWindow : SimpleWindow
                 editable: definitionEditorEnabled,
                 lockFrom: true,
                 changed: () => MarkTransformDefinitionDirty(state, saveDefinitionButton),
-                isBusy: () => _isPopulating);
+                isBusy: TransformEditorBusy);
             content.Children.Add(sharedTransformEditor);
 
             var fromEditor = sharedTransformEditor.FromEditor;
             var toEditor = sharedTransformEditor.ToEditor;
             var prereqTechEditor = sharedTransformEditor.PrereqTechEditor;
             var associatedTechEditor = sharedTransformEditor.AssociatedTechEditor;
+            associatedTechEditor.IsEnabled = false;
             fromEditor.BorderBrush = sourceBelongsToOtherUnit ? Brush.Parse("#d64545") : Brush.Parse("#4C4031");
+
+            void ApplyDerivedTransformIdentity()
+            {
+                var sourceName = state.SourceCommandName.Trim();
+                var sourceAssociatedTechnology = state.LoadedCommandSnapshot?.Elements().FirstOrDefault(element =>
+                    element.Name.LocalName.Equals("associatedtech", StringComparison.OrdinalIgnoreCase))?.Value.Trim()
+                    ?? definition.Values.GetValueOrDefault("associatedtech", "").Trim();
+                var isNewCommand = string.IsNullOrWhiteSpace(sourceName);
+                var ownsExistingBundle = !state.SourceIsBuiltIn &&
+                                         TransformAssociatedTechnologyDefinition.IsOwnedIdentity(
+                                             sourceName,
+                                             currentTransformUnitName,
+                                             sourceAssociatedTechnology);
+                if (!isNewCommand && !ownsExistingBundle)
+                    return;
+                var targetName = toEditor.Text?.Trim() ?? "";
+                var canonicalTarget = context.ProtoUnitNames.FirstOrDefault(name =>
+                    name.Equals(targetName, StringComparison.OrdinalIgnoreCase)) ?? "";
+                var derivedName = string.IsNullOrWhiteSpace(canonicalTarget)
+                    ? ""
+                    : TransformAssociatedTechnologyDefinition.BuildOwnedName(currentTransformUnitName, canonicalTarget);
+                if (state.CommandName.Equals(derivedName, StringComparison.Ordinal))
+                {
+                    state.RenameOwnedBundleOnSave = ownsExistingBundle &&
+                                                    !derivedName.Equals(sourceName, StringComparison.OrdinalIgnoreCase);
+                    return;
+                }
+
+                var needsEconomyRerender = state.AssociatedTechnology == null;
+                state.CommandName = derivedName;
+                definition.Name = derivedName;
+                transformDefinition.Command = derivedName;
+                definition.Values["associatedtech"] = derivedName;
+                commandNameTextBox.Text = derivedName;
+                associatedTechEditor.Text = derivedName;
+                state.AssociatedTechnology ??= TransformAssociatedTechnologyDefinition.Create(derivedName);
+                state.AssociatedTechnology.Name = derivedName;
+                state.AssociatedTechnologyIsBuiltIn = false;
+                if (isNewCommand)
+                    state.LoadedAssociatedTechnologySnapshot = null;
+                state.RenameOwnedBundleOnSave = ownsExistingBundle &&
+                                                !derivedName.Equals(sourceName, StringComparison.OrdinalIgnoreCase);
+                if (!state.IsMultiple)
+                    RefreshTransformCommandStatsReference();
+                MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                RenderTransformTabs();
+                if (needsEconomyRerender && !string.IsNullOrWhiteSpace(derivedName))
+                {
+                    Dispatcher.UIThread.Post(
+                        () => _ = RenderTransformAssignmentAsync(state),
+                        DispatcherPriority.Background);
+                }
+            }
+
+            toEditor.TextChanged += (_, _) =>
+            {
+                if (TransformEditorBusy() || !definitionEditorEnabled)
+                    return;
+                ApplyDerivedTransformIdentity();
+            };
+            if (string.IsNullOrWhiteSpace(state.SourceCommandName))
+                ApplyDerivedTransformIdentity();
+
+            var associatedTechName = definition.Values.GetValueOrDefault("associatedtech", "").Trim();
+            if (state.AssociatedTechnology == null && !string.IsNullOrWhiteSpace(associatedTechName))
+            {
+                state.AssociatedTechnology = LoadTransformAssociatedTechnology(
+                    associatedTechName,
+                    out var associatedTechnologyIsBuiltIn);
+                state.AssociatedTechnologyIsBuiltIn = associatedTechnologyIsBuiltIn;
+            }
+            if (state.AssociatedTechnology != null)
+            {
+                var economy = state.AssociatedTechnology;
+                var economyEditable = definitionEditorEnabled && !state.AssociatedTechnologyIsBuiltIn;
+                var durationLabel = new TextBlock { Text = "Duration", VerticalAlignment = VerticalAlignment.Center };
+                Grid.SetColumn(durationLabel, 2);
+                sharedTransformEditor.AssociatedTechRow.Children.Add(durationLabel);
+                var durationEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
+                    EditorNumericFieldStyle.FormatDisplay(economy.ResearchPoints), 100, economyEditable);
+                EditorNumericInputBehavior.AttachRule(durationEditor, ProtoUnitNumericKind.UnsignedFloat);
+                durationEditor.TextChanged += (_, _) =>
+                {
+                    if (!economyEditable || TransformEditorBusy()) return;
+                    var value = durationEditor.Text?.Trim() ?? "";
+                    if (economy.ResearchPoints.Equals(value, StringComparison.Ordinal)) return;
+                    economy.ResearchPoints = value;
+                    MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                };
+                Grid.SetColumn(durationEditor, 3);
+                sharedTransformEditor.AssociatedTechRow.Children.Add(durationEditor);
+
+                var costGrid = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("115,Auto,100,Auto,100,Auto,100,Auto,100"),
+                    ColumnSpacing = 8,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Margin = new Thickness(0, 2)
+                };
+
+                var costLabel = new TextBlock { Text = "Cost", VerticalAlignment = VerticalAlignment.Center };
+                Grid.SetColumn(costLabel, 0);
+                costGrid.Children.Add(costLabel);
+                for (var resourceIndex = 0; resourceIndex < ProtoConstants.KnownResourceTypes.Length; resourceIndex++)
+                {
+                    var resource = ProtoConstants.KnownResourceTypes[resourceIndex];
+                    var label = new TextBlock { Text = resource, VerticalAlignment = VerticalAlignment.Center };
+                    Grid.SetColumn(label, resourceIndex * 2 + 1);
+                    costGrid.Children.Add(label);
+                    var costEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
+                        EditorNumericFieldStyle.FormatDisplay(economy.Costs.GetValueOrDefault(resource, "0")), 100, economyEditable);
+                    EditorNumericInputBehavior.AttachRule(costEditor, ProtoUnitNumericKind.UnsignedInteger);
+                    costEditor.TextChanged += (_, _) =>
+                    {
+                        if (!economyEditable || TransformEditorBusy()) return;
+                        var value = costEditor.Text?.Trim() ?? "";
+                        if (economy.Costs.GetValueOrDefault(resource, "0").Equals(value, StringComparison.Ordinal)) return;
+                        economy.Costs[resource] = value;
+                        MarkTransformDefinitionDirty(state, saveDefinitionButton);
+                    };
+                    Grid.SetColumn(costEditor, resourceIndex * 2 + 2);
+                    costGrid.Children.Add(costEditor);
+                }
+                content.Children.Add(costGrid);
+            }
 
             var sharedFlagsEditor = new ProtoUnitCommandFlagsEditor(
                 definition.Flags,
                 editable: definitionEditorEnabled,
                 transformKind: () => state.IsMultiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique,
                 changed: () => MarkTransformDefinitionDirty(state, saveDefinitionButton),
-                isBusy: () => _isPopulating);
+                isBusy: TransformEditorBusy);
             content.Children.Add(sharedFlagsEditor);
 
             async Task<bool> SaveTransformDefinitionAsync()
             {
-                definition.Name = commandNameAutoComplete?.Text?.Trim() ?? commandNameTextBox?.Text?.Trim() ?? "";
+                ApplyDerivedTransformIdentity();
+                definition.Name = state.CommandName.Trim();
+                commandNameTextBox.Text = definition.Name;
                 state.CommandName = definition.Name;
                 transformDefinition.Command = state.CommandName;
                 if (!state.IsMultiple)
@@ -46299,12 +47115,31 @@ public partial class ProtoEditorWindow : SimpleWindow
                 definition.Values["associatedtech"] = associatedTechEditor.Text?.Trim() ?? "";
 
                 var validation = sharedTransformEditor.ValidateRequired(currentTransformUnitName);
-                if (string.IsNullOrWhiteSpace(state.CommandName) || !validation.IsValid)
+                var ownsNewAssociatedTechnology = state.AssociatedTechnology != null &&
+                                                  !state.AssociatedTechnologyIsBuiltIn &&
+                                                  state.AssociatedTechnology.Name.Equals(state.CommandName, StringComparison.OrdinalIgnoreCase) &&
+                                                  definition.Values.GetValueOrDefault("associatedtech", "")
+                                                      .Equals(state.CommandName, StringComparison.OrdinalIgnoreCase);
+                if (ownsNewAssociatedTechnology)
+                {
+                    associatedTechEditor.BorderBrush = Brush.Parse("#4C4031");
+                    associatedTechEditor.BorderThickness = new Thickness(1);
+                }
+                var transformFieldsValid = validation.FromValid && validation.ToValid && validation.PrereqTechValid &&
+                                           (validation.AssociatedTechValid || ownsNewAssociatedTechnology);
+                var economyValid = state.AssociatedTechnology == null ||
+                                   TransformAssociatedTechnologyDefinition.IsValidUnsignedFloat(state.AssociatedTechnology.ResearchPoints) &&
+                                   ProtoConstants.KnownResourceTypes.All(resource =>
+                                       TransformAssociatedTechnologyDefinition.IsValidUnsignedInteger(
+                                           state.AssociatedTechnology.Costs.GetValueOrDefault(resource, "0")));
+                if (string.IsNullOrWhiteSpace(state.CommandName) || !transformFieldsValid || !economyValid)
                 {
                     var message = !validation.FromValid && !string.IsNullOrWhiteSpace(transformDefinition.From) &&
                                   !transformDefinition.From.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase)
                         ? $"This Transform command belongs to '{transformDefinition.From}', but the edited ProtoUnit is '{currentTransformUnitName}'. Change Transform to '{currentTransformUnitName}' and use a new command name to create a custom copy."
-                        : "Command Name, Transform, To, Prereq Tech and Associated Tech are required and must use valid existing entries.";
+                        : !economyValid
+                            ? "Duration must be a non-negative number and all four costs must be non-negative whole numbers."
+                            : "Transform, To, Prereq Tech and Associated Tech are required. The target unit creates the command and internal technology names automatically.";
                     await new Prompt(PromptType.Error, "Transform command", message).ShowDialog(this);
                     return false;
                 }
@@ -46324,26 +47159,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             saveDefinitionButton.Click += async (_, _) => await SaveTransformDefinitionAsync();
 
-            if (commandNameAutoComplete != null)
+            commandNameTextBox.KeyDown += async (_, e) =>
             {
-                commandNameAutoComplete.KeyDown += async (_, e) =>
-                {
-                    if (e.Key != Key.Enter || commandNameAutoComplete.SelectedItem != null)
-                        return;
-                    e.Handled = true;
-                    await SaveTransformDefinitionAsync();
-                };
-            }
-            if (commandNameTextBox != null)
-            {
-                commandNameTextBox.KeyDown += async (_, e) =>
-                {
-                    if (e.Key != Key.Enter)
-                        return;
-                    e.Handled = true;
-                    await SaveTransformDefinitionAsync();
-                };
-            }
+                if (e.Key != Key.Enter)
+                    return;
+                e.Handled = true;
+                await SaveTransformDefinitionAsync();
+            };
 
             _saveActiveTransformCommandBeforeUnitSaveAsync = async () =>
             {
@@ -46355,13 +47177,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
         }
 
-        async Task AddNewMultipleTransformTabAsync()
+        async Task AddNewTransformTabAsync(bool multiple)
         {
             var definition = new ProtoUnitCommandDefinition();
-            ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Multiple);
+            ProtoUnitCommandTransformRules.ApplyModeDefaults(
+                definition.Flags,
+                multiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique);
             var state = new TransformCommandAssignmentState
             {
-                IsMultiple = true,
+                IsMultiple = multiple,
                 Row = "0",
                 Column = "0",
                 Definition = definition,
@@ -46390,9 +47214,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Content = label,
                     Margin = new Thickness(0, 0, 6, 6),
                     Padding = new Thickness(10, 4),
-                    Background = ReferenceEquals(state, activeTransformState) ? Brush.Parse("#28466f") : Brush.Parse("#2b2b2b")
+                    Background = ReferenceEquals(state, activeTransformState) ? Brush.Parse("#393125") : Brush.Parse("#252526")
                 };
-                tab.Click += (_, _) => _ = RenderTransformAssignmentAsync(state);
+                tab.Click += (_, _) =>
+                {
+                    if (!ReferenceEquals(state, activeTransformState) && !_isPopulating)
+                    {
+                        // Like ProtoAction navigation, realizing another Transform card can
+                        // raise delayed selector initialization events. Navigation must not
+                        // turn those events into document or command-definition edits.
+                        SuppressEditorChangeTrackingWhileControlsSettle();
+                    }
+                    _ = RenderTransformAssignmentAsync(state);
+                };
                 transformTabs.Children.Add(tab);
             }
 
@@ -46411,198 +47245,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (!await CheckStartLocalMod())
                         return;
                     if (_transformCommandAssignments.Any(state => state.IsMultiple))
-                        await AddNewMultipleTransformTabAsync();
+                        await AddNewTransformTabAsync(multiple: true);
                     else
                         ShowTransformTypePicker();
                 };
                 transformTabs.Children.Add(add);
             }
-        }
-
-        async Task CommitTransformSelection(bool multiple, AutoCompleteBox selector, ComboBox rowPicker, ComboBox columnPicker)
-        {
-            var input = selector.Text?.Trim() ?? "";
-            var validNames = GetTransformCommandNames(multiple);
-            var match = validNames.FirstOrDefault(name => name.Equals(input, StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrWhiteSpace(match))
-                return;
-            if (_transformCommandAssignments.Any(state => state.CommandName.Equals(match, StringComparison.OrdinalIgnoreCase)))
-                return;
-            if (!multiple && _transformCommandAssignments.Any(state => !state.IsMultiple))
-                return;
-            if (!await CheckStartLocalMod())
-                return;
-
-            var state = new TransformCommandAssignmentState
-            {
-                CommandName = match,
-                SourceCommandName = match,
-                SourceIsBuiltIn = _builtInProtoUnitCommandNames.Contains(match) && !IsCustomProtoUnitCommand(match),
-                IsMultiple = multiple,
-                Row = rowPicker.SelectedItem as string ?? rowPicker.SelectedValue as string ?? "0",
-                Column = columnPicker.SelectedItem as string ?? columnPicker.SelectedValue as string ?? "0",
-                TransformDefinition = LoadProtoUnitTransformDefinition(match)
-            };
-            _transformCommandAssignments.Add(state);
-            RefreshTransformCommandStatsReference();
-            activeTransformState = state;
-            MarkDirty();
-            RenderTransformTabs();
-            await RenderTransformAssignmentAsync(state);
-            RefreshTransformAddArea();
-        }
-
-        void ShowTransformCommandPicker(bool multiple)
-        {
-            transformAddHost.Children.Clear();
-            var validNames = GetTransformCommandNames(multiple)
-                .Where(name => !_transformCommandAssignments.Any(state => state.CommandName.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            var panel = new StackPanel { Spacing = 2, HorizontalAlignment = HorizontalAlignment.Left };
-            var header = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("70,70,248,Auto,Auto"),
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            header.Children.Add(new TextBlock { Text = "Row", FontWeight = FontWeight.Bold });
-            var columnHeader = new TextBlock { Text = "Column", FontWeight = FontWeight.Bold };
-            Grid.SetColumn(columnHeader, 1);
-            header.Children.Add(columnHeader);
-            var commandHeader = new TextBlock { Text = "Command", FontWeight = FontWeight.Bold };
-            Grid.SetColumn(commandHeader, 2);
-            header.Children.Add(commandHeader);
-            panel.Children.Add(header);
-
-            var row = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("70,70,248,Auto,Auto"),
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            var rowPicker = CreateTransformPositionCombo("0", TrainTechRowOptions);
-            rowPicker.Margin = new Thickness(0, 0, 8, 0);
-            Grid.SetColumn(rowPicker, 0);
-            row.Children.Add(rowPicker);
-            var columnPicker = CreateTransformPositionCombo("0", TrainTechColumnOptions);
-            columnPicker.Margin = new Thickness(0, 0, 8, 0);
-            Grid.SetColumn(columnPicker, 1);
-            row.Children.Add(columnPicker);
-
-            var selector = new AutoCompleteBox
-            {
-                FilterMode = AutoCompleteFilterMode.Contains,
-                ItemsSource = validNames,
-                PlaceholderText = multiple ? "Transform (Multiple) command" : "Transform (Unique) command"
-            };
-            EditorTextFieldStyle.ConfigureSelector(selector);
-            EditorFieldAppearance.ApplyStandard(selector);
-            selector.Width = 240;
-            selector.MaxWidth = 240;
-            selector.Margin = new Thickness(0, 0, 8, 0);
-            EditorAutoCompleteService.EnableDropdown(selector, () => _isPopulating, selectAllOnFirstClick: false);
-            Grid.SetColumn(selector, 2);
-            row.Children.Add(selector);
-
-            var save = new Button
-            {
-                Content = "Save",
-                Background = Brush.Parse("#163E26"),
-                BorderBrush = Brush.Parse("#A98243"),
-                Padding = new Thickness(8, 4),
-                Margin = new Thickness(0, 0, 6, 0),
-                IsVisible = false
-            };
-            Grid.SetColumn(save, 3);
-            row.Children.Add(save);
-
-            var cancel = new Button { Content = "Cancel", Padding = new Thickness(8, 4) };
-            cancel.Click += (_, _) => RefreshTransformAddArea();
-            Grid.SetColumn(cancel, 4);
-            row.Children.Add(cancel);
-            panel.Children.Add(row);
-            transformAddHost.Children.Add(panel);
-
-            selector.TextChanged += (_, _) =>
-            {
-                save.IsVisible = !string.IsNullOrWhiteSpace(selector.Text);
-            };
-
-            selector.SelectionChanged += (_, _) =>
-            {
-                if (selector.SelectedItem is string selected)
-                {
-                    selector.Text = selected;
-                    Dispatcher.UIThread.Post(
-                        () => _ = CommitTransformSelection(multiple, selector, rowPicker, columnPicker),
-                        DispatcherPriority.Background);
-                }
-            };
-
-            async Task SaveTransformPickerAsync()
-            {
-                var input = selector.Text?.Trim() ?? "";
-                if (string.IsNullOrWhiteSpace(input))
-                    return;
-
-                var existingMatch = validNames.FirstOrDefault(name => name.Equals(input, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(existingMatch))
-                {
-                    await CommitTransformSelection(multiple, selector, rowPicker, columnPicker);
-                    return;
-                }
-
-                EnsureProtoUnitCommandCatalogLoaded(force: true);
-                if (!ProtoUnitCommandNamePolicy.IsAvailable(input, _protoUnitCommandCatalog.Keys))
-                {
-                    await new Prompt(
-                        PromptType.Error,
-                        "Command already exists",
-                        $"A command named '{input}' already exists but is not a compatible {(multiple ? "Transform (Multiple)" : "Transform (Unique)")} command.").ShowDialog(this);
-                    return;
-                }
-
-                if (!await CheckStartLocalMod())
-                    return;
-
-                var definition = new ProtoUnitCommandDefinition { Name = input };
-                if (multiple)
-                    ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Multiple);
-                else
-                    ProtoUnitCommandTransformRules.ApplyModeDefaults(definition.Flags, ProtoUnitCommandTransformKind.Unique);
-
-                var state = new TransformCommandAssignmentState
-                {
-                    CommandName = input,
-                    SourceCommandName = "",
-                    SourceIsBuiltIn = false,
-                    IsMultiple = multiple,
-                    Row = rowPicker.SelectedItem as string ?? rowPicker.SelectedValue as string ?? "0",
-                    Column = columnPicker.SelectedItem as string ?? columnPicker.SelectedValue as string ?? "0",
-                    Definition = definition,
-                    TransformDefinition = new ProtoUnitTransformDefinition
-                    {
-                        Command = input,
-                        From = currentTransformUnitName
-                    },
-                    DefinitionDirty = true
-                };
-                _transformCommandAssignments.Add(state);
-                RefreshTransformCommandStatsReference();
-                activeTransformState = state;
-                MarkDirty();
-                transformAddHost.Children.Clear();
-                RenderTransformTabs();
-                await RenderTransformAssignmentAsync(state);
-            }
-
-            save.Click += async (_, _) => await SaveTransformPickerAsync();
-            selector.KeyDown += async (_, e) =>
-            {
-                if (e.Key != Key.Enter || selector.SelectedItem != null)
-                    return;
-                e.Handled = true;
-                await SaveTransformPickerAsync();
-            };
         }
 
         void ShowTransformTypePicker()
@@ -46633,7 +47281,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 if (typePicker.SelectedItem is not string type)
                     return;
-                ShowTransformCommandPicker(type.Equals("Transform (Multiple)", StringComparison.OrdinalIgnoreCase));
+                _ = AddNewTransformTabAsync(type.Equals("Transform (Multiple)", StringComparison.OrdinalIgnoreCase));
             };
         }
 
@@ -55902,6 +56550,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         Dictionary<string, string> PendingUnitStringUpdates,
         HashSet<string> PendingUnitStringRemovals,
         Dictionary<string, string> PendingUnitRenames,
+        Dictionary<string, List<OwnedTransformCommandBundle>> PendingOwnedTransformBundleDeletions,
         List<ProtoActionRenameOperation> PendingProtoActionRenames,
         HashSet<string> DirtyUnitNames,
         Dictionary<string, Dictionary<string, AbilityEditorDraft>> UnitAbilityDrafts,
@@ -55920,6 +56569,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             new Dictionary<string, string>(_pendingUnitStringUpdates, StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(_pendingUnitStringRemovals, StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, string>(_pendingUnitRenames, StringComparer.OrdinalIgnoreCase),
+            _pendingOwnedTransformBundleDeletions.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.ToList(),
+                StringComparer.OrdinalIgnoreCase),
             _pendingProtoActionRenames.ToList(),
             new HashSet<string>(_dirtyUnitNames, StringComparer.OrdinalIgnoreCase),
             _unitAbilityDrafts.ToDictionary(
@@ -55957,6 +56610,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         _pendingUnitRenames.Clear();
         foreach (var entry in snapshot.PendingUnitRenames)
             _pendingUnitRenames[entry.Key] = entry.Value;
+
+        _pendingOwnedTransformBundleDeletions.Clear();
+        foreach (var entry in snapshot.PendingOwnedTransformBundleDeletions)
+            _pendingOwnedTransformBundleDeletions[entry.Key] = entry.Value.ToList();
 
         _pendingProtoActionRenames.Clear();
         _pendingProtoActionRenames.AddRange(snapshot.PendingProtoActionRenames);
@@ -56206,6 +56863,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             if (!await ReloadExternallyChangedUnitFilesAsync())
                 return;
+            if (!await ValidatePendingTransformCommandRemovalsAsync())
+                return;
 
             var existingStringEntries = LoadCurrentModStringEntries(requireReadable: true);
             var existingStringRemovalCandidates = GetExistingStringCleanupCandidates(
@@ -56220,6 +56879,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             var unitNameBackup = _currentUnitName;
             var stringFieldIdsBackup = new Dictionary<string, string>(_currentStringFieldIds, StringComparer.OrdinalIgnoreCase);
             var pendingRemovedStringIdsBackup = new HashSet<string>(_pendingUnitRenameRemovedStringIds, StringComparer.OrdinalIgnoreCase);
+            var pendingTransformBundleDeletionsBackup = _pendingOwnedTransformBundleDeletions.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.ToList(),
+                StringComparer.OrdinalIgnoreCase);
             var abilityPowerCatalogBackup = _abilityPowerCatalog.ToDictionary(
                 entry => entry.Key,
                 entry => new XElement(entry.Value),
@@ -56264,6 +56927,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName),
                     AbilityBindingMetadataStore.StoragePath
                 };
+                if (_pendingUnitRenames.Count > 0)
+                    transactionPaths.AddRange(referenceFiles.Select(file => (string?)file.Path));
                 var expectedStates = FileIntegrityTransaction.CaptureStates(transactionPaths)
                     .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
                 if (_loadedModXmlFileState == null)
@@ -56292,6 +56957,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     expectedStates,
                     () =>
                     {
+                        var deletedTransformCommandStringIds = SavePendingOwnedTransformBundleDeletions();
+                        SavePendingOwnedTransformBundleUnitRenames();
                         SavePendingUnitRenames();
                         foreach (var rename in _pendingUnitRenames)
                         {
@@ -56310,6 +56977,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 rename.Value);
                         }
                         SavePendingUnitStringDrafts(approvedStringRemovals);
+                        SavePendingTransformCommandStringCleanup(deletedTransformCommandStringIds);
                         SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
                         SaveAllPendingAbilityDrafts();
 
@@ -56334,6 +57002,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _pendingUnitRenameRemovedStringIds.Clear();
                 foreach (var id in pendingRemovedStringIdsBackup)
                     _pendingUnitRenameRemovedStringIds.Add(id);
+                _pendingOwnedTransformBundleDeletions.Clear();
+                foreach (var entry in pendingTransformBundleDeletionsBackup)
+                    _pendingOwnedTransformBundleDeletions[entry.Key] = entry.Value;
                 _abilityPowerCatalog.Clear();
                 foreach (var entry in abilityPowerCatalogBackup)
                     _abilityPowerCatalog[entry.Key] = entry.Value;
@@ -56354,11 +57025,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             _loadedModXmlBaseline = new XDocument(_modXmlDoc);
 
             AdoptGameIdentifierReferenceMigration(identifierMigration);
+            _protoUnitCommandCatalogLoaded = false;
+            _cachedCommandNames = null;
+            _cachedTechNames = null;
+            RefreshTechnologyViewAfterTechTypeChanges();
 
             _pendingUnitRenameRemovedStringIds.Clear();
             _pendingUnitStringUpdates.Clear();
             _pendingUnitStringRemovals.Clear();
             _pendingUnitRenames.Clear();
+            _pendingOwnedTransformBundleDeletions.Clear();
             _pendingProtoActionRenames.Clear();
             _dirtyUnitNames.Clear();
             _unitAbilityDrafts.Clear();
@@ -56580,6 +57256,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (!_isReadOnly)
                     ApplyCurrentEdits();
 
+                XElement? sourceUnitForTransformBundles = null;
+                XElement? duplicatedUnitForTransformBundles = null;
                 if (_isReadOnly && _barXmlRoot != null)
                 {
                     var source = ProtoXmlHandler.GetUnitElement(_barXmlRoot, _currentUnitName);
@@ -56589,10 +57267,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                         await pErr.ShowDialog(this);
                         return;
                     }
-                    ProtoXmlHandler.CloneUnit(_modXmlRoot, source, name);
+                    sourceUnitForTransformBundles = source;
+                    duplicatedUnitForTransformBundles = ProtoXmlHandler.CloneUnit(_modXmlRoot, source, name);
                 }
                 else
                 {
+                    sourceUnitForTransformBundles = ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName);
                     var clone = ProtoXmlHandler.CloneUnit(_modXmlRoot, _currentUnitName, name);
                     if (clone == null)
                     {
@@ -56600,6 +57280,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                         await pErr.ShowDialog(this);
                         return;
                     }
+                    duplicatedUnitForTransformBundles = clone;
+                }
+
+                if (sourceUnitForTransformBundles != null && duplicatedUnitForTransformBundles != null &&
+                    !await DuplicateOwnedTransformBundlesForUnitAsync(
+                        sourceUnitForTransformBundles,
+                        duplicatedUnitForTransformBundles,
+                        name))
+                {
+                    duplicatedUnitForTransformBundles.Remove();
+                    return;
                 }
 
                 AssignGeneratedStringIds(name);
@@ -56693,6 +57384,24 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             [Path.GetFullPath(_modFilePath)] = candidateDocument
         };
+        IReadOnlyList<OwnedTransformCommandBundle>? ownedTransformBundles;
+        try
+        {
+            ownedTransformBundles = candidateUnit == null
+                ? []
+                : await PreflightOwnedTransformBundleUnitDeletionAsync(candidateUnit, candidateDocument);
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(
+                PromptType.Error,
+                "Transform deletion check failed",
+                $"'{_currentUnitName}' was not deleted because its Transform bundle references could not be checked safely. {exception.Message}")
+                .ShowDialog(this);
+            return;
+        }
+        if (ownedTransformBundles == null)
+            return;
         if (!await EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.ProtoUnit,
                 _currentUnitName,
@@ -56712,6 +57421,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _pendingUnitStringRemovals.Add(stringId);
             }
             ProtoXmlHandler.DeleteUnit(_modXmlRoot, deletedUnitName);
+            if (ownedTransformBundles.Count > 0)
+                _pendingOwnedTransformBundleDeletions[deletedUnitName] = ownedTransformBundles.ToList();
             _dirtyUnitNames.Add(deletedUnitName);
             _unitAbilityDrafts[deletedUnitName] = new Dictionary<string, AbilityEditorDraft>(StringComparer.OrdinalIgnoreCase);
             _currentUnitName = null;

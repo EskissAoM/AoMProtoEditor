@@ -126,6 +126,11 @@ public static class ProtoXmlHandler
             : formattingSourcePath;
         var format = ReadDocumentFormat(sourcePath, doc);
         var serializable = new XDocument(doc);
+        NormalizeStructuralIndentation(
+            doc.Root,
+            serializable.Root,
+            format.Newline,
+            ReadExistingTopLevelEntries(sourcePath));
         EnsureExplicitArmorClosingTags(serializable);
 
         var settings = new XmlWriterSettings
@@ -145,6 +150,223 @@ public static class ProtoXmlHandler
 
         var xml = stringWriter.ToString();
         File.WriteAllBytes(path, format.TextEncoding.Encode(xml));
+    }
+
+    /// <summary>
+    /// LINQ to XML preserves whitespace loaded from disk. Once a document contains
+    /// that whitespace, XmlWriter does not synthesize indentation for newly added
+    /// element trees. Supply only the missing structural whitespace on the detached
+    /// save copy, while leaving leaf text and mixed-content elements untouched.
+    /// </summary>
+    private static void NormalizeStructuralIndentation(
+        XElement? sourceRoot,
+        XElement? saveRoot,
+        string newline,
+        IReadOnlyDictionary<string, string> existingTopLevelEntries)
+    {
+        if (sourceRoot == null || saveRoot == null)
+            return;
+
+        // Removing an element loaded with PreserveWhitespace leaves its leading and
+        // trailing separator nodes adjacent. Collapse only those adjacent nodes on
+        // the detached save copy; intentional blank lines stored in one text node,
+        // comments, mixed content, and xml:space="preserve" remain untouched.
+        CollapseAdjacentStructuralWhitespace(saveRoot, preserveSpace: false);
+
+        var indentationUnit = DetectIndentationUnit(sourceRoot);
+        var sourceEntries = sourceRoot.Elements().ToList();
+        var saveEntries = saveRoot.Elements().ToList();
+        var elementsToFormat = new HashSet<XElement>();
+        for (var index = 0; index < Math.Min(sourceEntries.Count, saveEntries.Count); index++)
+        {
+            var sourceEntry = sourceEntries[index];
+            var key = GetTopLevelEntryKey(sourceEntry);
+            var unchanged = existingTopLevelEntries.TryGetValue(key, out var existingCanonical) &&
+                            existingCanonical.Equals(CanonicalizeForFormattingComparison(sourceEntry), StringComparison.Ordinal);
+            if (unchanged && HasExpectedLeadingIndentation(sourceEntry, indentationUnit))
+                continue;
+            foreach (var element in saveEntries[index].DescendantsAndSelf())
+                elementsToFormat.Add(element);
+        }
+        if (elementsToFormat.Count == 0)
+            return;
+
+        Normalize(saveRoot, depth: 0, preserveSpace: false);
+        return;
+
+        void Normalize(XElement element, int depth, bool preserveSpace)
+        {
+            var xmlSpace = element.Attribute(XNamespace.Xml + "space")?.Value;
+            var currentPreserveSpace = xmlSpace?.Equals("preserve", StringComparison.OrdinalIgnoreCase) == true ||
+                                       preserveSpace && xmlSpace?.Equals("default", StringComparison.OrdinalIgnoreCase) != true;
+
+            var children = element.Elements().ToList();
+            foreach (var child in children)
+                Normalize(child, depth + 1, currentPreserveSpace);
+
+            if (currentPreserveSpace ||
+                children.Count == 0 ||
+                !children.Any(elementsToFormat.Contains) ||
+                element.Nodes().OfType<XText>().Any(text => !string.IsNullOrWhiteSpace(text.Value)))
+                return;
+
+            var parentIndent = GetLeadingIndentation(element) ??
+                               string.Concat(Enumerable.Repeat(indentationUnit, depth));
+            var nestedIndentUnit = parentIndent.Contains('\t') ? "\t" : indentationUnit;
+            var childIndent = parentIndent + nestedIndentUnit;
+            if (elementsToFormat.Contains(element))
+            {
+                foreach (var whitespace in element.Nodes().OfType<XText>()
+                             .Where(text => string.IsNullOrWhiteSpace(text.Value)).ToList())
+                    whitespace.Remove();
+                foreach (var node in element.Nodes().ToList())
+                    node.AddBeforeSelf(new XText(newline + childIndent));
+            }
+            else
+            {
+                foreach (var child in children.Where(elementsToFormat.Contains))
+                    EnsureLeadingIndentation(child, childIndent);
+            }
+
+            if (element.LastNode is not XText trailing ||
+                !string.IsNullOrWhiteSpace(trailing.Value) ||
+                !trailing.Value.Contains('\n'))
+                element.Add(new XText(newline + parentIndent));
+        }
+
+        void EnsureLeadingIndentation(XElement element, string indentation)
+        {
+            if (element.PreviousNode is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+            {
+                // Replacing/removing an entry can leave two adjacent whitespace nodes:
+                // the separator that preceded the removed entry and the root's trailing
+                // whitespace. Collapse the whole contiguous run so an edited entry is
+                // never pushed one blank line away from its siblings.
+                var previous = whitespace.PreviousNode;
+                while (previous is XText earlierWhitespace && string.IsNullOrWhiteSpace(earlierWhitespace.Value))
+                {
+                    previous = earlierWhitespace.PreviousNode;
+                    earlierWhitespace.Remove();
+                }
+                var lastNewline = whitespace.Value.LastIndexOf('\n');
+                var existingIndentation = lastNewline < 0
+                    ? string.Empty
+                    : whitespace.Value[(lastNewline + 1)..];
+                whitespace.Value = newline +
+                                   (existingIndentation.Length > 0 ? existingIndentation : indentation);
+                return;
+            }
+
+            element.AddBeforeSelf(new XText(newline + indentation));
+        }
+
+        static string DetectIndentationUnit(XElement root)
+        {
+            foreach (var child in root.Elements())
+            {
+                if (child.PreviousNode is not XText whitespace || !string.IsNullOrWhiteSpace(whitespace.Value))
+                    continue;
+                var lastNewline = whitespace.Value.LastIndexOf('\n');
+                if (lastNewline < 0)
+                    continue;
+                var indentation = whitespace.Value[(lastNewline + 1)..];
+                if (indentation.Length > 0)
+                    return indentation;
+            }
+            return "  ";
+        }
+
+        static bool HasExpectedLeadingIndentation(XElement element, string expected)
+            => GetLeadingIndentation(element)?.Equals(expected, StringComparison.Ordinal) == true;
+
+        static string? GetLeadingIndentation(XElement element)
+        {
+            if (element.PreviousNode is not XText whitespace || !string.IsNullOrWhiteSpace(whitespace.Value))
+                return null;
+            var lastNewline = whitespace.Value.LastIndexOf('\n');
+            if (lastNewline < 0)
+                return null;
+            var indentation = whitespace.Value[(lastNewline + 1)..];
+            return indentation.Length == 0 ? null : indentation;
+        }
+
+        static void CollapseAdjacentStructuralWhitespace(XElement element, bool preserveSpace)
+        {
+            var xmlSpace = element.Attribute(XNamespace.Xml + "space")?.Value;
+            var currentPreserveSpace = xmlSpace?.Equals("preserve", StringComparison.OrdinalIgnoreCase) == true ||
+                                       preserveSpace && xmlSpace?.Equals("default", StringComparison.OrdinalIgnoreCase) != true;
+
+            foreach (var child in element.Elements())
+                CollapseAdjacentStructuralWhitespace(child, currentPreserveSpace);
+
+            if (currentPreserveSpace ||
+                element.Nodes().OfType<XText>().Any(text => !string.IsNullOrWhiteSpace(text.Value)))
+                return;
+
+            XText? previousWhitespace = null;
+            foreach (var node in element.Nodes().ToList())
+            {
+                if (node is XText whitespace && string.IsNullOrWhiteSpace(whitespace.Value))
+                {
+                    previousWhitespace?.Remove();
+                    previousWhitespace = whitespace;
+                }
+                else
+                {
+                    previousWhitespace = null;
+                }
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadExistingTopLevelEntries(string path)
+    {
+        if (!File.Exists(path))
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = XmlReader.Create(stream, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                IgnoreComments = true,
+                IgnoreWhitespace = true
+            });
+            var document = XDocument.Load(reader, LoadOptions.None);
+            return document.Root?.Elements()
+                       .GroupBy(GetTopLevelEntryKey, StringComparer.OrdinalIgnoreCase)
+                       .ToDictionary(
+                           group => group.Key,
+                           group => CanonicalizeForFormattingComparison(group.First()),
+                           StringComparer.OrdinalIgnoreCase)
+                   ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is XmlException or IOException or UnauthorizedAccessException)
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string CanonicalizeForFormattingComparison(XElement element)
+    {
+        var copy = new XElement(element);
+        foreach (var whitespace in copy.DescendantNodesAndSelf().OfType<XText>()
+                     .Where(text => string.IsNullOrWhiteSpace(text.Value)).ToList())
+            whitespace.Remove();
+        return copy.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string GetTopLevelEntryKey(XElement element)
+    {
+        var identifier = element.Attributes().FirstOrDefault(attribute =>
+                             attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim()
+                         ?? element.Elements().FirstOrDefault(child =>
+                             child.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) ||
+                             child.Name.LocalName.Equals("command", StringComparison.OrdinalIgnoreCase))?.Value.Trim()
+                         ?? (!element.HasElements ? element.Value.Trim() : string.Empty);
+        return element.Name.LocalName + "|" + identifier;
     }
 
     private static ProtoXmlDocumentFormat ReadDocumentFormat(string path, XDocument document)

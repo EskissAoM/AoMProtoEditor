@@ -21,7 +21,7 @@ internal sealed class AnimFileViewerWindow : SimpleWindow
 
         var preview = new TextEditor
         {
-            Text = xml,
+            Text = XmlSyntaxEditorService.PreparePreviewText(xml),
             IsReadOnly = true,
             FontFamily = new FontFamily("Consolas"),
             FontSize = 12,

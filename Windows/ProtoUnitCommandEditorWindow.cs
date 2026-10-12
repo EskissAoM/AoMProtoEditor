@@ -1322,7 +1322,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                     : BuildPreviewStringId(captured.Name, tag);
                 preview.Add(new XElement(tag, id));
             }
-            _xmlPreview.Text = FormatPreviewXml(preview);
+            _xmlPreview.Text = XmlSyntaxEditorService.PreparePreviewText(FormatPreviewXml(preview));
         }
         catch { }
         finally

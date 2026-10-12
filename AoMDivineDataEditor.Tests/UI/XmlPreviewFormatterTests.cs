@@ -24,4 +24,16 @@ public sealed class XmlPreviewFormatterTests
 
         Assert.Equal(malformed, XmlPreviewFormatter.Beautify(malformed));
     }
+
+    [Fact]
+    public void PreparePreviewText_AddsExactlyOneDisplayOnlyTrailingLine()
+    {
+        const string xml = "<unit><name>Example</name></unit>";
+
+        var result = XmlSyntaxEditorService.PreparePreviewText(xml);
+
+        Assert.Equal(xml + Environment.NewLine, result);
+        Assert.Equal(result, XmlSyntaxEditorService.PreparePreviewText(result));
+        Assert.Equal(xml, System.Xml.Linq.XElement.Parse(result).ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+    }
 }

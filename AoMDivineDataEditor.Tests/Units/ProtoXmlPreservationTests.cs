@@ -127,6 +127,161 @@ public sealed class ProtoXmlPreservationTests
         Assert.DoesNotContain("\n", savedText.Replace("\r\n", "", StringComparison.Ordinal), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("protomods", "unit", "name")]
+    [InlineData("techtreemods", "tech", "name")]
+    [InlineData("protounitcommandmods", "protounitcommand", "name")]
+    [InlineData("unittransformmods", "transform", "command")]
+    public void SaveProtoXml_indents_new_custom_entry_trees(
+        string rootName,
+        string entryName,
+        string childName)
+    {
+        using var temp = new TestWorkspace(nameof(SaveProtoXml_indents_new_custom_entry_trees));
+        var path = temp.GetPath(rootName + ".xml");
+        var source = $"<{rootName}>\n  <!-- existing content -->\n</{rootName}>\n";
+        File.WriteAllText(path, source, new UTF8Encoding(false));
+        var document = XDocument.Parse(source, LoadOptions.PreserveWhitespace);
+        document.Root!.Add(new XElement(entryName,
+            new XAttribute("name", "Custom"),
+            new XElement(childName, "Custom"),
+            new XElement("flag", "enabled")));
+
+        ProtoXmlHandler.SaveProtoXml(document, path);
+
+        var saved = File.ReadAllText(path);
+        Assert.Contains($"\n  <{entryName}", saved, StringComparison.Ordinal);
+        Assert.Contains($"\n    <{childName}>Custom</{childName}>", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <flag>enabled</flag>", saved, StringComparison.Ordinal);
+        Assert.Contains($"\n  </{entryName}>", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain($"<{entryName} name=\"Custom\"><{childName}", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SaveProtoXml_repairs_existing_custom_entries_that_lost_structural_indentation()
+    {
+        using var temp = new TestWorkspace(nameof(SaveProtoXml_repairs_existing_custom_entries_that_lost_structural_indentation));
+        var path = temp.GetPath("techtree_mods.xml");
+        const string source =
+            "<techtreemods>\n" +
+            "  <tech name=\"Existing\">\n" +
+            "    <name>Existing</name>\n" +
+            "  </tech>\n" +
+            "<tech name=\"Broken\"><name>Broken</name><researchpoints>0</researchpoints></tech>\n" +
+            "</techtreemods>\n";
+        File.WriteAllText(path, source, new UTF8Encoding(false));
+        var document = XDocument.Parse(source, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
+
+        ProtoXmlHandler.SaveProtoXml(document, path);
+
+        var saved = File.ReadAllText(path);
+        Assert.Contains("\n  <tech name=\"Broken\">", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <name>Broken</name>", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <researchpoints>0</researchpoints>", saved, StringComparison.Ordinal);
+        Assert.Contains("\n  </tech>\n", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SaveProtoXml_reindents_an_edited_replacement_and_removes_orphaned_whitespace()
+    {
+        using var temp = new TestWorkspace(nameof(SaveProtoXml_reindents_an_edited_replacement_and_removes_orphaned_whitespace));
+        var path = temp.GetPath("proto_unit_command_mods.xml");
+        const string source =
+            "<protounitcommandmods>\n" +
+            "  <protounitcommand>\n" +
+            "    <name>ArcusToHero</name>\n" +
+            "    <icon>old.png</icon>\n" +
+            "    <associatedtech>ArcusToHero</associatedtech>\n" +
+            "    <unitcommand></unitcommand>\n" +
+            "  </protounitcommand>\n" +
+            "</protounitcommandmods>\n";
+        File.WriteAllText(path, source, new UTF8Encoding(false));
+        var document = XDocument.Parse(source, LoadOptions.PreserveWhitespace);
+        var existing = document.Root!.Element("protounitcommand")!;
+        var command = ProtoUnitCommandDefinition.FromElement(existing);
+        command.Values["icon"] = "new.png";
+        existing.ReplaceWith(command.ToElement());
+
+        ProtoXmlHandler.SaveProtoXml(document, path, formattingSourcePath: path);
+
+        var saved = File.ReadAllText(path);
+        Assert.Contains("\n  <protounitcommand>\n", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <name>ArcusToHero</name>\n", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <icon>new.png</icon>\n", saved, StringComparison.Ordinal);
+        Assert.Contains("\n    <associatedtech>ArcusToHero</associatedtech>\n", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("<name>ArcusToHero</name><icon>", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("\n\n\n", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SaveProtoXml_collapses_adjacent_root_whitespace_after_replacing_an_entry()
+    {
+        using var temp = new TestWorkspace(nameof(SaveProtoXml_collapses_adjacent_root_whitespace_after_replacing_an_entry));
+        var path = temp.GetPath("unit_transform_mods.xml");
+        const string source =
+            "<unittransformmods>\n" +
+            "  <transform><from>First</from><to>FirstTarget</to><command>FirstToFirstTarget</command></transform>\n" +
+            "  <transform><from>Second</from><to>OldTarget</to><command>SecondToOldTarget</command></transform>\n" +
+            "</unittransformmods>\n";
+        File.WriteAllText(path, source, new UTF8Encoding(false));
+        var document = XDocument.Parse(source, LoadOptions.PreserveWhitespace);
+        var oldEntry = document.Root!.Elements("transform").Last();
+        oldEntry.Remove();
+        document.Root.Add(new XElement("transform",
+            new XElement("from", "Second"),
+            new XElement("to", "NewTarget"),
+            new XElement("command", "SecondToNewTarget")));
+
+        ProtoXmlHandler.SaveProtoXml(document, path, formattingSourcePath: path);
+
+        var saved = File.ReadAllText(path);
+        Assert.Contains("</transform>\n  <transform>\n", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain("</transform>\n\n  <transform>", saved, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("protomods", "unit")]
+    [InlineData("techtreemods", "tech")]
+    [InlineData("protounitcommandmods", "protounitcommand")]
+    [InlineData("unittransformmods", "transform")]
+    public void SaveProtoXml_collapses_orphaned_structural_whitespace_after_deletions(
+        string rootName,
+        string entryName)
+    {
+        using var temp = new TestWorkspace(nameof(SaveProtoXml_collapses_orphaned_structural_whitespace_after_deletions));
+        var path = temp.GetPath(rootName + ".xml");
+
+        XElement Entry(string id) => entryName switch
+        {
+            "unit" => new XElement(entryName, new XAttribute("name", id), new XElement("value", id)),
+            "tech" => new XElement(entryName, new XAttribute("name", id), new XElement("researchpoints", id.Length)),
+            "protounitcommand" => new XElement(entryName, new XElement("name", id)),
+            "transform" => new XElement(entryName, new XElement("command", id)),
+            _ => throw new ArgumentOutOfRangeException(nameof(entryName))
+        };
+
+        var source = new XDocument(new XElement(rootName,
+            Entry("One"), Entry("Two"), Entry("Three"), Entry("Four")))
+            .ToString(SaveOptions.None) + "\n";
+        File.WriteAllText(path, source, new UTF8Encoding(false));
+        var document = XDocument.Parse(source, LoadOptions.PreserveWhitespace);
+        var entries = document.Root!.Elements().ToList();
+        entries[1].Remove();
+        entries[3].Remove();
+
+        ProtoXmlHandler.SaveProtoXml(document, path, formattingSourcePath: path);
+
+        var saved = File.ReadAllText(path);
+        Assert.DoesNotContain("\n\n", saved, StringComparison.Ordinal);
+        Assert.Equal(["One", "Three"], document.Root.Elements().Select(element => entryName switch
+        {
+            "unit" or "tech" => (string?)element.Attribute("name") ?? "",
+            "protounitcommand" => element.Element("name")?.Value ?? "",
+            "transform" => element.Element("command")?.Value ?? "",
+            _ => ""
+        }).ToArray());
+    }
+
     [Fact]
     public void SaveProtoXml_does_not_modify_the_in_memory_document_to_expand_armor_tags()
     {

@@ -20,11 +20,23 @@ public static class XmlSyntaxEditorService
         editor.Options.IndentationSize = 2;
         editor.Options.EnableHyperlinks = false;
         editor.Options.EnableEmailHyperlinks = false;
-        // Keep the final XML line clear of the horizontal scrollbar without
-        // allowing the document to scroll through an entire empty viewport.
+        // Do not use AvaloniaEdit's full-viewport overscroll. Dedicated XML
+        // previews add one display-only trailing line via PreparePreviewText.
         editor.Options.AllowScrollBelowDocument = false;
-        editor.TextArea.TextView.Margin = new Avalonia.Thickness(0, 0, 0, 4);
         SetReadOnly(editor, editor.IsReadOnly);
+    }
+
+    /// <summary>
+    /// Adds one display-only line after an XML payload. AvaloniaEdit's horizontal
+    /// scrollbar can otherwise cover the final rendered line when scrolled to the
+    /// bottom. Callers must use this only for preview text, never for persisted XML.
+    /// </summary>
+    public static string PreparePreviewText(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.EndsWith('\n') || text.EndsWith('\r'))
+            return text;
+
+        return text + Environment.NewLine;
     }
 
     public static void SetReadOnly(TextEditor editor, bool isReadOnly)

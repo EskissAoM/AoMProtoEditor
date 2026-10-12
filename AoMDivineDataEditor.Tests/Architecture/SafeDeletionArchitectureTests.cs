@@ -28,7 +28,8 @@ public sealed class SafeDeletionArchitectureTests
 
         Assert.Contains("EnsureIdentifierCanBeDeletedAsync", commandDelete, StringComparison.Ordinal);
         Assert.Contains("ModDocumentPersistence.Execute", commandDelete, StringComparison.Ordinal);
-        Assert.Contains("ReviewOrphanStringsAsync", commandDelete, StringComparison.Ordinal);
+        Assert.Contains("FilterUnreferencedStringIdsInCurrentMod", commandDelete, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReviewOrphanStringsAsync", commandDelete, StringComparison.Ordinal);
         Assert.Contains("EnsureIdentifierCanBeDeletedAsync", abilityDelete, StringComparison.Ordinal);
         Assert.Contains("ModDocumentPersistence.Execute", abilityDelete, StringComparison.Ordinal);
         Assert.Contains("ReviewOrphanStringsAsync", abilityDelete, StringComparison.Ordinal);

@@ -9719,6 +9719,6 @@ public partial class TechnologyEditorView : UserControl
         var savedTechnology = FindSavedTechnologySnapshot(_current);
         foreach (var effect in TechnologyXmlShapePolicy.FindChangedEffects(previewTech, savedTechnology))
             NormalizeEffectAttributeOrder(effect);
-        _xmlPreview.Text = previewTech.ToString();
+        _xmlPreview.Text = XmlSyntaxEditorService.PreparePreviewText(previewTech.ToString());
     }
 }

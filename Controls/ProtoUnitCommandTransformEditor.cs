@@ -32,6 +32,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
     public AutoCompleteBox ToEditor { get; }
     public AutoCompleteBox PrereqTechEditor { get; }
     public AutoCompleteBox AssociatedTechEditor { get; }
+    public Grid AssociatedTechRow { get; }
     public CheckBox FullHealEditor { get; }
     public AutoCompleteBox? RevertOthersEditor { get; private set; }
     public Dictionary<string, Control> OptionalValueEditors { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -97,7 +98,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         _revertHost = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 2,
+            Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 2)
         };
@@ -121,19 +122,22 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
             ShowRevertEditor(_transform.RevertOthersTo);
         Children.Add(optionRow);
 
-        var techRow = CreateTwoFieldRow();
-        AddLabel(techRow, "Prereq Tech", 0);
+        var prerequisiteTechRow = CreateTwoFieldRow();
+        AddLabel(prerequisiteTechRow, "Prereq Tech", 0);
         PrereqTechEditor = CreateSelector(_transform.Tech ?? string.Empty, techNames, editable, value =>
         {
             if (string.Equals(_transform.Tech, value, StringComparison.Ordinal)) return;
             _transform.Tech = value;
             _changed();
         });
-        AddControl(techRow, PrereqTechEditor, 1);
-        AddLabel(techRow, "Associated Tech", 2);
+        AddControl(prerequisiteTechRow, PrereqTechEditor, 1);
+        Children.Add(prerequisiteTechRow);
+
+        AssociatedTechRow = CreateTwoFieldRow();
+        AddLabel(AssociatedTechRow, "Associated Tech", 0);
         AssociatedTechEditor = CreateSelector(GetValue("associatedtech"), techNames, editable, value => SetValue("associatedtech", value));
-        AddControl(techRow, AssociatedTechEditor, 3);
-        Children.Add(techRow);
+        AddControl(AssociatedTechRow, AssociatedTechEditor, 1);
+        Children.Add(AssociatedTechRow);
 
         _optionalHost = new WrapPanel
         {
@@ -320,7 +324,7 @@ public sealed class ProtoUnitCommandFlagsEditor : Grid
     private readonly Func<bool>? _isBusy;
     private readonly Action<string>? _flagAdded;
     private readonly AutoCompleteBox? _picker;
-    private readonly StackPanel _chipRows;
+    private readonly WrapPanel _chipRows;
 
     public ProtoUnitCommandFlagsEditor(
         ISet<string> flags,
@@ -337,8 +341,8 @@ public sealed class ProtoUnitCommandFlagsEditor : Grid
         _isBusy = isBusy;
         _flagAdded = flagAdded;
 
-        ColumnDefinitions = new ColumnDefinitions("115,240,*");
-        RowDefinitions = new RowDefinitions("Auto,Auto");
+        ColumnDefinitions = new ColumnDefinitions("115,50,*");
+        RowDefinitions = new RowDefinitions("Auto");
         ColumnSpacing = 8;
         Margin = new Thickness(0, 8, 0, 0);
 
@@ -346,28 +350,32 @@ public sealed class ProtoUnitCommandFlagsEditor : Grid
         {
             Text = "Flags",
             FontWeight = FontWeight.Bold,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 7, 0, 0)
         });
 
-        _chipRows = new StackPanel
+        _chipRows = new WrapPanel
         {
-            Spacing = 4,
-            Margin = editable ? new Thickness(0, 4, 0, 0) : new Thickness(0)
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0)
         };
-        Grid.SetColumn(_chipRows, 1);
-        Grid.SetRow(_chipRows, editable ? 1 : 0);
+        Grid.SetColumn(_chipRows, editable ? 2 : 1);
+        Grid.SetColumnSpan(_chipRows, editable ? 1 : 2);
+        Grid.SetRow(_chipRows, 0);
         Children.Add(_chipRows);
 
         if (editable)
         {
             _picker = new AutoCompleteBox
             {
-                FilterMode = AutoCompleteFilterMode.Contains,
-                Width = 240,
-                MaxWidth = 240
+                FilterMode = AutoCompleteFilterMode.Contains
             };
             EditorTextFieldStyle.ConfigureSelector(_picker);
             EditorFieldAppearance.ApplyStandard(_picker);
+            _picker.Width = 50;
+            _picker.MinWidth = 50;
+            _picker.MaxWidth = 50;
+            _picker.HorizontalAlignment = HorizontalAlignment.Left;
             EditorAutoCompleteService.EnableDropdown(_picker, Busy, selectAllOnFirstClick: false);
             _picker.SelectionChanged += (_, _) =>
             {
@@ -401,22 +409,19 @@ public sealed class ProtoUnitCommandFlagsEditor : Grid
             .OrderBy(flag => flag, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        for (var index = 0; index < visible.Count; index += 3)
+        foreach (var flag in visible)
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var flag in visible.Skip(index).Take(3))
+            var kind = _transformKind();
+            var structural = kind.HasValue && ProtoUnitCommandTransformRules.IsRequiredFlag(flag, kind.Value);
+            Action? remove = _editable && !structural ? () =>
             {
-                var kind = _transformKind();
-                var structural = kind.HasValue && ProtoUnitCommandTransformRules.IsRequiredFlag(flag, kind.Value);
-                Action? remove = _editable && !structural ? () =>
-                {
-                    _flags.Remove(flag);
-                    _changed();
-                    Refresh();
-                } : null;
-                row.Children.Add(EditorChipService.CreateBlueChip(flag, remove, readOnly: remove == null));
-            }
-            _chipRows.Children.Add(row);
+                _flags.Remove(flag);
+                _changed();
+                Refresh();
+            } : null;
+            var chip = EditorChipService.CreateBlueChip(flag, remove, readOnly: remove == null);
+            chip.Margin = new Thickness(0, 0, 4, 4);
+            _chipRows.Children.Add(chip);
         }
 
         if (_picker != null)

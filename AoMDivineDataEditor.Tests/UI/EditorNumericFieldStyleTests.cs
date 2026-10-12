@@ -116,4 +116,23 @@ public sealed class EditorNumericFieldStyleTests
             Assert.Equal("12", textBox.Text);
         });
     }
+
+    [Theory]
+    [InlineData("07", ProtoUnitNumericKind.UnsignedInteger, "7")]
+    [InlineData("007.5000", ProtoUnitNumericKind.UnsignedFloat, "7.5")]
+    public void NumericRuleBehavior_NormalizesCommittedText(
+        string source,
+        ProtoUnitNumericKind kind,
+        string expected)
+    {
+        AvaloniaTestHost.Run(() =>
+        {
+            var textBox = new TextBox { Text = source };
+            EditorNumericInputBehavior.AttachRule(textBox, kind);
+
+            textBox.RaiseEvent(new FocusChangedEventArgs(InputElement.LostFocusEvent));
+
+            Assert.Equal(expected, textBox.Text);
+        });
+    }
 }

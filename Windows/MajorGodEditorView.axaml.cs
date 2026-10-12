@@ -5198,7 +5198,7 @@ public partial class MajorGodEditorView : UserControl
     private void SetRawXml(string text)
     {
         _isPopulating = true;
-        try { _rawXmlEditor.Text = text; }
+        try { _rawXmlEditor.Text = XmlSyntaxEditorService.PreparePreviewText(text); }
         finally { _isPopulating = false; }
     }
 
