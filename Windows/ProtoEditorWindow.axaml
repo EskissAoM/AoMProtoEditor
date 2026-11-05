@@ -180,7 +180,7 @@
                             </Flyout>
                         </Button.Flyout>
                     </Button>
-                    <Button Classes="topNav" Content="Gods">
+                    <Button x:Name="_godsNavigationButton" Classes="topNav" Content="Gods">
                         <Button.Flyout>
                             <Flyout Placement="BottomEdgeAlignedLeft">
                                 <StackPanel Spacing="4" Margin="4">
@@ -203,6 +203,20 @@
                 <!-- Kept only as an internal status sink for existing load/save code. -->
                 <TextBlock x:Name="_fileLabel" IsVisible="False" />
             </DockPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Top" Padding="10,6" IsVisible="{Binding #_settingsNotice.IsVisible}">
+            <ScrollViewer MaxHeight="100" HorizontalScrollBarVisibility="Disabled">
+                <TextBlock x:Name="_settingsNotice" IsVisible="False" TextWrapping="Wrap"
+                           Foreground="{DynamicResource MainGoldBrush}" />
+            </ScrollViewer>
+        </Border>
+
+        <!-- One status surface for every main editor and standalone host mode. -->
+        <Border DockPanel.Dock="Bottom" Padding="12,4" MinHeight="28">
+            <TextBlock x:Name="_statusMessage" Text="" Foreground="{DynamicResource MainGoldBrush}"
+                       FontWeight="SemiBold" HorizontalAlignment="Stretch" TextAlignment="Center"
+                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
         </Border>
 
         <!-- Main content -->
@@ -416,7 +430,7 @@
                             </StackPanel>
                         </Border>
                     </Grid>
-                    <Grid Grid.Row="1" RowDefinitions="Auto,*">
+                    <Grid x:Name="_unitStructuredForm" Grid.Row="1" RowDefinitions="Auto,*">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="0,0,0,10">
                             <TextBlock Text="Unit :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
                             <TextBox Grid.Column="1" x:Name="_unitNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
@@ -470,7 +484,6 @@
                             </TabItem>
                         </TabControl>
                     </Grid>
-                    <TextBlock Grid.Row="2" x:Name="_statusMessage" Text="" Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold" Margin="0,6,0,0" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Grid>
             </Border>
             <GridSplitter x:Name="_previewSplitter" Grid.Column="3" Grid.Row="1" Width="5" Background="{DynamicResource SubtleBorderBrush}" ResizeDirection="Columns" />
@@ -479,7 +492,7 @@
                     <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
                         <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
                             <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center" />
-                            <Button Grid.Column="1" x:Name="_applyXmlPreviewButton" Classes="positive" Content="Apply" IsVisible="False" Padding="12,4" Click="ApplyXmlPreview_Click" />
+                            <Button Grid.Column="1" x:Name="_editUnitXmlButton" Content="Edit XML" IsVisible="False" Padding="12,4" />
                         </Grid>
                         <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_xmlPreviewText" IsReadOnly="True"
                                                  FontFamily="Consolas" FontSize="12"
@@ -487,8 +500,7 @@
                                                  Foreground="{DynamicResource PrimaryTextBrush}"
                                                  BorderBrush="{DynamicResource NormalBorderBrush}"
                                                  HorizontalScrollBarVisibility="Auto"
-                                                 VerticalScrollBarVisibility="Auto"
-                                                 TextChanged="XmlPreviewText_TextChanged" />
+                                                 VerticalScrollBarVisibility="Auto" />
                     </Grid>
                     <Button x:Name="_xmlPreviewToggleButton"
                             Content="&#x25B6;"

@@ -13,6 +13,41 @@ namespace AoMDivineDataEditor.Tests;
 public sealed class PowerEditorInteractionSafetyTests
 {
     [Fact]
+    public void MissingTypeSaveDismissalShowsAndFocusesSpecificSelectorWithoutWriting()
+    {
+        using var workspace = new TestWorkspace("power-type-validation-navigation");
+        var path = workspace.WriteText("powers_mods.xml", "<powersmod><power name='NewPower'/></powersmod>");
+        var before = File.ReadAllBytes(path);
+        AvaloniaTestHost.RunAsync(async () =>
+        {
+            var editor = new PowerEditorView([], path);
+            var window = new Window { Content = editor, Width = 1000, Height = 800 };
+            try
+            {
+                editor.SetModifiedMode(true);
+                editor.SelectPower("NewPower");
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+                var tabs = GetPrivateField<TabControl>(editor, "_powerTabs");
+                tabs.SelectedIndex = 0;
+                var save = editor.SaveAsync();
+                var prompt = Assert.Single(window.OwnedWindows.OfType<Prompt>());
+                Assert.Contains("Power Type", prompt.PromptText, StringComparison.OrdinalIgnoreCase);
+                prompt.Close();
+                Assert.False(await save);
+                Assert.Equal(1, tabs.SelectedIndex);
+                var picker = GetPrivateField<AutoCompleteBox>(editor, "_powerTypeBox");
+                Assert.Contains("invalid-field", picker.Classes);
+                Assert.True(picker.IsKeyboardFocusWithin);
+                Assert.Equal(before, File.ReadAllBytes(path));
+                picker.SelectedItem = "Bolt";
+                Assert.DoesNotContain("invalid-field", picker.Classes);
+            }
+            finally { window.Close(); }
+        });
+    }
+
+    [Fact]
     public void UntypedPowerNameLosingFocusDefersCommitSoTypeCanBeSelected()
     {
         using var workspace = new TestWorkspace(
@@ -38,6 +73,7 @@ public sealed class PowerEditorInteractionSafetyTests
 
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync),
             AvaloniaTestHost.Run(() => editor.StatusMessage));
+        Assert.Equal("Changes saved.", AvaloniaTestHost.Run(() => editor.StatusMessage));
         var saved = XDocument.Load(path).Root!.Elements("power").Single();
         Assert.Equal("RenamedPower", saved.Attribute("name")?.Value);
         Assert.Equal("Bolt", saved.Attribute("type")?.Value);
@@ -196,9 +232,20 @@ public sealed class PowerEditorInteractionSafetyTests
                 AvaloniaTestHost.Run(() => editor.StatusMessage), StringComparison.Ordinal);
         }
 
-        Assert.False(AvaloniaTestHost.RunAsync(editor.SaveAsync));
-        Assert.Contains("radius", AvaloniaTestHost.Run(() => editor.StatusMessage),
-            StringComparison.OrdinalIgnoreCase);
+        AvaloniaTestHost.RunAsync(async () =>
+        {
+            var window = new Window { Content = editor };
+            window.Show();
+            try
+            {
+                var saving = editor.SaveAsync();
+                var prompt = Assert.Single(window.OwnedWindows.OfType<Prompt>());
+                Assert.Contains("radius", prompt.PromptText, StringComparison.OrdinalIgnoreCase);
+                prompt.Close(); Assert.False(await saving);
+            }
+            finally { foreach (var prompt in window.OwnedWindows.ToArray()) prompt.Close(); window.Close(); }
+        });
+        Assert.Equal("Save blocked.", AvaloniaTestHost.Run(() => editor.StatusMessage));
         Assert.True(XNode.DeepEquals(before,
             XDocument.Load(path, LoadOptions.PreserveWhitespace)));
     }

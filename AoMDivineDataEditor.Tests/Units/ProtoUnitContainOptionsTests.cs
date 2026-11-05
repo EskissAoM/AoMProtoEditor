@@ -34,7 +34,13 @@ public sealed class ProtoUnitContainOptionsTests
     {
         var source = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("\"recharge\",\n        \"auxrecharge\"", source.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitFieldOrder.OptionalGroups.Select(group => group.Key)", source, StringComparison.Ordinal);
+        var keys = ProtoUnitFieldOrder.OptionalGroups.Select(group => group.Key).ToArray();
+        var rechargeIndex = Array.IndexOf(keys, "recharge");
+        Assert.True(rechargeIndex >= 0);
+        Assert.Equal("auxrecharge", keys[rechargeIndex + 1]);
+        Assert.Contains("rechargetime", ProtoUnitFieldOrder.OptionalGroups[rechargeIndex].Tags);
+        Assert.Contains("auxrechargetime", ProtoUnitFieldOrder.OptionalGroups[rechargeIndex + 1].Tags);
         Assert.Contains("Content = \"External\"", source, StringComparison.Ordinal);
         Assert.Contains("Content = \"Eject command\"", source, StringComparison.Ordinal);
         Assert.Contains("Value = \"Eject\"", source, StringComparison.Ordinal);
@@ -52,7 +58,9 @@ public sealed class ProtoUnitContainOptionsTests
         var containEnd = normalized.IndexOf("var containPickersRow", containStart, StringComparison.Ordinal);
         var containEditor = normalized[containStart..containEnd];
 
-        Assert.True(containEditor.Split("CommitChipAdditionAndRefreshXmlPreview();").Length - 1 >= 2);
+        Assert.Contains("CreateStatsCatalogChipGroup(title, values, containSuggestions", containEditor, StringComparison.Ordinal);
+        var sharedChips = File.ReadAllText(Path.Combine(ProjectSource.RootPath, "Windows", "ProtoEditorWindow.StatsChips.cs"));
+        Assert.True(sharedChips.Split("CommitChipAdditionAndRefreshXmlPreview();").Length - 1 >= 2);
         Assert.Contains("Content = $\"Add {itemLabel}\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Content = $\"+ Add {itemLabel}\"", source, StringComparison.Ordinal);
         Assert.Contains("GetRechargeModeDisplayValue", source, StringComparison.Ordinal);
@@ -74,9 +82,9 @@ public sealed class ProtoUnitContainOptionsTests
 
         foreach (var editor in new[] { main, aux })
         {
-            Assert.Contains("selector.Width = 150;", editor, StringComparison.Ordinal);
-            Assert.Contains("selectorRow.Children.Add(selector);", editor, StringComparison.Ordinal);
-            Assert.Contains("Margin = new Thickness(150, 0, 0, 0)", editor, StringComparison.Ordinal);
+            Assert.Contains("CreateStatsCatalogChipGroup(title, values, GetAvailableBuildLimitTargets(), out _)", editor, StringComparison.Ordinal);
+            Assert.Contains("Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0)", editor, StringComparison.Ordinal);
+            Assert.Contains("selectedMode.Equals(\"ResourceDropoff\", StringComparison.OrdinalIgnoreCase)", editor, StringComparison.Ordinal);
             Assert.DoesNotContain("var addButton = new Button { Content = \"Add\"", editor, StringComparison.Ordinal);
             Assert.Contains("if (IsRechargeUsedByAnyAbility(key))", editor, StringComparison.Ordinal);
         }

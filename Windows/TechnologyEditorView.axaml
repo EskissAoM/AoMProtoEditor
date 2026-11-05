@@ -12,7 +12,7 @@
       <ColumnDefinition Width="0"/>
       <ColumnDefinition Width="4*"/>
       <ColumnDefinition Width="5"/>
-      <ColumnDefinition Width="1*" MinWidth="250"/>
+      <ColumnDefinition Width="1*" MinWidth="28"/>
     </Grid.ColumnDefinitions>
     <!-- The main window owns the shared entity browser. These controls remain
          as a private selection adapter for the technology editor. -->
@@ -34,6 +34,7 @@
     <GridSplitter Grid.Column="1" IsVisible="False" Width="0" />
     <Border Grid.Column="2" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
+        <Grid x:Name="_technologyForm" Grid.RowSpan="2" RowDefinitions="Auto,*">
         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Technology :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
           <TextBox Grid.Column="1" x:Name="_techNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="TechNameBox_TextChanged" LostFocus="TechNameBox_LostFocus"/>
@@ -55,6 +56,7 @@
             </ScrollViewer>
           </TabItem>
         </TabControl>
+        </Grid>
         <TextBlock Grid.Row="2" x:Name="_statusMessage" Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold" Margin="0,6,0,0" HorizontalAlignment="Center"/>
       </Grid>
     </Border>
@@ -64,6 +66,7 @@
         <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
           <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
             <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center"/>
+            <Button Grid.Column="1" x:Name="_editXmlButton" Content="Edit XML" IsVisible="False"/>
           </Grid>
           <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_xmlPreview" IsReadOnly="True"
                                    FontFamily="Consolas" FontSize="12"

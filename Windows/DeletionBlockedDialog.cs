@@ -22,13 +22,7 @@ internal static class DeletionBlockedDialog
             PromptType.Error,
             $"{entityLabel} is still in use",
             $"'{identifier}' is used by {references.Count} reference(s) and cannot be deleted. " +
-            "Remove or change those references first.\n\n" + string.Join(Environment.NewLine, shown))
-        {
-            Width = 680,
-            Height = 360,
-            MinWidth = 560,
-            MinHeight = 260
-        };
+            "Remove or change those references first.\n\n" + string.Join(Environment.NewLine, shown)).FitToContent(680, 400);
         await prompt.ShowDialog(owner);
     }
 }

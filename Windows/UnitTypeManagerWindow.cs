@@ -79,6 +79,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
     private async Task AddAsync()
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         var name = await PromptForNameAsync("New Unit Type name:");
         if (name == null || !await _createAsync(name)) return;
         _items.Add(new EditableItem { Name = name, IsBuiltIn = false, UsageCount = 0 });
@@ -87,6 +88,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
     private async Task RenameAsync(EditableItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         var prompt = new InputPromptWindow("Rename Unit Type:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
@@ -106,6 +108,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
     private async Task DeleteAsync(EditableItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         item.UsageCount = _resolveUsageCount(item.Name);
         if (_validateDeleteAsync != null)
@@ -118,12 +121,12 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
             await new Prompt(
                 PromptType.Error,
                 "Unit Type is in use",
-                $"'{item.Name}' is used by {item.UsageCount} unit(s) and cannot be removed. Remove or change those references first.")
+                $"'{item.Name}' is used by {item.UsageCount} item(s) and cannot be removed. Remove or change those references first.")
                 .ShowDialog(this);
             return;
         }
         var message = $"Are you sure you want to remove '{item.Name}'?";
-        var confirm = new Prompt(PromptType.Confirm, "Remove Unit Type?", message, confirmButtonText: "Remove");
+        var confirm = new Prompt(PromptType.Confirm, "Remove Unit Type?", message, confirmButtonText: "Delete unit type", actionRole: PromptActionRole.Destructive);
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed || !await _deleteAsync(item.Name)) return;
         _items.Remove(item);
@@ -162,7 +165,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
     private Control CreateRow(EditableItem item)
     {
-        var row = ManagerListShell.CreateRow("*,Auto,Auto");
+        var row = ManagerListShell.CreateActionRow(1);
         row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
             row.Children.Add(new TextBlock
             {
@@ -173,7 +176,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
             });
             var status = new TextBlock
             {
-                Text = item.IsBuiltIn ? "Data.bar" : item.UsageCount > 0 ? $"Used by {item.UsageCount}" : "Custom",
+                Text = ManagerListShell.FormatTypeUsageStatus(item.IsBuiltIn, item.UsageCount),
                 Foreground = Brushes.Gray,
                 Margin = new Thickness(8, 9),
                 VerticalAlignment = VerticalAlignment.Center
@@ -183,17 +186,7 @@ internal sealed class UnitTypeManagerWindow : SimpleWindow
 
             if (!item.IsBuiltIn)
             {
-                var deleteButton = new Button
-                {
-                    Content = "×",
-                    FontSize = 16,
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(4),
-                    Background = Brush.Parse("#992824"),
-                    Foreground = Brushes.White
-                };
+                var deleteButton = ManagerActionButtons.Delete("Delete unit type");
                 deleteButton.Click += async (_, _) => await DeleteAsync(item);
                 Grid.SetColumn(deleteButton, 2);
                 row.Children.Add(deleteButton);

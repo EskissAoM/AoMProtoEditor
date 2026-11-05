@@ -173,7 +173,8 @@ public sealed class TechTypeCatalogTests
         Assert.Contains("if (!item.IsBuiltIn)", managerCode, StringComparison.Ordinal);
         Assert.Contains("item.Usage.TotalCount > 0", managerCode, StringComparison.Ordinal);
         Assert.Contains("cannot be removed", managerCode, StringComparison.Ordinal);
-        Assert.Contains("Data.bar · Used by", managerCode, StringComparison.Ordinal);
+        Assert.Contains("ManagerListShell.FormatTypeUsageStatus(item.IsBuiltIn, item.Usage.TotalCount)", managerCode, StringComparison.Ordinal);
+        Assert.Equal("Data.bar · Used by 2", AoMDivineDataEditor.Controls.ManagerListShell.FormatTypeUsageStatus(true, 2));
         Assert.Contains("GameIdentifierKind.TechType", windowCode, StringComparison.Ordinal);
         Assert.Contains("GameIdentifierReferenceMigrationPlan.Prepare", windowCode, StringComparison.Ordinal);
         Assert.DoesNotContain("duplicateButton", managerCode, StringComparison.OrdinalIgnoreCase);

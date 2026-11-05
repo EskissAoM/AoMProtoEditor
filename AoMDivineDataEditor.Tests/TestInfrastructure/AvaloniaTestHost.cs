@@ -93,6 +93,8 @@ internal static class AvaloniaTestHost
             {
                 AppBuilder.Configure<App>()
                     .UseHeadless(new AvaloniaHeadlessPlatformOptions())
+                    // Match Program.BuildAvaloniaApp: modal text needs the bundled font here too.
+                    .WithInterFont()
                     .SetupWithoutStarting();
                 AvaloniaSynchronizationContext.InstallIfNeeded();
                 _ready.Set();

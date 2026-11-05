@@ -7,17 +7,20 @@ public sealed record TechnologyReferenceFile(string Path, TechnologyReferenceDoc
 public sealed class TechnologyReferenceMigrationPlan
 {
     private readonly IReadOnlyList<TechnologyReferenceSource> _sources;
+    private readonly FileDiscoverySnapshot? _discovery;
 
     private TechnologyReferenceMigrationPlan(
         IReadOnlyList<TechnologyReferenceSource> sources,
         IReadOnlyList<TechnologyReferenceUsage> affected,
         IReadOnlyList<TechnologyReferenceUsage> unknown,
-        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> expectedStates)
+        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> expectedStates,
+        FileDiscoverySnapshot? discovery)
     {
         _sources = sources;
         AffectedReferences = affected;
         UnknownReferences = unknown;
         ExpectedStates = expectedStates;
+        _discovery = discovery;
     }
 
     public IReadOnlyList<string> Paths => _sources.Select(source => source.Path!)
@@ -28,25 +31,40 @@ public sealed class TechnologyReferenceMigrationPlan
     public IReadOnlyList<TechnologyReferenceUsage> UnknownReferences { get; }
     public IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> ExpectedStates { get; }
 
+    // Call inside the owner transaction before its first write. Save may run after
+    // that transaction has intentionally created or moved reference files.
+    public void ValidateDiscovery() => _discovery?.Validate();
+
     public static TechnologyReferenceMigrationPlan Prepare(
         IEnumerable<TechnologyReferenceFile> files,
-        IReadOnlyList<TechnologyRenameOperation> operations)
+        IReadOnlyList<TechnologyRenameOperation> operations,
+        FileDiscoverySnapshot? discovery = null)
+        => PrepareWithBudget(new ReferenceReadBudget(), files, operations, discovery);
+
+    internal static TechnologyReferenceMigrationPlan PrepareWithBudget(ReferenceReadBudget budget,
+        IEnumerable<TechnologyReferenceFile> files, IReadOnlyList<TechnologyRenameOperation> operations,
+        FileDiscoverySnapshot? discovery = null)
     {
         var sources = new List<TechnologyReferenceSource>();
         var states = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files
-                     .Where(file => !string.IsNullOrWhiteSpace(file.Path) && File.Exists(file.Path))
+                     .Where(file => !string.IsNullOrWhiteSpace(file.Path))
                      .GroupBy(file => Path.GetFullPath(file.Path), StringComparer.OrdinalIgnoreCase)
                      .Select(group => group.First()))
         {
             var path = Path.GetFullPath(file.Path);
+            budget.AdmitFile(path);
             var stateBeforeRead = FileIntegrityTransaction.CaptureState(path);
-            var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            states[path] = stateBeforeRead;
+            if (!stateBeforeRead.Exists)
+                continue;
+            var document = ModReferenceDocumentReader.Load(path, budget);
             var stateAfterRead = FileIntegrityTransaction.CaptureState(path);
             if (stateBeforeRead != stateAfterRead)
                 throw new IOException($"'{path}' changed while its technology references were being inspected. No files were written.");
             states[path] = stateAfterRead;
-            sources.Add(new TechnologyReferenceSource(file.Label, document, file.Kind, path, CanMigrate: true));
+            sources.Add(new TechnologyReferenceSource(file.Label, document, file.Kind, path,
+                CanMigrate: !ModReferenceDocumentReader.IsCompiledTactics(path)));
         }
 
         var affected = new List<TechnologyReferenceUsage>();
@@ -55,6 +73,10 @@ public sealed class TechnologyReferenceMigrationPlan
         foreach (var operation in operations)
         {
             var usages = TechnologyReferenceIndex.FindReferencesTo(sources, operation.OldName);
+            var compiledUsage = usages.FirstOrDefault(usage => usage.Path != null &&
+                ModReferenceDocumentReader.IsCompiledTactics(usage.Path));
+            if (compiledUsage != null)
+                throw ModReferenceDocumentReader.CannotRewrite(compiledUsage.Path!);
             affected.AddRange(usages.Where(usage => usage.IsRecognized));
             unknown.AddRange(usages.Where(usage => !usage.IsRecognized));
             if (unknown.Count > 0)
@@ -76,10 +98,13 @@ public sealed class TechnologyReferenceMigrationPlan
         }
 
         var changed = sources.Where(changedSources.Contains).ToList();
-        var changedStates = states
-            .Where(entry => changed.Any(source => source.Path!.Equals(entry.Key, StringComparison.OrdinalIgnoreCase)))
-            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
-        return new TechnologyReferenceMigrationPlan(changed, affected, unknown, changedStates);
+        foreach (var source in changed)
+            budget.InspectExisting(source.Document, source.Path!);
+        // Unchanged sources are read dependencies too: a concurrent edit may add
+        // an old-name reference after inspection. Only Paths are write targets.
+        var plan = new TechnologyReferenceMigrationPlan(changed, affected, unknown, states, discovery);
+        plan.ValidateDiscovery();
+        return plan;
     }
 
     public void Save(Action<XDocument, string> writer)

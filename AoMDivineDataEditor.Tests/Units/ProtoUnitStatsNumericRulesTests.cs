@@ -7,6 +7,7 @@ public sealed class ProtoUnitStatsNumericRulesTests
 {
     [Theory]
     [InlineData("populationcount", "12", "12")]
+    [InlineData("ondiscoverlos", "12.5", "12.5")]
     [InlineData("cost:Food", "12", "12")]
     [InlineData("cost:Food", "-12", "0")]
     [InlineData("buildlimit", "1", "1")]
@@ -30,6 +31,8 @@ public sealed class ProtoUnitStatsNumericRulesTests
 
     [Theory]
     [InlineData("populationcount", "1.5")]
+    [InlineData("ondiscoverlos", "not-a-number")]
+    [InlineData("ondiscoverlos", "-1")]
     [InlineData("cost:Food", "1.5")]
     [InlineData("resourcepriority", "0")]
     [InlineData("conversionresistance", "-1")]

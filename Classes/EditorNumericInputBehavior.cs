@@ -6,6 +6,20 @@ namespace AoMDivineDataEditor.Classes;
 
 public static class EditorNumericInputBehavior
 {
+    // Attach after display formatting. Avalonia may deliver the initial
+    // TextChanged after a form's loading guard clears; that is not a model edit.
+    internal static void AttachValueChanged(TextBox textBox, Func<bool> isBusy, Action<string> commit)
+    {
+        var displayedValue = textBox.Text ?? "";
+        textBox.TextChanged += (_, _) =>
+        {
+            var value = textBox.Text ?? "";
+            if (isBusy() || string.Equals(value, displayedValue, StringComparison.Ordinal)) return;
+            displayedValue = value;
+            commit(value);
+        };
+    }
+
     public static void AttachRule(TextBox textBox, ProtoUnitNumericKind kind)
     {
         var integerOnly = ProtoUnitStatsNumericRules.IsIntegerKind(kind);

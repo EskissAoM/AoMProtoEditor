@@ -19,7 +19,8 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
 
         Assert.Contains("new ProtoUnitCommandTransformEditor(", standalone, StringComparison.Ordinal);
         Assert.Contains("new ProtoUnitCommandTransformEditor(", inline, StringComparison.Ordinal);
-        Assert.Contains("ColumnDefinitions = new ColumnDefinitions(\"115,240,Auto,240,*\")", shared, StringComparison.Ordinal);
+        Assert.Contains("ColumnDefinitions = new ColumnDefinitions(\"115,200,Auto,200,*\")", shared, StringComparison.Ordinal);
+        Assert.Contains("EditorFormLayout.WrapFlowingGridColumns", shared, StringComparison.Ordinal);
         Assert.Contains("\"Transform\"", shared, StringComparison.Ordinal);
         Assert.Contains("\"To\"", shared, StringComparison.Ordinal);
         Assert.Contains("\"Full heal\"", shared, StringComparison.Ordinal);
@@ -29,7 +30,7 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
         Assert.Contains("public Grid AssociatedTechRow { get; }", shared, StringComparison.Ordinal);
         Assert.Contains("Spacing = 8", shared, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinitions = new ColumnDefinitions(\"115,50,*\")", shared, StringComparison.Ordinal);
-        Assert.Contains("Width = 50", shared, StringComparison.Ordinal);
+        Assert.Contains("EditorFieldWidthRole.ChipSearch", shared, StringComparison.Ordinal);
         Assert.Contains("Grid.SetColumn(_chipRows, editable ? 2 : 1)", shared, StringComparison.Ordinal);
         Assert.Contains("Grid.SetColumnSpan(_chipRows, editable ? 1 : 2)", shared, StringComparison.Ordinal);
         Assert.Contains("\"forbidtech\"", shared, StringComparison.OrdinalIgnoreCase);
@@ -106,7 +107,7 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
         var root = ProjectSource.RootPath;
         var inline = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("sharedTransformEditor.AssociatedTechRow.Children.Add(durationLabel)", inline, StringComparison.Ordinal);
+        Assert.Contains("sharedTransformEditor.AddAssociatedTechField(\"Duration\", durationEditor)", inline, StringComparison.Ordinal);
         Assert.Contains("EditorNumericFieldStyle.FormatDisplay(economy.ResearchPoints)", inline, StringComparison.Ordinal);
         Assert.Contains("EditorNumericFieldStyle.FormatDisplay(economy.Costs.GetValueOrDefault(resource, \"0\"))", inline, StringComparison.Ordinal);
         Assert.Contains("Brush.Parse(\"#393125\") : Brush.Parse(\"#252526\")", inline, StringComparison.Ordinal);
@@ -188,7 +189,10 @@ public sealed class ProtoUnitCommandSharedEditorRegressionTests
         Assert.Contains("SavePendingOwnedTransformBundleDeletions", inline, StringComparison.Ordinal);
         Assert.Contains("_pendingOwnedTransformBundleDeletions.Remove(currentName);", inline, StringComparison.Ordinal);
         Assert.DoesNotContain("PersistTransformAssignmentsNowAsync", inline, StringComparison.Ordinal);
-        Assert.Contains("var approvedStringIds = deletedStringIds;", inline, StringComparison.Ordinal);
+        Assert.Contains("ProtoUnitCommandStringPolicy.CollectOwnedStringIds(command)", inline, StringComparison.Ordinal);
+        Assert.Contains("stringCleanup.Inspection.References.ValidateReadDependencies();", inline, StringComparison.Ordinal);
+        Assert.Contains("SavePendingUnitStringDrafts(stringCleanup.Updates, stringCleanup.Plan.StringRemovals, stringCleanup.Abilities?.Updates);", inline, StringComparison.Ordinal);
+        Assert.DoesNotContain("SavePendingTransformCommandStringCleanup", inline, StringComparison.Ordinal);
     }
 
 }

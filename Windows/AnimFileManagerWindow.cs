@@ -35,19 +35,23 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
     private readonly ListBox _itemsList;
     private readonly TextBlock _footerText;
     private readonly Func<AnimFileCatalogEntry, Task<string?>> _loadXmlAsync;
+    private readonly Func<AnimFileCatalogEntry, Task<AssetPayloadResult<string>>>? _loadXmlResultAsync;
     private readonly string? _customArtDirectory;
     private readonly Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? _moveAsync;
     private readonly XmlAssetManagerProfile _profile;
+    internal bool HasSavedXml { get; private set; }
 
     public AnimFileManagerWindow(
         IEnumerable<AnimFileCatalogEntry> animFiles,
         Func<AnimFileCatalogEntry, Task<string?>> loadXmlAsync,
         string? customArtDirectory,
         Func<AnimFileCatalogEntry, AssetDestination, Task<bool>>? moveAsync = null,
-        XmlAssetManagerProfile? profile = null)
+        XmlAssetManagerProfile? profile = null,
+        Func<AnimFileCatalogEntry, Task<AssetPayloadResult<string>>>? loadXmlResultAsync = null)
     {
         _profile = profile ?? XmlAssetManagerProfile.AnimFile;
         _loadXmlAsync = loadXmlAsync ?? throw new ArgumentNullException(nameof(loadXmlAsync));
+        _loadXmlResultAsync = loadXmlResultAsync;
         _customArtDirectory = customArtDirectory;
         _moveAsync = moveAsync;
         _items = animFiles
@@ -99,7 +103,7 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
 
     private Control CreateRow(AnimFileCatalogEntry item)
     {
-        var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto");
+        var row = ManagerListShell.CreateActionRow(2);
         row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
         row.Children.Add(new TextBlock
         {
@@ -142,6 +146,9 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
 
     private async Task OpenMoveDialogAsync(AnimFileCatalogEntry item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
+        if (!await CatalogAvailabilityPrompt.EnsureAsync(this,
+                () => CustomAssetCatalog.LoadAnimFilesResult(_customArtDirectory), _profile.SearchLabel)) return;
         var dialog = new AssetDestinationWindow(
             _profile.MoveTitle, _customArtDirectory!, _profile.RootDisplay, "", ".xml",
             Path.GetFileNameWithoutExtension(item.Path), Path.GetDirectoryName(item.Path) ?? "", confirmButtonText: "Save");
@@ -163,47 +170,40 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
 
     private Button CreateEditButton(AnimFileCatalogEntry item)
     {
-        var button = new Button
-        {
-            Content = new TextBlock
-            {
-                Text = "✎",
-                FontSize = 16,
-                RenderTransform = new ScaleTransform(-1, 1),
-                RenderTransformOrigin = RelativePoint.Center
-            },
-            Width = 28,
-            Height = 28,
-            Padding = new Thickness(0),
-            Margin = new Thickness(4),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(button, $"View {_profile.ItemLabel} XML");
+        var button = ManagerActionButtons.Edit($"View{(item.IsCustom ? "/edit" : "")} {_profile.ItemLabel} XML");
         button.Click += async (_, _) => await OpenViewerAsync(item, button);
         return button;
     }
 
     private async Task OpenViewerAsync(AnimFileCatalogEntry item, Button button)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         button.IsEnabled = false;
         try
         {
-            var xml = await _loadXmlAsync(item);
+            var load = await LoadXmlResultAsync(item);
+            var xml = load.Value;
             if (string.IsNullOrWhiteSpace(xml))
             {
                 await new Prompt(
                     PromptType.Error,
                     _profile.UnavailableTitle,
-                    $"{GetFileName(item.Path)} could not be read from {item.ArchiveName}.").ShowDialog(this);
+                    $"{load.Source}\n\n{load.Error}").FitToContent(600, 360).ShowDialog(this);
                 return;
             }
 
+            var source = item.IsCustom && !string.IsNullOrWhiteSpace(_customArtDirectory)
+                ? await XmlAssetEditingSource.OpenAsync(_customArtDirectory, item.Path) : null;
             var viewer = new AnimFileViewerWindow(
                 GetFileName(item.Path),
                 XmlPreviewFormatter.Beautify(xml),
-                _profile.ViewerLabel);
+                _profile.ViewerLabel, source);
+            viewer.Saved += (_, _) => HasSavedXml = true;
             await viewer.ShowDialog(this);
+        }
+        catch (Exception exception) when (AssetPayloadReader.IsReadFailure(exception))
+        {
+            await new Prompt(PromptType.Error, _profile.UnavailableTitle, exception.Message).FitToContent(600, 360).ShowDialog(this);
         }
         finally
         {
@@ -211,73 +211,55 @@ internal sealed class AnimFileManagerWindow : SimpleWindow
         }
     }
 
+    private async Task<AssetPayloadResult<string>> LoadXmlResultAsync(AnimFileCatalogEntry item)
+    {
+        if (_loadXmlResultAsync != null) return await _loadXmlResultAsync(item);
+        var xml = await _loadXmlAsync(item);
+        return string.IsNullOrWhiteSpace(xml)
+            ? AssetPayloadResult<string>.Failure(item.Path, $"XML could not be read from {item.ArchiveName}.")
+            : AssetPayloadResult<string>.Success(xml, item.Path);
+    }
+
     private Button CreateDuplicateButton(AnimFileCatalogEntry item)
     {
-        var duplicateIcon = new Canvas { Width = 16, Height = 16 };
-        var backPage = new Border
-        {
-            Width = 10,
-            Height = 12,
-            BorderBrush = Brushes.White,
-            BorderThickness = new Thickness(1.5),
-            CornerRadius = new CornerRadius(1)
-        };
-        Canvas.SetLeft(backPage, 5);
-        Canvas.SetTop(backPage, 1);
-        duplicateIcon.Children.Add(backPage);
-        var frontPage = new Border
-        {
-            Width = 10,
-            Height = 12,
-            BorderBrush = Brushes.White,
-            BorderThickness = new Thickness(1.5),
-            CornerRadius = new CornerRadius(1),
-            Background = Brush.Parse("#191C1A")
-        };
-        Canvas.SetLeft(frontPage, 1);
-        Canvas.SetTop(frontPage, 4);
-        duplicateIcon.Children.Add(frontPage);
-
-        var button = new Button
-        {
-            Content = duplicateIcon,
-            Width = 28,
-            Height = 28,
-            Padding = new Thickness(0),
-            Margin = new Thickness(4),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        ToolTip.SetTip(button, $"Duplicate {_profile.ItemLabel} into this mod");
+        var button = ManagerActionButtons.Copy($"Duplicate {_profile.ItemLabel} into this mod");
         button.Click += async (_, _) => await DuplicateAsync(item, button);
         return button;
     }
 
     private async Task DuplicateAsync(AnimFileCatalogEntry item, Button button)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (string.IsNullOrWhiteSpace(_customArtDirectory)) return;
         button.IsEnabled = false;
         try
         {
-            var xml = await _loadXmlAsync(item);
+            var load = await LoadXmlResultAsync(item);
+            var xml = load.Value;
             if (string.IsNullOrWhiteSpace(xml))
-            { await new Prompt(PromptType.Error, _profile.UnavailableTitle, $"{GetFileName(item.Path)} could not be read.").ShowDialog(this); return; }
+            { await new Prompt(PromptType.Error, _profile.UnavailableTitle, $"{load.Source}\n\n{load.Error}").FitToContent(600, 360).ShowDialog(this); return; }
             var defaultName = Path.GetFileNameWithoutExtension(GetFileName(item.Path)) + "_copy";
             var dialog = new AssetDestinationWindow(_profile.DuplicateTitle, _customArtDirectory, _profile.RootDisplay, "", ".xml", defaultName);
             await dialog.ShowDialog(this);
             if (dialog.Destination is not { } destination) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(destination.AbsolutePath)!);
-            await File.WriteAllTextAsync(destination.AbsolutePath, xml);
-            _items.RemoveAll(entry => entry.Path.Equals(destination.XmlValue, StringComparison.OrdinalIgnoreCase));
-            _items.Add(new AnimFileCatalogEntry(destination.XmlValue, "Custom", IsCustom: true));
-            _items.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(GetFileName(left.Path), GetFileName(right.Path)));
-            _searchBox.Text = Path.GetFileNameWithoutExtension(destination.XmlValue);
-            _filterComboBox.SelectedItem = "Custom";
-            RefreshList();
+            await DuplicateToDestinationAsync(xml, destination);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         { await new Prompt(PromptType.Error, "Duplication failed", exception.Message).ShowDialog(this); }
         finally { button.IsEnabled = true; }
+    }
+
+    private async Task DuplicateToDestinationAsync(string xml, AssetDestination destination)
+    {
+        if (!await CatalogAvailabilityPrompt.EnsureAsync(this,
+                () => CustomAssetCatalog.LoadAnimFilesResult(_customArtDirectory), _profile.SearchLabel)) return;
+        await AssetCreateService.CreateXmlAsync(_customArtDirectory!, destination, xml);
+        _items.RemoveAll(entry => entry.Path.Equals(destination.XmlValue, StringComparison.OrdinalIgnoreCase));
+        _items.Add(new AnimFileCatalogEntry(destination.XmlValue, "Custom", IsCustom: true));
+        _items.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(GetFileName(left.Path), GetFileName(right.Path)));
+        _searchBox.Text = Path.GetFileNameWithoutExtension(destination.XmlValue);
+        _filterComboBox.SelectedItem = "Custom";
+        RefreshList();
     }
 
     private static string GetFileName(string path)

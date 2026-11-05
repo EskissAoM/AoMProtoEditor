@@ -74,8 +74,16 @@ public sealed class AssetPathEditor : Grid
         Editor.TextChanged += async (_, _) =>
         {
             if (!_editing || _suppress) return;
-            if (Editor.SelectedItem is PathSuggestion item && !item.FullValue.Equals(Editor.Text, StringComparison.OrdinalIgnoreCase)) Editor.SelectedItem = null;
-            await SetValueAsync(Editor.Text);
+            var text = Editor.Text;
+            if (Editor.SelectedItem is PathSuggestion item && !item.FullValue.Equals(text, StringComparison.OrdinalIgnoreCase))
+            {
+                // Clearing an obsolete selection can synchronously restore its
+                // old text. Preserve the user's replacement across that reset.
+                _suppress = true;
+                try { Editor.SelectedItem = null; Editor.Text = text; }
+                finally { _suppress = false; }
+            }
+            await SetValueAsync(text);
         };
         Editor.LostFocus += (_, _) => Dispatcher.UIThread.Post(() =>
         {
@@ -123,6 +131,11 @@ public sealed class AssetPathEditor : Grid
         _suppress = true; try { Editor.Text = FullValue; } finally { _suppress = false; }
         Editor.Focus();
         Editor.IsDropDownOpen = true;
+        if (EditorFieldInteraction.IsConfigured(this))
+        {
+            EditorFieldInteraction.SelectAllOnEntry(Editor);
+            return;
+        }
         Dispatcher.UIThread.Post(() =>
         {
             var textEditor = Editor.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
@@ -162,6 +175,6 @@ public sealed class AssetPathEditor : Grid
     private void Refresh()
     {
         CompactPresenter.Text = Suggestions.FirstOrDefault(x => x.FullValue.Equals(FullValue, StringComparison.OrdinalIgnoreCase))?.DisplayValue ?? FullValue;
-        ToolTip.SetTip(this, FullValue);
+        if (!EditorFieldInteraction.IsConfigured(this)) ToolTip.SetTip(this, FullValue);
     }
 }

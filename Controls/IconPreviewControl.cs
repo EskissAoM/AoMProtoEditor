@@ -131,10 +131,10 @@ public sealed class IconPreviewControl : Border
         if (_service == null || string.IsNullOrWhiteSpace(iconPath))
             return;
 
-        IconPreviewData? result;
+        AssetPayloadResult<IconPreviewData> load;
         try
         {
-            result = await _service.LoadAsync(iconPath);
+            load = await _service.LoadResultAsync(iconPath);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -148,10 +148,10 @@ public sealed class IconPreviewControl : Border
         if (generation != _loadGeneration)
             return;
 
-        if (result == null)
+        if (load.Value is not { } result)
         {
-            _placeholder.Text = "Not found";
-            ToolTip.SetTip(this, $"Icon could not be loaded: {iconPath}");
+            _placeholder.Text = "Unavailable";
+            ToolTip.SetTip(this, $"Icon could not be loaded: {iconPath}\n{load.Source}\n{load.Error}");
             return;
         }
 

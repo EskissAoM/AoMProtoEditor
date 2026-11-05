@@ -213,7 +213,7 @@ public sealed class ProtoActionHostSeparationPass6Tests
         Assert.DoesNotContain("_tacticsEditorClosePromptOpen", source, StringComparison.Ordinal);
         Assert.Contains("_tacticsEditorSession.TrySaveAsync(updated)", source, StringComparison.Ordinal);
         Assert.Contains("_tacticsEditorSession.IsSaveInProgress", source, StringComparison.Ordinal);
-        Assert.Contains("newer edits remain unsaved", source, StringComparison.Ordinal);
+        Assert.Contains("ReportSaveFeedback(_isDirty ? EditorSaveOutcome.NewerEdits : EditorSaveOutcome.Saved);", source, StringComparison.Ordinal);
         Assert.Contains("_tacticsEditorSession?.HasUnsavedChanges(", source, StringComparison.Ordinal);
         Assert.Contains("_tacticsEditorSession?.TryBeginClosePrompt()", source, StringComparison.Ordinal);
         Assert.Contains("_tacticsEditorSession?.IsCloseAllowed", source, StringComparison.Ordinal);

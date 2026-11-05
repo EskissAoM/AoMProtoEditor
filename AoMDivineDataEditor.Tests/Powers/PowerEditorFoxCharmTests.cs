@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Xml.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using AoMDivineDataEditor.Classes;
 using AoMDivineDataEditor.Windows;
 using Xunit;
@@ -55,9 +56,9 @@ public sealed class PowerEditorFoxCharmTests : IDisposable
                 .OfType<WrapPanel>().ToList();
             Assert.Equal(5, rows.Count);
             Assert.Equal(["ArchaicAge", "ClassicalAge", "HeroicAge", "MythicAge", "WonderAge"],
-                rows.Select(row => row.Children.OfType<ComboBox>().Single().SelectedItem).Cast<string>());
+                rows.Select(row => row.GetLogicalDescendants().OfType<ComboBox>().Single().SelectedItem).Cast<string>());
             Assert.Equal(["1", "2", "3", "4", "5"],
-                rows.Select(row => row.Children.OfType<TextBox>().Single().Text));
+                rows.Select(row => row.GetLogicalDescendants().OfType<TextBox>().Single().Text));
             Assert.False(GetPrivateField<Button>(editor, "_addFoxCharmAgeButton").IsVisible);
             Assert.True(GetPrivateField<WrapPanel>(editor, "_foxCharmVfxFields").IsVisible);
             Assert.Equal("VFXFoxCharm", GetPrivateField<AutoCompleteBox>(editor,
@@ -94,7 +95,7 @@ public sealed class PowerEditorFoxCharmTests : IDisposable
             var areaFields = GetPrivateField<StackPanel>(editor, "_foxCharmAreaVfxFields");
             var removeVfx = GetPrivateField<Button>(editor, "_removeFoxCharmVfxButton");
             Assert.Same(areaFields, removeVfx.Parent);
-            Assert.Equal(2, removeVfx.Margin.Left);
+            Assert.Equal(EditorFormLayout.CrossGap, removeVfx.Margin.Left);
             CommitProto(editor, "_foxCharmUnitVfxBox", "UnitVfx");
             CommitProto(editor, "_foxCharmTargetVfxBox", "TargetVfx");
             CommitProto(editor, "_foxCharmAreaVfxBox", "AreaVfx");

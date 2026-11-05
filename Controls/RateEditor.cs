@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using AoMDivineDataEditor.Classes;
 
 namespace AoMDivineDataEditor.Controls;
 
@@ -22,6 +23,8 @@ public sealed class RateEditor : Grid
     {
         TypeField = typeField;
         ValueField = valueField;
+        EditorFormLayout.ApplyWidth(typeField, typeField is ComboBox ? EditorFieldWidthRole.ShortEnum : EditorFieldWidthRole.Reference);
+        EditorFormLayout.ApplyWidth(valueField, EditorFieldWidthRole.Numeric);
 
         ColumnDefinitions = showRemoveButton
             ? new ColumnDefinitions("Auto, Auto, Auto, Auto")
@@ -49,12 +52,7 @@ public sealed class RateEditor : Grid
 
         if (showRemoveButton)
         {
-            RemoveButton = new Button
-            {
-                Classes = { "remove-button" },
-                Margin = new Thickness(2, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            RemoveButton = EditorRemoveButtons.Row(description: "Remove rate");
             Grid.SetColumn(RemoveButton, 3);
             Children.Add(RemoveButton);
         }

@@ -51,17 +51,20 @@ public sealed class ModifierEditor : WrapPanel
         if (ApplyTypeField != null)
             Children.Add(CreateGroup(applyTypeLabel, ApplyTypeField));
 
-        Children.Add(CreateGroup(valueLabel, ValueField, new Thickness(0, 0, 0, 4)));
+        var valueAndRemove = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 0, 0, 4),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        valueAndRemove.Children.Add(CreateGroup(valueLabel, ValueField, new Thickness(0)));
+        Children.Add(valueAndRemove);
 
         if (showRemoveButton)
         {
-            RemoveButton = new Button
-            {
-                Classes = { "remove-button" },
-                Margin = new Thickness(2, 0, 0, 4),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Children.Add(RemoveButton);
+            RemoveButton = EditorRemoveButtons.Row(description: "Remove modifier");
+            // Keep the cross with the final value when the outer modifier wraps.
+            valueAndRemove.Children.Add(RemoveButton);
         }
     }
 

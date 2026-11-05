@@ -201,14 +201,15 @@ public static class ProtoXmlHandler
                                        preserveSpace && xmlSpace?.Equals("default", StringComparison.OrdinalIgnoreCase) != true;
 
             var children = element.Elements().ToList();
-            foreach (var child in children)
-                Normalize(child, depth + 1, currentPreserveSpace);
-
             if (currentPreserveSpace ||
                 children.Count == 0 ||
                 !children.Any(elementsToFormat.Contains) ||
                 element.Nodes().OfType<XText>().Any(text => !string.IsNullOrWhiteSpace(text.Value)))
+            {
+                foreach (var child in children)
+                    Normalize(child, depth + 1, currentPreserveSpace);
                 return;
+            }
 
             var parentIndent = GetLeadingIndentation(element) ??
                                string.Concat(Enumerable.Repeat(indentationUnit, depth));
@@ -232,6 +233,12 @@ public static class ProtoXmlHandler
                 !string.IsNullOrWhiteSpace(trailing.Value) ||
                 !trailing.Value.Contains('\n'))
                 element.Add(new XText(newline + parentIndent));
+
+            // Descendants derive their indentation from their preceding whitespace.
+            // Establish the parent's child layout first; otherwise they inherit the
+            // stale indentation from detached/editor-built groups.
+            foreach (var child in children)
+                Normalize(child, depth + 1, currentPreserveSpace);
         }
 
         void EnsureLeadingIndentation(XElement element, string indentation)
@@ -459,7 +466,7 @@ public static class ProtoXmlHandler
     {
         var el = unit.Element(tag);
         if (el == null)
-            unit.Add(new XElement(tag, value));
+            ProtoUnitXmlOrderPolicy.InsertNewField(unit, new XElement(tag, value));
         else
             XmlTriviaPreserver.SetText(el, value);
     }

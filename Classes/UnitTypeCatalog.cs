@@ -56,7 +56,11 @@ public static class UnitTypeCatalog
             .ToList();
 
     public static IReadOnlyList<UnitTypeDefinition> ExtractBaseDefinitionsFromBar(BarArchive? barFile, string? barPath)
+        => ExtractBaseDefinitionsFromBar(barFile, barPath, out _);
+
+    public static IReadOnlyList<UnitTypeDefinition> ExtractBaseDefinitionsFromBar(BarArchive? barFile, string? barPath, out bool complete)
     {
+        complete = false;
         if (barFile?.Entries == null || string.IsNullOrWhiteSpace(barPath) || !File.Exists(barPath))
             return [];
 
@@ -67,7 +71,9 @@ public static class UnitTypeCatalog
             var fileName = normalized.Split('/').LastOrDefault() ?? "";
             return fileName.Equals("abstract_unit_types.xml.xmb", StringComparison.OrdinalIgnoreCase) ||
                    fileName.Equals("abstract_unit_types.xmb", StringComparison.OrdinalIgnoreCase);
-        });
+        }).ToList();
+
+        complete = entries.Count > 0;
 
         using var stream = File.OpenRead(barPath);
         foreach (var entry in entries)
@@ -78,26 +84,58 @@ public static class UnitTypeCatalog
                 var bytes = new byte[size];
                 var read = entry.ReadDataDecompressed(stream, bytes);
                 if (read <= 0)
+                {
+                    complete = false;
                     continue;
+                }
 
                 var xml = XmbReader.ToFormattedXml(bytes.AsSpan(0, read));
                 if (string.IsNullOrWhiteSpace(xml))
+                {
+                    complete = false;
                     continue;
+                }
 
                 var document = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-                if (document.Root == null || !document.Root.Name.LocalName.Equals(BaseRootName, StringComparison.OrdinalIgnoreCase))
+                if (document.Root == null || document.Root.Name != BaseRootName)
+                {
+                    complete = false;
                     continue;
+                }
+
+                complete &= IsCompleteDefinitionDocument(document.Root);
 
                 foreach (var definition in ExtractDefinitions(document, isBuiltIn: true))
                     definitions.TryAdd(definition.Name, definition);
             }
             catch
             {
+                complete = false;
                 // A malformed matching BAR entry must not hide definitions loaded from another entry/fallback.
             }
         }
 
         return definitions.Values.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool IsCompleteDefinitionDocument(XElement root)
+        => root.Descendants().All(element => element.Name.Namespace == XNamespace.None) &&
+           root.Descendants(EntryName).All(element => element.Parent == root &&
+               !element.HasElements && !string.IsNullOrWhiteSpace(element.Value));
+
+    /// <summary>Unlike suggestion loading, distinguishes an absent optional mod from a failed read.</summary>
+    public static IReadOnlyList<UnitTypeDefinition>? ReadForMigration(string? path, bool isBuiltIn)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try
+        {
+            var root = XDocument.Load(path).Root;
+            if (root?.Name != (isBuiltIn ? BaseRootName : ModRootName) || !IsCompleteDefinitionDocument(root)) return null;
+            return ExtractDefinitions(root, isBuiltIn);
+        }
+        catch (FileNotFoundException) { return isBuiltIn ? null : []; }
+        catch (DirectoryNotFoundException) { return isBuiltIn ? null : []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException) { return null; }
     }
 
     public static XDocument LoadOrCreateModDocument(string path)

@@ -32,27 +32,26 @@ public sealed class TargetFilterEditor : StackPanel
         Spacing = 4;
         Margin = new Thickness(0, 2, 0, 0);
 
-        var headerRow = new StackPanel
+        var headerRow = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center
         };
-        headerRow.Children.Add(new TextBlock
+        var modeLabel = new TextBlock
         {
             Text = "Targets:",
             FontWeight = Avalonia.Media.FontWeight.Bold,
             VerticalAlignment = VerticalAlignment.Center
-        });
-        headerRow.Children.Add(ModeField);
+        };
+        headerRow.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 12, 8), Children = { modeLabel, ModeField } });
         SimpleTypeLabel = new TextBlock
         {
             Text = "Type:",
             VerticalAlignment = VerticalAlignment.Center
         };
-        headerRow.Children.Add(SimpleTypeLabel);
         SimpleTargetField.Margin = new Thickness(0);
-        headerRow.Children.Add(SimpleTargetField);
+        var simpleGroup = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 12, 8), Children = { SimpleTypeLabel, SimpleTargetField } };
+        headerRow.Children.Add(simpleGroup);
         Children.Add(headerRow);
         Children.Add(MultipleTargetsField);
 
@@ -64,6 +63,7 @@ public sealed class TargetFilterEditor : StackPanel
     {
         SimpleTypeLabel.IsVisible = !IsMultiple;
         SimpleTargetField.IsVisible = !IsMultiple;
+        if (SimpleTypeLabel.Parent is Control group) group.IsVisible = !IsMultiple;
         MultipleTargetsField.IsVisible = IsMultiple;
     }
 
@@ -77,7 +77,7 @@ public sealed class TargetFilterEditor : StackPanel
         WrapPanel chips,
         bool isReadOnly)
     {
-        var host = new StackPanel { Spacing = 2, Width = 330 };
+        var host = new StackPanel { Spacing = 8 };
         var header = new StackPanel
         {
             Orientation = Orientation.Horizontal,

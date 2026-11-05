@@ -202,6 +202,16 @@ public static class CultureCatalog
         => !string.IsNullOrWhiteSpace(stringId) &&
            BuildDisplayNameId(cultureName).Equals(stringId.Trim(), StringComparison.OrdinalIgnoreCase);
 
+    public static IReadOnlySet<string> CollectOwnedStringIds(XElement? culture)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (culture == null || culture.Name.Namespace != XNamespace.None) return result;
+        var field = culture.Elements().FirstOrDefault(element => element.Name.Namespace == XNamespace.None &&
+            element.Name.LocalName.Equals("displaynameid", StringComparison.OrdinalIgnoreCase) && !element.HasElements);
+        if (field != null && OwnsDisplayNameId(ReadField(culture, "name"), field.Value)) result.Add(field.Value.Trim());
+        return result;
+    }
+
     public static OwnedStringRename? RenameOwnedDisplayNameId(
         XElement culture,
         string oldCultureName,
@@ -211,7 +221,8 @@ public static class CultureCatalog
         var displayName = culture.Elements().FirstOrDefault(element =>
             element.Name.LocalName.Equals("displaynameid", StringComparison.OrdinalIgnoreCase));
         var oldId = BuildDisplayNameId(oldCultureName);
-        if (displayName == null || !displayName.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
+        if (displayName == null || !CollectOwnedStringIds(culture).Contains(displayName.Value.Trim()) ||
+            !displayName.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
             return null;
         var newId = BuildDisplayNameId(newCultureName);
         if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase))

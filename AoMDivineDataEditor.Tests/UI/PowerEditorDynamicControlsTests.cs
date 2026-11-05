@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using AoMDivineDataEditor.Controls;
+using AoMDivineDataEditor.Classes;
 using Xunit;
 
 namespace AoMDivineDataEditor.Tests;
@@ -29,14 +30,15 @@ public sealed class PowerEditorDynamicControlsTests
             Assert.Same(removeTag, remove.Tag);
             Assert.Contains("remove-button", remove.Classes);
 
-            // Per-row geometry remains caller-owned because existing Power rows differ.
+            // Shared field removal supplies its actual gap; owning cards may
+            // still set their own placement outside the field group.
             Assert.Equal(default, optional.Margin);
-            Assert.Equal(default, remove.Margin);
+            Assert.Equal(4, remove.Margin.Left);
         });
     }
 
     [Fact]
-    public void LabeledSegmentsPreserveControlOrderAndLegacySpacing()
+    public void LabeledSegmentsPreserveControlOrderAndUseSharedSpacing()
     {
         AvaloniaTestHost.Run(() =>
         {
@@ -46,8 +48,8 @@ public sealed class PowerEditorDynamicControlsTests
 
             Assert.Equal(Avalonia.Layout.Orientation.Horizontal, segment.Orientation);
             Assert.Equal("Amount", label.Text);
-            Assert.Equal(6, label.Margin.Right);
-            Assert.Equal(4, label.Margin.Bottom);
+            Assert.Equal(8, label.Margin.Right);
+            Assert.Equal(0, label.Margin.Bottom);
             Assert.Same(control, segment.Children[1]);
 
             var unlabeledControl = new TextBox();
@@ -67,11 +69,13 @@ public sealed class PowerEditorDynamicControlsTests
             var owner = new ScrollViewer();
             var selector = PowerEditorDynamicControls.CreateStrictSelector(
                 ["Known", "known", "Other"], "ModdedValue", true,
-                () => busy, () => canCommit, committed.Add, "field", owner, 175);
+                () => busy, () => canCommit, committed.Add, "field", owner, EditorFieldWidthRole.CompactReference);
             var values = Assert.IsAssignableFrom<IEnumerable<string>>(selector.ItemsSource).ToList();
 
-            Assert.Equal(175, selector.Width);
-            Assert.Equal(175, selector.MaxWidth);
+            Assert.Equal(150, selector.Width);
+            Assert.Equal(150, selector.MinWidth);
+            Assert.Equal(150, selector.MaxWidth);
+            Assert.True(EditorFieldInteraction.IsConfigured(selector));
             Assert.Equal(AutoCompleteFilterMode.Contains, selector.FilterMode);
             Assert.Equal(0, selector.MinimumPrefixLength);
             Assert.Equal(14, selector.Margin.Right);

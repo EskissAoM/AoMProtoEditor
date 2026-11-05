@@ -20,6 +20,20 @@ public sealed class ProtoBarData
     public List<string> MovementTypes { get; set; } = [];
     public List<string> Tactics { get; set; } = [];
     public List<string> UnitNames { get; set; } = [];
+
+    internal ProtoBarData Clone() => new()
+    {
+        UnitTypes = [.. UnitTypes], Flags = [.. Flags], Icons = [.. Icons],
+        AnimFiles = [.. AnimFiles], SoundSetFiles = [.. SoundSetFiles],
+        ImpactTypes = [.. ImpactTypes], UnitAiTypes = [.. UnitAiTypes],
+        MovementTypes = [.. MovementTypes], Tactics = [.. Tactics], UnitNames = [.. UnitNames],
+        ProtoActionTypes = new(ProtoActionTypes, ProtoActionTypes.Comparer),
+        ProtoActionFieldUsageByType = ProtoActionFieldUsageByType.ToDictionary(
+            pair => pair.Key, pair => new Dictionary<string, int>(pair.Value, pair.Value.Comparer),
+            ProtoActionFieldUsageByType.Comparer),
+        ProtoActionNamesByType = ProtoActionNamesByType.ToDictionary(
+            pair => pair.Key, pair => new List<string>(pair.Value), ProtoActionNamesByType.Comparer)
+    };
 }
 
 public static class ProtoDataExtractor

@@ -309,7 +309,8 @@ public sealed class ProtoActionFinalHardeningPass7Tests
     public void ProtoUnitCapture_RestoresAllMutableStateWhenProjectionFails()
     {
         var source = ReadProtoEditorSource();
-        var captureStart = source.IndexOf("private async Task<bool> CaptureCurrentUnitDraftAsync()", StringComparison.Ordinal);
+        var captureStart = source.IndexOf("private async Task<bool> CaptureCurrentUnitDraftCoreAsync()", StringComparison.Ordinal);
+        Assert.True(captureStart >= 0);
         var saveStart = source.IndexOf("private async void Save_Click", captureStart, StringComparison.Ordinal);
         Assert.True(captureStart >= 0 && saveStart > captureStart);
         var capture = source[captureStart..saveStart];

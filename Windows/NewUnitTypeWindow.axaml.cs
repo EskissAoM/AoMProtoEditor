@@ -12,6 +12,7 @@ public partial class NewUnitTypeWindow : SimpleWindow
     public NewUnitTypeWindow()
     {
         InitializeComponent();
+        Opened += (_, _) => _typeComboBox.Focus();
     }
 
     private void OK_Click(object? sender, RoutedEventArgs e)

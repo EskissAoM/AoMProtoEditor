@@ -1,5 +1,4 @@
 using System.Text;
-using System.Xml;
 using System.Xml.Linq;
 
 namespace AoMDivineDataEditor.Classes;
@@ -19,6 +18,16 @@ public sealed record ModDeletionReference(
 
 public sealed class ModDeletionInspection
 {
+    public IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> ExpectedStates { get; internal set; }
+        = new Dictionary<string, FileIntegrityTransaction.FileState>();
+    internal Action? ValidateManifest { get; set; }
+
+    public void ValidateReadDependencies()
+    {
+        ValidateManifest?.Invoke();
+        FileIntegrityTransaction.Execute([], ExpectedStates, () => { });
+    }
+
     public ModDeletionInspection(IEnumerable<ModDeletionReference> references)
     {
         References = references
@@ -55,7 +64,6 @@ public sealed class ModDeletionInspection
 public static class ModDeletionSafety
 {
     private const long MaximumKnownTextFileSize = 512L * 1024 * 1024;
-    private const long MaximumReferenceXmlFileSize = 256L * 1024 * 1024;
     private const long MaximumCandidateBytes = 2L * 1024 * 1024 * 1024;
     private const int MaximumCandidateFileCount = 20_000;
     private const int ScanBufferCharacters = 64 * 1024;
@@ -71,7 +79,73 @@ public static class ModDeletionSafety
         string identifier,
         string? modRootDirectory,
         IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
-        IEnumerable<string>? excludedPaths = null)
+        IEnumerable<string>? excludedPaths = null,
+        bool captureReadDependencies = false)
+        => InspectReferences(files, identifier, modRootDirectory,
+            (file, document) => FindIdentifierReferences(file, document, kind, identifier),
+            documentOverrides, excludedPaths, captureReadDependencies);
+
+    private static IEnumerable<ModDeletionReference> FindIdentifierReferences(
+        TechnologyReferenceFile file, XDocument document, GameIdentifierKind kind, string identifier)
+        => GameIdentifierReferencePolicy.FindDeletionReferenceLocations(document, kind, identifier)
+            .Select(reference => new ModDeletionReference(identifier, file.Label, file.Path,
+                reference.Owner, reference.Field, reference.IsRecognized));
+
+    // Display snapshot only: never use these counts to authorize a mutation.
+    // Parse one document at a time, rather than retaining every document in memory.
+    internal static IReadOnlyDictionary<string, int> CountIdentifierReferencesForDisplay(
+        IEnumerable<TechnologyReferenceFile> files, GameIdentifierKind kind,
+        IEnumerable<string> identifiers, string? modRootDirectory)
+    {
+        var names = identifiers.Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var counts = names.ToDictionary(name => name, _ => 0, StringComparer.OrdinalIgnoreCase);
+        if (names.Length == 0) return counts;
+        foreach (var file in files.Where(file => !string.IsNullOrWhiteSpace(file.Path))
+                     .GroupBy(file => Path.GetFullPath(file.Path), StringComparer.OrdinalIgnoreCase).Select(group => group.First()))
+        {
+            var path = Path.GetFullPath(file.Path);
+            if (!File.Exists(path)) continue;
+            var before = FileIntegrityTransaction.CaptureState(path);
+            var document = LoadReferenceDocument(path);
+            var after = FileIntegrityTransaction.CaptureState(path);
+            if (before != after)
+                throw new IOException($"'{path}' changed while usage counts were being inspected.");
+            foreach (var name in names)
+                counts[name] += new ModDeletionInspection(FindIdentifierReferences(file, document, kind, name)).References.Count;
+        }
+        // Deduplication includes the path, so counts from distinct files can be added.
+        foreach (var reference in FindReferencesInOtherFiles(modRootDirectory, names, NormalizePaths(null)))
+            counts[reference.Identifier]++;
+        return counts;
+    }
+
+    public static ModDeletionInspection InspectTechnology(
+        IEnumerable<TechnologyReferenceFile> files, string identifier, string? modRootDirectory,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides = null)
+        => InspectReferences(files, identifier, modRootDirectory,
+            (file, document) => TechnologyReferenceIndex.FindReferencesTo(
+                [new TechnologyReferenceSource(file.Label, document, file.Kind, file.Path, CanMigrate: true)], identifier)
+                .Select(reference => new ModDeletionReference(identifier, file.Label, file.Path,
+                    reference.Owner, reference.Field, reference.IsRecognized)),
+            documentOverrides, null, true);
+
+    public static IReadOnlyList<string> FindDeletedNames(IEnumerable<string> savedAndDirtyNames,
+        IEnumerable<string> currentNames, IEnumerable<KeyValuePair<string, string>> renames)
+    {
+        var current = currentNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var survivingRenames = renames.Where(rename => current.Contains(rename.Value))
+            .Select(rename => rename.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return savedAndDirtyNames.Where(name => !string.IsNullOrWhiteSpace(name) &&
+            !current.Contains(name) && !survivingRenames.Contains(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static ModDeletionInspection InspectReferences(
+        IEnumerable<TechnologyReferenceFile> files, string identifier, string? modRootDirectory,
+        Func<TechnologyReferenceFile, XDocument, IEnumerable<ModDeletionReference>> findReferences,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides,
+        IEnumerable<string>? excludedPaths, bool captureReadDependencies)
     {
         ArgumentNullException.ThrowIfNull(files);
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
@@ -80,6 +154,13 @@ public static class ModDeletionSafety
         var overrides = (documentOverrides ?? new Dictionary<string, XDocument>())
             .ToDictionary(entry => Path.GetFullPath(entry.Key), entry => entry.Value, StringComparer.OrdinalIgnoreCase);
         var references = new List<ModDeletionReference>();
+        var states = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+        var manifest = captureReadDependencies
+            ? EnumerateCandidateFiles(modRootDirectory, includeXmlAndTactics: true).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (manifest != null)
+            foreach (var path in manifest.Where(path => !excluded.Contains(Path.GetFullPath(path))))
+                states[Path.GetFullPath(path)] = FileIntegrityTransaction.CaptureState(path);
 
         foreach (var file in files
                      .Where(file => !string.IsNullOrWhiteSpace(file.Path))
@@ -89,6 +170,8 @@ public static class ModDeletionSafety
             var path = Path.GetFullPath(file.Path);
             if (excluded.Contains(path))
                 continue;
+            if (captureReadDependencies && !states.ContainsKey(path))
+                states[path] = FileIntegrityTransaction.CaptureState(path);
 
             XDocument document;
             if (overrides.TryGetValue(path, out var replacement))
@@ -115,18 +198,21 @@ public static class ModDeletionSafety
                     throw new IOException($"'{path}' changed while deletion references were being inspected. No files were written.");
             }
 
-            references.AddRange(GameIdentifierReferencePolicy.FindDeletionReferenceLocations(document, kind, identifier)
-                .Select(reference => new ModDeletionReference(
-                    identifier,
-                    file.Label,
-                    path,
-                    reference.Owner,
-                    reference.Field,
-                    reference.IsRecognized)));
+            references.AddRange(findReferences(file, document));
         }
 
         references.AddRange(FindCustomFileReferences(modRootDirectory, identifier, excluded));
-        return new ModDeletionInspection(references);
+        var inspection = new ModDeletionInspection(references) { ExpectedStates = states };
+        if (manifest != null)
+        {
+            inspection.ValidateManifest = () =>
+            {
+                if (!manifest.SetEquals(EnumerateCandidateFiles(modRootDirectory, includeXmlAndTactics: true)))
+                    throw new IOException("The mod reference file list changed during deletion checking. Retry Save. No files were written.");
+            };
+            inspection.ValidateReadDependencies();
+        }
+        return inspection;
     }
 
     public static IReadOnlyList<ModDeletionReference> FindCustomFileReferences(
@@ -147,32 +233,69 @@ public static class ModDeletionSafety
         IEnumerable<string> candidateIds,
         IEnumerable<XDocument>? currentDocuments = null,
         IEnumerable<string>? excludedPaths = null)
+        => InspectStringReferencesCore(modRootDirectory, candidateIds, currentDocuments, null,
+            excludedPaths, captureReadDependencies: false).ReferencedIds;
+
+    /// <summary>
+    /// Inspects a proposed result and live pending drafts in one batch. Overrides replace
+    /// disk documents automatically. Keep the supplied documents/enumerables live until
+    /// commit so final validation can detect draft or override-membership changes.
+    /// String definitions are not references. Callers must also guard the string table's
+    /// loaded baseline when supplying its values to OwnedStringLifecyclePolicy.
+    /// </summary>
+    public static ModStringReferenceInspection InspectStringReferences(
+        string modRootDirectory,
+        IEnumerable<string> candidateIds,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
+        IEnumerable<XDocument>? pendingDrafts = null,
+        IEnumerable<string>? excludedPaths = null)
+        => InspectStringReferencesCore(modRootDirectory, candidateIds, pendingDrafts,
+            documentOverrides, excludedPaths, captureReadDependencies: true);
+
+    private static ModStringReferenceInspection InspectStringReferencesCore(
+        string? modRootDirectory, IEnumerable<string> candidateIds,
+        IEnumerable<XDocument>? currentDocuments,
+        IReadOnlyDictionary<string, XDocument>? documentOverrides,
+        IEnumerable<string>? excludedPaths, bool captureReadDependencies)
     {
+        ArgumentNullException.ThrowIfNull(candidateIds);
         var candidates = candidateIds
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var states = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
         if (candidates.Count == 0)
-            return referenced;
+            return new ModStringReferenceInspection(referenced, states);
 
-        foreach (var document in currentDocuments ?? [])
+        FileDiscoverySnapshot? discovery = null;
+        IEnumerable<string> paths;
+        if (captureReadDependencies)
         {
-            foreach (var value in document.Descendants()
-                         .SelectMany(element => element.Attributes().Select(attribute => attribute.Value)
-                             .Concat(!element.HasElements ? [element.Value] : []))
-                         .Select(value => value.Trim()))
-            {
-                if (candidates.Contains(value))
-                    referenced.Add(value);
-            }
+            ArgumentException.ThrowIfNullOrWhiteSpace(modRootDirectory);
+            var root = Path.GetFullPath(modRootDirectory);
+            var discovered = DiscoverStringReferenceFiles(root);
+            discovery = FileDiscoverySnapshot.Capture(discovered, () => DiscoverStringReferenceFiles(root));
+            paths = discovery.Paths;
         }
+        else paths = EnumerateCandidateFiles(modRootDirectory, includeXmlAndTactics: true);
 
+        var overrides = (documentOverrides ?? new Dictionary<string, XDocument>())
+            .ToDictionary(entry => Path.GetFullPath(entry.Key), entry => new XDocument(entry.Value), StringComparer.OrdinalIgnoreCase);
+        var documents = (currentDocuments ?? []).Select(document =>
+            captureReadDependencies ? new XDocument(document) : document).ToList();
         var excluded = NormalizePaths(excludedPaths);
-        foreach (var path in EnumerateCandidateFiles(modRootDirectory, includeXmlAndTactics: true))
+        if (captureReadDependencies)
+            foreach (var path in overrides.Keys.Concat(excluded).Distinct(StringComparer.OrdinalIgnoreCase))
+                states[path] = FileIntegrityTransaction.CaptureState(path);
+
+        foreach (var document in documents.Concat(overrides.Values))
+            CollectStringReferences(document, candidates, referenced, includeWholeTokens: captureReadDependencies);
+
+        foreach (var path in paths)
         {
             var fullPath = Path.GetFullPath(path);
-            if (excluded.Contains(fullPath) ||
+            if (excluded.Contains(fullPath) || overrides.ContainsKey(fullPath) ||
                 Path.GetFileName(fullPath).Equals("stringmods.txt", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -180,20 +303,110 @@ public static class ModDeletionSafety
 
             var unresolved = candidates.Where(id => !referenced.Contains(id)).ToList();
             if (unresolved.Count == 0)
-                break;
-            var found = FindWholeTokensInStableFile(fullPath, unresolved, "string cleanup");
-            foreach (var id in found)
-                referenced.Add(id);
+                break; // Every candidate is retained; unread files cannot change that decision.
+            if (ModReferenceDocumentReader.IsCompiledTactics(fullPath))
+            {
+                var before = FileIntegrityTransaction.CaptureState(fullPath);
+                CollectStringReferences(LoadReferenceDocument(fullPath), candidates, referenced, includeWholeTokens: true);
+                if (before != FileIntegrityTransaction.CaptureState(fullPath))
+                    throw new IOException($"'{fullPath}' changed during compiled string reference inspection. No files were written.");
+                if (captureReadDependencies) states[fullPath] = before;
+                continue;
+            }
+            var found = FindWholeTokensInStableFile(fullPath, unresolved, "string cleanup", out var state);
+            referenced.UnionWith(found);
+            if (captureReadDependencies)
+            {
+                // Reuse the bounded XML reader too: entities/CDATA can hide a reference
+                // from a literal text scan. Keep conservative raw-token matches as well.
+                var extension = Path.GetExtension(fullPath);
+                if (unresolved.Any(id => !referenced.Contains(id)) &&
+                    (extension.Equals(".xml", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".tactics", StringComparison.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        CollectStringReferences(LoadReferenceDocument(fullPath), candidates, referenced, includeWholeTokens: true);
+                        if (FileIntegrityTransaction.CaptureState(fullPath) != state)
+                            throw new IOException($"'{fullPath}' changed during string reference inspection.");
+                    }
+                    catch (Exception exception)
+                    {
+                        throw new InvalidOperationException(
+                            $"String cleanup was cancelled because '{fullPath}' could not be inspected safely. No files were written.", exception);
+                    }
+                }
+                states[fullPath] = state;
+            }
         }
 
-        return referenced;
+        Action? validateDocuments = null;
+        if (captureReadDependencies)
+        {
+            validateDocuments = () =>
+            {
+                var currentOverrides = (documentOverrides ?? new Dictionary<string, XDocument>())
+                    .ToDictionary(entry => Path.GetFullPath(entry.Key), entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+                var current = (currentDocuments ?? []).ToList();
+                if (!NormalizePaths(excludedPaths).SetEquals(excluded) ||
+                    currentOverrides.Count != overrides.Count ||
+                    overrides.Any(entry => !currentOverrides.TryGetValue(entry.Key, out var document) ||
+                        !XNode.DeepEquals(entry.Value, document)) ||
+                    current.Count != documents.Count ||
+                    !current.Zip(documents).All(pair => XNode.DeepEquals(pair.First, pair.Second)))
+                    throw new IOException("Proposed documents or pending drafts changed during string cleanup checking. Retry the operation. No files were written.");
+            };
+        }
+        var inspection = new ModStringReferenceInspection(referenced, states, discovery, validateDocuments);
+        if (captureReadDependencies) inspection.ValidateReadDependencies();
+        return inspection;
+    }
+
+    private static List<string> DiscoverStringReferenceFiles(string root)
+    {
+        RequireStringReferenceRoot(root);
+        var paths = EnumerateCandidateFiles(root, includeXmlAndTactics: true).ToList();
+        RequireStringReferenceRoot(root);
+        return paths;
+    }
+
+    private static void RequireStringReferenceRoot(string root)
+    {
+        if ((File.GetAttributes(root) & FileAttributes.Directory) == 0)
+            throw new IOException($"The mod reference root '{root}' is not a directory. No files were written.");
+    }
+
+    private static void CollectStringReferences(XDocument document, IReadOnlySet<string> candidates,
+        ISet<string> referenced, bool includeWholeTokens)
+    {
+        foreach (var value in document.Descendants()
+                     .SelectMany(element => element.Attributes().Select(attribute => attribute.Value)
+                         .Concat(!element.HasElements ? [element.Value] : [])))
+        {
+            var trimmed = value.Trim();
+            if (candidates.Contains(trimmed)) referenced.Add(trimmed);
+            if (includeWholeTokens)
+                foreach (var id in candidates.Where(id => !referenced.Contains(id)))
+                    if (ContainsWholeToken(trimmed, id)) referenced.Add(id);
+        }
     }
 
     private static IEnumerable<ModDeletionReference> FindReferencesInOtherFiles(
         string? modRootDirectory,
         string identifier,
         IReadOnlySet<string> excluded)
+        => FindReferencesInOtherFiles(modRootDirectory, new[] { identifier }, excluded);
+
+    private static IEnumerable<ModDeletionReference> FindReferencesInOtherFiles(
+        string? modRootDirectory,
+        IReadOnlyCollection<string> identifiers,
+        IReadOnlySet<string> excluded)
     {
+        var searchValues = identifiers.ToDictionary(identifier => identifier,
+            identifier => identifier.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase)
+                ? new[] { identifier, identifier[..^".tactics".Length] }
+                : new[] { identifier }, StringComparer.OrdinalIgnoreCase);
+        var tokens = searchValues.Values.SelectMany(values => values).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var path in EnumerateCandidateFiles(modRootDirectory, includeXmlAndTactics: false))
         {
             var fullPath = Path.GetFullPath(path);
@@ -203,13 +416,11 @@ public static class ModDeletionSafety
                 continue;
             }
 
-            var searchValues = identifier.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase)
-                ? new[] { identifier, identifier[..^".tactics".Length] }
-                : new[] { identifier };
-            if (FindWholeTokensInStableFile(fullPath, searchValues, "deletion reference checking").Count > 0)
+            var found = FindWholeTokensInStableFile(fullPath, tokens, "deletion reference checking");
+            foreach (var entry in searchValues.Where(entry => entry.Value.Any(found.Contains)))
             {
                 yield return new ModDeletionReference(
-                    identifier,
+                    entry.Key,
                     Path.GetRelativePath(modRootDirectory!, fullPath),
                     fullPath,
                     "",
@@ -231,13 +442,14 @@ public static class ModDeletionSafety
             var extension = Path.GetExtension(path);
             if (!includeXmlAndTactics &&
                 (extension.Equals(".xml", StringComparison.OrdinalIgnoreCase) ||
-                 extension.Equals(".tactics", StringComparison.OrdinalIgnoreCase)))
+                 extension.Equals(".tactics", StringComparison.OrdinalIgnoreCase) ||
+                 ModReferenceDocumentReader.IsCompiledTactics(path)))
             {
                 continue;
             }
             // Files with extensions outside the supported text catalog are not game
             // reference sources. Do not guess their encoding or inspect their payload.
-            if (!KnownTextExtensions.Contains(extension))
+            if (!KnownTextExtensions.Contains(extension) && !ModReferenceDocumentReader.IsCompiledTactics(path))
                 continue;
 
             var size = new FileInfo(path).Length;
@@ -262,7 +474,13 @@ public static class ModDeletionSafety
         string path,
         IReadOnlyCollection<string> tokens,
         string operation)
+        => FindWholeTokensInStableFile(path, tokens, operation, out _);
+
+    private static IReadOnlySet<string> FindWholeTokensInStableFile(
+        string path, IReadOnlyCollection<string> tokens, string operation,
+        out FileIntegrityTransaction.FileState inspectedState)
     {
+        inspectedState = new FileIntegrityTransaction.FileState(false, 0, "");
         var remaining = tokens
             .Where(token => !string.IsNullOrWhiteSpace(token))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -306,6 +524,7 @@ public static class ModDeletionSafety
             var after = FileIntegrityTransaction.CaptureState(path);
             if (before != after)
                 throw new IOException($"'{path}' changed while it was being inspected.");
+            inspectedState = after;
             return found;
         }
         catch (Exception exception)
@@ -335,27 +554,7 @@ public static class ModDeletionSafety
     }
 
     private static XDocument LoadReferenceDocument(string path)
-    {
-        var length = new FileInfo(path).Length;
-        if (length > MaximumReferenceXmlFileSize)
-        {
-            throw new InvalidOperationException(
-                $"'{path}' is larger than {MaximumReferenceXmlFileSize / (1024 * 1024):N0} MiB.");
-        }
-        var settings = new XmlReaderSettings
-        {
-            DtdProcessing = DtdProcessing.Prohibit,
-            XmlResolver = null,
-            MaxCharactersInDocument = MaximumReferenceXmlFileSize * 2,
-            IgnoreComments = false,
-            IgnoreWhitespace = false
-        };
-        using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: 128 * 1024, FileOptions.SequentialScan);
-        using var reader = XmlReader.Create(stream, settings);
-        return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
-    }
+        => ModReferenceDocumentReader.Load(path);
 
     internal static bool ContainsWholeToken(string contents, string token)
     {

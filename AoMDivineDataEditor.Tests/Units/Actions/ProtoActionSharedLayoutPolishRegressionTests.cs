@@ -15,7 +15,7 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         var source = ReadProtoEditorSource();
 
         Assert.Contains("Tag = \"attaching.singleuse\"", source, StringComparison.Ordinal);
-        Assert.Contains("var singleUseColumn = Grid.GetColumn(state.MaxRangeTb) + 1;", source, StringComparison.Ordinal);
+        Assert.Contains("var singleUseColumn = EditorFormLayout.GetContainingGridColumn(state.CoreFieldsGrid, state.MaxRangeTb) + 1;", source, StringComparison.Ordinal);
         Assert.Contains("IsManagedAttachingFieldTag(actionType, normalized)", source, StringComparison.Ordinal);
         Assert.Contains("RegisterProtoActionFlagSourceControl(state, singleUseCheckBox, \"singleuse\")", source, StringComparison.Ordinal);
         Assert.Contains("SyncFlagCheckboxesFromFlags();", source, StringComparison.Ordinal);
@@ -531,7 +531,10 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         Assert.Contains("ConfigureStrictSuggestionAutoComplete(\n                protoActionAcb,\n                protoActionNameSuggestions", onHit, StringComparison.Ordinal);
         Assert.Contains("AddLabeledControl(\"Infect Action:\", protoActionAcb);\n                    AddLabeledControl(\"Duration:\", durationTb);", onHit, StringComparison.Ordinal);
         Assert.Contains("AddLabeledControl(\"Radius:\", radiusTb);\n                    AddLabeledControl(\"Duration:\", durationTb);", onHit, StringComparison.Ordinal);
-        Assert.Contains("rowGrid.ColumnDefinitions[3].Width = visible ? GridLength.Auto : new GridLength(0);", onHit, StringComparison.Ordinal);
+        Assert.Contains("damageTypeLabel.IsVisible = visible;", onHit, StringComparison.Ordinal);
+        Assert.Contains("damageTypeCb.IsVisible = visible;", onHit, StringComparison.Ordinal);
+        Assert.Contains("EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6, 7, 8, 9]);", onHit, StringComparison.Ordinal);
+        Assert.DoesNotContain("rowGrid.ColumnDefinitions[3].Width = visible", onHit, StringComparison.Ordinal);
         Assert.Contains("shadingTypeAcb.Text = KnownInitialShadingTypes.FirstOrDefault() ?? \"Default\";", onHit, StringComparison.Ordinal);
         Assert.Contains("probTb.Text = \"0\";", onHit, StringComparison.Ordinal);
         Assert.Contains("globalProbTb.Text = \"0\";", onHit, StringComparison.Ordinal);
@@ -1074,7 +1077,7 @@ public sealed class ProtoActionSharedLayoutPolishRegressionTests
         var chipRenderer = source[chipRendererStart..optionalRendererStart];
 
         Assert.Contains("removeSectionButton", chipRenderer, StringComparison.Ordinal);
-        Assert.Contains("picker.Width = 100;", chipRenderer, StringComparison.Ordinal);
+        Assert.Contains("EditorTextFieldStyle.ConfigureSelector(picker, EditorFieldWidthRole.ChipSearch);", chipRenderer, StringComparison.Ordinal);
         Assert.Contains("selectorRow.Children.Add(chips);", chipRenderer, StringComparison.Ordinal);
         Assert.Contains("state.CustomValues[\"additional.rof\"] = \"1\";", source, StringComparison.Ordinal);
         Assert.Contains("AddOptionalAttribute(\"resource\", \"Resource\", useResourceCombo: true);", source, StringComparison.Ordinal);

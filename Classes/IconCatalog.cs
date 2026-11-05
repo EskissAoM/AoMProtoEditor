@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Classes;
@@ -20,33 +19,57 @@ public static class IconCatalog
         "glyphs", "spectator", "talking_heads"
     };
 
-    private static readonly ConcurrentDictionary<string, Lazy<Task<IconArchiveSnapshot>>> Cache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ArchiveCatalogCache<IconArchiveSnapshot> Cache = new(LoadCore);
 
     public static async Task<IReadOnlyList<string>> LoadAsync(string archivePath)
-    {
-        if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
-            return [];
+        => (await LoadResultAsync(archivePath).ConfigureAwait(false)).Entries;
 
-        return (await LoadSnapshotAsync(archivePath).ConfigureAwait(false)).Paths;
-    }
+    public static async Task<CatalogLoadResult<string>> LoadResultAsync(string archivePath)
+        => (await LoadSnapshotAsync(archivePath).ConfigureAwait(false)).Map<string>(
+            snapshots => snapshots.Count == 0 ? [] : snapshots[0].Paths);
 
     internal static async Task<IReadOnlyDictionary<string, BarArchiveEntry>> LoadEntryIndexAsync(string archivePath)
+        => (await LoadEntryIndexResultAsync(archivePath).ConfigureAwait(false)).Value
+            ?? new Dictionary<string, BarArchiveEntry>(StringComparer.OrdinalIgnoreCase);
+
+    internal static async Task<AssetPayloadResult<IReadOnlyDictionary<string, BarArchiveEntry>>> LoadEntryIndexResultAsync(string archivePath)
     {
-        if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
-            return new Dictionary<string, BarArchiveEntry>(StringComparer.OrdinalIgnoreCase);
-        return (await LoadSnapshotAsync(archivePath).ConfigureAwait(false)).Entries;
+        var result = await LoadSnapshotAsync(archivePath).ConfigureAwait(false);
+        return result.Entries.Count == 0
+            ? AssetPayloadResult<IReadOnlyDictionary<string, BarArchiveEntry>>.Failure(archivePath, result.Warning)
+            : AssetPayloadResult<IReadOnlyDictionary<string, BarArchiveEntry>>.Success(result.Entries[0].Entries, archivePath);
     }
 
-    private static Task<IconArchiveSnapshot> LoadSnapshotAsync(string archivePath)
+    internal static async Task<IReadOnlyList<IconAssetSource>> LoadSourcesAsync(string archivePath)
+        => (await LoadSourcesResultAsync(archivePath).ConfigureAwait(false)).Entries;
+
+    internal static async Task<CatalogLoadResult<IconAssetSource>> LoadSourcesResultAsync(string archivePath)
     {
-        var info = new FileInfo(archivePath);
-        var cacheKey = $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
-        return Cache.GetOrAdd(
-            cacheKey,
-            _ => new Lazy<Task<IconArchiveSnapshot>>(
-                () => Task.Run(() => LoadCore(info.FullName)),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        var result = await LoadSnapshotAsync(archivePath).ConfigureAwait(false);
+        return result.Map<IconAssetSource>(snapshots => snapshots.Count == 0 ? [] : snapshots[0].Paths.Select(path =>
+        {
+            var snapshot = snapshots[0];
+            var alias = EnumerateResourcePathAliases(IconSourceResolver.ChangeExtension(path, ".dds"))
+                .First(snapshot.Entries.ContainsKey);
+            var entry = snapshot.Entries[alias];
+            return new IconAssetSource(path, new[]
+            {
+                new IconPhysicalSource(entry.RelativePath, IconFileFormat.Dds, false, Path.GetFullPath(archivePath))
+            });
+        }).ToList().AsReadOnly());
+    }
+
+    private static async Task<CatalogLoadResult<IconArchiveSnapshot>> LoadSnapshotAsync(string archivePath)
+    {
+        try
+        {
+            return new([await Cache.LoadAsync(archivePath).ConfigureAwait(false)],
+                CatalogLoadState.Complete, archivePath, []);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidDataException)
+        {
+            return new([], CatalogLoadState.Unavailable, archivePath, [exception.Message]);
+        }
     }
 
     internal static IReadOnlyList<string> FilterPaths(IEnumerable<string> paths)
@@ -75,28 +98,18 @@ public static class IconCatalog
 
     private static IconArchiveSnapshot LoadCore(string archivePath)
     {
-        try
-        {
-            using var stream = File.OpenRead(archivePath);
-            var archive = new BarArchive(stream);
-            if (!archive.Load(out _) || archive.Entries == null)
-                return EmptySnapshot();
-            var ddsEntries = archive.Entries
-                .Where(entry => entry.RelativePath.EndsWith(".dds", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            var entryIndex = ddsEntries
-                .GroupBy(entry => NormalizePath(entry.RelativePath), StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-            return new IconArchiveSnapshot(FilterPaths(ddsEntries.Select(entry => entry.RelativePath)), entryIndex);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            return EmptySnapshot();
-        }
+        using var stream = File.OpenRead(archivePath);
+        var archive = new BarArchive(stream);
+        if (!archive.Load(out var error) || archive.Entries == null)
+            throw new InvalidDataException($"Archive '{archivePath}' metadata could not be read: {error}.");
+        var ddsEntries = archive.Entries
+            .Where(entry => entry.RelativePath.EndsWith(".dds", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var entryIndex = ddsEntries
+            .GroupBy(entry => NormalizePath(entry.RelativePath), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        return new IconArchiveSnapshot(FilterPaths(ddsEntries.Select(entry => entry.RelativePath)), entryIndex);
     }
-
-    private static IconArchiveSnapshot EmptySnapshot()
-        => new([], new Dictionary<string, BarArchiveEntry>(StringComparer.OrdinalIgnoreCase));
 
     internal static string NormalizePath(string? path)
         => (path ?? "").Trim().Replace('/', '\\').TrimStart('\\');

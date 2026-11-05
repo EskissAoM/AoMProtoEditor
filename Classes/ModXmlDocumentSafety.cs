@@ -227,11 +227,17 @@ public static class ModXmlDocumentSafety
         if (File.Exists(path))
             return LoadExisting(path, kind);
 
+        // If a file appeared after Exists, load its real contents rather than
+        // pairing an empty document with the newly existing file's fingerprint.
+        var state = FileIntegrityTransaction.CaptureState(path);
+        if (state.Exists)
+            return LoadExisting(path, kind);
+
         var document = new XDocument(new XElement(ExpectedRoots[kind]));
         return new SafeModXmlLoadResult(
             document,
             Validate(document, kind),
-            FileIntegrityTransaction.CaptureState(path));
+            state);
     }
 
     public static ModXmlDocumentValidation Validate(XDocument document, ModXmlDocumentKind kind)

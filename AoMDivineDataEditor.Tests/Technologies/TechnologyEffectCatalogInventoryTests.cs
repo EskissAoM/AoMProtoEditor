@@ -124,13 +124,12 @@ public sealed class TechnologyEffectCatalogInventoryTests
         Assert.DoesNotContain(result.UnclassifiedCorpusEntries, item => item.Name == "Flag");
     }
 
-    [Fact]
+    [CorpusFact]
+    [Trait("Category", "Corpus")]
     [Trait("Category", "Integration")]
     public void ConfiguredOriginalCorpusMatchesTheCheckedInAudit()
     {
-        var dataBarPath = Environment.GetEnvironmentVariable("AOM_DATA_BAR");
-        if (string.IsNullOrWhiteSpace(dataBarPath) || !File.Exists(dataBarPath))
-            return;
+        var dataBarPath = OriginalCorpus.RequirePath();
 
         using var stream = File.OpenRead(dataBarPath);
         var archive = new BarArchive(stream);

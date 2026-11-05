@@ -35,8 +35,10 @@ public sealed class PowerEditorHostSynchronizationTests
             StringComparison.Ordinal);
         Assert.Contains("!_powerView.GetPowerNames(modified: true)", delete,
             StringComparison.Ordinal);
-        Assert.Contains("RemoveDeletedDocumentTabs(EditorEntityKind.Powers, deletedName)", delete,
-            StringComparison.Ordinal);
+        Assert.Contains("_powerView.ImmediateDeletionRequestedAsync = () => DeleteEntityImmediatelyAsync(EditorEntityKind.Powers)",
+            source, StringComparison.Ordinal);
+        var immediateDeletion = ProjectSource.ExtractMethod(source, "private async Task DeleteEntityImmediatelyAsync");
+        Assert.Contains("RemoveDeletedDocumentTabs(kind, name)", immediateDeletion, StringComparison.Ordinal);
         Assert.Contains("RefreshSavedDocumentSnapshots(EditorEntityKind.Powers)", mainSave,
             StringComparison.Ordinal);
     }

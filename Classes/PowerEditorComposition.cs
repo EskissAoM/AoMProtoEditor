@@ -2,7 +2,7 @@ using Avalonia.Controls;
 
 namespace AoMDivineDataEditor.Classes;
 
-/// <summary>Immutable lookup catalogs consumed while composing Power editor controls.</summary>
+/// <summary>Owned lookup catalogs; entity lists keep stable identities when refreshed.</summary>
 public sealed class PowerEditorCatalogs
 {
     public PowerEditorCatalogs(
@@ -17,17 +17,15 @@ public sealed class PowerEditorCatalogs
         IEnumerable<string>? tacticNames = null)
     {
         IconPaths = Normalize(iconPaths, IconCatalog.ToResourceRelativePath);
-        ProtoUnitNames = Normalize(protoUnitNames);
-        UnitTypeNames = Normalize(unitTypeNames);
-        UnitOrTypeNames = ProtoUnitNames.Concat(UnitTypeNames)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
-        TerrainCreepNames = Normalize(terrainCreepNames);
-        ProtoActionNames = Normalize(protoActionNames);
-        TechnologyNames = Normalize(technologyNames);
+        ProtoUnitNames = new SelectorCatalog(protoUnitNames);
+        UnitTypeNames = new SelectorCatalog(unitTypeNames);
+        UnitOrTypeNames = new SelectorCatalog(ProtoUnitNames.Concat(UnitTypeNames));
+        TerrainCreepNames = new SelectorCatalog(terrainCreepNames);
+        ProtoActionNames = new SelectorCatalog(protoActionNames);
+        TechnologyNames = new SelectorCatalog(technologyNames);
         AnimationNames = Normalize(animationNames);
         BoneNames = Normalize(boneNames);
-        TacticNames = Normalize(tacticNames);
+        TacticNames = new SelectorCatalog(tacticNames);
     }
 
     public IReadOnlyList<string> IconPaths { get; }
@@ -40,6 +38,18 @@ public sealed class PowerEditorCatalogs
     public IReadOnlyList<string> AnimationNames { get; }
     public IReadOnlyList<string> BoneNames { get; }
     public IReadOnlyList<string> TacticNames { get; }
+
+    internal bool RefreshEntitiesFrom(PowerEditorCatalogs updated)
+    {
+        var changed = false;
+        foreach (var pair in new[]
+                 { (ProtoUnitNames, updated.ProtoUnitNames), (UnitTypeNames, updated.UnitTypeNames),
+                   (TerrainCreepNames, updated.TerrainCreepNames), (ProtoActionNames, updated.ProtoActionNames),
+                   (TechnologyNames, updated.TechnologyNames), (TacticNames, updated.TacticNames) })
+            changed |= ((SelectorCatalog)pair.Item1).ReplaceWith(pair.Item2);
+        changed |= ((SelectorCatalog)UnitOrTypeNames).ReplaceWith(ProtoUnitNames.Concat(UnitTypeNames));
+        return changed;
+    }
 
     private static IReadOnlyList<string> Normalize(
         IEnumerable<string>? values,

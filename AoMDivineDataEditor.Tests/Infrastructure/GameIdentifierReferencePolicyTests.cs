@@ -121,9 +121,9 @@ public sealed class GameIdentifierReferencePolicyTests
             </techtreemods>
             """);
 
-        var changed = GameIdentifierReferencePolicy.RenameTechnologyProtoActionReferences(
+        var changed = GameIdentifierReferencePolicy.RenameEffectProtoActionReferences(
             document,
-            new ProtoActionRenameOperation("OwnerUnit", "OldAction", "NewAction"));
+            new ProtoActionRenameOperation("OwnerUnit", "OldAction", "NewAction"), []);
 
         Assert.Equal(1, changed);
         Assert.Equal("NewAction", (string?)document.Descendants("effect").First().Attribute("action"));

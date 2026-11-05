@@ -21,6 +21,7 @@ public sealed record TechnologySaveCatalogs(
 public sealed record TechnologySaveValidation(IReadOnlyList<string> Errors)
 {
     public bool IsValid => Errors.Count == 0;
+    internal IReadOnlyList<LocatedValidationIssue> Issues { get; init; } = [];
 }
 
 /// <summary>
@@ -186,7 +187,7 @@ public static class TechnologySaveValidator
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(catalogs);
 
-        var errors = new List<string>();
+        var errors = new LocatedValidationErrors();
         var structural = TechnologyDocumentSafety.ValidateModDocument(document);
         errors.AddRange(structural.Errors);
         if (!structural.IsValid)
@@ -211,13 +212,17 @@ public static class TechnologySaveValidator
         {
             var technologyName = AttributeValue(technology, "name");
             if (!InternalNamePolicy.IsValid(technologyName))
+            {
+                using var nameLocation = LocatedValidationErrors.At(errors, technology, "@name");
                 errors.Add($"Technology '{technologyName}' has an invalid internal name.");
+            }
 
             var namespaceOwner = TechnologyStringIdPolicy.FindNamespaceCollision(
                 technologyName,
                 catalogs.TechnologyNames);
             if (namespaceOwner != null)
             {
+                using var nameLocation = LocatedValidationErrors.At(errors, technology, "@name");
                 errors.Add(
                     $"Technology '{technologyName}' and '{namespaceOwner}' generate the same string ID namespace. Rename one technology before saving.");
             }
@@ -235,7 +240,7 @@ public static class TechnologySaveValidator
             }
         }
 
-        return new TechnologySaveValidation(errors.Distinct(StringComparer.Ordinal).ToList());
+        return new TechnologySaveValidation(errors.Distinct(StringComparer.Ordinal).ToList()) { Issues = errors.Issues };
     }
 
     private static void ValidateTechnologyProperties(
@@ -246,10 +251,14 @@ public static class TechnologySaveValidator
     {
         var orderHint = AttributeValue(technology, "orderhint");
         if (orderHint.Length > 0)
+        {
+            using var location = LocatedValidationErrors.At(errors, technology, "@orderhint");
             ValidateNumber(orderHint, $"Technology '{technologyName}' attribute 'orderhint'", integer: false, errors);
+        }
 
         foreach (var element in technology.Elements())
         {
+            using var location = LocatedValidationErrors.At(errors, element);
             var tag = element.Name.LocalName;
             if (tag.Equals("researchpoints", StringComparison.OrdinalIgnoreCase) ||
                 tag.Equals("researchlimit", StringComparison.OrdinalIgnoreCase) ||
@@ -289,6 +298,7 @@ public static class TechnologySaveValidator
     {
         foreach (var prerequisite in technology.Elements().Where(IsNamed("prereqs")).SelectMany(element => element.Elements()))
         {
+            using var location = LocatedValidationErrors.At(errors, prerequisite);
             var context = $"Technology '{technologyName}' prerequisite <{prerequisite.Name.LocalName}>";
             if (prerequisite.Name.LocalName.Equals("techstatus", StringComparison.OrdinalIgnoreCase))
             {
@@ -301,10 +311,13 @@ public static class TechnologySaveValidator
             {
                 ValidateRequiredAttribute(prerequisite, "unit", context, errors);
                 ValidateCatalogAttribute(prerequisite, "unit", unitOrTypeNames, context, errors);
-                ValidateNumber(AttributeValue(prerequisite, "count"), context + " count", integer: false, errors);
-                if (TryParseNumber(AttributeValue(prerequisite, "count"), out var count) &&
-                    (count < 0 || count != decimal.Truncate(count)))
-                    errors.Add($"{context} count must be a non-negative integer.");
+                using (LocatedValidationErrors.At(errors, prerequisite, "@count"))
+                {
+                    ValidateNumber(AttributeValue(prerequisite, "count"), context + " count", integer: false, errors);
+                    if (TryParseNumber(AttributeValue(prerequisite, "count"), out var count) &&
+                        (count < 0 || count != decimal.Truncate(count)))
+                        errors.Add($"{context} count must be a non-negative integer.");
+                }
                 ValidateRequiredCatalogAttribute(prerequisite, "operator", PrerequisiteOperators, context, errors);
                 ValidateRequiredCatalogAttribute(prerequisite, "state", PrerequisiteStates, context, errors);
             }
@@ -315,12 +328,17 @@ public static class TechnologySaveValidator
             else if (prerequisite.Name.LocalName.Equals("KBStat", StringComparison.OrdinalIgnoreCase))
             {
                 var kbStat = AttributeValue(prerequisite, "kbStat");
-                ValidateCatalogValue(kbStat, KbStatNames, context + " stat", errors);
+                using (LocatedValidationErrors.At(errors, prerequisite, "@kbStat"))
+                    ValidateCatalogValue(kbStat, KbStatNames, context + " stat", errors);
                 ValidateRequiredCatalogAttribute(prerequisite, "operator", PrerequisiteOperators, context, errors);
-                ValidateNumber(AttributeValue(prerequisite, "value"), context + " value", integer: false, errors);
+                using (LocatedValidationErrors.At(errors, prerequisite, "@value"))
+                    ValidateNumber(AttributeValue(prerequisite, "value"), context + " value", integer: false, errors);
                 ValidateOptionalCatalogAttribute(prerequisite, "kbParam", resources, context, errors);
                 if (KbStatsUsingResourceParameter.Contains(kbStat) && AttributeValue(prerequisite, "kbParam").Length == 0)
+                {
+                    using var resourceLocation = LocatedValidationErrors.At(errors, prerequisite, "@kbParam");
                     errors.Add($"{context} stat '{kbStat}' requires a Resource selection.");
+                }
             }
         }
     }
@@ -340,7 +358,10 @@ public static class TechnologySaveValidator
         }
 
         foreach (var child in children)
+        {
+            using var location = LocatedValidationErrors.At(errors, child);
             ValidateCatalogValue(child.Value, catalog, context, errors);
+        }
     }
 
     private static void ValidateEffect(
@@ -366,6 +387,7 @@ public static class TechnologySaveValidator
         var type = AttributeValue(effect, "type");
         if (type.Length == 0)
         {
+            using var typeLocation = LocatedValidationErrors.At(errors, effect, "@type");
             errors.Add($"{context} has no effect type.");
             return;
         }
@@ -376,6 +398,7 @@ public static class TechnologySaveValidator
         var isKnownStructured = knownStructuredTypes.Contains(type);
         if (isData && subtype.Length == 0)
         {
+            using var subtypeLocation = LocatedValidationErrors.At(errors, effect, "@subtype");
             errors.Add($"{context} is Data but has no subtype.");
             return;
         }
@@ -384,6 +407,7 @@ public static class TechnologySaveValidator
 
         foreach (var attribute in effect.Attributes().Where(attribute => NumericEffectAttributes.Contains(attribute.Name.LocalName)))
         {
+            using var attributeLocation = LocatedValidationErrors.At(errors, effect, "@" + attribute.Name.LocalName);
             var name = attribute.Name.LocalName;
             ValidateNumber(attribute.Value, $"{context} attribute '{name}'", IntegerEffectAttributes.Contains(name), errors);
             if (TryParseNumber(attribute.Value, out var number))
@@ -408,9 +432,15 @@ public static class TechnologySaveValidator
             if (ActionRequiredSubtypes.Contains(subtype) &&
                 AttributeValue(effect, "action").Length == 0 &&
                 !AttributeValue(effect, "allactions").Equals("1", StringComparison.OrdinalIgnoreCase))
+            {
+                using var actionLocation = LocatedValidationErrors.At(errors, effect, "@action");
                 errors.Add($"{context} ({subtype}) requires an Action selection.");
+            }
             if (subtype.Equals("ActionEnable", StringComparison.OrdinalIgnoreCase) && AttributeValue(effect, "action").Length == 0)
+            {
+                using var actionLocation = LocatedValidationErrors.At(errors, effect, "@action");
                 errors.Add($"{context} (ActionEnable) requires a concrete Action selection.");
+            }
 
             if (PowerAttributeSubtypes.Contains(subtype))
                 ValidateRequiredCatalogAttribute(effect, "power", powerNames, context, errors);
@@ -420,7 +450,10 @@ public static class TechnologySaveValidator
             {
                 var goalName = AttributeValue(effect, "goalname");
                 if (!InternalNamePolicy.IsValid(goalName))
+                {
+                    using var goalLocation = LocatedValidationErrors.At(errors, effect, "@goalname");
                     errors.Add($"{context} ({subtype}) requires a valid Goal internal name.");
+                }
             }
             if (ResourceAttributeSubtypes.Contains(subtype))
                 ValidateRequiredCatalogAttribute(effect, "resource", resources, context, errors);
@@ -478,7 +511,8 @@ public static class TechnologySaveValidator
             if (subtype.Equals("ResourceByKBStat", StringComparison.OrdinalIgnoreCase))
             {
                 var kbStat = AttributeValue(effect, "kbStat");
-                ValidateCatalogValue(kbStat, KbStatNames, context + " stat", errors);
+                using (LocatedValidationErrors.At(errors, effect, "@kbStat"))
+                    ValidateCatalogValue(kbStat, KbStatNames, context + " stat", errors);
                 if (KbStatsUsingResourceParameter.Contains(kbStat))
                     ValidateRequiredCatalogAttribute(effect, "kbparamresource", resources, context, errors);
             }
@@ -510,17 +544,25 @@ public static class TechnologySaveValidator
         }
         else if (type.Equals("ForbidTech", StringComparison.OrdinalIgnoreCase) ||
                  type.Equals("SetOnBuildingDeathTech", StringComparison.OrdinalIgnoreCase))
+        {
+            using var location = LocatedValidationErrors.At(errors, effect);
             ValidateCatalogValue(effect.Value, technologyNames, context, errors);
+        }
         else if (type.Equals("SetOnTechResearchedTech", StringComparison.OrdinalIgnoreCase))
         {
             ValidateRequiredCatalogAttribute(effect, "techType", techTypeNames, context, errors);
+            using var location = LocatedValidationErrors.At(errors, effect);
             ValidateCatalogValue(effect.Value, technologyNames, context, errors);
         }
         else if (type.Equals("RandomTech", StringComparison.OrdinalIgnoreCase))
         {
-            ValidateNumber(AttributeValue(effect, "select"), context + " selection count", integer: true, errors);
+            using (LocatedValidationErrors.At(errors, effect, "@select"))
+                ValidateNumber(AttributeValue(effect, "select"), context + " selection count", integer: true, errors);
             foreach (var technology in effect.Elements().Where(IsNamed("Tech")))
+            {
+                using var location = LocatedValidationErrors.At(errors, technology);
                 ValidateCatalogValue(technology.Value, technologyNames, context + " technology", errors);
+            }
         }
     }
 
@@ -535,6 +577,7 @@ public static class TechnologySaveValidator
         var type = AttributeValue(target, "type");
         if (type.Length == 0)
         {
+            using var typeLocation = LocatedValidationErrors.At(errors, target, "@type");
             errors.Add($"{context} target has no type.");
             return;
         }
@@ -543,6 +586,7 @@ public static class TechnologySaveValidator
             return;
         if (type.Equals("techAll", StringComparison.OrdinalIgnoreCase))
             return;
+        using var targetLocation = LocatedValidationErrors.At(errors, target);
         if (type.Equals("Tech", StringComparison.OrdinalIgnoreCase))
             ValidateCatalogValue(target.Value, technologyNames, context + " target", errors);
         else if (type.Equals("TechType", StringComparison.OrdinalIgnoreCase))
@@ -556,11 +600,15 @@ public static class TechnologySaveValidator
                  type.Equals("Unit", StringComparison.OrdinalIgnoreCase))
             ValidateCatalogValue(target.Value, unitOrTypeNames, context + " target", errors);
         else
+        {
+            using var typeLocation = LocatedValidationErrors.At(errors, target, "@type");
             errors.Add($"{context} uses unsupported target type '{type}'.");
+        }
     }
 
     private static void ValidateRequiredAttribute(XElement element, string name, string context, List<string> errors)
     {
+        using var location = LocatedValidationErrors.At(errors, element, "@" + name);
         if (AttributeValue(element, name).Length == 0)
             errors.Add($"{context} requires attribute '{name}'.");
     }
@@ -591,6 +639,7 @@ public static class TechnologySaveValidator
         string context,
         List<string> errors)
     {
+        using var location = LocatedValidationErrors.At(errors, element, "@" + name);
         var value = AttributeValue(element, name);
         if (value.Length > 0)
             ValidateCatalogValue(value, catalog, $"{context} attribute '{name}'", errors);

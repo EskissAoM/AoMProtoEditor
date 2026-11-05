@@ -114,7 +114,7 @@ public sealed class CultureManagerTests
         Assert.Contains("Click=\"GodsCultures_Click\"", xaml, StringComparison.Ordinal);
         Assert.Contains("new ManagerListShell", manager, StringComparison.Ordinal);
         Assert.Contains("Copy Culture", manager, StringComparison.Ordinal);
-        Assert.Contains("View Culture", manager, StringComparison.Ordinal);
+        Assert.Contains("View Culture", editor, StringComparison.Ordinal);
         Assert.Contains("Replay Panel Background", editor, StringComparison.Ordinal);
         Assert.Contains("SaveCultureStringValuesAsync", host, StringComparison.Ordinal);
         Assert.DoesNotContain("cultures_mods.xml", host, StringComparison.OrdinalIgnoreCase);

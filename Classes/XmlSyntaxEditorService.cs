@@ -1,4 +1,5 @@
 using System.Xml;
+using System.Xml.Linq;
 using Avalonia.Platform;
 using Avalonia.Media;
 using AvaloniaEdit;
@@ -9,6 +10,9 @@ namespace AoMDivineDataEditor.Classes;
 
 public static class XmlSyntaxEditorService
 {
+    public static string FormatElementForPreview(XElement element)
+        => XElement.Parse(element.ToString(SaveOptions.DisableFormatting)).ToString();
+
     private static readonly Lazy<IHighlightingDefinition> Highlighting = new(LoadHighlighting);
 
     public static void Configure(TextEditor editor)

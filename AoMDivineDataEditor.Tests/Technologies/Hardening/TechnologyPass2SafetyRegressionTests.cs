@@ -45,7 +45,7 @@ public sealed class TechnologyPass2SafetyRegressionTests
         Assert.Contains("var stringUpdatesToSave = new Dictionary<string, string>", technologyCode, StringComparison.Ordinal);
         Assert.Contains("foreach (var (name, xml) in savedTechnologyXml)", technologyCode, StringComparison.Ordinal);
         Assert.Contains("RecalculateDirtyState();", technologyCode, StringComparison.Ordinal);
-        Assert.Contains("newer edits remain unsaved", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("ReportSaveFeedback(_dirty ? EditorSaveOutcome.NewerEdits : EditorSaveOutcome.Saved)", technologyCode, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -65,9 +65,14 @@ public sealed class TechnologyPass2SafetyRegressionTests
     {
         var technologyCode = ReadSource("Windows", "TechnologyEditorView.axaml.cs");
 
-        Assert.Contains("ShowSavedStatus(_dirty", technologyCode, StringComparison.Ordinal);
-        Assert.Contains("else if (_statusMessage.Text == \"Modified\")", technologyCode, StringComparison.Ordinal);
-        Assert.Contains("_savedStatusGeneration == generation", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("using var feedback = _saveFeedback.BeginSave()", technologyCode, StringComparison.Ordinal);
+        Assert.Contains("if (saved) feedback.Complete(_dirty)", technologyCode, StringComparison.Ordinal);
+        var markDirty = ProjectSource.ExtractMethod(technologyCode, "private void MarkDirty()");
+        Assert.Contains("if (_dirty)", markDirty, StringComparison.Ordinal);
+        Assert.Contains("_saveFeedback.ClearSuccessOnEdit()", markDirty, StringComparison.Ordinal);
+        Assert.Contains("if (_statusMessage.Text == \"Modified\")", markDirty, StringComparison.Ordinal);
+        var sharedFeedback = ReadSource("Classes", "EditorSaveFeedback.cs");
+        Assert.Contains("if (_generation == generation)", sharedFeedback, StringComparison.Ordinal);
     }
 
     [Fact]

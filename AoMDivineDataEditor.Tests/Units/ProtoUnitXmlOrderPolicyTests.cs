@@ -10,25 +10,25 @@ public sealed class ProtoUnitXmlOrderPolicyTests
     public void NormalizeForEditor_PlacesCommandsTacticsAndActionsInCanonicalSections()
     {
         var unit = XElement.Parse("""
-            <unit name="Example"><protoaction><name>Attack</name><type>Attack</type></protoaction><culture>Greek</culture><command row="0">DoWork</command><unknown>kept</unknown><tactics>example.tactics</tactics><optionalcommand>Optional</optionalcommand></unit>
+            <unit name="Example"><protoaction><name>Attack</name><type>Attack</type></protoaction><culture>Greek</culture><command row="0">DoWork</command><tactics>example.tactics</tactics><optionalcommand>Optional</optionalcommand></unit>
             """, LoadOptions.PreserveWhitespace);
 
         ProtoUnitXmlOrderPolicy.NormalizeForEditor(unit);
 
         Assert.Equal(
-            ["culture", "unknown", "command", "optionalcommand", "tactics", "protoaction"],
+            ["culture", "command", "optionalcommand", "tactics", "protoaction"],
             unit.Elements().Select(element => element.Name.LocalName));
     }
 
     [Fact]
-    public void NormalizeForEditor_PutsStructuredSiblingsOnSeparateIndentedLines()
+    public void NormalizeForEditor_LeavesIndentationToTheSharedPreviewFormatter()
     {
         var unit = XElement.Parse("""
             <unit name="Example"><protoaction><name>Attack</name><rate type="All">1</rate></protoaction><protoaction><name>Heal</name><active>0</active></protoaction></unit>
             """, LoadOptions.PreserveWhitespace);
 
         ProtoUnitXmlOrderPolicy.NormalizeForEditor(unit);
-        var xml = unit.ToString(SaveOptions.DisableFormatting);
+        var xml = XmlSyntaxEditorService.FormatElementForPreview(unit);
 
         Assert.Contains($"{Environment.NewLine}  <protoaction>{Environment.NewLine}    <name>Attack</name>", xml, StringComparison.Ordinal);
         Assert.Contains($"</protoaction>{Environment.NewLine}  <protoaction>", xml, StringComparison.Ordinal);

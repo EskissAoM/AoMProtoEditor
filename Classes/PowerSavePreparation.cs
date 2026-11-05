@@ -21,7 +21,8 @@ public static class PowerSavePreparation
         IEnumerable<string> dirtyNames,
         IEnumerable<KeyValuePair<string, string>> pendingRenames,
         IReadOnlyDictionary<string, string> pendingStringUpdates,
-        IEnumerable<string> pendingStringRemovals)
+        IEnumerable<string> pendingStringRemovals,
+        IReadOnlySet<string>? rawXmlNames = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(dirtyNames);
@@ -29,7 +30,7 @@ public static class PowerSavePreparation
         ArgumentNullException.ThrowIfNull(pendingStringUpdates);
         ArgumentNullException.ThrowIfNull(pendingStringRemovals);
 
-        NormalizeDirtyEntries(document, dirtyNames);
+        NormalizeDirtyEntries(document, dirtyNames, rawXmlNames);
         var renames = pendingRenames.ToList();
 
         // Validate every rename before mutating the in-memory document. One unsupported
@@ -65,13 +66,16 @@ public static class PowerSavePreparation
         return new PowerSavePreparationResult(renames, updates, removals);
     }
 
-    private static void NormalizeDirtyEntries(XDocument document, IEnumerable<string> dirtyNames)
+    private static void NormalizeDirtyEntries(XDocument document, IEnumerable<string> dirtyNames, IReadOnlySet<string>? rawXmlNames)
     {
         foreach (var name in dirtyNames.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var editedEntry = PowerCatalog.Find(document, name);
             if (editedEntry == null)
                 continue;
+
+            if (rawXmlNames?.Contains(name) != true)
+                PowerXmlFieldOrder.NormalizeForEditor(editedEntry);
 
             if (editedEntry.Attribute("type")?.Value.Equals("Bronze", StringComparison.OrdinalIgnoreCase) == true)
             {

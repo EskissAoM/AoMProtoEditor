@@ -14,6 +14,15 @@ public partial class InputPromptWindow : SimpleWindow
         InitializeComponent();
     }
 
+    protected override void OnOpened(EventArgs e)
+    {
+        var limits = DialogLayout.Limits(this, 520, 400);
+        Width = Math.Min(Width, limits.Width);
+        MaxHeight = limits.Height;
+        _messageText.Parent!.SetValue(MaxHeightProperty, Math.Max(1, limits.Height - 130));
+        base.OnOpened(e);
+    }
+
     public InputPromptWindow(string message, string defaultValue = "", string confirmButtonText = "OK", bool allowWhitespace = true) : this()
     {
         _messageText.Text = message;

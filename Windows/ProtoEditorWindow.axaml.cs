@@ -143,6 +143,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private IProtoActionEditorHostAdapter _protoActionHostAdapter = new ProtoUnitActionEditorHostAdapter();
     private bool _allowCloseAfterDiscard;
     private TacticsActionEditorSession? _tacticsEditorSession;
+    // Standalone editors serialize a synthetic Unit, but selectors must use
+    // the owning document's real catalogs, never that serialization container.
+    private Func<IEnumerable<string>>? _standaloneUnitNamesProvider;
+    private Func<IEnumerable<string>>? _standaloneUnitTypeNamesProvider;
     private readonly List<ProtoAction> _tacticsEditorSeedActions = [];
     private bool _tacticsEditorSeedActionsConsumed;
     private TacticDefinition? _tacticsEditorTacticDefinition;
@@ -157,6 +161,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private readonly Dictionary<string, List<XElement>> _duplicatedUnitRechargeFallbacks = new(StringComparer.OrdinalIgnoreCase);
     private Func<string, XElement, Dictionary<string, string>, FileIntegrityTransaction.FileState?, Task>? _saveAbilityDefinitionAsync;
     private Action? _captureAbilityEditorCurrent;
+    private Control? _abilityDefinitionNameControl;
     private Action? _refreshAbilityUnitActionValidity;
     private AutoCompleteBox? _currentAbilityNameEditor;
     private Func<Task<bool>>? _commitAbilityEditorNameBeforeSaveAsync;
@@ -274,6 +279,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private ulong _lastEntityPointerPressTimestamp;
     private const int EntitySecondClickWindowMilliseconds = 500;
     private bool _isUnitSaveInProgress;
+    private IReadOnlyList<ModDeletionInspection>? _immediateUnitDeletionChecks;
     private readonly Dictionary<string, TextBox> _costControls = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextBox> _armorControls = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<TextBox, (IBrush? Brush, Thickness Thickness)> _statsValidationOriginalBorders = [];
@@ -326,7 +332,12 @@ public partial class ProtoEditorWindow : SimpleWindow
     private IReadOnlyList<string> _baseGameIconPaths = [];
     private IReadOnlyList<AnimFileCatalogEntry> _baseGameAnimFiles = [];
     private IReadOnlyList<AnimFileCatalogEntry> _baseGameSoundSets = [];
+    private IReadOnlyList<IconAssetSource> _baseGameIconSources = [];
+    private readonly Dictionary<AssetReferenceKind, CatalogLoadResult<string>> _baseGameAssetCatalogLoads = [];
     private IReadOnlyList<string> _customIconPaths = [];
+    private readonly Dictionary<AssetReferenceKind, CatalogLoadResult<string>> _customAssetCatalogLoads = [];
+    private string? _customAssetCatalogRoot;
+    private string _assetCatalogWarning = "";
     private IReadOnlyList<AnimFileCatalogEntry> _customAnimFiles = [];
     private IReadOnlyList<AnimFileCatalogEntry> _customSoundSets = [];
     private List<string>? _cachedProtoActionAnimationSuggestions;
@@ -402,6 +413,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private string _currentAbilityEditorName = "";
     private bool _loadingAbilityEditor;
     private readonly List<BuildLimitTargetRowState> _buildLimitRows = [];
+    private readonly List<string> _dynamicBuildLimitTypes = [];
     private readonly List<ResourceConversionRowState> _resourceConversionRows = [];
     private readonly List<DependentUnitRowState> _dependentUnitRows = [];
     private readonly List<SpawnRowState> _spawnRows = [];
@@ -425,13 +437,8 @@ public partial class ProtoEditorWindow : SimpleWindow
     private bool _editorTabsInitialized;
     private int _currentPageSearchMatchIndex = -1;
     private readonly DispatcherTimer _xmlPreviewRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
-    private bool _isXmlPreviewDirty;
-    private bool _isUpdatingXmlPreviewText;
     private bool _showStoredRawXml;
-    private string _lastRenderedXmlPreview = "";
     private bool _isXmlPreviewCollapsed;
-    private GridLength _expandedXmlPreviewWidth = new(250);
-    private const double CollapsedXmlPreviewWidth = 28;
 
     private static AbilityEditorDraft CloneAbilityDraft(AbilityEditorDraft source)
     {
@@ -497,7 +504,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public required ProtoAction Model { get; set; }
         // This is set only by the Add Proto Action flow. Tactics-only actions have no
         // source element too, so SourceElement cannot safely identify a new action.
-        public bool IsNewCustomAction { get; init; }
+        public bool IsNewCustomAction { get; set; }
         public bool IsTacticsOnlyAction { get; init; }
         public bool IsCurrentTacticsAction { get; set; }
         public bool HasTacticsOnlyOverrides { get; set; }
@@ -611,6 +618,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         public bool IncludeInSerialization { get; set; } = true;
         public Dictionary<string, Control> AttributeEditors { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> PreservedAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public bool HasUnrepresentedAttributes { get; set; }
     }
 
     private class DamageRowState
@@ -844,9 +852,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         public required Panel RowPanel { get; set; }
         public required TextBox RankIdTb { get; set; }
-        public required AutoCompleteBox ModifyTypeAcb { get; set; }
+        public required StrictSearchableComboBox ModifyTypeAcb { get; set; }
         public required TextBox ValueTb { get; set; }
-        public required AutoCompleteBox DamageTypeAcb { get; set; }
+        public required StrictSearchableComboBox DamageTypeAcb { get; set; }
         public required TextBlock DamageTypeLabel { get; set; }
         public string OriginalModifyType { get; set; } = "";
         public string OriginalDamageType { get; set; } = "";
@@ -855,7 +863,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private class OnDamageModifyRowState
     {
         public required Panel RowPanel { get; set; }
-        public required AutoCompleteBox ModifyTypeAcb { get; set; }
+        public required StrictSearchableComboBox ModifyTypeAcb { get; set; }
         public required TextBox ValueTb { get; set; }
         public required StrictSearchableComboBox DamageTypeCb { get; set; }
         public required TextBlock DamageTypeLabel { get; set; }
@@ -876,7 +884,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         Func<string> ReadValue,
         string OriginalValue,
         IReadOnlyList<string> Options,
-        bool AllowEmpty);
+        bool AllowEmpty,
+        Func<IReadOnlyList<string>>? CurrentOptions = null,
+        Func<string>? CurrentOriginalValue = null);
 
     protected ProtoEditorWindow(bool initializeProtoEditor)
         : this(new EditorGameDataService(), initializeProtoEditor)
@@ -891,6 +901,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetCurrentModIconResourcesDirectory);
         DataContext = this;
         InitializeComponent();
+        InitializeSaveFeedback();
         InitializePageSearch();
         InitializeXmlPreview();
         InitializeEditorTabs();
@@ -926,8 +937,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         string tacticsName,
         bool isBuiltIn,
         XDocument sourceDocument,
-        Func<XDocument, Task<TacticsDocumentSaveOutcome>>? saveDocumentAsync)
+        Func<XDocument, Task<TacticsDocumentSaveOutcome>>? saveDocumentAsync,
+        Func<IEnumerable<string>>? unitNamesProvider = null,
+        Func<IEnumerable<string>>? unitTypeNamesProvider = null,
+        ProtoEditorWindow? gameDataOwner = null)
     {
+        _standaloneUnitNamesProvider = unitNamesProvider;
+        _standaloneUnitTypeNamesProvider = unitTypeNamesProvider;
         _protoActionHostAdapter = new TacticsActionEditorHostAdapter(GetTacticsEditorActions);
         _tacticsEditorSession = new TacticsActionEditorSession(
             tacticsName,
@@ -951,7 +967,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         await ShowStartupLoadingAsync("Loading action editor...");
         try
         {
-            await LoadProtoDataFromBar();
+            await LoadTacticsEditorGameDataAsync(gameDataOwner);
 
             _tacticsEditorSeedActions.Clear();
             _tacticsEditorSeedActionsConsumed = false;
@@ -1020,12 +1036,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         XElement powerElement,
         string? modFilePath,
         Func<string, XElement, Dictionary<string, string>, FileIntegrityTransaction.FileState?, Task>? saveAbilityDefinitionAsync,
-        IEnumerable<string>? knownAbilityNames = null)
+        IEnumerable<string>? knownAbilityNames = null,
+        Func<IEnumerable<string>>? unitNamesProvider = null,
+        Func<IEnumerable<string>>? unitTypeNamesProvider = null)
     {
+        if (!PowerCatalog.IsAbilityPower(powerElement))
+            throw new InvalidDataException("This definition is a God Power, not an Ability. Open it in Powers.");
+        _standaloneUnitNamesProvider = unitNamesProvider;
+        _standaloneUnitTypeNamesProvider = unitTypeNamesProvider;
         _isAbilityDefinitionEditorMode = true;
         _abilityDefinitionEditorReadOnly = isBuiltIn;
         _isReadOnly = isBuiltIn;
         _abilityDefinitionEditorOriginalName = abilityName;
+        _standaloneAbilitySource = new XElement(powerElement);
         _saveAbilityDefinitionAsync = saveAbilityDefinitionAsync;
         _modFilePath = modFilePath;
 
@@ -1340,6 +1363,34 @@ public partial class ProtoEditorWindow : SimpleWindow
         ScheduleXmlPreviewRefresh();
     }
 
+    private async Task ReportEditorFieldErrorAsync(Prompt prompt, Control? target, Action? revealSection = null)
+    {
+        var failure = target?.IsEnabled != true ? null : EditorValidationNavigation.Mark(this, target);
+        await prompt.ShowDialog(this);
+        if (failure != null) await failure.RevealAsync(revealSection: revealSection);
+    }
+
+    private async Task ReportTacticFieldErrorAsync(Prompt prompt, object model, string field)
+        => await ReportEditorFieldErrorAsync(prompt, EditorValidationBindings.FindModel(this, model, field),
+            () =>
+            {
+                var tabs = this.GetLogicalDescendants().OfType<TabControl>().FirstOrDefault(control =>
+                    control.Items.OfType<TabItem>().Any(tab => Equals(tab.Header, "Tactic")));
+                if (tabs != null) tabs.SelectedIndex = 1;
+            });
+
+    private Action<ProtoActionWidgetState>? _revealActionForValidation;
+
+    private Task ReportActionFieldErrorAsync(Prompt prompt, ProtoActionWidgetState? state, Control? target)
+        => ReportEditorFieldErrorAsync(prompt, target, () =>
+        {
+            var tabs = this.GetLogicalDescendants().OfType<TabControl>().FirstOrDefault(control =>
+                control.Items.OfType<TabItem>().Any(tab => Equals(tab.Header, "Actions")));
+            if (tabs != null) tabs.SelectedItem = tabs.Items.OfType<TabItem>().First(tab => Equals(tab.Header, "Actions"));
+            if (state != null && _protoActionWidgets.Contains(state) && _selectedProtoActionIndex != _protoActionWidgets.IndexOf(state))
+                _revealActionForValidation?.Invoke(state);
+        });
+
     private void BasicTacticValueChanged()
     {
         if (_isPopulating)
@@ -1367,96 +1418,51 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsEnabled = !_isReadOnly
         };
         EnableDropdownAutoComplete(editor, selectAllOnFirstClick);
+        ConfigureUnitField(editor, EditorFieldWidthRole.Reference);
+        EditorAutoCompleteService.KeepDropDownAnchored(editor);
         return editor;
     }
 
-    private Button CreateBasicTacticActionNamePicker(
+    private ComboBox CreateBasicTacticActionNamePicker(
         TacticActionReference reference,
         Func<IEnumerable<string>> suggestionProvider,
         Action valueChanged)
     {
-        var picker = new Button
+        var picker = new ComboBox
         {
-            // Tactic action names need less horizontal space than normal editor text fields.
-            // Keep the full value; this is only a visual width (roughly 30 characters).
             Width = 228,
             MinHeight = 30,
-            Padding = new Thickness(8, 4),
             HorizontalContentAlignment = HorizontalAlignment.Left,
+            PlaceholderText = "Select action...",
             IsEnabled = !_isReadOnly
         };
-
-        void RefreshDisplay()
+        var refreshing = false;
+        void RefreshChoices()
         {
-            picker.Content = string.IsNullOrWhiteSpace(reference.ActionName)
-                ? "Select action..."
-                : reference.ActionName.Trim();
+            refreshing = true;
+            try
+            {
+                // Keep the current value, including an unknown legacy name, without
+                // allowing a refresh to clear the model or mark the document dirty.
+                picker.ItemsSource = suggestionProvider().Append(reference.ActionName)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+                picker.SelectedItem = reference.ActionName.Trim();
+            }
+            finally { refreshing = false; }
         }
-
-        picker.Click += (_, _) =>
+        RefreshChoices();
+        ConfigureUnitField(picker, EditorFieldWidthRole.Reference);
+        EditorValidationBindings.BindModel(picker, reference, "action");
+        picker.DropDownOpened += (_, _) => RefreshChoices();
+        picker.SelectionChanged += (_, _) =>
         {
-            // Build the choices at click time so newly created or renamed actions
-            // are available immediately without closing the tactics editor.
-            var choices = suggestionProvider()
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(value => value.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var choicesPanel = new StackPanel
-            {
-                Spacing = 2,
-                MinWidth = 212
-            };
-            var flyout = new Flyout
-            {
-                Placement = PlacementMode.BottomEdgeAlignedLeft
-            };
-
-            if (choices.Count == 0)
-            {
-                choicesPanel.Children.Add(new TextBlock
-                {
-                    Text = "No available actions",
-                    Foreground = Brushes.Gray,
-                    Margin = new Thickness(8, 6)
-                });
-            }
-            else
-            {
-                foreach (var choice in choices)
-                {
-                    var choiceButton = new Button
-                    {
-                        Content = choice,
-                        Background = Brushes.Transparent,
-                        HorizontalAlignment = HorizontalAlignment.Stretch,
-                        HorizontalContentAlignment = HorizontalAlignment.Left,
-                        Padding = new Thickness(8, 5)
-                    };
-                    choiceButton.Click += (_, _) =>
-                    {
-                        reference.ActionName = choice;
-                        RefreshDisplay();
-                        flyout.Hide();
-                        valueChanged();
-                    };
-                    choicesPanel.Children.Add(choiceButton);
-                }
-            }
-
-            flyout.Content = new ScrollViewer
-            {
-                Content = choicesPanel,
-                MaxHeight = 320,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
-            };
-            flyout.ShowAt(picker);
+            if (refreshing || picker.SelectedItem is not string selected ||
+                selected.Equals(reference.ActionName, StringComparison.Ordinal)) return;
+            reference.ActionName = selected;
+            valueChanged();
         };
-
-        RefreshDisplay();
         return picker;
     }
 
@@ -1515,21 +1521,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         };
     }
     private static Button CreateRedRemoveButton()
-    {
-        return new Button
-        {
-            Content = "×",
-            Width = 28,
-            Height = 28,
-            MinWidth = 28,
-            MinHeight = 28,
-            Padding = new Thickness(0),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Background = Brush.Parse("#992824"),
-            Foreground = Brushes.White
-        };
-    }
+        => new() { Classes = { "remove-button" } };
 
     private void BuildBasicTacticEditor()
     {
@@ -1563,7 +1555,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .ToList();
         }
 
-        var unitTypeSuggestions = (_barData?.UnitTypes ?? [])
+        var unitTypeSuggestions = GetKnownUnitTypeNames()
             .Concat(GetAvailableTrainUnitNames())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
@@ -1601,7 +1593,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var headerRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
             var nameRow = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             nameRow.Children.Add(new TextBlock { Text = "Tactic Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-            var nameBox = new TextBox { Text = definition.Name, Width = 228, MaxWidth = 228, IsReadOnly = _isReadOnly };
+            var nameBox = ConfigureUnitField(new TextBox { Text = definition.Name, IsReadOnly = _isReadOnly }, EditorFieldWidthRole.SingleLineText);
+            EditorValidationBindings.BindModel(nameBox, definition, "name");
             nameBox.TextChanged += (_, _) =>
             {
                 definition.Name = nameBox.Text?.Trim() ?? "";
@@ -1641,15 +1634,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             headerRow.Children.Add(nameRow);
             if (!_isReadOnly && _tacticsEditorTacticDefinitions.Count > 1)
             {
-                var removeTactic = new Button
-                {
-                    Content = "Remove Tactic",
-                    Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                    Padding = new Thickness(8, 4),
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
+                var removeTactic = CreateRedRemoveButton();
+                removeTactic.HorizontalAlignment = HorizontalAlignment.Right;
+                removeTactic.VerticalAlignment = VerticalAlignment.Center;
+                ToolTip.SetTip(removeTactic, "Remove tactic");
                 removeTactic.Click += (_, _) =>
                 {
                     if (_tacticsEditorTacticDefinitions.Count <= 1)
@@ -1685,14 +1673,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 priorityRows.Children.Clear();
                 foreach (var reference in definition.Actions.Where(reference => !reference.Probability.HasValue).ToList())
                 {
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6), VerticalAlignment = VerticalAlignment.Center };
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap), VerticalAlignment = VerticalAlignment.Center };
                     row.Children.Add(CreateBasicTacticActionNamePicker(reference, () => GetAvailableActionSuggestions(reference), BasicTacticValueChanged));
                     var priority = new TextBox { Text = reference.Priority?.ToString(CultureInfo.InvariantCulture) ?? "", Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    EditorValidationBindings.BindModel(priority, reference, "weight");
                     AttachBasicTacticBoundedIntegerBehavior(priority, reference, false, BasicTacticValueChanged);
+                    ConfigureUnitField(priority, EditorFieldWidthRole.TacticsWeight);
+                    priority.Margin = new Thickness(EditorFormLayout.LabelGap, 0, 0, 0);
                     row.Children.Add(priority);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) => { definition.Actions.Remove(reference); RebuildPriorityRows(); BasicTacticValueChanged(); };
                         row.Children.Add(remove);
                     }
@@ -1700,7 +1691,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 if (!_isReadOnly)
                 {
-                    var add = new Button { Content = "Add Action", Classes = { "add-item" }, Margin = new Thickness(0, 0, 10, 6) };
+                    var add = new Button { Content = "Add Action", Classes = { "add-component", "inline-action" }, Margin = new Thickness(0, 0, 12, 8) };
                     add.Click += (_, _) => { definition.Actions.Add(new TacticActionReference()); RebuildPriorityRows(); BasicTacticValueChanged(); };
                     priorityRows.Children.Add(add);
                 }
@@ -1729,14 +1720,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                 probabilityHost.Children.Add(rows);
                 foreach (var reference in refs)
                 {
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
                     row.Children.Add(CreateBasicTacticActionNamePicker(reference, () => GetAvailableActionSuggestions(reference), BasicTacticValueChanged));
                     var probability = new TextBox { Text = reference.Probability?.ToString(CultureInfo.InvariantCulture) ?? "", Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    EditorValidationBindings.BindModel(probability, reference, "weight");
                     AttachBasicTacticBoundedIntegerBehavior(probability, reference, true, BasicTacticValueChanged);
+                    ConfigureUnitField(probability, EditorFieldWidthRole.TacticsWeight);
+                    probability.Margin = new Thickness(EditorFormLayout.LabelGap, 0, 0, 0);
                     row.Children.Add(probability);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) => { definition.Actions.Remove(reference); RebuildProbabilitySection(); BasicTacticValueChanged(); };
                         row.Children.Add(remove);
                     }
@@ -1762,17 +1756,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 attackPriorityHost.Children.Add(rows);
                 foreach (var priority in definition.AttackPriorities.ToList())
                 {
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
                     var type = CreateBasicTacticAutoComplete(priority.TargetType, unitTypeSuggestions);
-                    type.Width = 230;
+                    EditorValidationBindings.BindModel(type, priority, "target");
+                    ConfigureUnitField(type, EditorFieldWidthRole.Reference);
                     type.TextChanged += (_, _) => { priority.TargetType = type.Text?.Trim() ?? ""; BasicTacticValueChanged(); };
                     row.Children.Add(type);
                     var value = new TextBox { Text = priority.BonusFactorText, Width = 48, MaxWidth = 48, IsReadOnly = _isReadOnly };
+                    EditorValidationBindings.BindModel(value, priority, "factor");
                     AttachDecimalText(value, text => priority.BonusFactorText = text, BasicTacticValueChanged, true);
+                    ConfigureUnitField(value, EditorFieldWidthRole.TacticsWeight);
+                    value.Margin = new Thickness(EditorFormLayout.LabelGap, 0, 0, 0);
                     row.Children.Add(value);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) => { definition.AttackPriorities.Remove(priority); RebuildAttackPriorities(); BasicTacticValueChanged(); };
                         row.Children.Add(remove);
                     }
@@ -1802,7 +1800,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var panel = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnSpacing = 8, RowSpacing = 6 };
                 var label = new TextBlock { Text = title + ":", FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
                 Grid.SetColumn(label, 0); Grid.SetRow(label, 0); panel.Children.Add(label);
-                var input = CreateBasicTacticAutoComplete("", unitTypeSuggestions); input.Width = 228; input.MaxWidth = 228;
+                var input = CreateBasicTacticAutoComplete("", unitTypeSuggestions); ConfigureUnitField(input, EditorFieldWidthRole.ChipSearch);
                 Grid.SetColumn(input, 1); Grid.SetRow(input, 0); panel.Children.Add(input);
                 var chips = new WrapPanel { Orientation = Orientation.Horizontal };
                 Grid.SetColumn(chips, 1); Grid.SetRow(chips, 1); panel.Children.Add(chips);
@@ -1835,12 +1833,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             targetingLists.Children.Add(attackTypesEditor); targetingLists.Children.Add(excludeTypesEditor);
             container.Children.Add(targetingLists);
 
-            var singleValueGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), ColumnSpacing = 14 };
+            var singleValueGrid = new WrapPanel();
             void AddSingleValueEditor(int column, string label, string? initial, Action<string?> setter)
             {
                 var panel = new StackPanel { Spacing = 4 };
                 panel.Children.Add(new TextBlock { Text = label, FontWeight = FontWeight.SemiBold });
-                var editor = CreateBasicTacticAutoComplete(initial, unitTypeSuggestions); editor.HorizontalAlignment = HorizontalAlignment.Stretch; editor.Width = double.NaN;
+                var editor = CreateBasicTacticAutoComplete(initial, unitTypeSuggestions);
+                panel.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 editor.TextChanged += (_, _) => { setter(string.IsNullOrWhiteSpace(editor.Text) ? null : editor.Text.Trim()); BasicTacticValueChanged(); };
                 panel.Children.Add(editor); Grid.SetColumn(panel, column); singleValueGrid.Children.Add(panel);
             }
@@ -1976,14 +1975,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                         continue;
                     }
 
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
-                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center });
-                    var editor = new TextBox { Text = value, Width = EditorNumericFieldStyle.CompactWidth, IsReadOnly = _isReadOnly };
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
+                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0) });
+                    var editor = ConfigureUnitField(new TextBox { Text = value, IsReadOnly = _isReadOnly }, EditorFieldWidthRole.Numeric);
                     AttachDecimalText(editor, text => entry.Set(text), BasicTacticValueChanged);
                     row.Children.Add(editor);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) =>
                         {
                             entry.Set(null);
@@ -2030,15 +2029,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                         continue;
                     }
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
-                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center });
-                    var editor = CreateBasicTacticAutoComplete(entry.Get(), animationSuggestions.Concat([entry.Get() ?? ""])); editor.Width = 220;
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
+                    row.Children.Add(new TextBlock { Text = entry.Label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0) });
+                    var editor = CreateBasicTacticAutoComplete(entry.Get(), animationSuggestions.Concat([entry.Get() ?? ""]));
                     FreezeActionsScrollWhileDropDownIsOpen(editor);
                     editor.TextChanged += (_, _) => { entry.Set(editor.Text?.Trim() ?? ""); BasicTacticValueChanged(); };
                     row.Children.Add(editor);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) =>
                         {
                             entry.Set(null);
@@ -2066,7 +2065,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 armorHost.Children.Add(wrap);
                 foreach (var armor in definition.ArmorOverrides.ToList())
                 {
-                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 10, 6) };
+                    var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
                     var type = new ComboBox
                     {
                         ItemsSource = new[] { "Hack", "Pierce", "Crush" },
@@ -2085,12 +2084,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                         }
                     };
                     row.Children.Add(type);
-                    var value = new TextBox { Text = armor.ValueText, Width = EditorNumericFieldStyle.CompactWidth, IsReadOnly = _isReadOnly };
+                    ConfigureUnitField(type, EditorFieldWidthRole.ShortEnum);
+                    var value = ConfigureUnitField(new TextBox { Text = armor.ValueText, IsReadOnly = _isReadOnly }, EditorFieldWidthRole.Numeric);
+                    EditorValidationBindings.BindModel(type, armor, "type");
+                    EditorValidationBindings.BindModel(value, armor, "value");
                     AttachDecimalText(value, text => armor.ValueText = text, BasicTacticValueChanged);
+                    value.Margin = new Thickness(EditorFormLayout.LabelGap, 0, 0, 0);
                     row.Children.Add(value);
                     if (!_isReadOnly)
                     {
-                        var remove = CreateRedRemoveButton();
+                        var remove = EditorRemoveButtons.Row();
                         remove.Click += (_, _) =>
                         {
                             definition.ArmorOverrides.Remove(armor);
@@ -2135,10 +2138,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         BasicTacticValueChanged();
                     }
                 };
+                ConfigureUnitField(editor, EditorFieldWidthRole.ShortEnum);
                 ageHost.Children.Add(editor);
                 if (!_isReadOnly)
                 {
-                    var remove = CreateRedRemoveButton();
+                    var remove = EditorRemoveButtons.Row();
                     remove.Click += (_, _) =>
                     {
                         definition.AgeRequirement = null;
@@ -2271,7 +2275,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ConfigureTacticsActionEditorChrome(bool isBuiltIn)
     {
-        _expandedXmlPreviewWidth = new GridLength(3, GridUnitType.Star);
         _documentTabsHost.IsVisible = false;
         _unitListPanel.IsVisible = false;
         _unitListSplitter.IsVisible = false;
@@ -2282,10 +2285,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
         _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
         _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
+        EditorXmlPreviewPane.CaptureDefaultSplit(_mainContentGrid);
         XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
         _xmlPreviewText.Focusable = true;
         _xmlPreviewText.IsTabStop = false;
-        _applyXmlPreviewButton.IsVisible = false;
+        _editUnitXmlButton.IsVisible = false;
 
         if (_mainToolbar.Child is not DockPanel toolbar)
             return;
@@ -2318,8 +2322,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#163E26"),
-                BorderBrush = Brush.Parse("#A98243")
+                Classes = { "positive" }
             };
             saveButton.Click += async (_, _) => await SaveTacticsActionEditorAsync();
             buttons.Children.Add(saveButton);
@@ -2331,7 +2334,6 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ConfigureAbilityDefinitionEditorChrome(bool isBuiltIn)
     {
-        _expandedXmlPreviewWidth = new GridLength(3, GridUnitType.Star);
         _documentTabsHost.IsVisible = false;
         _unitListPanel.IsVisible = false;
         _unitListSplitter.IsVisible = false;
@@ -2342,10 +2344,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _mainContentGrid.ColumnDefinitions[2].Width = new GridLength(7, GridUnitType.Star);
         _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(5);
         _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(3, GridUnitType.Star);
+        EditorXmlPreviewPane.CaptureDefaultSplit(_mainContentGrid);
         XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: true);
         _xmlPreviewText.Focusable = true;
         _xmlPreviewText.IsTabStop = false;
-        _applyXmlPreviewButton.IsVisible = false;
+        _editUnitXmlButton.IsVisible = false;
 
         if (_mainToolbar.Child is not DockPanel toolbar)
             return;
@@ -2377,8 +2380,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#163E26"),
-                BorderBrush = Brush.Parse("#A98243")
+                Classes = { "positive" }
             };
             saveButton.Click += async (_, _) => await SaveAbilityDefinitionEditorAsync();
             buttons.Children.Add(saveButton);
@@ -2450,6 +2452,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_abilityDefinitionEditorReadOnly || _saveAbilityDefinitionAsync == null)
             return;
+        if (_standaloneXmlSession?.IsEditing == true)
+        {
+            await SaveStandaloneAbilityXmlAsync();
+            return;
+        }
+
+        using var feedback = _saveFeedback.BeginSave();
 
         _captureAbilityEditorCurrent?.Invoke();
         if (string.IsNullOrWhiteSpace(_currentAbilityEditorName) ||
@@ -2457,14 +2466,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             string.IsNullOrWhiteSpace(draft.Name))
         {
             var prompt = new Prompt(PromptType.Error, "Ability name required", "Enter an internal ability name before saving.");
-            await prompt.ShowDialog(this);
+            await ReportEditorFieldErrorAsync(prompt, _abilityDefinitionNameControl);
             return;
         }
 
         if (!InternalNamePolicy.IsValidOrUnchangedLegacy(draft.Name, _abilityDefinitionEditorOriginalName))
         {
-            await new Prompt(PromptType.Error, "Invalid ability name",
-                "Ability names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
+            await ReportEditorFieldErrorAsync(new Prompt(PromptType.Error, "Invalid ability name",
+                "Ability names can contain only letters, digits, '_' and '-'."), _abilityDefinitionNameControl);
             return;
         }
 
@@ -2478,51 +2487,57 @@ public partial class ProtoEditorWindow : SimpleWindow
                 name.Equals(draft.Name, StringComparison.OrdinalIgnoreCase)))
         {
             var prompt = new Prompt(PromptType.Error, "Ability name already exists", $"An ability named '{draft.Name}' already exists. Choose a different internal name.");
-            await prompt.ShowDialog(this);
+            await ReportEditorFieldErrorAsync(prompt, _abilityDefinitionNameControl);
             return;
         }
 
         try
         {
-            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            draft = CloneAbilityDraft(draft);
+            var stringEntries = new Dictionary<string, string>(LoadCurrentModStringEntries(requireReadable: true), StringComparer.OrdinalIgnoreCase);
+            var displayUpdates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var tag in new[] { "displaynameid", "rolloverid" })
             {
-                if (!draft.PowerDisplayTexts.TryGetValue(tag, out var text) || string.IsNullOrWhiteSpace(text))
-                    continue;
+                if (!draft.PowerDisplayTexts.TryGetValue(tag, out var text)) continue;
                 var id = draft.PowerValues.GetValueOrDefault(tag, "").Trim();
+                if (string.IsNullOrWhiteSpace(text)) { draft.PowerValues.Remove(tag); continue; }
+                if (!draft.ModifiedPowerDisplayTextTags.Contains(tag) && id.Length > 0) continue;
                 if (string.IsNullOrWhiteSpace(id))
                 {
                     id = BuildUniqueAbilityStringId(draft.Name, tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase), stringEntries);
                     draft.PowerValues[tag] = id;
                 }
+                AddAbilityStringUpdate(displayUpdates, id, text);
                 stringEntries[id] = text;
             }
             var power = BuildAbilityPowerElement(draft);
+            ValidateStandaloneAbilityXml(power);
             await _saveAbilityDefinitionAsync(
                 _abilityDefinitionEditorOriginalName ?? draft.Name,
                 power,
                 stringEntries,
                 _loadedModStringsFileState);
-            var savedStringsPath = GetCurrentModStringsPath();
-            if (!string.IsNullOrWhiteSpace(savedStringsPath))
-            {
-                _cachedModStringEntriesPath = savedStringsPath;
-                _cachedModStringEntries = new Dictionary<string, string>(stringEntries, StringComparer.OrdinalIgnoreCase);
-                _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(savedStringsPath);
-                ReplaceLoadedModStringValues(stringEntries);
-            }
+            InvalidateModStringEntriesCache();
+            LoadCurrentModStringEntries(requireReadable: true);
+            foreach (var tag in AbilityStringPolicy.FieldTags)
+                if (power.Element(tag) is { } field) draft.PowerValues[tag] = field.Value;
+                else draft.PowerValues.Remove(tag);
             _abilityDefinitionEditorOriginalName = draft.Name;
             draft.PowerSource = new XElement(power);
             draft.Modified = false;
             draft.ModifiedPowerDisplayTextTags.Clear();
+            _abilityDrafts[draft.Name] = draft;
             _isDirty = false;
             _allowAbilityDefinitionEditorClose = true;
-            _statusMessage.Text = "Ability saved.";
+            _standaloneAbilitySource = new XElement(power);
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
+            feedback.Complete();
             UpdateXmlPreview(force: true);
         }
         catch (Exception ex)
         {
             var prompt = new Prompt(PromptType.Error, "Unable to save ability", ex.Message);
+            _saveFeedback.Report(EditorSaveOutcome.Failed);
             await prompt.ShowDialog(this);
         }
     }
@@ -2539,7 +2554,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _abilityDefinitionEditorClosePromptOpen = true;
         try
         {
-            var prompt = new Prompt(PromptType.Confirm, "Discard ability changes?", "You have unsaved ability changes. Close this window without saving them?");
+            var prompt = new Prompt(PromptType.Confirm, "Discard ability changes?", "You have unsaved ability changes. Close this window without saving them?", confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
             await prompt.ShowDialog(this);
             if (!prompt.Confirmed) return;
             _allowAbilityDefinitionEditorClose = true;
@@ -2621,6 +2636,13 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_tacticsEditorSession?.CanSave != true || _tacticsEditorSession.IsSaveInProgress)
             return;
+        if (_standaloneXmlSession?.IsEditing == true)
+        {
+            await SaveStandaloneTacticsXmlAsync();
+            return;
+        }
+
+        using var feedback = _saveFeedback.BeginSave();
 
         var names = _protoActionWidgets
             .Select(state => state.NameAcb.Text?.Trim() ?? "")
@@ -2629,14 +2651,18 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (names.Count != names.Distinct(StringComparer.OrdinalIgnoreCase).Count())
         {
             var duplicatePrompt = new Prompt(PromptType.Error, "Duplicate action name", "Each tactics action must have a unique name.");
-            await duplicatePrompt.ShowDialog(this);
+            var duplicates = _protoActionWidgets.Where(state => !string.IsNullOrWhiteSpace(state.NameAcb.Text) &&
+                names.Count(name => name.Equals(state.NameAcb.Text.Trim(), StringComparison.OrdinalIgnoreCase)) > 1).ToList();
+            var duplicate = duplicates.FirstOrDefault(state => state.NameAcb.IsEffectivelyVisible) ?? duplicates.FirstOrDefault();
+            await ReportActionFieldErrorAsync(duplicatePrompt, duplicate, duplicate?.NameAcb);
             return;
         }
 
         if (_protoActionWidgets.Any(state => string.IsNullOrWhiteSpace(state.NameAcb.Text) || string.IsNullOrWhiteSpace(state.TypeAcb.Text)))
         {
             var requiredPrompt = new Prompt(PromptType.Error, "Missing action data", "Every action requires both a Name and a Type.");
-            await requiredPrompt.ShowDialog(this);
+            var missing = _protoActionWidgets.First(state => string.IsNullOrWhiteSpace(state.NameAcb.Text) || string.IsNullOrWhiteSpace(state.TypeAcb.Text));
+            await ReportActionFieldErrorAsync(requiredPrompt, missing, string.IsNullOrWhiteSpace(missing.NameAcb.Text) ? missing.NameAcb : missing.TypeAcb);
             return;
         }
 
@@ -2648,9 +2674,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         });
         if (invalidAction != null)
         {
-            await new Prompt(PromptType.Error, "Invalid action name",
-                "New or renamed action names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
-            invalidAction.NameAcb.Focus();
+            await ReportActionFieldErrorAsync(new Prompt(PromptType.Error, "Invalid action name",
+                "New or renamed action names can contain only letters, digits, '_' and '-'."), invalidAction, invalidAction.NameAcb);
             return;
         }
 
@@ -2661,7 +2686,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (string.IsNullOrWhiteSpace(definition.Name))
             {
                 var prompt = new Prompt(PromptType.Error, "Missing tactic name", "Every tactic requires a name.");
-                await prompt.ShowDialog(this);
+                await ReportTacticFieldErrorAsync(prompt, definition, "name");
                 return;
             }
             var originalTacticName = definition.SourceElement?.Nodes().OfType<XText>()
@@ -2669,8 +2694,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .FirstOrDefault(value => value.Length > 0);
             if (!InternalNamePolicy.IsValidOrUnchangedLegacy(definition.Name, originalTacticName))
             {
-                await new Prompt(PromptType.Error, "Invalid tactic name",
-                    "New or renamed tactic names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
+                await ReportTacticFieldErrorAsync(new Prompt(PromptType.Error, "Invalid tactic name",
+                    "New or renamed tactic names can contain only letters, digits, '_' and '-'."), definition, "name");
                 return;
             }
 
@@ -2679,7 +2704,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (string.IsNullOrWhiteSpace(reference.ActionName))
                 {
                     var prompt = new Prompt(PromptType.Error, "Missing action reference", $"Every action reference in tactic '{definition.Name}' requires an action name.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, reference, "action");
                     return;
                 }
                 if (!existingActionNames.Contains(reference.ActionName.Trim()))
@@ -2688,7 +2713,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         PromptType.Error,
                         "Missing referenced action",
                         $"Tactic '{definition.Name}' references action '{reference.ActionName}', but that action does not exist in this tactics file. Update or remove the reference before saving.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, reference, "action");
                     return;
                 }
                 if (reference.AttributeMode == "Priority" &&
@@ -2696,14 +2721,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                     (!int.TryParse(reference.AttributeValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var priority) || priority < 0 || priority > 100))
                 {
                     var prompt = new Prompt(PromptType.Error, "Invalid priority", $"Priority for '{reference.ActionName}' must be an integer from 0 to 100.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, reference, "weight");
                     return;
                 }
                 if (reference.AttributeMode == "Probability" &&
                     (!int.TryParse(reference.AttributeValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var probability) || probability < 0 || probability > 100))
                 {
                     var prompt = new Prompt(PromptType.Error, "Invalid probability", $"Probability for '{reference.ActionName}' must be an integer from 0 to 100.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, reference, "weight");
                     return;
                 }
             }
@@ -2715,7 +2740,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     bonusFactor < 0 || bonusFactor > 100)
                 {
                     var prompt = new Prompt(PromptType.Error, "Invalid attack priority", $"Attack priority entries in tactic '{definition.Name}' require a target type and a bonus factor from 0 to 100.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, attackPriority, string.IsNullOrWhiteSpace(attackPriority.TargetType) ? "target" : "factor");
                     return;
                 }
             }
@@ -2726,7 +2751,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     !decimal.TryParse(armor.ValueText, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
                 {
                     var prompt = new Prompt(PromptType.Error, "Invalid armor override", $"Armor override entries in tactic '{definition.Name}' require both a type and numeric value.");
-                    await prompt.ShowDialog(this);
+                    await ReportTacticFieldErrorAsync(prompt, armor, string.IsNullOrWhiteSpace(armor.Type) ? "type" : "value");
                     return;
                 }
             }
@@ -2736,6 +2761,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             SortTacticPriorityReferencesForSave();
             var updated = BuildTacticsActionEditorDocument();
+            ValidateStandaloneTacticsXml(updated);
             var saveResult = await _tacticsEditorSession.TrySaveAsync(updated);
             if (saveResult == TacticsEditorSaveResult.Busy ||
                 saveResult == TacticsEditorSaveResult.Unavailable)
@@ -2746,7 +2772,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             if (saveResult == TacticsEditorSaveResult.Cancelled)
             {
-                _statusMessage.Text = "Tactics save cancelled.";
+                ReportSaveFeedback(EditorSaveOutcome.Cancelled);
                 return;
             }
 
@@ -2781,18 +2807,25 @@ public partial class ProtoEditorWindow : SimpleWindow
             _isDirty = _tacticsEditorSession.HasUnsavedChanges(
                 isDirty: true,
                 () => BuildTacticsActionEditorDocument(validateSerializedActions: false));
-            _statusMessage.Text = _isDirty
-                ? "Tactics saved; newer edits remain unsaved."
-                : "Tactics saved.";
+            ReportSaveFeedback(_isDirty ? EditorSaveOutcome.NewerEdits : EditorSaveOutcome.Saved);
+            feedback.Complete(_isDirty);
         }
         catch (Exception ex)
         {
             var prompt = new Prompt(PromptType.Error, "Unable to save tactics", ex.Message);
+            _saveFeedback.Report(EditorSaveOutcome.Failed);
             await prompt.ShowDialog(this);
         }
     }
 
     internal void ReloadTacticsActionEditorDocument(XDocument document)
+    {
+        _standaloneXmlSession?.Reset(StandaloneXmlPreview(document.Root!));
+        AdoptTacticsActionEditorDocument(document);
+        ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
+    }
+
+    private void AdoptTacticsActionEditorDocument(XDocument document)
     {
         if (_tacticsEditorSession == null || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
             return;
@@ -2818,11 +2851,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         _isDirty = false;
         BuildEditorPanel(_currentUnitName, resetScroll: false);
         UpdateXmlPreview(force: true);
-        _statusMessage.Text = "External tactics reloaded. Review the file before saving again.";
     }
 
     private bool HasUnsavedTacticsEditorChanges()
     {
+        if (_standaloneXmlSession?.IsDirty == true) return true;
         // Delayed UI notifications may mark a just-saved editor dirty. The
         // session compares serialized state with the committed document before
         // deciding that a close confirmation is required.
@@ -2845,7 +2878,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         try
         {
-            var prompt = new Prompt(PromptType.Confirm, "Discard tactics changes?", "Close this tactics editor without saving your changes?");
+            var prompt = new Prompt(PromptType.Confirm, "Discard tactics changes?", "Close this tactics editor without saving your changes?", confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
             await prompt.ShowDialog(this);
             if (!prompt.Confirmed)
                 return;
@@ -2918,7 +2951,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task EnsureInitialModSelectionAsync()
     {
-        var config = ProtoEditorSettings.LoadSettings();
+        var config = ReadHostSettings(refresh: true).Config ?? new ProtoEditorConfig();
         if (!string.IsNullOrEmpty(config.LastModFilePath) && File.Exists(config.LastModFilePath))
         {
             if (await TryLoadModFileWithFeedbackAsync(config.LastModFilePath))
@@ -2933,6 +2966,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task LoadProtoDataFromBar()
     {
+        _loadedTacticsBaseSource = null;
         _protoDataBarFile = null;
         _protoDataBarPath = null;
         _cachedBaseTechtreeDocuments = null;
@@ -2940,11 +2974,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         _baseGameIconPaths = [];
         _baseGameAnimFiles = [];
         _baseGameSoundSets = [];
+        _baseGameIconSources = [];
+        _baseGameAssetCatalogLoads.Clear();
         ResetBarProtoActionSuggestionData();
 
         var dataBarPath = ResolveDataBarPath();
         if (!string.IsNullOrEmpty(dataBarPath) && File.Exists(dataBarPath))
         {
+            var sourceBeforeLoad = CaptureTacticsBaseSource(dataBarPath);
             _statusMessage.Text = "Loading Data.bar...";
             try
             {
@@ -2965,7 +3002,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 // extracted data updates controls and must stay on Avalonia's UI thread.
                 _protoDataBarFile = loadedBarFile;
                 _protoDataBarPath = dataBarPath;
+                var previousData = _barData;
                 ExtractProtoFromBar(loadedBarFile, dataBarPath);
+                if (_barData != null && _barXmlRoot != null && !ReferenceEquals(previousData, _barData) &&
+                    sourceBeforeLoad == CaptureTacticsBaseSource(dataBarPath))
+                    _loadedTacticsBaseSource = sourceBeforeLoad;
                 await LoadBaseGameIconCatalogAsync(dataBarPath);
                 await LoadBaseGameAnimFileCatalogAsync(dataBarPath);
                 await LoadBaseGameSoundSetCatalogAsync(dataBarPath);
@@ -2982,27 +3023,59 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task LoadBaseGameIconCatalogAsync(string? dataBarPath = null)
     {
-        var archivePath = ResolveIconArchivePath(dataBarPath ?? ResolveDataBarPath());
-        _baseGameIconPaths = archivePath == null
-            ? []
-            : await IconCatalog.LoadAsync(archivePath);
+        var archivePath = ResolveIconArchivePath(dataBarPath ?? ResolveDataBarPath(), requireExists: false);
+        var result = archivePath == null ? UnconfiguredArchiveCatalog<IconAssetSource>("UITextureCache.bar") :
+            await IconCatalog.LoadSourcesResultAsync(archivePath);
+        _baseGameIconSources = AdoptBaseAssetCatalog(AssetReferenceKind.Icon, result, _baseGameIconSources,
+            item => item.LogicalPath);
+        _baseGameIconPaths = _baseGameIconSources.Select(item => item.LogicalPath).ToList();
     }
 
     private async Task LoadBaseGameAnimFileCatalogAsync(string? dataBarPath = null)
     {
-        var artDirectory = ResolveArtDirectoryPath(dataBarPath ?? ResolveDataBarPath());
-        _baseGameAnimFiles = artDirectory == null
-            ? []
-            : await AnimFileCatalog.LoadAsync(artDirectory);
+        var artDirectory = ResolveArtDirectoryPath(dataBarPath ?? ResolveDataBarPath(), requireExists: false);
+        var result = artDirectory == null ? UnconfiguredArchiveCatalog<AnimFileCatalogEntry>("Art*.bar") :
+            await AnimFileCatalog.LoadResultAsync(artDirectory);
+        _baseGameAnimFiles = AdoptBaseAssetCatalog(AssetReferenceKind.Animation, result, _baseGameAnimFiles,
+            item => item.Path);
     }
 
     private async Task LoadBaseGameSoundSetCatalogAsync(string? dataBarPath = null)
     {
-        var archivePath = ResolveSoundArchivePath(dataBarPath ?? ResolveDataBarPath());
-        _baseGameSoundSets = archivePath == null ? [] : await SoundSetCatalog.LoadAsync(archivePath);
+        var archivePath = ResolveSoundArchivePath(dataBarPath ?? ResolveDataBarPath(), requireExists: false);
+        var result = archivePath == null ? UnconfiguredArchiveCatalog<AnimFileCatalogEntry>("Sound.bar") :
+            await SoundSetCatalog.LoadResultAsync(archivePath);
+        _baseGameSoundSets = AdoptBaseAssetCatalog(AssetReferenceKind.SoundSet, result, _baseGameSoundSets,
+            item => item.Path);
     }
 
-    internal static string? ResolveIconArchivePath(string? dataBarPath)
+    private static CatalogLoadResult<T> UnconfiguredArchiveCatalog<T>(string source)
+        => new([], CatalogLoadState.Unavailable, source, ["Set the Data.bar path in Settings to locate this archive."]);
+
+    private IReadOnlyList<T> AdoptBaseAssetCatalog<T>(AssetReferenceKind kind, CatalogLoadResult<T> result,
+        IReadOnlyList<T> previous, Func<T, string> path)
+    {
+        var sameSource = _baseGameAssetCatalogLoads.TryGetValue(kind, out var old) &&
+            string.Equals(old.Source, result.Source, StringComparison.OrdinalIgnoreCase);
+        _baseGameAssetCatalogLoads[kind] = result.Map<string>(entries => entries.Select(path).ToList());
+        UpdateAssetCatalogWarning();
+        return result.IsComplete || !sameSource || previous.Count == 0 ? result.Entries : previous;
+    }
+
+    private Task<bool> EnsureBaseGameAssetCatalogAvailableAsync(AssetReferenceKind kind)
+        => CatalogAvailabilityPrompt.EnsureAsync(this, async () =>
+        {
+            switch (kind)
+            {
+                case AssetReferenceKind.Icon: await LoadBaseGameIconCatalogAsync(); break;
+                case AssetReferenceKind.Animation: await LoadBaseGameAnimFileCatalogAsync(); break;
+                default: await LoadBaseGameSoundSetCatalogAsync(); break;
+            }
+            return _baseGameAssetCatalogLoads[kind];
+        }, kind switch { AssetReferenceKind.Icon => "Base-game icons", AssetReferenceKind.Animation => "Base-game animation files", _ => "Base-game sound sets" },
+            "Check the Data.bar path in Settings and access to the reported archives. Restore or repair an unreadable archive, then retry.");
+
+    internal static string? ResolveIconArchivePath(string? dataBarPath, bool requireExists = true)
     {
         if (string.IsNullOrWhiteSpace(dataBarPath))
             return null;
@@ -3011,10 +3084,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (gameDirectory == null)
             return null;
         var candidate = Path.Combine(gameDirectory, "ui", "UITextureCache.bar");
-        return File.Exists(candidate) ? candidate : null;
+        return !requireExists || File.Exists(candidate) ? candidate : null;
     }
 
-    internal static string? ResolveArtDirectoryPath(string? dataBarPath)
+    internal static string? ResolveArtDirectoryPath(string? dataBarPath, bool requireExists = true)
     {
         if (string.IsNullOrWhiteSpace(dataBarPath))
             return null;
@@ -3023,17 +3096,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (gameDirectory == null)
             return null;
         var candidate = Path.Combine(gameDirectory, "art");
-        return Directory.Exists(candidate) ? candidate : null;
+        return !requireExists || Directory.Exists(candidate) ? candidate : null;
     }
 
-    internal static string? ResolveSoundArchivePath(string? dataBarPath)
+    internal static string? ResolveSoundArchivePath(string? dataBarPath, bool requireExists = true)
     {
         if (string.IsNullOrWhiteSpace(dataBarPath)) return null;
         var dataDirectory = Path.GetDirectoryName(Path.GetFullPath(dataBarPath));
         var gameDirectory = dataDirectory == null ? null : Directory.GetParent(dataDirectory)?.FullName;
         if (gameDirectory == null) return null;
         var candidate = Path.Combine(gameDirectory, "sound", "Sound.bar");
-        return File.Exists(candidate) ? candidate : null;
+        return !requireExists || File.Exists(candidate) ? candidate : null;
     }
 
     private string? ResolveDataBarPath()
@@ -3054,7 +3127,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
-        var config = ProtoEditorSettings.LoadSettings();
+        var config = ReadHostSettings().Config ?? new ProtoEditorConfig();
         return !string.IsNullOrEmpty(config.DataBarPath) && File.Exists(config.DataBarPath)
             ? config.DataBarPath
             : null;
@@ -3065,7 +3138,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         DateTime lastWriteTimeUtc = File.GetLastWriteTimeUtc(barPath);
         double mtime = lastWriteTimeUtc.Ticks;
 
-        var configLoaded = ProtoEditorSettings.LoadSettings();
+        var settingsLoaded = ReadHostSettings(refresh: true);
+        var configLoaded = settingsLoaded.Config ?? new ProtoEditorConfig();
         string cachePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache_merged_proto.xml");
         Dictionary<string, string>? tacticsActionTypes = null;
 
@@ -3139,9 +3213,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             File.WriteAllText(cachePath, combinedXml);
 
-            configLoaded.DataBarPath = barPath;
-            configLoaded.DataBarMtime = mtime;
-            ProtoEditorSettings.SaveSettings(configLoaded);
+            RememberExtractedDataBar(settingsLoaded, barPath, mtime);
 
             _statusMessage.Text = "";
         }
@@ -3380,6 +3452,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         var savedName = savedElement?.Attribute("name")?.Value?.Trim();
         if (string.IsNullOrWhiteSpace(savedName))
             savedName = currentName;
+        ForgetUnitXmlDraft(currentName);
+        ForgetUnitXmlDraft(savedName);
 
         var currentElement = ProtoXmlHandler.GetUnitElement(_modXmlRoot, currentName);
         var affectedStringIds = CollectUnitOwnedStringIds(currentName, currentElement);
@@ -3427,6 +3501,23 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _isDirty = _dirtyUnitNames.Count > 0;
         InvalidateSuggestionCaches();
+        if (_activeEntityKind == EditorEntityKind.Units)
+        {
+            // The browser labels include the pending name textbox, not just saved XML.
+            if (string.Equals(_currentUnitName, currentName, StringComparison.OrdinalIgnoreCase) &&
+                _fieldControls.TryGetValue(ProtoUnitNameFieldKey, out var nameControl) && nameControl is TextBox nameBox)
+            {
+                _currentUnitName = savedName;
+                nameBox.Text = savedName;
+            }
+            _allCurrentNames = _allCurrentNames.Select(name =>
+                name.Equals(currentName, StringComparison.OrdinalIgnoreCase) ? savedName : name)
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+            var previousSuppression = _suppressUnitListSelectionChange;
+            _suppressUnitListSelectionChange = true;
+            try { FilterUnitList(); }
+            finally { _suppressUnitListSelectionChange = previousSuppression; }
+        }
     }
 
     private bool IsUnitStringIdOwnedByAnotherDirtyDocument(
@@ -3495,8 +3586,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         _emptyDocumentMessage.Text = entityKind switch
         {
             EditorEntityKind.Technologies => "Click on a technology to start",
-            EditorEntityKind.MajorGods => "Click on a major god to view its raw XML",
-            EditorEntityKind.Powers => "Click on a power to view its raw XML",
+            EditorEntityKind.MajorGods => "Click on a major god to start",
+            EditorEntityKind.Powers => "Click on a power to start",
             _ => "Click on a unit to start"
         };
         _emptyDocumentOverlay.IsVisible = true;
@@ -3660,29 +3751,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (tab.IsMain)
             return;
 
-        if (ReferenceEquals(_activeDocumentTab, tab) &&
-            tab.EntityKind == EditorEntityKind.Technologies &&
-            _technologyView != null &&
-            !await _technologyView.CommitCurrentTechnologyAsync())
-            return;
-        if (ReferenceEquals(_activeDocumentTab, tab) &&
-            tab.EntityKind == EditorEntityKind.MajorGods &&
-            _majorGodView != null &&
-            !await _majorGodView.CommitCurrentMajorGodAsync())
-            return;
-        if (ReferenceEquals(_activeDocumentTab, tab) &&
-            tab.EntityKind == EditorEntityKind.Powers &&
-            _powerView != null &&
-            !await _powerView.CommitCurrentPowerAsync())
-            return;
-
+        // Closing discards the draft. Save validation must not block that choice.
         if (IsDocumentTabDirty(tab))
         {
             var prompt = new Prompt(
                 PromptType.Confirm,
                 "Unsaved tab",
                 $"'{tab.EntityName}' has unsaved changes. Discard those changes and close this tab?",
-                confirmButtonText: "Discard & close");
+                confirmButtonText: "Discard & close", actionRole: PromptActionRole.Destructive);
             await prompt.ShowDialog(this);
             if (!prompt.Confirmed)
                 return;
@@ -3695,9 +3771,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _majorGodView.DiscardMajorGodChanges(tab.EntityName, tab.SavedElement);
             else if (tab.EntityKind == EditorEntityKind.Powers && _powerView != null && !string.IsNullOrWhiteSpace(tab.EntityName))
                 _powerView.DiscardPowerChanges(tab.EntityName, tab.SavedElement);
+            ClearFeedbackAfterDiscard();
         }
 
         var wasActive = ReferenceEquals(_activeDocumentTab, tab);
+        if (tab.EntityKind == EditorEntityKind.Units) ReleaseCleanUnitXmlDraft(tab.EntityName);
+        if (tab.EntityKind == EditorEntityKind.Technologies && !string.IsNullOrWhiteSpace(tab.EntityName))
+            _technologyView?.ReleaseCleanTechnologyXmlDraft(tab.EntityName);
+        if (tab.EntityKind == EditorEntityKind.Powers) _powerView?.ReleaseCleanPowerXmlDraft(tab.EntityName);
+        if (tab.EntityKind == EditorEntityKind.MajorGods) _majorGodView?.ReleaseCleanMajorGodXmlDraft(tab.EntityName);
         _openDocumentTabs.Remove(tab);
         _documentTabItems.Remove(tab.TabItem);
         if (wasActive && _mainDocumentTab != null)
@@ -3727,6 +3809,20 @@ public partial class ProtoEditorWindow : SimpleWindow
         await ActivateDocumentTabAsync(target);
     }
 
+    private async Task<bool> ConfirmDiscardInvalidUnitDraftAsync(EditorDocumentTabState tab)
+    {
+        var prompt = new Prompt(PromptType.Confirm, "Unsaved Unit changes",
+            $"'{tab.EntityName}' could not be kept as a draft. Discard its unsaved changes and switch tabs? Cancel keeps the current tab and changes.",
+            confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
+        await prompt.ShowDialog(this);
+        if (!prompt.Confirmed)
+            return false;
+        DiscardUnitDocumentChanges(tab);
+        _currentUnitName = null;
+        ClearEditorPanels();
+        return true;
+    }
+
     private async Task ActivateDocumentTabAsync(EditorDocumentTabState target)
     {
         if (_documentTabActivationInProgress)
@@ -3742,9 +3838,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (_activeEntityKind == EditorEntityKind.Units && !await CaptureCurrentUnitDraftAsync())
             {
-                if (previous != null)
-                    SelectDocumentTabWithoutActivation(previous);
-                return;
+                if (previous == null || !await ConfirmDiscardInvalidUnitDraftAsync(previous))
+                {
+                    if (previous != null)
+                        SelectDocumentTabWithoutActivation(previous);
+                    return;
+                }
             }
             if (_activeEntityKind == EditorEntityKind.Technologies &&
                 _technologyView != null &&
@@ -3756,7 +3855,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             if (_activeEntityKind == EditorEntityKind.MajorGods &&
                 _majorGodView != null &&
-                !await _majorGodView.CommitCurrentMajorGodAsync())
+                !await _majorGodView.CaptureCurrentMajorGodDraftAsync())
             {
                 if (previous != null)
                     SelectDocumentTabWithoutActivation(previous);
@@ -3987,7 +4086,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         if (_activeEntityKind == EditorEntityKind.MajorGods &&
             _majorGodView != null &&
-            !await _majorGodView.CommitCurrentMajorGodAsync())
+            !await _majorGodView.CaptureCurrentMajorGodDraftAsync())
             return;
         if (_activeEntityKind == EditorEntityKind.Powers &&
             _powerView != null &&
@@ -4003,6 +4102,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ApplyEntityKindUi(EditorEntityKind entityKind)
     {
+        if (_activeEntityKind != entityKind) _saveFeedback.ClearContextMessage();
         _activeEntityKind = entityKind;
         var showTechnologies = entityKind == EditorEntityKind.Technologies;
         var showMajorGods = entityKind == EditorEntityKind.MajorGods;
@@ -4043,7 +4143,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         _technologyHost.IsVisible = false;
         _technologyHost.Content = null;
         _technologyView = null;
+        _majorGodView?.ReleaseMajorGodXmlEditing();
         _majorGodView = null;
+        _powerView?.ReleasePowerXmlEditing();
         _powerView = null;
         _entityListHeading.Text = "Units";
         _unitsEntityButton.Classes.Set("active", true);
@@ -4092,7 +4194,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void EnsureTechnologyView()
     {
         if (_technologyView != null)
+        {
+            RefreshTechnologySelectorCatalogs();
             return;
+        }
 
         _technologyView = new TechnologyEditorView(
             GetBaseTechtreeDocumentsFromLoadedBar(),
@@ -4123,6 +4228,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             confirmLinkedMinorGodRemovalAsync: ConfirmLinkedMinorGodRemovalAsync,
             prepareMinorGodLifecycle: PrepareMinorGodTechnologyLifecycle,
             externalStringReferenceProvider: FindTechnologyExternalStringReferences);
+        _technologyView.PrepareDeletionChecks = (names, overrides) =>
+            PrepareStagedDeletionChecks(names, overrides, null);
+        _technologyView.PrepareStringCleanup = (candidates, proposed) =>
+            PrepareOwnedStringSaveInspection(candidates, proposed, GetCurrentModGameplayFilePath("techtree_mods.xml")!);
+        _technologyView.ImmediateDeletionRequestedAsync = () => DeleteEntityImmediatelyAsync(EditorEntityKind.Technologies);
+        _technologyView.SaveFeedbackReported = ReportSaveFeedback;
+        _technologyView.UseHostStatusFooter(text =>
+        {
+            if (_activeEntityKind == EditorEntityKind.Technologies) ReportContextStatus(text);
+        });
         _technologyView.BrowserStateChanged += TechnologyView_BrowserStateChanged;
         _technologyView.DirtyStateChanged += TechnologyView_DirtyStateChanged;
         _technologyHost.Content = _technologyView;
@@ -4162,13 +4277,72 @@ public partial class ProtoEditorWindow : SimpleWindow
             excludedPaths);
     }
 
+    private OwnedStringSaveInspection PrepareOwnedStringSaveInspection(IEnumerable<string> candidates,
+        IReadOnlyDictionary<string, XDocument> proposed, string sourcePath,
+        IReadOnlySet<string>? appliedAbilityNames = null, bool includePowerDrafts = false)
+    {
+        var ownerPath = Path.GetFullPath(sourcePath);
+        var reserved = OtherStringClaims().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var inspection = ModDeletionSafety.InspectStringReferences(GetCurrentModRootDirectory()
+                ?? throw new IOException("The active mod directory could not be resolved. No files were written."),
+            candidates, proposed, Drafts(), string.IsNullOrWhiteSpace(GetCurrentModStringsPath()) ? [] : [GetCurrentModStringsPath()!]);
+        return new OwnedStringSaveInspection(inspection, reserved);
+
+        bool IsOwner(string? path) => !string.IsNullOrWhiteSpace(path) && ownerPath.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase);
+        IEnumerable<string> OtherStringClaims()
+        {
+            if (!IsOwner(_modFilePath)) foreach (var id in _pendingUnitStringUpdates.Keys) yield return id;
+            if (!IsOwner(GetCurrentModGameplayFilePath("techtree_mods.xml")) && _technologyView != null)
+                foreach (var id in _technologyView.PendingStringIds) yield return id;
+            if ((includePowerDrafts || !IsOwner(GetCurrentModGameplayFilePath(PowerCatalog.ModFileName))) && _powerView != null)
+                foreach (var id in _powerView.PendingStringIds) yield return id;
+            if (!IsOwner(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName)) && _majorGodView != null)
+                foreach (var id in _majorGodView.PendingStringIds) yield return id;
+        }
+        IEnumerable<XDocument> Drafts()
+        {
+            // Additive evidence: persisted files remain inspected too. A pending
+            // removal in a different editor cannot authorize cleanup prematurely.
+            if (!IsOwner(_modFilePath) && (_isDirty || _dirtyUnitNames.Count > 0) && _modXmlDoc != null) yield return CreateUnitXmlSnapshot();
+            if (!IsOwner(GetCurrentModGameplayFilePath("techtree_mods.xml")) && _technologyView?.IsDirty == true && _technologyView.CreateModifiedDocumentSnapshot() is { } technologies)
+                yield return technologies;
+            if ((includePowerDrafts || !IsOwner(GetCurrentModGameplayFilePath(PowerCatalog.ModFileName))) && _powerView?.IsDirty == true)
+                foreach (var document in _powerView.CreateStringReferenceDrafts()) yield return document;
+            if (!IsOwner(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName)) && _majorGodView?.IsDirty == true)
+                foreach (var document in _majorGodView.CreateStringReferenceDrafts()) yield return document;
+            foreach (var draft in _abilityDrafts.Values.Concat(_unitAbilityDrafts.Values.SelectMany(drafts => drafts.Values))
+                         .Where(draft => draft.Modified && appliedAbilityNames?.Contains(draft.Name) != true))
+            {
+                if (draft.GeneralSource != null) yield return new XDocument(new XElement(draft.GeneralSource));
+                if (draft.PowerSource != null) yield return new XDocument(new XElement(draft.PowerSource));
+                yield return new XDocument(new XElement("draft", draft.GeneralValues.Values.Concat(draft.PowerValues.Values)
+                    .Select(value => new XElement("value", value))));
+            }
+            yield return new XDocument(new XElement("claims", OtherStringClaims().Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(id => id, StringComparer.OrdinalIgnoreCase).Select(id => new XElement("id", id))));
+        }
+    }
+
     private IReadOnlyList<TechnologyReferenceUsage> GetExternalTechnologyReferences()
+        => GetExternalTechnologyReferencesCore(new ReferenceReadBudget());
+
+    private IReadOnlyList<TechnologyReferenceUsage> GetExternalTechnologyReferencesCore(ReferenceReadBudget budget)
+    {
+        try { return ReadExternalTechnologyReferences(budget); }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException or XmlException)
+        {
+            _statusMessage.Text = $"Technology reference browsing is incomplete: {exception.Message}";
+            return [];
+        }
+    }
+
+    private IReadOnlyList<TechnologyReferenceUsage> ReadExternalTechnologyReferences(ReferenceReadBudget budget)
     {
         var knownTechnologyNames = new HashSet<string>(LoadTechNamesFromBar(), StringComparer.OrdinalIgnoreCase);
         var modTechtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
         if (!string.IsNullOrWhiteSpace(modTechtreePath) && File.Exists(modTechtreePath))
         {
-            var modTechtree = XDocument.Load(modTechtreePath, LoadOptions.PreserveWhitespace);
+            var modTechtree = ModReferenceDocumentReader.Load(modTechtreePath, budget);
             foreach (var tech in modTechtree.Descendants().Where(element =>
                          element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)))
             {
@@ -4182,6 +4356,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var sources = new List<TechnologyReferenceSource>();
         if (_barXmlRoot != null)
         {
+            budget.InspectExisting(_barXmlRoot, "Base ProtoUnits");
             sources.Add(new TechnologyReferenceSource(
                 "Base ProtoUnits",
                 new XDocument(new XElement(_barXmlRoot)),
@@ -4190,6 +4365,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (_modXmlDoc?.Root != null)
         {
+            budget.InspectExisting(_modXmlDoc, "Mod ProtoUnits");
             sources.Add(new TechnologyReferenceSource(
                 "Mod ProtoUnits",
                 _modXmlDoc,
@@ -4201,6 +4377,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         var baseMajorGods = MajorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
         if (baseMajorGods.Count > 0)
         {
+            foreach (var definition in baseMajorGods)
+                budget.InspectExisting(definition.SourceElement, "Base major gods");
             sources.Add(new TechnologyReferenceSource(
                 "Base major gods",
                 new XDocument(new XElement("majorgods", baseMajorGods.Select(definition => new XElement(definition.SourceElement)))),
@@ -4215,13 +4393,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 sources.Add(new TechnologyReferenceSource(
                     file.Label,
-                    XDocument.Load(file.Path, LoadOptions.PreserveWhitespace),
+                    ModReferenceDocumentReader.Load(file.Path, budget),
                     file.Kind,
                     file.Path,
                     CanMigrate: true));
             }
-            catch
+            catch (ReferenceResourceLimitException) { throw; }
+            catch (Exception exception)
             {
+                _statusMessage.Text = $"Technology reference browsing is incomplete: '{file.Label}' could not be inspected: {exception.Message}";
                 // Reference browsing remains available when an unrelated custom
                 // XML file is malformed. A rename preflight is stricter and will
                 // identify that exact file before permitting any writes.
@@ -4234,6 +4414,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyDeletionReferences(
         string technologyName,
         IReadOnlyDictionary<string, XDocument>? documentOverrides = null)
+        => GetTechnologyDeletionReferencesCore(technologyName, documentOverrides, new ReferenceReadBudget());
+
+    private IReadOnlyList<TechnologyReferenceUsage> GetTechnologyDeletionReferencesCore(
+        string technologyName, IReadOnlyDictionary<string, XDocument>? documentOverrides,
+        ReferenceReadBudget budget)
     {
         var sources = new List<TechnologyReferenceSource>();
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -4250,6 +4435,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 documentOverrides.TryGetValue(Path.GetFullPath(_modFilePath), out var overriddenProto)
                 ? overriddenProto
                 : _modXmlDoc;
+            budget.InspectExisting(protoDocument, "Mod ProtoUnits");
             sources.Add(new TechnologyReferenceSource(
                 "Mod ProtoUnits",
                 protoDocument,
@@ -4265,21 +4451,23 @@ public partial class ProtoEditorWindow : SimpleWindow
             var fullPath = Path.GetFullPath(file.Path);
             if (documentOverrides != null && documentOverrides.TryGetValue(fullPath, out var overrideDocument))
             {
+                budget.InspectExisting(overrideDocument, file.Label);
                 excluded.Add(fullPath);
                 sources.Add(new TechnologyReferenceSource(
                     file.Label, overrideDocument, file.Kind, file.Path, CanMigrate: true));
                 continue;
             }
+            budget.AdmitFile(file.Path);
             var before = FileIntegrityTransaction.CaptureState(file.Path);
             XDocument document;
             try
             {
-                document = XDocument.Load(file.Path, LoadOptions.PreserveWhitespace);
+                document = ModReferenceDocumentReader.Load(file.Path, budget);
             }
             catch (Exception exception)
             {
                 throw new InvalidOperationException(
-                    $"'{technologyName}' was not deleted because '{file.Path}' could not be inspected safely.",
+                    $"'{technologyName}' was not deleted because '{file.Path}' could not be inspected safely: {exception.Message}",
                     exception);
             }
             var after = FileIntegrityTransaction.CaptureState(file.Path);
@@ -4310,8 +4498,19 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private IReadOnlyList<TechnologyReferenceFile> GetGameIdentifierReferenceFiles()
+        => IncludeKnownReferenceFiles(GetTechnologyReferenceFiles());
+
+    private IReadOnlyList<TechnologyReferenceFile> DiscoverRenameReferenceFiles(out FileDiscoverySnapshot discovery)
     {
-        var files = GetTechnologyReferenceFiles().ToList();
+        var root = GetCurrentModRootDirectory()
+            ?? throw new IOException("The active mod reference directory could not be resolved. No files were written.");
+        return IncludeKnownReferenceFiles(ModReferenceFileCatalog.Discover(root, out discovery));
+    }
+
+    private IReadOnlyList<TechnologyReferenceFile> IncludeKnownReferenceFiles(
+        IReadOnlyList<TechnologyReferenceFile> discovered)
+    {
+        var files = discovered.ToList();
         var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
         if (!string.IsNullOrWhiteSpace(techtreePath))
         {
@@ -4327,14 +4526,62 @@ public partial class ProtoEditorWindow : SimpleWindow
         GameIdentifierKind kind,
         string identifier,
         IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
-        IEnumerable<string>? excludedPaths = null)
+        IEnumerable<string>? excludedPaths = null,
+        bool captureReadDependencies = false)
         => ModDeletionSafety.InspectIdentifier(
             GetGameIdentifierReferenceFiles(),
             kind,
             identifier,
             GetCurrentModRootDirectory(),
             documentOverrides,
-            excludedPaths);
+            excludedPaths,
+            captureReadDependencies);
+
+    private IReadOnlyList<ModDeletionInspection> PrepareStagedDeletionChecks(
+        IReadOnlyList<string> names, IReadOnlyDictionary<string, XDocument> candidates,
+        GameIdentifierKind? kind)
+    {
+        if (names.Count == 0) return [];
+        var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in candidates) overrides[Path.GetFullPath(entry.Key)] = entry.Value;
+        // Other editors' draft additions can block deletion, but their unsaved
+        // removals must not hide references that still exist on disk.
+        var pending = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase);
+        void AddPending(string? path, XDocument? document)
+        {
+            if (!string.IsNullOrWhiteSpace(path) && document != null && !overrides.ContainsKey(Path.GetFullPath(path)))
+                pending[Path.GetFullPath(path)] = document;
+        }
+        if (_isDirty) AddPending(_modFilePath, _modXmlDoc);
+        if (_technologyView?.IsDirty == true)
+            AddPending(GetCurrentModGameplayFilePath("techtree_mods.xml"), _technologyView.CreateModifiedDocumentSnapshot());
+        if (_powerView?.IsDirty == true)
+            AddPending(GetCurrentModGameplayFilePath(PowerCatalog.ModFileName), _powerView.CreateModifiedDocumentSnapshot());
+        if (_majorGodView?.IsDirty == true)
+            AddPending(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName), _majorGodView.CreateModifiedDocumentSnapshot());
+        var checks = new List<ModDeletionInspection>();
+        foreach (var name in names)
+        {
+            var inspection = kind.HasValue
+                ? ModDeletionSafety.InspectIdentifier(GetGameIdentifierReferenceFiles(), kind.Value, name,
+                    GetCurrentModRootDirectory(), overrides, captureReadDependencies: true)
+                : ModDeletionSafety.InspectTechnology(GetGameIdentifierReferenceFiles(), name,
+                    GetCurrentModRootDirectory(), overrides);
+            if (inspection.IsBlocked)
+                throw new InvalidOperationException($"'{name}' was not deleted because it is referenced:\n{inspection.Format()}");
+            foreach (var entry in pending)
+            {
+                var file = new TechnologyReferenceFile(entry.Key, ModReferenceFileCatalog.InferDocumentKind(entry.Key), "Unsaved editor draft");
+                var draftCheck = kind.HasValue
+                    ? ModDeletionSafety.InspectIdentifier([file], kind.Value, name, null, pending)
+                    : ModDeletionSafety.InspectTechnology([file], name, null, pending);
+                if (draftCheck.IsBlocked)
+                    throw new InvalidOperationException($"'{name}' was not deleted because an unsaved draft references it:\n{draftCheck.Format()}");
+            }
+            checks.Add(inspection);
+        }
+        return checks;
+    }
 
     private async Task<bool> EnsureIdentifierCanBeDeletedAsync(
         GameIdentifierKind kind,
@@ -4342,14 +4589,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         string entityLabel,
         IReadOnlyDictionary<string, XDocument>? documentOverrides = null,
         IEnumerable<string>? excludedPaths = null,
-        Window? owner = null)
+        Window? owner = null,
+        Action<ModDeletionInspection>? captureInspection = null)
     {
         try
         {
             var inspection = InspectIdentifierForDeletion(
-                kind, identifier, documentOverrides, excludedPaths);
+                kind, identifier, documentOverrides, excludedPaths,
+                captureReadDependencies: captureInspection != null);
             if (!inspection.IsBlocked)
+            {
+                captureInspection?.Invoke(inspection);
                 return true;
+            }
 
             await DeletionBlockedDialog.ShowAsync(
                 owner ?? this,
@@ -4398,22 +4650,60 @@ public partial class ProtoEditorWindow : SimpleWindow
             .ToList();
 
     private void AdoptGameIdentifierReferenceMigration(GameIdentifierReferenceMigrationPlan? plan)
+        => AdoptReferenceMigrationPaths(plan?.Paths ?? [], preserveTechnologyView: true);
+
+    private void AdoptReferenceMigrationPaths(IReadOnlyList<string> paths, bool preserveTechnologyView = false)
     {
-        if (plan == null || plan.Paths.Count == 0)
+        if (paths.Count == 0)
             return;
 
-        bool Includes(string? path) => !string.IsNullOrWhiteSpace(path) && plan.Paths.Any(candidate =>
+        bool Includes(string? path) => !string.IsNullOrWhiteSpace(path) && paths.Any(candidate =>
             candidate.Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
 
         if (Includes(GetCurrentModGameplayFilePath("techtree_mods.xml")) && _technologyView?.IsDirty != true)
+        {
+            var previousView = _technologyView;
+            var previousContent = _technologyHost.Content;
+            var selected = previousView?.CurrentTechnologyName;
+            var modified = previousView?.IsModifiedMode == true;
             RefreshTechnologyViewAfterTechTypeChanges();
+            if (preserveTechnologyView && previousView != null)
+            {
+                EnsureTechnologyView();
+                _technologyView!.SetModifiedMode(modified);
+                _technologyView.SelectTechnology(selected);
+                if (!ReferenceEquals(previousContent, previousView))
+                    _technologyHost.Content = previousContent;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
+            }
+        }
         if (Includes(GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName)))
+        {
+            var previousView = _majorGodView;
+            var previousContent = _technologyHost.Content;
+            var selectedGod = previousView?.CurrentMajorGodName;
+            var modifiedGods = previousView?.IsModifiedMode == true;
+            previousView?.ReleaseMajorGodXmlEditing();
             _majorGodView = null;
+            if (previousView != null)
+            {
+                EnsureMajorGodView();
+                _majorGodView!.SetModifiedMode(modifiedGods);
+                _majorGodView.SelectMajorGod(selectedGod);
+                if (!ReferenceEquals(previousContent, previousView))
+                    _technologyHost.Content = previousContent;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
+            }
+        }
         if (Includes(GetCurrentModAbilitiesFilePath("abilities_mods.xml")) ||
             Includes(GetCurrentModGameplayFilePath("powers_mods.xml")))
         {
             if (Includes(GetCurrentModGameplayFilePath("powers_mods.xml")) && _powerView?.IsDirty != true)
+            {
                 _powerView?.AcknowledgePowerFileSavedByEditor();
+                if (preserveTechnologyView)
+                    RefreshSavedDocumentSnapshots(EditorEntityKind.Powers);
+            }
             _abilityPowerCatalog.Clear();
             if (!_isDirty)
             {
@@ -4428,37 +4718,48 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private TechnologyReferenceMigrationPlan PrepareExternalTechnologyReferenceMigration(
         IReadOnlyList<TechnologyRenameOperation> operations)
-        => TechnologyReferenceMigrationPlan.Prepare(
-            GetTechnologyReferenceFiles().Where(file => file.Kind != TechnologyReferenceDocumentKind.MinorGods),
-            operations);
+    {
+        var files = DiscoverRenameReferenceFiles(out var discovery);
+        var ownerPath = Path.GetFullPath(GetCurrentModGameplayFilePath("techtree_mods.xml")
+            ?? throw new IOException("The active Technology file could not be resolved. No files were written."));
+        var plan = TechnologyReferenceMigrationPlan.Prepare(
+            // Technology.SaveAsync migrates its own candidate. Writing a second
+            // copy from the disk scan would restore stale definitions after Save.
+            files.Where(file => file.Kind != TechnologyReferenceDocumentKind.MinorGods &&
+                !Path.GetFullPath(file.Path).Equals(ownerPath, StringComparison.OrdinalIgnoreCase)),
+            operations, discovery);
+        ValidateReferenceMigrationDrafts(plan.Paths, EditorEntityKind.Technologies,
+            plan.GetDocument(GetCurrentModGameplayFilePath(PowerCatalog.ModFileName)));
+        return plan;
+    }
+
+    private void ValidateReferenceMigrationDrafts(IReadOnlyList<string> paths, EditorEntityKind source,
+        XDocument? proposedPowerDocument)
+    {
+        bool Includes(string? path) => !string.IsNullOrWhiteSpace(path) && paths.Any(candidate =>
+            Path.GetFullPath(candidate).Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
+        void RequireClean(bool dirty, EditorEntityKind kind, string? path)
+        {
+            if (source != kind && dirty && Includes(path))
+                throw new IOException($"The rename affects unsaved {kind} edits. Save or discard those edits before renaming. No reference files were written.");
+        }
+        RequireClean(_isDirty, EditorEntityKind.Units, _modFilePath);
+        RequireClean(_technologyView?.IsDirty == true, EditorEntityKind.Technologies,
+            GetCurrentModGameplayFilePath("techtree_mods.xml"));
+        RequireClean(_majorGodView?.IsDirty == true, EditorEntityKind.MajorGods,
+            GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName));
+        RequireClean(_powerView?.IsDirty == true, EditorEntityKind.Powers,
+            GetCurrentModGameplayFilePath(PowerCatalog.ModFileName));
+        if (source != EditorEntityKind.Powers)
+            _powerView?.ValidateReferenceMigration(proposedPowerDocument);
+    }
 
     private void AdoptExternalTechnologyReferenceMigration(TechnologyReferenceMigrationPlan plan)
     {
         var protoDocument = plan.GetDocument(_modFilePath);
         if (protoDocument != null)
             AdoptSavedProtoDocument(protoDocument);
-        var majorGodPath = GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName);
-        if (!string.IsNullOrWhiteSpace(majorGodPath) && plan.Paths.Any(path =>
-                path.Equals(Path.GetFullPath(majorGodPath), StringComparison.OrdinalIgnoreCase)))
-        {
-            _majorGodView = null;
-        }
-        if (plan.Paths.Any(path =>
-                path.Equals(GetCurrentModAbilitiesFilePath("abilities_mods.xml"), StringComparison.OrdinalIgnoreCase) ||
-                path.Equals(GetCurrentModGameplayFilePath("powers_mods.xml"), StringComparison.OrdinalIgnoreCase)))
-        {
-            if (_powerView?.IsDirty != true && plan.Paths.Any(path =>
-                    path.Equals(GetCurrentModGameplayFilePath("powers_mods.xml"), StringComparison.OrdinalIgnoreCase)))
-            {
-                _powerView?.AcknowledgePowerFileSavedByEditor();
-            }
-            _abilityPowerCatalog.Clear();
-            if (!_isDirty)
-            {
-                _abilityDrafts.Clear();
-                _unitAbilityDrafts.Clear();
-            }
-        }
+        AdoptReferenceMigrationPaths(plan.Paths, preserveTechnologyView: true);
         _protoUnitCommandCatalogLoaded = false;
         _cachedTechNames = null;
         InvalidateSuggestionCaches();
@@ -4467,7 +4768,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void EnsureMajorGodView()
     {
         if (_majorGodView != null)
+        {
+            RefreshMajorGodSelectorCatalogs();
             return;
+        }
 
         var baseDefinitions = MajorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
         var sharedData = MajorGodCatalog.ExtractSharedDataFromBar(_protoDataBarFile, _protoDataBarPath);
@@ -4509,9 +4813,20 @@ public partial class ProtoEditorWindow : SimpleWindow
             AdoptMajorGodReferenceMigration,
             EnsureMajorGodCanBeDeletedAsync,
             this);
+        _majorGodView.PrepareDeletionChecks = (names, overrides) =>
+            PrepareStagedDeletionChecks(names, overrides, GameIdentifierKind.MajorGod);
+        _majorGodView.PrepareStringCleanup = (candidates, proposed) =>
+            PrepareOwnedStringSaveInspection(candidates, proposed, GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName)!);
+        _majorGodView.ImmediateDeletionRequestedAsync = () => DeleteEntityImmediatelyAsync(EditorEntityKind.MajorGods);
         _majorGodView.BrowserStateChanged += MajorGodView_BrowserStateChanged;
         _majorGodView.DirtyStateChanged += MajorGodView_DirtyStateChanged;
         _majorGodView.Saved += MajorGodView_Saved;
+        _majorGodView.XmlMajorGodRenamed += (oldName, newName) => RenameOpenDocumentTabs(EditorEntityKind.MajorGods, oldName, newName);
+        _majorGodView.SaveFeedbackReported = ReportSaveFeedback;
+        _majorGodView.UseHostStatusFooter(text =>
+        {
+            if (_activeEntityKind == EditorEntityKind.MajorGods) ReportContextStatus(text);
+        });
         _technologyHost.Content = _majorGodView;
     }
 
@@ -4532,10 +4847,20 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void MajorGodView_DirtyStateChanged(object? sender, EventArgs e)
-        => RefreshDocumentTabHeaders();
+    {
+        if (_majorGodView?.IsDirty == true) _saveFeedback.ClearSuccessOnEdit();
+        RefreshDocumentTabHeaders();
+    }
 
     private void MajorGodView_Saved(object? sender, EventArgs e)
     {
+        if (_majorGodView?.LastSaveWroteStrings == true)
+        {
+            InvalidateModStringEntriesCache();
+            LoadCurrentModStringEntries(requireReadable: true);
+            _powerView?.AcknowledgeStringFileSavedByEditor();
+            _technologyView?.AcknowledgeStringFileSavedByEditor();
+        }
         InvalidateSuggestionCaches();
         _technologyView?.UpdateMajorGodNames(GetTechnologyPrerequisiteMajorGodNames());
     }
@@ -4544,10 +4869,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         IReadOnlyList<KeyValuePair<string, string>> renames)
     {
         var majorGodPath = GetCurrentModGameplayFilePath(MajorGodCatalog.ModFileName);
-        var files = GetGameIdentifierReferenceFiles().Where(file =>
+        var files = DiscoverRenameReferenceFiles(out var discovery).Where(file =>
             string.IsNullOrWhiteSpace(majorGodPath) ||
             !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(majorGodPath), StringComparison.OrdinalIgnoreCase));
-        return GameIdentifierReferenceMigrationPlan.Prepare(files, GameIdentifierKind.MajorGod, renames);
+        var plan = GameIdentifierReferenceMigrationPlan.Prepare(files, GameIdentifierKind.MajorGod, renames,
+            discovery: discovery);
+        ValidateReferenceMigrationDrafts(plan.Paths, EditorEntityKind.MajorGods,
+            plan.GetDocument(GetCurrentModGameplayFilePath(PowerCatalog.ModFileName)));
+        return plan;
     }
 
     private void AdoptMajorGodReferenceMigration(GameIdentifierReferenceMigrationPlan plan)
@@ -4568,7 +4897,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private void EnsurePowerView()
     {
         if (_powerView != null)
+        {
+            RefreshPowerSelectorCatalogs();
             return;
+        }
 
         var definitions = new Dictionary<string, PowerDefinition>(StringComparer.OrdinalIgnoreCase);
         void AddDefinitions(IEnumerable<PowerDefinition> candidates)
@@ -4601,16 +4933,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             PowerCatalog.LoadLooseBaseDocuments(ResolveBaseGameplayDirectory()),
             isBuiltIn: true));
 
-        var powerCatalogs = new PowerEditorCatalogs(
-            iconPaths: _baseGameIconPaths.Concat(_customIconPaths),
-            protoUnitNames: GetTechnologyProtoUnitNames(),
-            unitTypeNames: GetKnownUnitTypeNames(),
-            terrainCreepNames: GetKnownTerrainCreepNames(),
-            protoActionNames: GetTechnologyProtoActionNames(),
-            technologyNames: GetAvailableTechNames(),
-            animationNames: GetGlobalProtoActionAnimationNames(),
-            boneNames: GetAvailableProtoActionModelAttachmentBones(),
-            tacticNames: GetTechnologyTacticDefinitionNames());
+        var powerCatalogs = CreatePowerSelectorCatalogs();
         var powerHostServices = new PowerEditorHostServices(
             PrepareReferenceMigration: PreparePowerReferenceMigration,
             AdoptReferenceMigration: AdoptPowerReferenceMigration,
@@ -4625,9 +4948,24 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetCurrentModStringsPath(),
             powerCatalogs,
             powerHostServices));
+        _powerView.PrepareDeletionChecks = (names, overrides) =>
+            PrepareStagedDeletionChecks(names, overrides, GameIdentifierKind.Ability);
+        _powerView.PrepareStringCleanup = (candidates, proposed) =>
+            PrepareOwnedStringSaveInspection(candidates, proposed, GetCurrentModGameplayFilePath(PowerCatalog.ModFileName)!);
+        _powerView.ImmediateDeletionRequestedAsync = () => DeleteEntityImmediatelyAsync(EditorEntityKind.Powers);
         _powerView.BrowserStateChanged += PowerView_BrowserStateChanged;
         _powerView.DirtyStateChanged += PowerView_DirtyStateChanged;
         _powerView.Saved += PowerView_Saved;
+        _powerView.XmlPowerRenamed += (oldName, newName) =>
+        {
+            RenameOpenDocumentTabs(EditorEntityKind.Powers, oldName, newName);
+            RenamePendingAbilityDraftReferences(oldName, newName);
+        };
+        _powerView.SaveFeedbackReported = ReportSaveFeedback;
+        _powerView.UseHostStatusFooter(text =>
+        {
+            if (_activeEntityKind == EditorEntityKind.Powers) ReportContextStatus(text);
+        });
         _technologyHost.Content = _powerView;
     }
 
@@ -4635,12 +4973,15 @@ public partial class ProtoEditorWindow : SimpleWindow
         IReadOnlyList<KeyValuePair<string, string>> renames)
     {
         var powerPath = GetCurrentModGameplayFilePath(PowerCatalog.ModFileName);
-        return GameIdentifierReferenceMigrationPlan.Prepare(
-            GetGameIdentifierReferenceFiles().Where(file =>
+        var files = DiscoverRenameReferenceFiles(out var discovery);
+        var plan = GameIdentifierReferenceMigrationPlan.Prepare(
+            files.Where(file =>
                 string.IsNullOrWhiteSpace(powerPath) ||
                 !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(powerPath), StringComparison.OrdinalIgnoreCase)),
             GameIdentifierKind.Ability,
-            renames);
+            renames, bindingModPath: _modFilePath, discovery: discovery);
+        ValidateReferenceMigrationDrafts(plan.Paths, EditorEntityKind.Powers, null);
+        return plan;
     }
 
     private void AdoptPowerReferenceMigration(GameIdentifierReferenceMigrationPlan plan)
@@ -4696,11 +5037,20 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void PowerView_DirtyStateChanged(object? sender, EventArgs e)
-        => RefreshDocumentTabHeaders();
+    {
+        if (_powerView?.IsDirty == true) _saveFeedback.ClearSuccessOnEdit();
+        RefreshDocumentTabHeaders();
+    }
 
     private void PowerView_Saved(object? sender, EventArgs e)
     {
-        _majorGodView?.AcknowledgeStringFileSavedByEditor();
+        if (_powerView?.LastSaveWroteStrings == true)
+        {
+            InvalidateModStringEntriesCache();
+            LoadCurrentModStringEntries(requireReadable: true);
+            _majorGodView?.AcknowledgeStringFileSavedByEditor();
+            _technologyView?.AcknowledgeStringFileSavedByEditor();
+        }
         _abilityPowerCatalog.Clear();
         // Global and manager saves persist Units before Powers. Keep this guard
         // so a future direct Power save cannot discard an unrelated Unit draft.
@@ -4713,6 +5063,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (_technologyView?.IsDirty != true)
             RefreshTechnologyViewAfterTechTypeChanges();
+        else
+            RefreshTechnologySelectorCatalogs();
         InvalidateSuggestionCaches();
     }
 
@@ -4825,7 +5177,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void TechnologyView_DirtyStateChanged(object? sender, EventArgs e)
-        => RefreshDocumentTabHeaders();
+    {
+        if (_technologyView?.IsDirty == true) _saveFeedback.ClearSuccessOnEdit();
+        RefreshDocumentTabHeaders();
+    }
 
     private async void EntityAdd_Click(object? sender, RoutedEventArgs e)
     {
@@ -4867,11 +5222,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (_majorGodView == null)
                 return;
-            var deletedName = _majorGodView.CurrentMajorGodName;
             await _majorGodView.DeleteCurrentMajorGodAsync();
-            if (!string.IsNullOrWhiteSpace(deletedName))
-                RemoveDeletedDocumentTabs(EditorEntityKind.MajorGods, deletedName);
-            RefreshUnitList();
             return;
         }
 
@@ -4879,13 +5230,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (_powerView == null)
                 return;
-            var deletedName = _powerView.CurrentPowerName;
             await _powerView.DeleteCurrentPowerAsync();
-            if (!string.IsNullOrWhiteSpace(deletedName) &&
-                !_powerView.GetPowerNames(modified: true)
-                    .Contains(deletedName, StringComparer.OrdinalIgnoreCase))
-                RemoveDeletedDocumentTabs(EditorEntityKind.Powers, deletedName);
-            RefreshUnitList();
             return;
         }
 
@@ -4985,14 +5330,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_technologyView == null || _unitTabs.SelectedIndex != 1)
             return;
-        var deletedTechnologyName = (_unitList.SelectedItem as UnitListItem)?.UnitName;
         await _technologyView.DeleteTechnologyAsync();
-        if (!string.IsNullOrWhiteSpace(deletedTechnologyName) &&
-            !_technologyView.GetTechnologyNames(modified: true).Contains(deletedTechnologyName, StringComparer.OrdinalIgnoreCase))
-        {
-            RemoveDeletedDocumentTabs(EditorEntityKind.Technologies, deletedTechnologyName);
-        }
-        RefreshUnitList();
     }
 
     private async void UnitList_PointerPressed(object? sender, PointerPressedEventArgs e)
@@ -5223,7 +5561,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
                     EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
-                    EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
+                    EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CaptureCurrentMajorGodDraftAsync(),
                     EditorEntityKind.Powers => _powerView == null || await _powerView.CommitCurrentPowerAsync(),
                     _ => true
                 };
@@ -5257,6 +5595,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ApplyEntitySourceUi(bool selectedModified)
     {
+        _saveFeedback.ClearContextMessage();
         if (_activeEntityKind == EditorEntityKind.Technologies)
             _technologyView?.SetModifiedMode(selectedModified);
         else if (_activeEntityKind == EditorEntityKind.MajorGods)
@@ -5330,18 +5669,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 SetMainDocumentTarget(EditorEntityKind.Technologies, _unitTabs.SelectedIndex == 1, selectedName);
                 _technologyView?.SelectTechnology(selectedName);
+                RestoreEntityBrowserSelection();
                 return;
             }
 
             if (_activeEntityKind == EditorEntityKind.MajorGods)
             {
-                if (_majorGodView != null && !await _majorGodView.CommitCurrentMajorGodAsync())
+                if (_majorGodView != null && !await _majorGodView.CaptureCurrentMajorGodDraftAsync())
                 {
                     RestoreEntityBrowserSelection();
                     return;
                 }
                 SetMainDocumentTarget(EditorEntityKind.MajorGods, _unitTabs.SelectedIndex == 1, selectedName);
                 _majorGodView?.SelectMajorGod(selectedName);
+                RestoreEntityBrowserSelection();
                 return;
             }
 
@@ -5354,6 +5695,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 SetMainDocumentTarget(EditorEntityKind.Powers, _unitTabs.SelectedIndex == 1, selectedName);
                 _powerView?.SelectPower(selectedName);
+                RestoreEntityBrowserSelection();
                 return;
             }
 
@@ -5388,6 +5730,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 // browser is refreshed by add/delete/rename/filter operations;
                 // selecting an unchanged name does not require rebuilding it.
                 BuildEditorPanel(selectedName);
+                // Discard can rebuild the list while navigation is pending.
+                // Select the destination's current item, not the discarded item.
+                RestoreEntityBrowserSelection();
             }
             finally
             {
@@ -5410,18 +5755,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             string.Equals(main.EntityName, incomingName, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var captured = main.EntityKind switch
-        {
-            EditorEntityKind.Units => await CaptureCurrentUnitDraftAsync(),
-            EditorEntityKind.Technologies => _technologyView == null || await _technologyView.CommitCurrentTechnologyAsync(),
-            EditorEntityKind.MajorGods => _majorGodView == null || await _majorGodView.CommitCurrentMajorGodAsync(),
-            EditorEntityKind.Powers => _powerView == null || await _powerView.CommitCurrentPowerAsync(),
-            _ => true
-        };
-        if (!captured)
-            return false;
+        // Replacement abandons the current draft, including an incomplete name
+        // or required field. Only keeping/saving a draft needs to validate it.
         if (!IsDocumentTabDirty(main))
+        {
+            if (main.EntityKind == EditorEntityKind.Technologies) _technologyView?.ReleaseCleanTechnologyXmlDraft(main.EntityName);
+            if (main.EntityKind == EditorEntityKind.Units) ReleaseCleanUnitXmlDraft(main.EntityName);
+            if (main.EntityKind == EditorEntityKind.Powers) _powerView?.ReleaseCleanPowerXmlDraft(main.EntityName);
+            if (main.EntityKind == EditorEntityKind.MajorGods) _majorGodView?.ReleaseCleanMajorGodXmlDraft(main.EntityName);
             return true;
+        }
 
         var destination = string.IsNullOrWhiteSpace(incomingName)
             ? incomingKind switch
@@ -5437,7 +5780,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             PromptType.Confirm,
             "Unsaved main document",
             $"'{main.EntityName}' has unsaved changes. Discard those changes and open {destination}?",
-            confirmButtonText: "Discard changes");
+            confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
         await prompt.ShowDialog(this);
         if (!prompt.Confirmed)
             return false;
@@ -5461,13 +5804,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             _powerView.DiscardPowerChanges(main.EntityName, main.SavedElement);
         }
 
+        ClearFeedbackAfterDiscard();
         RefreshDocumentTabHeaders();
         return true;
     }
 
     private async void UnitNameBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_isPopulating || _suppressUnitNameChange)
+        // Delayed population events are not renames, particularly when no Unit is open.
+        if (_isPopulating || _suppressUnitNameChange || string.IsNullOrWhiteSpace(_currentUnitName))
             return;
 
         if (InternalNamePolicy.IsValidOrUnchangedLegacy(_unitNameBox.Text, _currentUnitName))
@@ -5476,6 +5821,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         // Keep the modified-unit list and its search results in sync with the
         // pending name, while retaining the original key until Save applies it.
         FilterUnitList();
+        if (string.Equals(_unitNameBox.Text, _currentUnitName, StringComparison.Ordinal))
+            return;
         var proceed = await CheckStartLocalMod();
         if (proceed)
             MarkDirty();
@@ -5502,7 +5849,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void InitializeXmlPreview()
     {
+        EditorXmlPreviewPane.Configure(_mainContentGrid, 2, 3, 4, _xmlPreviewContent, _previewSplitter, _xmlPreviewToggleButton);
         XmlSyntaxEditorService.Configure(_xmlPreviewText);
+        InitializeUnitXmlEditing();
         _xmlPreviewRefreshTimer.Tick += (_, _) =>
         {
             _xmlPreviewRefreshTimer.Stop();
@@ -5514,17 +5863,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         _isXmlPreviewCollapsed = !_isXmlPreviewCollapsed;
 
-        _xmlPreviewContent.IsVisible = !_isXmlPreviewCollapsed;
-        _previewSplitter.IsVisible = !_isXmlPreviewCollapsed;
-        _mainContentGrid.ColumnDefinitions[3].Width = new GridLength(_isXmlPreviewCollapsed ? 0 : 5);
-        _mainContentGrid.ColumnDefinitions[4].Width = new GridLength(
-            _isXmlPreviewCollapsed ? CollapsedXmlPreviewWidth : _expandedXmlPreviewWidth.Value,
-            _isXmlPreviewCollapsed ? GridUnitType.Pixel : _expandedXmlPreviewWidth.GridUnitType);
-
-        _xmlPreviewToggleButton.Content = _isXmlPreviewCollapsed ? "\u25C0" : "\u25B6";
-        ToolTip.SetTip(
-            _xmlPreviewToggleButton,
-            _isXmlPreviewCollapsed ? "Restore XML Preview" : "Collapse XML Preview");
+        EditorXmlPreviewPane.SetCollapsed(_mainContentGrid, _isXmlPreviewCollapsed);
     }
 
     private void InitializeEditorTabs()
@@ -5546,7 +5885,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void EditorTab_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (!_editorTabsInitialized || _isPopulating)
+        // SelectionChanged also bubbles from selectors inside the active page.
+        // Only actual tab navigation may suppress initialization events; treating
+        // a field selection as navigation silently drops its dirty notification.
+        if (!ReferenceEquals(e.Source, _editorTabs) || !_editorTabsInitialized || _isPopulating)
             return;
 
         // A tab's controls can raise delayed initialization events the first
@@ -5557,7 +5899,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ScheduleXmlPreviewRefresh()
     {
-        if (_isPopulating || _isXmlPreviewDirty)
+        if (_isPopulating || CurrentUnitXmlDraft?.Session.IsEditing == true)
             return;
 
         _xmlPreviewRefreshTimer.Stop();
@@ -5568,6 +5910,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_isAbilityDefinitionEditorMode)
         {
+            if (PreserveStandaloneXmlBuffer()) return;
             try
             {
                 if (!_loadingAbilityEditor)
@@ -5581,8 +5924,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _xmlPreviewText.Opacity = 1;
                 _xmlPreviewText.Background = Brush.Parse("#090C0B");
                 _xmlPreviewText.Foreground = Brush.Parse("#E8DECC");
-                _applyXmlPreviewButton.IsVisible = false;
-                SetXmlPreviewText(preview == null ? "" : FormatXmlForPreview(preview));
+                BindStandaloneXmlPreview(preview);
             }
             catch { }
             return;
@@ -5590,6 +5932,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (_protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle)
         {
+            if (PreserveStandaloneXmlBuffer()) return;
             try
             {
                 var previewDocument = BuildTacticsActionEditorDocument(validateSerializedActions: false);
@@ -5601,8 +5944,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 _xmlPreviewText.Opacity = 1;
                 _xmlPreviewText.Background = Brush.Parse("#090C0B");
                 _xmlPreviewText.Foreground = Brush.Parse("#E8DECC");
-                _applyXmlPreviewButton.IsVisible = false;
-                SetXmlPreviewText(previewRoot == null ? "" : FormatXmlForPreview(previewRoot));
+                BindStandaloneXmlPreview(previewRoot);
             }
             catch
             {
@@ -5622,29 +5964,28 @@ public partial class ProtoEditorWindow : SimpleWindow
         // Base-game XML remains read-only, but stays enabled so it can be focused
         // and scrolled like any other text viewer.
         _xmlPreviewText.IsEnabled = sourceUnit != null;
-        XmlSyntaxEditorService.SetReadOnly(_xmlPreviewText, isReadOnly: !canEditRawXml);
         _xmlPreviewText.Focusable = sourceUnit != null;
         _xmlPreviewText.IsTabStop = canEditRawXml;
         _xmlPreviewText.Opacity = sourceUnit != null ? 1 : 0.55;
         _xmlPreviewText.Background = Brush.Parse(canEditRawXml ? "#090C0B" : "#090C0B");
         _xmlPreviewText.Foreground = Brush.Parse(sourceUnit != null ? "#E8DECC" : "#8a8a8a");
-        _applyXmlPreviewButton.IsVisible = canEditRawXml;
-
-        if (!force && canEditRawXml && _isXmlPreviewDirty)
-            return;
 
         if (sourceUnit == null)
         {
-            SetXmlPreviewText("");
+            _unitXmlController.Bind(null, false);
             return;
         }
 
         var previewUnit = new XElement(sourceUnit);
+        // The detached projection must retain the source's inherited whitespace
+        // context for ordering. The wrapper itself is never shown or serialized.
+        if (sourceUnit.Attribute(XNamespace.Xml + "space") == null && ProtoUnitXmlOrderPolicy.PreservesSpace(sourceUnit))
+            _ = new XElement("preview-context", new XAttribute(XNamespace.Xml + "space", "preserve"), previewUnit);
         if (!_showStoredRawXml && !_isReadOnly && _modXmlRoot != null)
             ApplyCurrentEdits(previewUnit);
 
         RefreshTacticsOnlyActionTabMarkers(previewUnit);
-        SetXmlPreviewText(FormatXmlForPreview(previewUnit));
+        BindUnitXmlPreview(previewUnit, canEditRawXml);
     }
 
     private bool IsTacticsBackedProtoAction(ProtoAction action)
@@ -5848,93 +6189,16 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static string FormatXmlForPreview(XElement unit)
     {
+        if (ProtoUnitXmlOrderPolicy.PreservesSpace(unit))
+            return unit.ToString(SaveOptions.DisableFormatting);
         // BAR XML and local XML can carry different insignificant whitespace.
         // Reparse the compact form for a consistent, readable preview layout.
-        return XElement.Parse(unit.ToString(SaveOptions.DisableFormatting)).ToString();
+        return XmlSyntaxEditorService.FormatElementForPreview(unit);
     }
 
     private void SetXmlPreviewText(string text)
     {
-        var displayText = XmlSyntaxEditorService.PreparePreviewText(text);
-        _lastRenderedXmlPreview = displayText;
-        _isUpdatingXmlPreviewText = true;
-        _xmlPreviewText.Text = displayText;
-        _isUpdatingXmlPreviewText = false;
-        _isXmlPreviewDirty = false;
-    }
-
-    private void XmlPreviewText_TextChanged(object? sender, EventArgs e)
-    {
-        // Avalonia can dispatch a programmatic Text assignment after the setter
-        // returns. Compare against the rendered value as well as the guard so a
-        // normal preview refresh is never mistaken for un-applied raw input.
-        if (!_isUpdatingXmlPreviewText &&
-            !_xmlPreviewText.IsReadOnly &&
-            !string.Equals(_xmlPreviewText.Text, _lastRenderedXmlPreview, StringComparison.Ordinal))
-            _isXmlPreviewDirty = true;
-    }
-
-    private async void ApplyXmlPreview_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_isReadOnly || _modXmlRoot == null || string.IsNullOrWhiteSpace(_currentUnitName))
-            return;
-
-        XElement parsedUnit;
-        try
-        {
-            parsedUnit = XElement.Parse(_xmlPreviewText.Text ?? "", LoadOptions.PreserveWhitespace);
-        }
-        catch (Exception ex)
-        {
-            await new Prompt(PromptType.Error, "Invalid XML", $"The XML could not be applied:\n{ex.Message}").ShowDialog(this);
-            return;
-        }
-
-        if (!parsedUnit.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase))
-        {
-            await new Prompt(PromptType.Error, "Invalid Unit XML", "Raw XML must have a <unit> root element so it can be saved in proto_mods.xml.").ShowDialog(this);
-            return;
-        }
-
-        var newUnitName = parsedUnit.Attribute("name")?.Value?.Trim();
-        if (string.IsNullOrWhiteSpace(newUnitName))
-        {
-            await new Prompt(PromptType.Error, "Invalid Unit XML", "The <unit> element must have a name attribute.").ShowDialog(this);
-            return;
-        }
-
-        var oldUnitName = _currentUnitName;
-        if (!InternalNamePolicy.IsValidOrUnchangedLegacy(newUnitName, oldUnitName))
-        {
-            await new Prompt(PromptType.Error, "Invalid Unit name",
-                "New or renamed ProtoUnit names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
-            return;
-        }
-        if (!newUnitName.Equals(oldUnitName, StringComparison.OrdinalIgnoreCase) && UnitNameExistsAnywhere(newUnitName))
-        {
-            await new Prompt(PromptType.Error, "Duplicate Unit", $"Unit '{newUnitName}' already exists in the base game or this mod.").ShowDialog(this);
-            return;
-        }
-
-        var currentUnit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, oldUnitName);
-        if (currentUnit == null)
-        {
-            await new Prompt(PromptType.Error, "Missing Unit", $"Could not find mod unit '{oldUnitName}'.").ShowDialog(this);
-            return;
-        }
-
-        currentUnit.ReplaceWith(parsedUnit);
-        TrackPendingUnitRename(oldUnitName, newUnitName);
-        _currentUnitName = newUnitName;
-        RenameOpenDocumentTabs(EditorEntityKind.Units, oldUnitName, newUnitName);
-        _isXmlPreviewDirty = false;
-        MarkDirty();
-        InvalidateSuggestionCaches();
-        RefreshUnitList();
-        _unitList.SelectedItem = _filteredUnitNames.FirstOrDefault(item =>
-            string.Equals(item.UnitName, newUnitName, StringComparison.OrdinalIgnoreCase));
-        BuildEditorPanel(newUnitName, resetScroll: false);
-        _statusMessage.Text = "Raw XML applied.";
+        _xmlPreviewText.Text = XmlSyntaxEditorService.PreparePreviewText(text);
     }
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
@@ -6007,7 +6271,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         RefreshPageSearchMatches(scrollToCurrentMatch: true);
     }
 
-    private void AddSectionHeader(string title)
+    private TextBlock AddSectionHeader(string title)
     {
         var lbl = new TextBlock
         {
@@ -6024,6 +6288,25 @@ public partial class ProtoEditorWindow : SimpleWindow
             Title = title,
             Header = lbl,
             TabIndex = _activeEditorTabIndex
+        });
+        return lbl;
+    }
+
+    private static void AddSectionHeaderEditor(TextBlock header, Control editor)
+    {
+        if (header.Parent is not Panel panel) return;
+        var index = panel.Children.IndexOf(header);
+        var margin = header.Margin;
+        panel.Children.Remove(header);
+        header.Margin = new Thickness(0);
+        header.VerticalAlignment = VerticalAlignment.Center;
+        editor.Margin = new Thickness(0);
+        panel.Children.Insert(index, new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = EditorFormLayout.LabelGap,
+            Margin = margin,
+            Children = { header, editor }
         });
     }
 
@@ -6387,83 +6670,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     private static readonly string[] TrainTechRowOptions = ["0", "1", "2", "3"];
     private static readonly string[] TrainTechColumnOptions = ["0", "1", "2", "3", "4", "5"];
     private static readonly string[] OtherSpecificAttributeChoiceKeys =
-    [
-        "selectionradius",
-        "autoattackrange",
-        "lifespan",
-        "resourcesubtype",
-        "minimapvisuals",
-        "resourcepriority",
-        "hotkeycontext",
-        "allyhotkeycontext",
-        "resourcedecay",
-        "culture",
-        "wanderdistance",
-        "workersoftlimit",
-        "formationorder",
-        "screenshakeondestruction",
-        "initialunitaistance",
-        "displayedrange",
-        "aistancebasedistance",
-        "heighthitpointbaroffset",
-        "allowedheightvariance",
-        "creationfade",
-        "stealth",
-        "selfdestructprotoaction",
-        "transformcommand",
-        "pathabilityflags",
-        "heightbobdata",
-        "birthprotoaction",
-        "placementfile",
-        "ondiscoverlos",
-        "populationcapaddition",
-        "gathererlimit",
-        "prioritybonusfactor",
-        "buildingworkrate",
-        "trainingrate",
-        "gatherratemultiplier",
-        "partisans",
-        "bloodandbones",
-        "decaytime",
-        "decaydelaytime",
-        "researchrate",
-        "killrewarddata",
-        "resourcereturn",
-        "resourcereturnrate",
-        "autobuildrate",
-        "godpowerblockradius",
-        "godpowercostfactor",
-        "builderlimit",
-        "corpsedecaydelay",
-        "costescalation",
-        "damageshading",
-        "initialshading",
-        "deadreplacement",
-        "deadtransform",
-        "dependentunitdata",
-        "eidolonprotoid",
-        "enemyshortrollovertextid",
-        "socketdata",
-        "disguiseprotoid",
-        "spawndata",
-        "veterancydata",
-        "stackprotoaction",
-        "dodgechance",
-        "directionalarmor",
-        "placementobstruction",
-        "farming",
-        "carrycapacity",
-        "initialresource",
-        "resourceconversion",
-        "conversionresistance",
-        "respawntraindata",
-        "sharedselectionunittypes",
-        "decay",
-        "recharge",
-        "auxrecharge",
-        "replacement",
-        "ondamagemodifiers",
-    ];
+        ProtoUnitFieldOrder.OptionalGroups.Select(group => group.Key).ToArray();
     private static string GetStringSuffixForField(string tag) => tag.ToLowerInvariant() switch
     {
         "displaynameid" => "NAME",
@@ -6582,7 +6789,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         "prioritybonusfactor", "buildingworkrate", "trainingrate", "gatherratemultiplier", "partisancount", "decaytime",
         "decaydelaytime", "researchrate", "projectilespinperiod", "autobuildrate",
         "godpowerblockradius", "godpowercostfactor", "builderlimit", "corpsedecaydelay", "costescalation", "bloodscalemodify", "bonescalemodify",
-        "dodgechance", "conversionresistance"
+        "dodgechance", "conversionresistance", "ondiscoverlos"
     };
 
     private static readonly HashSet<string> OtherSpecificSimpleSuggestionTags = new(StringComparer.OrdinalIgnoreCase)
@@ -6594,7 +6801,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static readonly HashSet<string> OtherSpecificSimpleTextTags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ondiscoverlos", "enemyshortrollovertextid", "dodgesoundset",
+        "enemyshortrollovertextid", "dodgesoundset",
         "dodgemessageid"
     };
 
@@ -6631,8 +6838,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         var names = new List<string>();
         if (_barData != null)
             names.AddRange(_barData.UnitNames);
-        if (_modXmlRoot != null)
+        if (_tacticsEditorSession == null && !_isAbilityDefinitionEditorMode && _modXmlRoot != null)
             names.AddRange(ProtoXmlHandler.GetUnitNames(_modXmlRoot));
+
+        if (_standaloneUnitNamesProvider != null)
+            names.AddRange(_standaloneUnitNamesProvider());
 
         _cachedTrainUnitNames = names
             .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -6814,15 +7024,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_cachedBuildLimitTargets != null)
             return _cachedBuildLimitTargets;
 
-        var values = new List<string>();
-        values.AddRange(GetKnownUnitTypeNames());
-        if (_barData != null)
-            values.AddRange(_barData.UnitNames);
-
-        if (_modXmlRoot != null)
-            values.AddRange(ProtoXmlHandler.GetUnitNames(_modXmlRoot));
-
-        _cachedBuildLimitTargets = values
+        _cachedBuildLimitTargets = GetKnownUnitTypeNames()
+            .Concat(GetAvailableTrainUnitNames())
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
@@ -6870,7 +7073,65 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private List<string> GetKnownUnitTypeNames()
-        => GetUnitTypeDefinitions().Select(definition => definition.Name).ToList();
+        => GetUnitTypeDefinitions().Select(definition => definition.Name)
+            .Concat(_standaloneUnitTypeNamesProvider?.Invoke() ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private IReadOnlyList<string>? GetUnitTypeNamesForMigration()
+    {
+        IReadOnlyList<UnitTypeDefinition>? definitions = null;
+        try
+        {
+            var path = ResolveDataBarPath();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                using var stream = File.OpenRead(path);
+                var archive = new BarArchive(stream);
+                if (archive.Load(out _))
+                {
+                    var loaded = UnitTypeCatalog.ExtractBaseDefinitionsFromBar(archive, path, out var complete);
+                    if (complete) definitions = loaded;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        definitions ??= UnitTypeCatalog.ReadForMigration(ResolveBaseGameplayXmlPath("abstract_unit_types.xml"), isBuiltIn: true);
+        var mod = UnitTypeCatalog.ReadForMigration(GetCurrentModGameplayFilePath("abstract_unit_types_mods.xml"), isBuiltIn: false);
+        if (definitions == null || mod == null) return null;
+        // Implicit types observed in base Proto data are part of this catalog too.
+        // A partially populated suggestion cache cannot establish their absence.
+        var parts = GetBaseProtoPartsForMigration();
+        var used = parts == null ? null : ReferenceCatalogSafety.UsedUnitTypeNames(parts);
+        if (used == null) return null;
+        return UnitTypeCatalog.Merge(definitions, mod).Select(item => item.Name)
+            .Concat(used).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<string>? GetProtoUnitNamesForMigration()
+    {
+        var parts = GetBaseProtoPartsForMigration();
+        return parts == null ? null : ReferenceCatalogSafety.ProtoUnitNames(parts, _modXmlRoot);
+    }
+
+    private IReadOnlyList<string?>? GetBaseProtoPartsForMigration()
+    {
+        try
+        {
+            var path = ResolveDataBarPath();
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            using var stream = File.OpenRead(path);
+            var archive = new BarArchive(stream);
+            if (!archive.Load(out _) || archive.Entries == null) return null;
+            // Reuse the editor's source selection, but reject any failed part instead
+            // of trusting a potentially partial merged suggestion cache.
+            var parts = archive.Entries.Where(entry => entry.Name.Contains("proto", StringComparison.OrdinalIgnoreCase) &&
+                entry.Name.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
+                .Select(entry => ReadBarXmbXml(entry, stream)).ToList();
+            return parts;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException) { return null; }
+    }
 
     private IReadOnlyList<CultureDefinition> GetCultureDefinitions()
     {
@@ -7074,10 +7335,10 @@ public partial class ProtoEditorWindow : SimpleWindow
     private List<string> GetKnownPlacementFileNames()
     {
         if (_cachedPlacementFileNames != null)
-            return _cachedPlacementFileNames;
+            return PlacementRuleCatalog.WithCustomFiles(_cachedPlacementFileNames, GetCurrentModGameplayFilePath("placement_rules"));
 
-        _cachedPlacementFileNames = GetDistinctBarSimpleFieldValues("placementfile");
-        return _cachedPlacementFileNames;
+        _cachedPlacementFileNames = PlacementRuleCatalog.FromArchive(_protoDataBarFile);
+        return PlacementRuleCatalog.WithCustomFiles(_cachedPlacementFileNames, GetCurrentModGameplayFilePath("placement_rules"));
     }
 
     private List<string> GetKnownPathabilityFlags()
@@ -7314,10 +7575,39 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void LoadCurrentModAssetCatalogs()
     {
-        _customIconPaths = CustomAssetCatalog.LoadIconPaths(GetCurrentModIconResourcesDirectory());
-        _customAnimFiles = CustomAssetCatalog.LoadAnimFiles(GetCurrentModArtDirectory());
-        _customSoundSets = CustomAssetCatalog.LoadSoundSets(GetCurrentModSoundDirectory());
+        var root = GetCurrentModGameDirectory();
+        var sameMod = string.Equals(root, _customAssetCatalogRoot, StringComparison.OrdinalIgnoreCase);
+        var icons = CustomAssetCatalog.LoadIconPathsResult(GetCurrentModIconResourcesDirectory());
+        var animations = CustomAssetCatalog.LoadAnimFilesResult(GetCurrentModArtDirectory());
+        var sounds = CustomAssetCatalog.LoadSoundSetsResult(GetCurrentModSoundDirectory());
+        // Keep known suggestions on transient failure, never across mod switches.
+        // These lists do not authorize writes or clear the XML's current values.
+        if (icons.IsComplete || !sameMod || _customIconPaths.Count == 0) _customIconPaths = icons.Entries;
+        if (animations.IsComplete || !sameMod || _customAnimFiles.Count == 0) _customAnimFiles = animations.Entries;
+        if (sounds.IsComplete || !sameMod || _customSoundSets.Count == 0) _customSoundSets = sounds.Entries;
+        _customAssetCatalogRoot = root;
+        _iconPreviewService.RefreshSourceContext();
+        _customAssetCatalogLoads[AssetReferenceKind.Icon] = icons;
+        _customAssetCatalogLoads[AssetReferenceKind.Animation] = animations.Map(entries => entries.Select(entry => entry.Path).ToList());
+        _customAssetCatalogLoads[AssetReferenceKind.SoundSet] = sounds.Map(entries => entries.Select(entry => entry.Path).ToList());
+        UpdateAssetCatalogWarning();
     }
+
+    private void UpdateAssetCatalogWarning()
+    {
+        var warning = string.Join("\n", _customAssetCatalogLoads.Values.Concat(_baseGameAssetCatalogLoads.Values)
+            .Where(result => !result.IsComplete).Select(result => result.Warning));
+        if (warning.Length > 0) _statusMessage.Text = warning + " Reopen the asset manager to retry.";
+        else if (_statusMessage.Text == _assetCatalogWarning) _statusMessage.Text = "";
+        _assetCatalogWarning = warning.Length > 0 ? warning + " Reopen the asset manager to retry." : "";
+    }
+
+    private Task<bool> EnsureCustomAssetCatalogAvailableAsync(AssetReferenceKind kind)
+        => CatalogAvailabilityPrompt.EnsureAsync(this, () =>
+        {
+            LoadCurrentModAssetCatalogs();
+            return _customAssetCatalogLoads[kind];
+        }, kind switch { AssetReferenceKind.Icon => "Custom icons", AssetReferenceKind.Animation => "Custom animation files", _ => "Custom sound sets" });
 
     private List<string> LoadTechNamesFromBar()
     {
@@ -7557,6 +7847,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         return documents;
     }
 
+    // Unit field roles are assigned by their builders, never from the current
+    // value or catalog size. Keep population/focus presentation under one guard.
+    private T ConfigureUnitField<T>(T editor, EditorFieldWidthRole role) where T : Control
+    {
+        EditorFormLayout.ApplyWidth(editor, role);
+        editor.VerticalAlignment = VerticalAlignment.Center;
+        EditorFieldInteraction.Configure(editor, role, () => _isPopulating || _suppressEditorChangeTracking);
+        return editor;
+    }
+
     private void AddCommandSection(
         string title,
         string itemLabel,
@@ -7568,53 +7868,37 @@ public partial class ProtoEditorWindow : SimpleWindow
         AddSectionHeader(title);
         var entryList = entries.ToList();
 
-        var commandContainer = new StackPanel { Spacing = 4 };
+        // AssignmentField owns the vertical gap, including when a row wraps.
+        var commandContainer = new StackPanel { Spacing = 0 };
         _activeEditorPanel?.Children.Add(commandContainer);
         stateStore.Clear();
 
-        var headerGrid = new Grid
+        StackPanel AssignmentField(string label, Control editor)
         {
-            ColumnDefinitions = new ColumnDefinitions(useNumericPositionFields ? "100, 100, Auto, Auto" : "70, 70, Auto, Auto"),
-            Margin = new Thickness(0, 0, 0, 2),
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
+            Avalonia.Automation.AutomationProperties.SetName(editor, label);
+            return new StackPanel
+            {
+                Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
+                Children =
+                {
+                    new TextBlock { Text = label, Classes = { "assignment-column-header" }, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 0, 0, 2) },
+                    editor
+                }
+            };
+        }
 
-        var rowHeader = new TextBlock
+        void RefreshAssignmentHeaders()
         {
-            Text = "Row",
-            FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        Grid.SetColumn(rowHeader, 0);
-        headerGrid.Children.Add(rowHeader);
-
-        var columnHeader = new TextBlock
-        {
-            Text = "Column",
-            FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        Grid.SetColumn(columnHeader, 1);
-        headerGrid.Children.Add(columnHeader);
-
-        var valueHeader = new TextBlock
-        {
-            Text = itemLabel,
-            FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        Grid.SetColumn(valueHeader, 2);
-        headerGrid.Children.Add(valueHeader);
-
-        headerGrid.IsVisible = entryList.Count > 0;
-        commandContainer.Children.Add(headerGrid);
+            foreach (var row in stateStore)
+            foreach (var header in row.RowPanel.GetLogicalDescendants().OfType<TextBlock>().Where(label => label.Classes.Contains("assignment-column-header")))
+                header.IsVisible = ReferenceEquals(row, stateStore[0]);
+        }
 
         void AddCommandRow(ProtoCommandEntry entry)
         {
-            var rowPanel = new Grid
+            var rowPanel = new WrapPanel
             {
-                ColumnDefinitions = new ColumnDefinitions(useNumericPositionFields ? "100, 100, Auto, Auto" : "70, 70, Auto, Auto"),
-                Margin = new Thickness(0, 2, 0, 2),
+                Margin = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
 
@@ -7626,9 +7910,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         Text = value,
                         IsEnabled = !_isReadOnly,
-                        Margin = new Thickness(0, 0, 8, 0)
+                        Margin = new Thickness(0)
                     };
-                    EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+                    EditorNumericFieldStyle.ConfigureNumericTextBox(textBox, EditorFieldWidthRole.Numeric);
+                    ConfigureUnitField(textBox, EditorFieldWidthRole.Numeric);
                     EditorNumericInputBehavior.AttachRule(textBox, ProtoUnitNumericKind.UnsignedInteger);
                     textBox.TextChanged += async (_, _) =>
                     {
@@ -7649,8 +7934,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ItemsSource = optionList.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                     SelectedItem = !string.IsNullOrWhiteSpace(value) ? value : null,
                     IsEnabled = !_isReadOnly,
-                    Margin = new Thickness(0, 0, 8, 0)
+                    Margin = new Thickness(0)
                 };
+                ConfigureUnitField(comboBox, EditorFieldWidthRole.ShortEnum);
                 comboBox.SelectionChanged += async (_, _) =>
                 {
                     if (!_isPopulating)
@@ -7663,12 +7949,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             var rowEditor = CreatePositionEditor(entry.Row, TrainTechRowOptions);
-            Grid.SetColumn(rowEditor, 0);
-            rowPanel.Children.Add(rowEditor);
+            rowPanel.Children.Add(AssignmentField("Row", rowEditor));
 
             var columnEditor = CreatePositionEditor(entry.Column, TrainTechColumnOptions);
-            Grid.SetColumn(columnEditor, 1);
-            rowPanel.Children.Add(columnEditor);
+            rowPanel.Children.Add(AssignmentField("Column", columnEditor));
 
             var valueAcb = new AutoCompleteBox
             {
@@ -7677,9 +7961,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 FilterMode = AutoCompleteFilterMode.Contains,
                 ItemsSource = suggestions,
                 IsEnabled = !_isReadOnly,
-                Margin = new Thickness(0, 0, 8, 0)
+                Margin = new Thickness(0)
             };
-            EditorTextFieldStyle.ConfigureSelector(valueAcb);
+            EditorTextFieldStyle.ConfigureSelector(valueAcb, EditorFieldWidthRole.Reference);
+            Avalonia.Automation.AutomationProperties.SetName(valueAcb, itemLabel);
+            ConfigureUnitField(valueAcb, EditorFieldWidthRole.Reference);
             EnableDropdownAutoComplete(valueAcb);
             valueAcb.TextChanged += async (s, e) =>
             {
@@ -7689,8 +7975,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (proceed) MarkDirty();
                 }
             };
-            Grid.SetColumn(valueAcb, 2);
-            rowPanel.Children.Add(valueAcb);
+            var valuePair = new StackPanel { Orientation = Orientation.Horizontal, Children = { valueAcb } };
+            rowPanel.Children.Add(AssignmentField(itemLabel, valuePair));
 
             var rowState = new CommandRowState
             {
@@ -7701,11 +7987,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 MergeMode = entry.MergeMode
             };
             stateStore.Add(rowState);
-            headerGrid.IsVisible = true;
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                var btnDel = EditorRemoveButtons.Row();
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -7713,7 +7998,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         stateStore.Remove(rowState);
                         commandContainer.Children.Remove(rowPanel);
-                        headerGrid.IsVisible = stateStore.Count > 0;
+                        RefreshAssignmentHeaders();
                         if (ReferenceEquals(stateStore, _unitCommandRows) &&
                             rowState.ValueAcb.Text?.Trim().Equals("Eject", StringComparison.OrdinalIgnoreCase) == true &&
                             !stateStore.Any(row => row.ValueAcb.Text?.Trim().Equals("Eject", StringComparison.OrdinalIgnoreCase) == true) &&
@@ -7726,11 +8011,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         MarkDirty();
                     }
                 };
-                Grid.SetColumn(btnDel, 3);
-                rowPanel.Children.Add(btnDel);
+                valuePair.Children.Add(btnDel);
             }
 
             commandContainer.Children.Add(rowPanel);
+            RefreshAssignmentHeaders();
         }
 
         foreach (var entry in entryList)
@@ -7752,7 +8037,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     stateStore.Remove(row);
                     commandContainer.Children.Remove(row.RowPanel);
                 }
-                headerGrid.IsVisible = stateStore.Count > 0;
+                RefreshAssignmentHeaders();
             };
         }
 
@@ -8053,6 +8338,44 @@ public partial class ProtoEditorWindow : SimpleWindow
     };
 
     private static void ApplyProtoActionFieldWidth(Control editor, string tag)
+    {
+        // Original/inherited controls retain their reviewed compact presentation.
+        // Editable fields receive semantic roles, independent of their current value.
+        if (!editor.IsEnabled || editor is TextBox { IsReadOnly: true })
+        {
+            ApplyReadOnlyProtoActionFieldWidth(editor, tag);
+            EditorFieldInteraction.ConfigureStartVisibility(editor);
+            return;
+        }
+        if (editor is not (TextBox or AutoCompleteBox or ComboBox or AssetPathEditor)) return;
+        if (tag.Equals("areasortmode", StringComparison.OrdinalIgnoreCase) && editor is ComboBox)
+        {
+            // Both the compact Damage Area builder and the standalone metadata
+            // field use this closed catalog. It is not a long reference enum.
+            EditorFormLayout.ApplyWidth(editor, EditorFieldWidthRole.ShortEnum);
+            return;
+        }
+        if (EditorFormLayout.TryGetWidthRole(editor, out var current) &&
+            current is EditorFieldWidthRole.Numeric or EditorFieldWidthRole.TacticsWeight or EditorFieldWidthRole.DamageBonusMultiplier or
+                EditorFieldWidthRole.ShortEnum or EditorFieldWidthRole.LongEnum)
+            return;
+        var role = tag.ToLowerInvariant() switch
+        {
+            "modelattachmentbone" or "targetattachmentbone" or "infectionattachmentbone" => EditorFieldWidthRole.AttachmentBone,
+            _ when editor is AssetPathEditor && (CompactProtoActionAnimationFieldTags.Contains(tag) ||
+                tag is "modelattachment" or "infectionattachment" or "targetattachment") => EditorFieldWidthRole.CompactAssetPath,
+            _ when editor is AssetPathEditor || AssetPathFieldTags.Contains(tag) => EditorFieldWidthRole.AssetPath,
+            _ when ProtoActionMetadataCatalog.GetFieldDefinition(tag).EditorKind == ProtoActionFieldEditorKind.Number => EditorFieldWidthRole.Numeric,
+            _ when CompactProtoActionAnimationFieldTags.Contains(tag) || tag is "launchpoint" or "castpower" or "conversionprotoid" => EditorFieldWidthRole.Reference,
+            _ when editor is ComboBox => EditorFieldWidthRole.LongEnum,
+            _ when editor is AutoCompleteBox => EditorFieldWidthRole.Reference,
+            _ => EditorFieldWidthRole.SingleLineText
+        };
+        EditorFormLayout.ApplyWidth(editor, role);
+        editor.VerticalAlignment = VerticalAlignment.Center;
+    }
+
+    private static void ApplyReadOnlyProtoActionFieldWidth(Control editor, string tag)
     {
         const double animationFieldWidth = 200;
         var isCompactBoneField = tag.Equals("modelattachmentbone", StringComparison.OrdinalIgnoreCase) ||
@@ -8886,6 +9209,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 tags.Add(normalized);
         }
 
+        foreach (var tag in AdvancedAttackScalarTags)
+            if (UsesAdvancedAttackScalarEditor(state, actionType, tag) &&
+                (state.ForcedVisibleFieldTags.Contains(tag) || !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(action, tag))) &&
+                !tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                tags.Add(tag);
         return tags;
     }
 
@@ -9220,8 +9548,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsEnabled = !_isReadOnly,
             Width = 100
         };
-        EditorTextFieldStyle.ConfigureSelector(bone);
-        bone.Width = 100;
+        EditorTextFieldStyle.ConfigureSelector(bone, EditorFieldWidthRole.AttachmentBone);
         EnableDropdownAutoComplete(bone);
         bone.TextChanged += async (_, _) =>
         {
@@ -9294,7 +9621,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static void AttachProtoActionDecimalBehavior(TextBox textBox, Func<bool>? allowNegative = null)
     {
-        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox, EditorFieldWidthRole.Numeric);
         textBox.TextChanged += (s, e) =>
         {
             var text = textBox.Text ?? "";
@@ -10401,6 +10728,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private List<string>? GetProtoActionValueSuggestions(string tag)
     {
+        if (tag.Equals("devotionpower", StringComparison.OrdinalIgnoreCase))
+            return GetTechnologyGodPowerNames().ToList();
         if (AttachmentPathTags.Contains(tag, StringComparer.OrdinalIgnoreCase))
             return GetAvailableProtoActionAttachmentPaths();
 
@@ -10491,7 +10820,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ConfigureProtoActionValueAutoComplete(AutoCompleteBox editor, string tag, string initialValue)
     {
-        if (IsProtoActionAnimationValueTag(tag))
+        if (tag.Equals("devotionpower", StringComparison.OrdinalIgnoreCase))
+            ConfigureStrictSuggestionAutoComplete(editor, GetTechnologyGodPowerNames(), initialValue);
+        else if (IsProtoActionAnimationValueTag(tag))
             ConfigureUnitAnimationAutoComplete(editor);
         else if (tag.Equals("areaprotoaction", StringComparison.OrdinalIgnoreCase))
             ConfigureStrictSuggestionAutoComplete(editor, GetCurrentUnitProtoActionNames(), initialValue);
@@ -10751,12 +11082,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 resolvedCustomPath.Replace('\\', Path.DirectorySeparatorChar));
             var stamp = File.Exists(loosePath) ? File.GetLastWriteTimeUtc(loosePath).Ticks : 0;
             cacheKey = $"custom:{loosePath}:{stamp}";
-            loader = () => AnimFileCatalog.LoadCustomXmlAsync(customArtDirectory, customEntry.Path);
+            loader = () => AnimFileCatalog.LoadCustomXmlForValidationAsync(customArtDirectory, customEntry.Path);
         }
         else if (baseEntry != null && baseArtDirectory != null)
         {
             cacheKey = $"base:{baseEntry.ArchiveName}:{baseEntry.Path}";
-            loader = () => AnimFileCatalog.LoadXmlAsync(baseArtDirectory, baseEntry);
+            loader = () => AnimFileCatalog.LoadXmlForValidationAsync(baseArtDirectory, baseEntry);
         }
         else
         {
@@ -10990,8 +11321,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PromptType.Error,
                 "Animation File Unavailable",
                 "The unit's animation file could not be resolved, so its ProtoAction animations cannot be validated. Correct the Animation File reference before saving.");
-            await unavailablePrompt.ShowDialog(this);
-            populatedEditors[0].Editor.Focus();
+            await ReportEditorFieldErrorAsync(unavailablePrompt, _fieldControls.GetValueOrDefault("animfile"),
+                () => _editorTabs.SelectedIndex = 0);
             return false;
         }
 
@@ -11018,8 +11349,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             MinWidth = 620,
             MinHeight = 280
         };
-        await prompt.ShowDialog(this);
-        invalid[0].Editor.Focus();
+        await ReportActionFieldErrorAsync(prompt, invalid[0].State, invalid[0].Editor);
         return false;
     }
 
@@ -11416,6 +11746,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             usedTags.Add(tag);
         foreach (var tag in GetVisibleProtoActionStructuredFieldTags(state, effectiveAction, actionType))
             usedTags.Add(tag);
+        if (state.AddDamageButton?.IsVisible == true || state.DamageRows.Count > 0) usedTags.Add("damage");
+        if (state.AddDamageBonusButton?.IsVisible == true || state.BonusRows.Count > 0) usedTags.Add("damagebonus");
+        if (state.AddDamageAreaButton?.IsVisible == true) usedTags.UnionWith(OptionalAbductDamageAreaTags);
         var showsCoreRof = ShouldShowProtoActionHardcodedField(state, effectiveAction, actionType, "rof");
         var showsCoreMaxRange = ShouldShowProtoActionHardcodedField(state, effectiveAction, actionType, "maxrange");
         if (IsAttackActionType(actionType))
@@ -11432,6 +11765,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var options = ProtoActionMetadataCatalog.GetKnownFieldDefinitions()
             .Where(x => !ProtoActionAttributePickerExcludedTags.Contains(x.Tag))
+            .Where(x => !IsDedicatedProtoActionAttribute(actionType, x.Tag) || UsesAdvancedAttackScalarEditor(state, actionType, x.Tag))
             .Where(x => ProtoActionMetadataCatalog.SupportsAutoRender(x.Tag))
             .Where(x => x.EditorKind != ProtoActionFieldEditorKind.Toggle)
               .Where(x => !IsKnownProtoActionFlagTag(x.Tag))
@@ -11610,7 +11944,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (IsBuckAttackActionType(actionType) && showMaxRange)
         {
-            var maxRangeColumn = Grid.GetColumn(state.MaxRangeTb);
+            var maxRangeColumn = EditorFormLayout.GetContainingGridColumn(state.CoreFieldsGrid, state.MaxRangeTb);
             if (maxRangeColumn >= 0 && maxRangeColumn < state.CoreFieldsGrid.ColumnDefinitions.Count)
                 state.CoreFieldsGrid.ColumnDefinitions[maxRangeColumn].Width = new GridLength(90);
             var linearShockwaveCheckBox = new CheckBox
@@ -11635,7 +11969,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             state.CustomFlagControls["linearshockwave"] = linearShockwaveCheckBox;
             RegisterProtoActionFlagSourceControl(state, linearShockwaveCheckBox, "linearshockwave");
-            var linearShockwaveSpacerColumn = Grid.GetColumn(state.MaxRangeTb) + 1;
+            var linearShockwaveSpacerColumn = EditorFormLayout.GetContainingGridColumn(state.CoreFieldsGrid, state.MaxRangeTb) + 1;
             while (state.CoreFieldsGrid.ColumnDefinitions.Count <= linearShockwaveSpacerColumn)
                 state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
             state.CoreFieldsGrid.ColumnDefinitions[linearShockwaveSpacerColumn].Width = new GridLength(8);
@@ -11677,7 +12011,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             state.CustomFlagControls["killoninvalidland"] = killOnInvalidLandCheckBox;
             RegisterProtoActionFlagSourceControl(state, killOnInvalidLandCheckBox, "killoninvalidland");
-            var killOnInvalidLandSpacerColumn = Grid.GetColumn(state.MaxRangeTb) + 1;
+            var killOnInvalidLandSpacerColumn = EditorFormLayout.GetContainingGridColumn(state.CoreFieldsGrid, state.MaxRangeTb) + 1;
             while (state.CoreFieldsGrid.ColumnDefinitions.Count <= killOnInvalidLandSpacerColumn)
                 state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
             state.CoreFieldsGrid.ColumnDefinitions[killOnInvalidLandSpacerColumn].Width = new GridLength(8);
@@ -11755,7 +12089,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             };
             state.CustomFlagControls["singleuse"] = singleUseCheckBox;
             RegisterProtoActionFlagSourceControl(state, singleUseCheckBox, "singleuse");
-            var singleUseColumn = Grid.GetColumn(state.MaxRangeTb) + 1;
+            var singleUseColumn = EditorFormLayout.GetContainingGridColumn(state.CoreFieldsGrid, state.MaxRangeTb) + 1;
             while (state.CoreFieldsGrid.ColumnDefinitions.Count <= singleUseColumn)
                 state.CoreFieldsGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
             Grid.SetColumn(singleUseCheckBox, singleUseColumn);
@@ -12287,6 +12621,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         ArrangeDrainResurrectionStructuredLayout(state, actionType);
         ArrangeEmpowerLayout(state, actionType);
         ArrangeProtoActionDamageOptionButtons(state);
+        FinalizeProtoActionFieldRoles(state);
         RefreshProtoActionSourceMarkers(state);
         }
         finally
@@ -12450,6 +12785,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 editor.Width = 200;
                 editor.MaxWidth = 200;
             }
+            EditorFormLayout.WrapFlowingGridColumns(animationGrid, [0, 1], [2, 3], [4, 5]);
         }
         if (animationRow != null && state.AdditionalFieldsContainer.Children.Remove(animationRow))
             state.StructuredFieldsContainer.Children.Add(animationRow);
@@ -13921,6 +14257,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         state.AdditionalFieldsContainer.Children.Add(rateSection);
     }
 
+    private bool UsesCompactDamageAreaSort(ProtoActionWidgetState state, ProtoAction effectiveAction, string actionType, bool hasDamageAreaData)
+        => hasDamageAreaData && !IsConditionalShieldActionType(actionType) &&
+           !(IsAutoBoostActionType(actionType) && IsAutoBoostSelfEnabled(state, effectiveAction) &&
+             !IsAutoBoostAreaEnabled(state, effectiveAction));
+
     private void RenderProtoActionAdditionalFields(
         ProtoActionWidgetState state,
         Dictionary<string, string> currentValues,
@@ -13938,6 +14279,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             state.ForcedVisibleFieldTags.Contains(tag) ||
             (currentValues.TryGetValue(tag, out var currentValue) && !string.IsNullOrWhiteSpace(currentValue)) ||
             !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag)));
+        // The compact damage-extra panel owns Area Sort whenever it is open.
+        // A generic copy would replace the registered editor and save stale data.
+        var usesCompactAreaSort = UsesCompactDamageAreaSort(state, effectiveAction, actionType, hasDamageAreaData);
         var fieldTags = GetVisibleProtoActionSimpleFieldTags(state, effectiveAction, actionType)
             .Where(tag => !state.IsLinkedMaulAreaAction ||
                           (!tag.Equals("anim", StringComparison.OrdinalIgnoreCase) &&
@@ -13952,6 +14296,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OptionalModelAttachmentTags.Contains(tag, StringComparer.OrdinalIgnoreCase)))
             .Where(tag => !(hasDamageAreaData &&
                             OptionalAbductDamageAreaTags.Contains(tag, StringComparer.OrdinalIgnoreCase)))
+            .Where(tag => !(usesCompactAreaSort && tag.Equals("areasortmode", StringComparison.OrdinalIgnoreCase)))
             // Damage area and flags are rendered by the compact, action-aware damage-extra panel.
             .Where(tag => !OptionalAbductDamageAreaTags.Contains(tag, StringComparer.OrdinalIgnoreCase) ||
                           hasDamageAreaData)
@@ -13960,6 +14305,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             state.CustomValues.GetValueOrDefault("rampage.projectile.hidden") == "1"))
             .ToList();
         var suggestedFieldTags = GetSuggestedProtoActionSimpleFieldTags(actionType);
+        if (usesCompactAreaSort) suggestedFieldTags.RemoveAll(tag => tag.Equals("areasortmode", StringComparison.OrdinalIgnoreCase));
         if (IsBuckAttackActionType(actionType))
         {
             foreach (var optionalTag in new[] { "maxsizeclass", "stunduration" })
@@ -24409,7 +24755,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
             if (optionIsOpen && openSection != null)
             {
-                button.Margin = new Thickness(2, 0, 0, 0);
+                button.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 openSection.Children.Add(button);
                 return;
             }
@@ -24597,28 +24943,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var damageAreaValue = currentValues.TryGetValue("damagearea", out var currentDamageArea)
                     ? currentDamageArea
                     : ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "damagearea");
-                damageAreaRow.Children.Add(new TextBlock
-                {
-                    Text = "Damage Area:",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 8, 4)
-                });
                 var damageAreaEditor = CreateDamageAreaEditor("damagearea", damageAreaValue);
-                damageAreaRow.Children.Add(damageAreaEditor);
+                Control damageAreaField = damageAreaEditor;
 
                 if (!_isReadOnly && !isSpecialAttackAreaMode)
                 {
-                    var removeButton = new Button
-                    {
-                        Classes = { "remove-button" },
-                        Margin = new Thickness(8, 0, 0, 0),
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
+                    var removeButton = EditorRemoveButtons.Field();
                     removeButton.Click += async (_, _) => await RemoveOptionalDamageAreaAsync();
-                    damageAreaRow.Children.Add(removeButton);
+                    damageAreaField = EditorFormLayout.WithCross(damageAreaEditor, removeButton);
                 }
-
+                damageAreaRow.Children.Add(EditorFormLayout.LabeledGroup("Damage Area:", damageAreaField));
             }
 
             var rawDamageFlagsValue = currentValues.TryGetValue("damageflags", out var currentDamageFlags)
@@ -24660,11 +24994,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 damageFlagsStorage.Text = string.Join("|", AbductDamageFlagValues.Where(selectedDamageFlags.Contains));
             }
 
-            damageAreaRow.Children.Add(new TextBlock
+            var damageTargetsGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap)
+            };
+            damageTargetsGroup.Children.Add(new TextBlock
             {
                 Text = "Targets:",
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(14, 4, 8, 4)
+                Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0)
             });
 
             void SyncDamageFlagsStorage()
@@ -24702,8 +25041,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SyncDamageFlagsStorage();
                     MarkDirty();
                 };
-                damageAreaRow.Children.Add(damageFlagCheckBox);
+                damageTargetsGroup.Children.Add(damageFlagCheckBox);
             }
+            damageAreaRow.Children.Add(damageTargetsGroup);
 
             if (!isConditionalShield)
             {
@@ -24719,13 +25059,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (isSpecialAttackAreaMode && string.IsNullOrWhiteSpace(currentAreaSortMode))
                         currentAreaSortMode = "Radial";
 
-                    damageAreaRow.Children.Add(new TextBlock
-                    {
-                        Text = "Area Sort:",
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 4, 8, 4)
-                    });
-
                     var areaSortOptions = new[] { "Directional", "Radial" };
                     var areaSortModeCombo = new ComboBox
                     {
@@ -24735,6 +25068,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IsEnabled = !_isReadOnly,
                         Width = 110
                     };
+                    ConfigureUnitField(areaSortModeCombo, EditorFieldWidthRole.ShortEnum);
                     areaSortModeCombo.SelectionChanged += async (_, _) =>
                     {
                         if (_isPopulating || !await CheckStartLocalMod())
@@ -24749,16 +25083,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         MarkDirty();
                     };
                     state.AdditionalFieldControls["areasortmode"] = areaSortModeCombo;
-                    damageAreaRow.Children.Add(areaSortModeCombo);
+                    Control areaSortField = areaSortModeCombo;
 
                     if (!_isReadOnly && !isSpecialAttackAreaMode)
                     {
-                        var removeAreaSortButton = new Button
-                        {
-                            Classes = { "remove-button" },
-                            Margin = new Thickness(8, 0, 0, 0),
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
+                        var removeAreaSortButton = EditorRemoveButtons.Field();
                         removeAreaSortButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
@@ -24770,8 +25099,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                             RefreshProtoActionMetadataPanels(state);
                             MarkDirty();
                         };
-                        damageAreaRow.Children.Add(removeAreaSortButton);
+                        areaSortField = EditorFormLayout.WithCross(areaSortModeCombo, removeAreaSortButton);
                     }
+                    damageAreaRow.Children.Add(EditorFormLayout.LabeledGroup("Area Sort:", areaSortField));
                 }
                 else if (!_isReadOnly)
                 {
@@ -25257,14 +25587,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var removeButton = new Button
-                    {
-                        Content = "Remove",
-                        Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        VerticalAlignment = VerticalAlignment.Top
-                    };
+                    var removeButton = EditorRemoveButtons.Card(description: "Remove target");
                     removeButton.Click += async (_, _) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -25662,6 +25985,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         DamageTypeLabel = row.DamageTypeLabel!
                     };
                     targetState.RateRows.Add(rowState);
+                    if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
                     if (row.RemoveButton != null)
                     {
@@ -25956,6 +26280,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ModifyAmountCapTb = capTb
             };
             state.ChargedRows.Add(rowState);
+            if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
             if (!_isReadOnly)
             {
@@ -27806,31 +28131,23 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
 
                 Control CreateOnHitLabeledControlGroup(
-                    string label,
-                    Control control,
-                    Action? clearOptionalValue = null)
+                    string label, Control control, Action? clearOptionalValue = null)
                 {
-                    if (control.Margin == default)
-                        control.Margin = new Thickness(0);
-                    var group = CreateLabeledFieldGroup(label, control);
-                    if (!_isReadOnly && clearOptionalValue != null && group is Panel panel)
+                    control.Margin = new Thickness(0);
+                    Control field = control;
+                    if (!_isReadOnly && clearOptionalValue != null)
                     {
-                        var remove = new Button
-                        {
-                            Classes = { "remove-button" },
-                            Margin = new Thickness(2, 0, 0, 0)
-                        };
+                        var remove = EditorRemoveButtons.Field();
                         remove.Click += async (_, _) =>
                         {
-                            if (!await CheckStartLocalMod())
-                                return;
+                            if (!await CheckStartLocalMod()) return;
                             clearOptionalValue();
                             RefreshProtoActionMetadataPanels(state);
                             MarkDirty();
                         };
-                        panel.Children.Add(remove);
+                        field = EditorFormLayout.WithCross(control, remove);
                     }
-                    return group;
+                    return EditorFormLayout.LabeledGroup(label, field);
                 }
 
                 void AddLabeledControl(string label, Control control, Action? clearOptionalValue = null)
@@ -28328,9 +28645,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var targetFilterEditors = new Grid
                     {
-                        ColumnDefinitions = new ColumnDefinitions("Auto,Auto"),
-                        ColumnSpacing = 18,
-                        HorizontalAlignment = HorizontalAlignment.Left
+                        ColumnDefinitions = new ColumnDefinitions("*,*"),
+                        ColumnSpacing = EditorFormLayout.GroupGap,
+                        HorizontalAlignment = HorizontalAlignment.Stretch
                     };
 
                     Control CreateTargetFilterChipEditor(
@@ -28345,7 +28662,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                             Width = 200,
                             HorizontalAlignment = HorizontalAlignment.Left
                         };
-                        EnableDropdownAutoComplete(picker);
+                        ConfigureUnitField(picker, EditorFieldWidthRole.ChipSearch);
+                        EditorAutoCompleteService.KeepDropDownAnchored(picker);
+                        EnableDropdownAutoComplete(picker, selectAllOnFirstClick: false);
                         var chips = new WrapPanel { Orientation = Orientation.Horizontal };
                         var host = TargetFilterEditor.CreateChipGroup(
                             title, picker, chips, _isReadOnly);
@@ -28558,6 +28877,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OriginalElement = originalElement != null ? new XElement(originalElement) : new XElement("damage")
                         };
                         rowState.DamageRows.Add(damageRowState);
+                        if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
                         damageTypeCb.SelectionChanged += async (_, _) =>
                         {
                             if (isRefreshingDamageTypes)
@@ -28651,7 +28971,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FontWeight = FontWeight.Bold
                     });
 
-                    var modifyRowsHost = new StackPanel { Spacing = 4 };
+                    var modifyRowsHost = new StackPanel { Spacing = 0 };
                     modifySection.Children.Add(modifyRowsHost);
 
                     void AddModifyRow(XElement? originalElement = null, string initialType = "", string initialApplyType = "", string initialDamageType = "", string initialValue = "", bool initialStack = false)
@@ -28765,8 +29085,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
                             damageTypeLabel.IsVisible = visible;
                             damageTypeCb.IsVisible = visible;
-                            rowGrid.ColumnDefinitions[3].Width = visible ? GridLength.Auto : new GridLength(0);
-                            rowGrid.ColumnDefinitions[4].Width = visible ? new GridLength(90) : new GridLength(0);
                             if (!visible)
                                 damageTypeCb.SelectedItem = null;
                             else
@@ -28788,6 +29106,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OriginalElement = originalElement != null ? new XElement(originalElement) : new XElement("modify")
                         };
                         rowState.ModifyRows.Add(modifyRowState);
+                        if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
                         if (!_isReadOnly)
                         {
@@ -28808,6 +29127,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             rowGrid.Children.Add(removeModifyButton);
                         }
 
+                        EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6, 7, 8, 9]);
                         modifyRowsHost.Children.Add(rowGrid);
                     }
 
@@ -28851,7 +29171,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FontWeight = FontWeight.Bold
                     });
 
-                    var modifyRampRowsHost = new StackPanel { Spacing = 4 };
+                    var modifyRampRowsHost = new StackPanel { Spacing = 0 };
                     modifyRampSection.Children.Add(modifyRampRowsHost);
 
                     void AddModifyRampRowForModifyEffects(XElement? originalElement = null, string initialType = "", string initialDamageType = "", string initialInit = "", string initialFinal = "")
@@ -28903,12 +29223,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Grid.SetColumn(damageTypeCb, 3);
                         rowGrid.Children.Add(damageTypeCb);
 
-                        var initLabel = new TextBlock
-                        {
-                            Text = "Init Value:",
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(8, 4, 6, 4)
-                        };
+                        var initLabel = CreateModifierRampValueCaption();
                         Grid.SetColumn(initLabel, 4);
                         rowGrid.Children.Add(initLabel);
 
@@ -28925,7 +29240,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                         var finalLabel = new TextBlock
                         {
-                            Text = "Final Value:",
+                            Text = "Final:",
                             VerticalAlignment = VerticalAlignment.Center,
                             Margin = new Thickness(8, 4, 6, 4)
                         };
@@ -28948,8 +29263,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
                             damageTypeLabel.IsVisible = visible;
                             damageTypeCb.IsVisible = visible;
-                            rowGrid.ColumnDefinitions[2].Width = visible ? GridLength.Auto : new GridLength(0);
-                            rowGrid.ColumnDefinitions[3].Width = visible ? new GridLength(90) : new GridLength(0);
                             if (!visible)
                                 damageTypeCb.SelectedItem = null;
                             else
@@ -28970,6 +29283,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OriginalElement = originalElement != null ? new XElement(originalElement) : new XElement("modifyramp")
                         };
                         rowState.ModifyRampRows.Add(modifyRampRowState);
+                        if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
                         if (!_isReadOnly)
                         {
@@ -28990,6 +29304,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             rowGrid.Children.Add(removeButton);
                         }
 
+                        EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2, 3], [4, 5], [6, 7, 8]);
                         modifyRampRowsHost.Children.Add(rowGrid);
                     }
 
@@ -29045,7 +29360,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FontWeight = FontWeight.Bold
                     });
 
-                    var modifyRowsHost = new StackPanel { Spacing = 4 };
+                    var modifyRowsHost = new StackPanel { Spacing = 0 };
                     modifySection.Children.Add(modifyRowsHost);
 
                     void AddBoostModifyRow(XElement? originalElement = null, string initialType = "", string initialApplyType = "", string initialDamageType = "", string initialValue = "")
@@ -29158,6 +29473,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OriginalElement = originalElement != null ? new XElement(originalElement) : new XElement("modify")
                         };
                         rowState.ModifyRows.Add(modifyRowState);
+                        if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
                         if (!_isReadOnly)
                         {
@@ -29178,6 +29494,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             rowGrid.Children.Add(removeButton);
                         }
 
+                        EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6, 7, 8, 9]);
                         modifyRowsHost.Children.Add(rowGrid);
                     }
 
@@ -29214,7 +29531,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FontWeight = FontWeight.Bold
                     });
 
-                    var modifyRampRowsHost = new StackPanel { Spacing = 4 };
+                    var modifyRampRowsHost = new StackPanel { Spacing = 0 };
                     modifyRampSection.Children.Add(modifyRampRowsHost);
 
                     void AddModifyRampRow(XElement? originalElement = null, string initialType = "", string initialDamageType = "", string initialInit = "", string initialFinal = "")
@@ -29266,12 +29583,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Grid.SetColumn(damageTypeCb, 3);
                         rowGrid.Children.Add(damageTypeCb);
 
-                        var initLabel = new TextBlock
-                        {
-                            Text = "Init Value:",
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(8, 4, 6, 4)
-                        };
+                        var initLabel = CreateModifierRampValueCaption();
                         Grid.SetColumn(initLabel, 4);
                         rowGrid.Children.Add(initLabel);
 
@@ -29288,7 +29600,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                         var finalLabel = new TextBlock
                         {
-                            Text = "Final Value:",
+                            Text = "Final:",
                             VerticalAlignment = VerticalAlignment.Center,
                             Margin = new Thickness(8, 4, 6, 4)
                         };
@@ -29311,8 +29623,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
                             damageTypeLabel.IsVisible = visible;
                             damageTypeCb.IsVisible = visible;
-                            rowGrid.ColumnDefinitions[2].Width = visible ? GridLength.Auto : new GridLength(0);
-                            rowGrid.ColumnDefinitions[3].Width = visible ? new GridLength(90) : new GridLength(0);
                             if (!visible)
                                 damageTypeCb.SelectedItem = null;
                             else
@@ -29333,6 +29643,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             OriginalElement = originalElement != null ? new XElement(originalElement) : new XElement("modifyramp")
                         };
                         rowState.ModifyRampRows.Add(modifyRampRowState);
+                        if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
 
                         if (!_isReadOnly)
                         {
@@ -29353,6 +29664,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             rowGrid.Children.Add(removeButton);
                         }
 
+                        EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2, 3], [4, 5], [6, 7, 8]);
                         modifyRampRowsHost.Children.Add(rowGrid);
                     }
 
@@ -29488,6 +29800,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             state.OnHitEffectRows.Add(rowState);
             cardsContainer.Children.Add(card);
+            if (!_isPopulating) FinalizeProtoActionFieldRoles(state);
         }
 
         foreach (var entry in effectEntries)
@@ -29947,7 +30260,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             section.Children.Add(sectionHeader);
 
-            var rowsContainer = new StackPanel { Spacing = 4 };
+            var rowsContainer = CreateProtoActionStructuredRowsPanel(state, tag);
             section.Children.Add(rowsContainer);
             state.StructuredFieldRows[tag] = [];
 
@@ -30209,6 +30522,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         attributeEditor.IsEnabled = false;
                     }
 
+                    ApplyProtoActionAttributeWidth(attributeEditor, tag, attributeName);
                     rowState.AttributeEditors[attributeName] = attributeEditor;
                     var insertIndex = insertBefore != null ? rowPanel.Children.IndexOf(insertBefore) : -1;
                     if (insertIndex >= 0)
@@ -30366,6 +30680,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 Width = 170,
                                 IsEnabled = !_isReadOnly
                             };
+                            ConfigureUnitField(pickerAcb, EditorFieldWidthRole.LongEnum);
+                            EditorAutoCompleteService.KeepDropDownAnchored(pickerAcb);
                             EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);
 
                             async void AddSelectedAttribute()
@@ -30454,6 +30770,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowPanel.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.UseInlineRowLayout(rowPanel);
+                rowState.HasUnrepresentedAttributes = initialEntry?.Attributes.Keys.Any(attribute =>
+                    !attribute.Equals("type", StringComparison.OrdinalIgnoreCase) && !rowState.AttributeEditors.ContainsKey(attribute)) == true;
                 state.StructuredFieldRows[tag].Add(rowState);
                 rowsContainer.Children.Add(rowPanel);
             }
@@ -30487,11 +30806,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
+                        if (rowsContainer is CompactRowsPanel) rowsContainer.Children.Remove(addButton);
                         AddRow();
+                        if (rowsContainer is CompactRowsPanel) rowsContainer.Children.Add(addButton);
                         MarkDirty();
                     }
                 };
-                section.Children.Add(addButton);
+                if (rowsContainer is CompactRowsPanel)
+                    rowsContainer.Children.Add(addButton);
+                else
+                    section.Children.Add(addButton);
             }
 
             state.StructuredFieldsContainer.Children.Add(section);
@@ -30630,6 +30954,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             HorizontalAlignment = HorizontalAlignment.Left
         };
         protoActionFlagPicker = acbAdd;
+        ConfigureUnitField(acbAdd, EditorFieldWidthRole.ChipSearch);
+        EditorAutoCompleteService.KeepDropDownAnchored(acbAdd);
         EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
         flagsHeaderRow.Children.Add(acbAdd);
 
@@ -30843,10 +31169,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Width = 100,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-            EditorTextFieldStyle.ConfigureSelector(picker);
-            picker.Width = 100;
-            picker.MinWidth = 100;
-            picker.MaxWidth = 100;
+            EditorTextFieldStyle.ConfigureSelector(picker, EditorFieldWidthRole.ChipSearch);
+            EditorAutoCompleteService.KeepDropDownAnchored(picker);
             ConfigureStrictSuggestionAutoComplete(picker, suggestions, "");
             FreezeEditorScrollWhileDropDownIsOpen(picker, _editorScroll);
             picker.SelectionChanged += async (_, _) =>
@@ -30886,6 +31210,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             (currentSimpleValues.TryGetValue(tag, out var currentValue) && !string.IsNullOrWhiteSpace(currentValue)) ||
             !string.IsNullOrWhiteSpace(ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, tag)));
         var suggestedSimpleTags = GetSuggestedProtoActionSimpleFieldTags(actionType);
+        if (UsesCompactDamageAreaSort(state, effectiveAction, actionType, hasDamageAreaData))
+        {
+            visibleSimpleTags.RemoveAll(tag => tag.Equals("areasortmode", StringComparison.OrdinalIgnoreCase));
+            suggestedSimpleTags.RemoveAll(tag => tag.Equals("areasortmode", StringComparison.OrdinalIgnoreCase));
+        }
         if (IsRampageActionType(actionType))
         {
             foreach (var optionalTag in new[] { "maxsizeclass", "projectile" })
@@ -30971,17 +31300,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 200,
                     IsEnabled = !_isReadOnly
                 };
-                EditorTextFieldStyle.ConfigureSelector(pickerAcb);
-                pickerAcb.Width = 200;
-                pickerAcb.MinWidth = 200;
-                pickerAcb.MaxWidth = 200;
+                EditorTextFieldStyle.ConfigureSelector(pickerAcb, EditorFieldWidthRole.LongEnum);
+                EditorAutoCompleteService.KeepDropDownAnchored(pickerAcb);
                 EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);
                 FreezeEditorScrollWhileDropDownIsOpen(pickerAcb, _editorScroll);
                 Grid.SetColumn(pickerAcb, 0);
                 pickerRow.Children.Add(pickerAcb);
 
+                var addingAttribute = false;
                 async void PerformAdd()
                 {
+                    if (addingAttribute) return;
                     var input = pickerAcb.Text?.Trim() ?? "";
                     var match = optionLabels.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase))
                         ?? optionLabels.FirstOrDefault(x => x.Equals(selectedAttributeLabel, StringComparison.OrdinalIgnoreCase));
@@ -30991,10 +31320,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var option = pickerOptions.FirstOrDefault(x => x.Label.Equals(match, StringComparison.OrdinalIgnoreCase));
                     if (string.IsNullOrWhiteSpace(option.Tag))
                         return;
-
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
+                    if (!GetAvailableProtoActionAttributePickerOptions(state).Any(candidate => candidate.Tag.Equals(option.Tag, StringComparison.OrdinalIgnoreCase))) return;
+                    addingAttribute = true;
+                    var revision = state.RenderRevision;
+                    try
                     {
+                        if (!await CheckStartLocalMod() || revision != state.RenderRevision || !_protoActionWidgets.Contains(state)) return;
+                        if (!GetAvailableProtoActionAttributePickerOptions(state).Any(candidate => candidate.Tag.Equals(option.Tag, StringComparison.OrdinalIgnoreCase))) return;
                         state.ForcedVisibleFieldTags.Add(option.Tag);
                         if (option.Tag.Equals("maxrange", StringComparison.OrdinalIgnoreCase))
                             state.CustomValues["additional.maxrange"] = "1";
@@ -31007,6 +31339,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                         MarkDirty();
                     }
+                    finally { addingAttribute = false; }
                 }
 
                 pickerAcb.SelectionChanged += (s, e) =>
@@ -31339,7 +31672,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             section.Children.Add(sectionHeader);
 
-            var rowsContainer = new StackPanel { Spacing = 4 };
+            var rowsContainer = CreateProtoActionStructuredRowsPanel(state, tag);
             section.Children.Add(rowsContainer);
             state.StructuredFieldRows[tag] = [];
 
@@ -31542,6 +31875,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (isInheritedRateTypeEditor)
                         attributeEditor.IsEnabled = false;
 
+                    ApplyProtoActionAttributeWidth(attributeEditor, tag, attributeName);
                     rowState.AttributeEditors[attributeName] = attributeEditor;
                     rowPanel.Children.Add(attributeEditor);
 
@@ -31719,6 +32053,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowPanel.Children.Add(rowDeleteButton);
                 }
 
+                EditorFormLayout.UseInlineRowLayout(rowPanel);
+                rowState.HasUnrepresentedAttributes = initialEntry?.Attributes.Keys.Any(attribute =>
+                    !attribute.Equals("type", StringComparison.OrdinalIgnoreCase) && !rowState.AttributeEditors.ContainsKey(attribute)) == true;
                 state.StructuredFieldRows[tag].Add(rowState);
                 rowsContainer.Children.Add(rowPanel);
             }
@@ -31742,11 +32079,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var proceed = await CheckStartLocalMod();
                     if (proceed)
                     {
+                        if (rowsContainer is CompactRowsPanel) rowsContainer.Children.Remove(addButton);
                         AddRow();
+                        if (rowsContainer is CompactRowsPanel) rowsContainer.Children.Add(addButton);
                         MarkDirty();
                     }
                 };
-                section.Children.Add(addButton);
+                if (rowsContainer is CompactRowsPanel)
+                    rowsContainer.Children.Add(addButton);
+                else
+                    section.Children.Add(addButton);
             }
 
             state.OptionalFieldsContainer.Children.Add(section);
@@ -32324,6 +32666,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_fieldControls.TryGetValue(tag, out var existingEditor))
         {
             existingEditor.IsEnabled = false;
+            ConfigureUnitField(existingEditor, EditorFieldWidthRole.Reference);
             switch (existingEditor)
             {
                 case AutoCompleteBox autoCompleteBox:
@@ -32356,7 +32699,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             Text = normalizedName,
             IsEnabled = false
         };
-        EditorTextFieldStyle.ConfigureTextBox(editor);
+        EditorTextFieldStyle.ConfigureTextBox(editor, EditorFieldWidthRole.Reference);
         ToolTip.SetTip(
             editor,
             tag.Equals("transformcommand", StringComparison.OrdinalIgnoreCase)
@@ -32547,7 +32890,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private static void AttachProtoActionIntegerBehavior(TextBox textBox, Func<bool>? allowNegative = null)
     {
-        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+        EditorNumericFieldStyle.ConfigureNumericTextBox(textBox, EditorFieldWidthRole.Numeric);
         textBox.TextChanged += (_, _) =>
         {
             var text = textBox.Text ?? "";
@@ -33152,8 +33495,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PromptType.Error,
                 "Invalid ProtoAction Name",
                 "New or renamed ProtoAction names can contain only letters, digits, '_' and '-'.");
-            await invalidPrompt.ShowDialog(this);
-            invalidNames[0].NameAcb.Focus();
+            await ReportActionFieldErrorAsync(invalidPrompt, invalidNames[0], invalidNames[0].NameAcb);
             return false;
         }
 
@@ -33175,8 +33517,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PromptType.Error,
                 "Missing ProtoAction Type",
                 "Every new ProtoAction requires a valid action type before it can be saved.");
-            await missingTypePrompt.ShowDialog(this);
-            missingNewActionType.TypeAcb.Focus();
+            await ReportActionFieldErrorAsync(missingTypePrompt, missingNewActionType, missingNewActionType.TypeAcb);
             return false;
         }
 
@@ -33201,8 +33542,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PromptType.Error,
                 "Invalid Trail Frequency",
                 "Trail Frequency must be a number greater than 0.");
-            await frequencyPrompt.ShowDialog(this);
-            invalidTrailFrequency.Focus();
+            var state = _protoActionWidgets.FirstOrDefault(action => action.StructuredFieldRows.Values
+                .SelectMany(rows => rows).Any(row => row.AttributeEditors.Values.Contains(invalidTrailFrequency)));
+            await ReportActionFieldErrorAsync(frequencyPrompt, state, invalidTrailFrequency);
             return false;
         }
 
@@ -33214,7 +33556,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 PromptType.Error,
                 "Duplicate ProtoAction Names",
                 $"Every protoaction on a unit must have a unique name. Rename or remove the duplicates before saving:\n{nameList}");
-            await prompt.ShowDialog(this);
+            var duplicate = _protoActionWidgets.FirstOrDefault(state => state.NameAcb.IsEffectivelyVisible &&
+                duplicateNames.Contains(state.NameAcb.Text?.Trim() ?? "", StringComparer.OrdinalIgnoreCase)) ??
+                _protoActionWidgets.FirstOrDefault(state => duplicateNames.Contains(state.NameAcb.Text?.Trim() ?? "", StringComparer.OrdinalIgnoreCase));
+            await ReportActionFieldErrorAsync(prompt, duplicate, duplicate?.NameAcb);
             return false;
         }
 
@@ -33283,8 +33628,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var directory = GetModTacticsDirectory();
         if (directory == null)
             return null;
-        var relative = NormalizeManagedTacticsName(tacticsName).Replace('\\', Path.DirectorySeparatorChar);
-        return Path.Combine(directory, relative);
+        return ManagedTacticsSource.Resolve(directory, tacticsName).XmlPath;
     }
 
     private HashSet<string> GetCustomTacticsNames()
@@ -33298,7 +33642,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var fileName = Path.GetFileName(path);
             if (!fileName.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase) &&
-                !fileName.EndsWith(".tactics.xmb", StringComparison.OrdinalIgnoreCase))
+                !fileName.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var relative = Path.GetRelativePath(directory, path).Replace(Path.DirectorySeparatorChar, '\\');
@@ -33356,7 +33700,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
             {
                 var name = GetAbilityElementName(power);
-                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
+                if (!string.IsNullOrWhiteSpace(name) && PowerCatalog.IsAbilityPower(power)) names.Add(name);
             }
         }
         catch { }
@@ -33509,6 +33853,22 @@ public partial class ProtoEditorWindow : SimpleWindow
         var path = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
             ?? throw new InvalidOperationException("The active mod unit transform file path could not be resolved.");
         return LoadAbilityXmlDocumentForUpdate(path, "unittransformmods");
+    }
+
+    private bool IsPendingTransformSourceRename(string commandName, string from, string unitName)
+    {
+        if (!_pendingUnitRenames.TryGetValue(from, out var renamed) ||
+            !renamed.Equals(unitName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Only a persisted mod transform participates in the pending migration.
+        // Built-in sources and unrelated mismatches still require correction.
+        var path = GetCurrentModGameplayFilePath("unit_transform_mods.xml");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+        var transform = FindProtoUnitTransformByCommand(LoadProtoUnitTransformModDocumentForRead(path), commandName);
+        return transform != null && ProtoUnitTransformDefinition.FromElement(transform).From
+            .Equals(from, StringComparison.OrdinalIgnoreCase);
     }
 
     private void SaveProtoUnitTransformMods(XDocument doc)
@@ -33758,7 +34118,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     throw new InvalidOperationException($"Technology '{newName}' already exists in Data.bar.");
             }
 
-            TransformCommandBundleLifecycle.Duplicate(
+            var stringState = CaptureCurrentModStringsStateForEdit();
+            var created = TransformCommandBundleLifecycle.Duplicate(
                 sourceUnit,
                 duplicatedUnit,
                 duplicatedUnitName,
@@ -33768,16 +34129,44 @@ public partial class ProtoEditorWindow : SimpleWindow
                 commandFile.Document,
                 transformFile.Document,
                 technologyFile.Document);
-            ModDocumentPersistence.Execute(
-                [commandFile, transformFile, technologyFile],
-                additionalPaths: null,
-                additionalExpectedStates: null,
-                () =>
+            var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var bundle in created)
+            {
+                var source = owned.Single(item => item.ToUnit.Equals(bundle.ToUnit, StringComparison.OrdinalIgnoreCase));
+                var sourceCommand = sourceDocuments.Commands.Root!.Elements().First(element =>
+                    GetProtoUnitCommandName(element).Equals(source.CommandName, StringComparison.OrdinalIgnoreCase));
+                var candidate = commandFile.Document.Root!.Elements().First(element =>
+                    GetProtoUnitCommandName(element).Equals(bundle.CommandName, StringComparison.OrdinalIgnoreCase));
+                var definition = ProtoUnitCommandDefinition.FromElement(candidate);
+                foreach (var update in await PrepareProtoUnitCommandStringsAsync(definition, sourceCommand,
+                             await ResolveProtoUnitCommandStringTextsAsync(ProtoUnitCommandDefinition.FromElement(sourceCommand)), copying: true)) updates[update.Key] = update.Value;
+                candidate.ReplaceWith(definition.ToElement());
+                var sourceTechnology = FindTechnologyByName(sourceDocuments.Technologies, source.TechnologyName)!;
+                var candidateTechnology = FindTechnologyByName(technologyFile.Document, bundle.TechnologyName)!;
+                foreach (var update in await PrepareTransformTechnologyStringsAsync(sourceTechnology, candidateTechnology)) updates[update.Key] = update.Value;
+            }
+            var documents = new[] { commandFile, transformFile, technologyFile };
+            var proposed = documents.ToDictionary(file => file.Path, file => file.Document, StringComparer.OrdinalIgnoreCase);
+            var cleanup = PrepareCommandStringSave(commandPath, proposed, new HashSet<string>(StringComparer.OrdinalIgnoreCase), updates, "");
+            var stringPath = GetCurrentModStringsPath();
+            var expected = CaptureExpectedEditorFileStates([stringPath]);
+            foreach (var file in documents) expected[file.Path] = file.LoadedState;
+            if (!string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
+            await ModDocumentPersistence.ExecuteAsync(
+                documents,
+                cleanup.WritesStrings ? [stringPath] : [],
+                expected,
+                async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
                     SaveProtoUnitCommandMods(commandFile.Document);
                     SaveProtoUnitTransformMods(transformFile.Document);
                     SaveAbilityXmlDocument(technologyFile.Document, technologyPath);
+                    await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),
+                        StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
                 });
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             _protoUnitCommandCatalogLoaded = false;
             _cachedCommandNames = null;
             _cachedTechNames = null;
@@ -33795,7 +34184,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void SavePendingOwnedTransformBundleUnitRenames()
+    private void SavePendingOwnedTransformBundleUnitRenames(IReadOnlyList<TechnologyReferenceFile> referenceFiles,
+        IReadOnlySet<string> availableStringSources)
     {
         if (_pendingUnitRenames.Count == 0 || _modXmlRoot == null)
             return;
@@ -33814,6 +34204,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             throw new InvalidDataException(technologyValidation.ToDisplayMessage(technologyPath));
 
         var bundleRenames = new List<(OwnedTransformCommandBundle Old, OwnedTransformCommandBundle New)>();
+        var originalTechnologies = technologyFile.Document.Root!.Elements()
+            .Where(element => element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(element => (string?)element.Attribute("name") ?? "", element => new XElement(element), StringComparer.OrdinalIgnoreCase);
+        var originalCommands = commandFile.Document.Root!.Elements()
+            .ToDictionary(GetProtoUnitCommandName, element => new XElement(element), StringComparer.OrdinalIgnoreCase);
         EnsureProtoUnitCommandCatalogLoaded(force: true);
         var builtInTechnologyNames = LoadTechNamesFromBar();
         foreach (var rename in _pendingUnitRenames)
@@ -33845,6 +34240,18 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (bundleRenames.Count == 0)
             return;
 
+        foreach (var bundle in bundleRenames)
+        {
+            if (originalCommands.TryGetValue(bundle.Old.CommandName, out var originalCommand) &&
+                commandFile.Document.Root!.Elements().FirstOrDefault(element =>
+                    GetProtoUnitCommandName(element).Equals(bundle.New.CommandName, StringComparison.OrdinalIgnoreCase)) is { } renamedCommand)
+                ProtoUnitCommandStringPolicy.RenameOwnedStringIds(originalCommand, renamedCommand, bundle.New.CommandName, availableStringSources);
+            if (originalTechnologies.TryGetValue(bundle.Old.TechnologyName, out var original) &&
+                technologyFile.Document.Root!.Elements().FirstOrDefault(element =>
+                    string.Equals((string?)element.Attribute("name"), bundle.New.TechnologyName, StringComparison.OrdinalIgnoreCase)) is { } renamed)
+                TechnologyStringIdPolicy.RenameOwnedStringIds(original, renamed, bundle.New.TechnologyName, availableStringSources);
+        }
+
         var localSources = new[]
         {
             new TechnologyReferenceSource("Mod ProtoUnits", _modXmlDoc!, TechnologyReferenceDocumentKind.ProtoUnits, _modFilePath, CanMigrate: true),
@@ -33870,7 +34277,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(path => Path.GetFullPath(path!))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var files = GetGameIdentifierReferenceFiles()
+        // The enclosing Unit transaction validated discovery before its first write.
+        // Reuse that original list after planned writes instead of rediscovering here.
+        var files = referenceFiles
             .Where(file => !excluded.Contains(Path.GetFullPath(file.Path)))
             .ToList();
         var commandMigration = GameIdentifierReferenceMigrationPlan.Prepare(
@@ -34126,13 +34535,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         return true;
     }
 
-    private IReadOnlySet<string> SavePendingOwnedTransformBundleDeletions()
+    private void SavePendingOwnedTransformBundleDeletions()
     {
         var bundles = _pendingOwnedTransformBundleDeletions.Values.SelectMany(value => value)
             .DistinctBy(bundle => bundle.CommandName, StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (bundles.Count == 0)
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return;
 
         var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
         var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
@@ -34140,48 +34549,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
         var transformFile = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
         var technologyFile = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
-        var deletedStringIds = bundles
-            .Select(bundle => commandFile.Document.Root?.Elements().FirstOrDefault(element =>
-                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
-                GetProtoUnitCommandName(element).Equals(bundle.CommandName, StringComparison.OrdinalIgnoreCase)))
-            .Where(element => element != null)
-            .SelectMany(element => GetProtoUnitCommandStringIds(element!))
-            .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         TransformCommandBundleLifecycle.Delete(
             bundles, commandFile.Document, transformFile.Document, technologyFile.Document);
         SaveProtoUnitCommandMods(commandFile.Document);
         SaveProtoUnitTransformMods(transformFile.Document);
         SaveAbilityXmlDocument(technologyFile.Document, technologyPath);
-        return deletedStringIds;
-    }
-
-    private void SavePendingTransformCommandStringCleanup(IEnumerable<string> candidateIds)
-    {
-        var candidates = candidateIds
-            .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (candidates.Count == 0)
-            return;
-
-        var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
-        var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
-        var commandDocument = ModDocumentPersistence.Prepare(
-            commandPath, ModXmlDocumentKind.ProtoUnitCommands).Document;
-        var transformDocument = ModDocumentPersistence.Prepare(
-            transformPath, ModXmlDocumentKind.UnitTransforms).Document;
-        var entries = LoadCurrentModStringEntries(requireReadable: true);
-        var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
-            candidates,
-            [commandDocument, transformDocument],
-            [commandPath, transformPath]);
-        var changed = false;
-        foreach (var id in safeRemovals)
-            changed |= entries.Remove(id);
-        if (!changed)
-            return;
-        SaveCurrentModStringEntries(entries, StringTableSection.UnitCommands);
     }
 
     private static void RenameProtoUnitTransformCommandReference(XDocument document, string oldName, string newName)
@@ -34268,82 +34640,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private static HashSet<string> GetReferencedProtoUnitCommandStringIds(XDocument doc)
-    {
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var command in doc.Descendants().Where(element =>
-                     element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase)))
-        {
-            foreach (var id in GetProtoUnitCommandStringIds(command))
-                result.Add(id);
-        }
-        return result;
-    }
-
-    private async Task<(Dictionary<string, string> Entries, HashSet<string> OldGeneratedIds)> MigrateProtoUnitCommandStringsForRenameAsync(
-        XElement command,
-        string oldName,
-        string newName)
-    {
-        var entries = LoadCurrentModStringEntries(requireReadable: true);
-        var oldGeneratedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tag in ProtoUnitCommandStringTags)
-        {
-            var element = command.Elements().FirstOrDefault(child =>
-                child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
-            var oldId = element?.Value?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(oldId))
-                continue;
-
-            string? text = null;
-            if (!entries.TryGetValue(oldId, out text))
-                text = await _gameData.LookupStringKeyAsync(oldId);
-            if (text == null)
-                throw new InvalidOperationException($"Could not resolve string '{oldId}' while renaming '{oldName}'. The command was not renamed.");
-
-            var newId = BuildUniqueProtoUnitCommandStringId(newName, tag, entries);
-            element!.Value = newId;
-            entries[newId] = text;
-            if (oldId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
-                oldGeneratedIds.Add(oldId);
-        }
-        return (entries, oldGeneratedIds);
-    }
-
-    private async Task CleanupProtoUnitCommandStringsWithWarningAsync(
-        Dictionary<string, string> entries,
-        IEnumerable<string> candidateIds,
-        XDocument commandDocument,
-        Window owner,
-        string operation)
-    {
-        try
-        {
-            var candidates = candidateIds
-                .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var approved = await ReviewOrphanStringsAsync(candidates, operation, owner);
-            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml");
-            var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
-                approved,
-                [commandDocument],
-                commandPath == null ? null : [commandPath]);
-            var changed = false;
-            foreach (var id in safeRemovals)
-                changed |= entries.Remove(id);
-            if (changed)
-                SaveCurrentModStringEntries(entries, StringTableSection.UnitCommands);
-        }
-        catch (Exception ex)
-        {
-            await new Prompt(
-                PromptType.Information,
-                "String cleanup incomplete",
-                $"{operation} succeeded, but some unused STR_PUC_* string entries could not be cleaned.\n\n{ex.Message}").ShowDialog(owner);
-        }
-    }
-
     private bool IsProtoUnitCommandNameAvailable(string name, string? currentName = null)
     {
         EnsureProtoUnitCommandCatalogLoaded(force: true);
@@ -34374,6 +34670,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void AdoptSavedProtoDocument(XDocument savedDocument)
     {
+        EnsureUnitXmlContext();
+        foreach (var (name, draft) in _unitXmlDrafts.Where(entry => !entry.Value.Session.IsDirty).ToArray())
+        {
+            var saved = savedDocument.Root == null ? null : ProtoXmlHandler.GetUnitElement(savedDocument.Root, name);
+            if (saved == null) ForgetUnitXmlDraft(name);
+            else if (!string.Equals(draft.Session.Text, UnitXmlPreview(saved), StringComparison.Ordinal))
+                draft.Session.Reset(UnitXmlPreview(saved));
+        }
         _modXmlDoc = savedDocument;
         _modXmlRoot = savedDocument.Root;
         _loadedModXmlBaseline = new XDocument(savedDocument);
@@ -34466,25 +34770,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             else
                 nameNode.Value = newName;
 
-            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
-            foreach (var tag in ProtoUnitCommandStringTags)
-            {
-                var element = clone.Elements().FirstOrDefault(child =>
-                    child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
-                var sourceId = element?.Value?.Trim() ?? "";
-                if (string.IsNullOrWhiteSpace(sourceId))
-                    continue;
-
-                string? sourceText = null;
-                if (!stringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
-                if (sourceText == null)
-                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
-
-                var newId = BuildUniqueProtoUnitCommandStringId(newName, tag, stringEntries);
-                element!.Value = newId;
-                stringEntries[newId] = sourceText;
-            }
+            var stringState = CaptureCurrentModStringsStateForEdit();
+            var copy = ProtoUnitCommandDefinition.FromElement(clone);
+            var updates = await PrepareProtoUnitCommandStringsAsync(copy, source,
+                await ResolveProtoUnitCommandStringTextsAsync(ProtoUnitCommandDefinition.FromElement(source)), copying: true);
+            clone = copy.ToElement();
 
             var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")
                 ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
@@ -34508,14 +34798,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                 documents.Add(transformFile);
             var stringPath = GetCurrentModStringsPath();
             var expected = CaptureExpectedEditorFileStates([stringPath]);
-            ModDocumentPersistence.Execute(documents, [stringPath], expected, () =>
+            var proposed = documents.ToDictionary(file => file.Path, file => file.Document, StringComparer.OrdinalIgnoreCase);
+            var cleanup = PrepareCommandStringSave(commandPath, proposed,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase), updates, "");
+            foreach (var file in documents) expected[file.Path] = file.LoadedState;
+            if (!string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
+            await ModDocumentPersistence.ExecuteAsync(documents, cleanup.WritesStrings ? [stringPath] : [], expected, async () =>
             {
-                SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+                cleanup.Inspection.ValidateReadDependencies();
+                await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),
+                    StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
                 SaveProtoUnitCommandMods(doc);
                 if (transformFile != null)
                     SaveProtoUnitTransformMods(transformFile.Document);
             });
-            AdoptSavedModStringEntries(stringEntries);
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             return true;
         }
         catch (Exception ex)
@@ -34536,6 +34834,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
                 ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
             var stringPath = GetCurrentModStringsPath();
+            var stringState = CaptureCurrentModStringsStateForEdit();
 
             var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
             var doc = commandFile.Document;
@@ -34544,6 +34843,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GetProtoUnitCommandName(element).Equals(oldName, StringComparison.OrdinalIgnoreCase));
             if (command == null)
                 return false;
+
+            var originalCommand = new XElement(command);
+            var originalOwned = ProtoUnitCommandStringPolicy.CollectOwnedStringIds(originalCommand);
+            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
+            var sourceValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in originalOwned)
+            {
+                var text = stringEntries.GetValueOrDefault(id) ?? await _gameData.LookupStringKeyAsync(id);
+                if (text != null) sourceValues[id] = text;
+            }
 
             if (!IsProtoUnitCommandNameAvailable(newName, oldName))
                 throw new InvalidOperationException($"Command '{newName}' already exists.");
@@ -34573,7 +34882,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             var transformChanged = GameIdentifierReferencePolicy.RenameReferences(
                 transformDoc, GameIdentifierKind.ProtoUnitCommand, oldName, newName) > 0;
 
-            var (stringEntries, _) = await MigrateProtoUnitCommandStringsForRenameAsync(command, oldName, newName);
+            var stringRenames = ProtoUnitCommandStringPolicy.RenameOwnedStringIds(originalCommand, command,
+                newName, sourceValues.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
 
             XDocument? updatedProtoDoc = null;
             if (_modXmlDoc != null && !string.IsNullOrWhiteSpace(_modFilePath))
@@ -34593,16 +34903,35 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(path => Path.GetFullPath(path!))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
             var migration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file => !excludedPaths.Contains(Path.GetFullPath(file.Path))),
+                referenceFiles.Where(file => !excludedPaths.Contains(Path.GetFullPath(file.Path))),
                 GameIdentifierKind.ProtoUnitCommand,
-                [new KeyValuePair<string, string>(oldName, newName)]);
+                [new KeyValuePair<string, string>(oldName, newName)], discovery: discovery);
             var paths = new List<string?> { _modFilePath, stringPath };
             paths.AddRange(migration.Paths);
             var expectedStates = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
-            ModDocumentPersistence.Execute([commandFile, transformFile], paths, expectedStates, () =>
+            var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
             {
-                SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+                [commandPath] = doc, [transformPath] = transformDoc
+            };
+            if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath)) proposed[_modFilePath] = updatedProtoDoc;
+            foreach (var path in migration.Paths)
+                if (migration.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+            var context = PrepareCommandStringSaveInspection(originalOwned.Concat(stringRenames.Select(rename => rename.NewId)), proposed, commandPath, oldName);
+            var stringPlan = OwnedStringLifecyclePolicy.Prepare(stringRenames, originalOwned, originalOwned,
+                stringEntries, sourceValues, context.References.ReferencedIds, context.ReservedIds);
+            expectedStates[commandFile.Path] = commandFile.LoadedState;
+            expectedStates[transformFile.Path] = transformFile.LoadedState;
+            if (!string.IsNullOrWhiteSpace(stringPath)) expectedStates[Path.GetFullPath(stringPath)] = stringState;
+            context.References.MergeExpectedStatesInto(expectedStates);
+            var writesStrings = stringPlan.StringUpdates.Count > 0 || stringPlan.StringRemovals.Count > 0;
+            await ModDocumentPersistence.ExecuteAsync([commandFile, transformFile], paths, expectedStates, async () =>
+            {
+                context.References.ValidateReadDependencies();
+                migration.ValidateDiscovery();
+                await SaveResolvedStringValuesAsync(stringPlan.StringUpdates, stringPlan.StringRemovals.ToArray(),
+                    StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
                 SaveProtoUnitCommandMods(doc);
                 if (transformChanged)
                     SaveProtoUnitTransformMods(transformDoc);
@@ -34610,7 +34939,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SaveXmlDocumentAtomic(updatedProtoDoc, _modFilePath);
                 migration.Save(SaveXmlDocumentAtomic);
             });
-            AdoptSavedModStringEntries(stringEntries);
+            AdoptCommittedManagerStrings(writesStrings);
 
             if (updatedProtoDoc != null)
                 AdoptSavedProtoDocument(updatedProtoDoc);
@@ -34638,6 +34967,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ?? throw new InvalidOperationException("The active mod command file path could not be resolved.");
             var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")
                 ?? throw new InvalidOperationException("The active mod transform file path could not be resolved.");
+            var stringPath = GetCurrentModStringsPath();
+            var stringState = CaptureCurrentModStringsStateForEdit();
             var commandFile = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
             var doc = commandFile.Document;
             var command = doc.Descendants().FirstOrDefault(element =>
@@ -34649,8 +34980,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var commandDefinition = ProtoUnitCommandDefinition.FromElement(command);
             var associatedTechnologyName = commandDefinition.Values.GetValueOrDefault("associatedtech", "").Trim();
 
-            var deletedStringIds = GetProtoUnitCommandStringIds(command)
-                .Where(id => id.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
+            var deletedStringIds = ProtoUnitCommandStringPolicy.CollectOwnedStringIds(command)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             command.Remove();
 
@@ -34680,6 +35010,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var technology = FindTechnologyByName(technologyDoc, associatedTechnologyName);
                 if (technology != null)
                 {
+                    deletedStringIds.UnionWith(TechnologyStringIdPolicy.CollectOwnedStringIds(technology));
                     technology.Remove();
                     technologyChanged = true;
                 }
@@ -34708,6 +35039,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 documentOverrides[Path.GetFullPath(_modFilePath)] = candidateProto;
             }
 
+            ModDeletionInspection? deletionCheck = null;
+            if (!await EnsureIdentifierCanBeDeletedAsync(
+                    GameIdentifierKind.ProtoUnitCommand,
+                    name,
+                    "Command",
+                    documentOverrides,
+                    captureInspection: inspection => deletionCheck = inspection))
+                return false;
+
             if (technologyChanged && technologyFile != null && technologyDoc != null)
             {
                 var technologyReferences = TechnologyReferenceIndex.FindReferencesTo(
@@ -34732,61 +35072,43 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
             }
 
-            if (!await EnsureIdentifierCanBeDeletedAsync(
-                    GameIdentifierKind.ProtoUnitCommand,
-                    name,
-                    "Command",
-                    documentOverrides))
-                return false;
-
-            // Generated command strings are implementation details of the command.
-            // Remove every now-unreferenced STR_PUC_* entry automatically instead of
-            // asking whether the user wants to leave those strings orphaned.
-            var approvedStringIds = deletedStringIds;
-            Dictionary<string, string>? stringEntries = null;
-            var stringsChanged = false;
-            var stringPath = GetCurrentModStringsPath();
-            if (approvedStringIds.Count > 0)
-            {
-                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
-                EnsureProtoUnitCommandCatalogLoaded(force: true);
-                var sharedCatalogStringIds = _protoUnitCommandCatalog
-                    .Where(entry => !entry.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    .SelectMany(entry => GetProtoUnitCommandStringIds(entry.Value))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
-                    approvedStringIds.Where(id => !sharedCatalogStringIds.Contains(id)),
-                    [doc, transformDoc],
-                    [commandPath, transformPath]);
-                foreach (var id in safeRemovals)
-                    stringsChanged |= stringEntries.Remove(id);
-            }
+            var cleanup = OwnedStringSavePreparation.Prepare(commandPath, stringPath, documentOverrides,
+                deletedStringIds, new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                new Dictionary<string, string>(), [],
+                (ids, proposed) => PrepareCommandStringSaveInspection(ids, proposed, commandPath, name));
 
             var paths = new List<string?>();
-            if (stringsChanged)
+            if (cleanup.WritesStrings)
                 paths.Add(stringPath);
             var expected = CaptureExpectedEditorFileStates(paths);
+            expected[commandFile.Path] = commandFile.LoadedState;
+            expected[transformFile.Path] = transformFile.LoadedState;
+            if (technologyFile != null) expected[technologyFile.Path] = technologyFile.LoadedState;
+            if (!string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
             var documents = new List<PreparedModXmlDocument> { commandFile };
             if (transformChanged)
                 documents.Add(transformFile);
             if (technologyChanged && technologyFile != null)
                 documents.Add(technologyFile);
-            ModDocumentPersistence.Execute(
+            await ModDocumentPersistence.ExecuteAsync(
                 documents,
                 paths,
                 expected,
-                () =>
+                async () =>
             {
+                cleanup.Inspection.ValidateReadDependencies();
+                deletionCheck!.ValidateReadDependencies();
                 SaveProtoUnitCommandMods(doc);
                 if (transformChanged)
                     SaveProtoUnitTransformMods(transformDoc);
                 if (technologyChanged && technologyFile != null && technologyDoc != null)
                     SaveAbilityXmlDocument(technologyDoc, technologyFile.Path);
-                if (stringsChanged && stringEntries != null)
-                    SaveCurrentModStringEntries(stringEntries, StringTableSection.UnitCommands, updateSession: false);
+                if (cleanup.WritesStrings)
+                    await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),
+                        StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
             });
-            if (stringsChanged && stringEntries != null)
-                AdoptSavedModStringEntries(stringEntries);
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             if (technologyChanged)
             {
                 _cachedTechNames = null;
@@ -34802,6 +35124,19 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
+    private OwnedStringSaveInspection PrepareCommandStringSaveInspection(IEnumerable<string> candidates,
+        IReadOnlyDictionary<string, XDocument> proposed, string commandPath, string sourceName)
+    {
+        var context = PrepareOwnedStringSaveInspection(candidates, proposed, commandPath);
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        // Base-game commands are not files in the mod scan. Preserve their shared keys too.
+        var reserved = context.ReservedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        reserved.UnionWith(_protoUnitCommandCatalog.Where(entry =>
+                !entry.Key.Equals(sourceName, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(entry => GetProtoUnitCommandStringIds(entry.Value)));
+        return new(context.References, reserved);
+    }
+
     private ProtoUnitCommandEditorContext BuildProtoUnitCommandEditorContext(IReadOnlyDictionary<string, string>? stringTexts = null, string? commandName = null)
     {
         EnsureProtoUnitCommandCatalogLoaded();
@@ -34810,7 +35145,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             CommandNames = _protoUnitCommandCatalog.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
             TechNames = GetAvailableTechNames(),
             ProtoUnitNames = GetAvailableTrainUnitNames(),
-            PowerNames = _availableAbilityNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+            PowerNames = GetTechnologyGodPowerNames(),
             ActionNames = _knownProtoActionNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
             IconPaths = GetAssetPathSuggestions("icon").ToList(),
             StringTexts = stringTexts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
@@ -34818,44 +35153,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         };
     }
 
-    private static readonly string[] ProtoUnitCommandStringTags =
-    [
-        "displaynameid", "rollovertextid", "shortrollovertextid", "activerollovertextid", "disabledrollovertextid", "buildlimittextid"
-    ];
-
-    private static string GetProtoUnitCommandStringSuffix(string tag) => tag.ToLowerInvariant() switch
-    {
-        "displaynameid" => "NAME",
-        "rollovertextid" => "LR",
-        "shortrollovertextid" => "SR",
-        "activerollovertextid" => "ACTIVE_LR",
-        "disabledrollovertextid" => "DISABLED_LR",
-        "buildlimittextid" => "BUILD_LIMIT",
-        _ => tag.ToUpperInvariant()
-    };
+    private static readonly string[] ProtoUnitCommandStringTags = ProtoUnitCommandStringPolicy.FieldTags.ToArray();
 
     private static string BuildProtoUnitCommandStringId(string commandName, string tag)
-    {
-        var normalized = new string(commandName.Trim().ToUpperInvariant()
-            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
-        while (normalized.Contains("__", StringComparison.Ordinal))
-            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
-        normalized = normalized.Trim('_');
-        return $"STR_PUC_{normalized}_{GetProtoUnitCommandStringSuffix(tag)}";
-    }
-
-    private static string BuildUniqueProtoUnitCommandStringId(string commandName, string tag, IReadOnlyDictionary<string, string> entries)
-    {
-        var baseId = BuildProtoUnitCommandStringId(commandName, tag);
-        if (!entries.ContainsKey(baseId))
-            return baseId;
-        for (var suffix = 2; ; suffix++)
-        {
-            var candidate = $"{baseId}_{suffix}";
-            if (!entries.ContainsKey(candidate))
-                return candidate;
-        }
-    }
+        => ProtoUnitCommandStringPolicy.BuildId(commandName, tag);
 
     private async Task<Dictionary<string, string>> ResolveProtoUnitCommandStringTextsAsync(ProtoUnitCommandDefinition definition)
     {
@@ -34872,6 +35173,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void CaptureInlineTransformSourceSnapshots(TransformCommandAssignmentState state)
     {
+        state.LoadedStringsState = CaptureCurrentModStringsStateForEdit();
         state.SnapshotCommandName = state.SourceCommandName;
         state.LoadedCommandSnapshot = null;
         state.LoadedTransformSnapshot = null;
@@ -34943,36 +35245,94 @@ public partial class ProtoEditorWindow : SimpleWindow
         EnsureProtoUnitCommandCatalogLoaded(force: true);
         if (!string.IsNullOrWhiteSpace(_currentUnitName))
             BuildEditorPanel(_currentUnitName, resetScroll: false);
-        _statusMessage.Text = "External Transform command reloaded. Review it, then save again.";
+        ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
         return false;
     }
 
-    private (Dictionary<string, string> Entries, HashSet<string> OldGeneratedIds) PrepareProtoUnitCommandStrings(
+    private async Task<Dictionary<string, string>> PrepareProtoUnitCommandStringsAsync(
         ProtoUnitCommandDefinition definition,
-        string originalName,
-        IReadOnlyDictionary<string, string> texts)
+        XElement? original,
+        IReadOnlyDictionary<string, string> texts,
+        bool copying = false)
     {
         var entries = LoadCurrentModStringEntries(requireReadable: true);
-        var oldGeneratedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var renamed = !definition.Name.Equals(originalName, StringComparison.OrdinalIgnoreCase);
+        var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var before = original == null ? new ProtoUnitCommandDefinition() : ProtoUnitCommandDefinition.FromElement(original);
+        var owned = original == null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : ProtoUnitCommandStringPolicy.CollectOwnedStringIds(original);
+        var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in before.Values.Where(pair => ProtoUnitCommandStringTags.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+                     .Select(pair => pair.Value.Trim()).Where(id => id.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var value = entries.GetValueOrDefault(id) ?? await _gameData.LookupStringKeyAsync(id);
+            if (value != null) sources[id] = value;
+        }
+        var candidate = definition.ToElement();
+        var available = sources.Keys.Concat(ProtoUnitCommandStringTags.Where(tag =>
+                texts.TryGetValue(tag, out var text) && !string.IsNullOrWhiteSpace(text) &&
+                text != before.Values.GetValueOrDefault(tag)).Select(tag => before.Values.GetValueOrDefault(tag, "")))
+            .Where(id => id.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var mappings = original == null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) :
+            ProtoUnitCommandStringPolicy.RenameOwnedStringIds(original, candidate, definition.Name, available)
+                .DistinctBy(rename => rename.OldId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(rename => rename.OldId, rename => rename.NewId, StringComparer.OrdinalIgnoreCase);
+        var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var tag in ProtoUnitCommandStringTags)
         {
-            var text = texts.GetValueOrDefault(tag, "").Trim();
-            var existingId = definition.Values.GetValueOrDefault(tag, "").Trim();
+            if (!texts.TryGetValue(tag, out var text)) continue;
+            var existingId = before.Values.GetValueOrDefault(tag, "").Trim();
             if (string.IsNullOrWhiteSpace(text))
             {
                 definition.Values.Remove(tag);
                 continue;
             }
 
-            var useExisting = !renamed && existingId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase);
-            var id = useExisting ? existingId : BuildUniqueProtoUnitCommandStringId(definition.Name, tag, entries);
-            if (renamed && existingId.StartsWith("STR_PUC_", StringComparison.OrdinalIgnoreCase))
-                oldGeneratedIds.Add(existingId);
+            var resolved = sources.GetValueOrDefault(existingId);
+            // The editor displays the key itself when lookup fails. That is not new text.
+            if (existingId.Length > 0 && resolved == null && text == existingId)
+            { definition.Values[tag] = existingId; continue; }
+            if (!copying && existingId.Length > 0 && !owned.Contains(existingId) && text == resolved)
+            { definition.Values[tag] = existingId; continue; }
+            var sameName = definition.Name.Equals(before.Name, StringComparison.OrdinalIgnoreCase);
+            var id = existingId.Length > 0 && aliases.TryGetValue(existingId, out var alias) ? alias :
+                owned.Contains(existingId) && sameName && !copying ? existingId :
+                mappings.GetValueOrDefault(existingId) ?? BuildProtoUnitCommandStringId(definition.Name, tag);
+            if (updates.TryGetValue(id, out var previous) && previous != text)
+                throw new InvalidOperationException($"Shared string '{existingId}' has conflicting field text. Keep linked fields consistent before saving. No files were written.");
+            if (existingId.Length > 0) aliases[existingId] = id;
             definition.Values[tag] = id;
-            entries[id] = text;
+            updates[id] = text;
         }
-        return (entries, oldGeneratedIds);
+        return updates;
+    }
+
+    private OwnedStringSavePreparation.Result PrepareCommandStringSave(string commandPath,
+        IReadOnlyDictionary<string, XDocument> proposed, IReadOnlySet<string> originalOwned,
+        IReadOnlyDictionary<string, string> updates, string sourceName)
+    {
+        var currentOwned = proposed.Values.SelectMany(document => document.Descendants().Where(element =>
+                element.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(ProtoUnitCommandStringPolicy.CollectOwnedStringIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        currentOwned.UnionWith(proposed.Values.SelectMany(document => document.Descendants().Where(element =>
+                element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(TechnologyStringIdPolicy.CollectOwnedStringIds));
+        return OwnedStringSavePreparation.Prepare(commandPath, GetCurrentModStringsPath(), proposed,
+            originalOwned, currentOwned, updates, [],
+            (ids, documents) => PrepareCommandStringSaveInspection(ids, documents, commandPath, sourceName));
+    }
+
+    private async Task<Dictionary<string, string>> PrepareTransformTechnologyStringsAsync(XElement original, XElement candidate)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var entries = LoadCurrentModStringEntries(requireReadable: true);
+        foreach (var id in TechnologyStringIdPolicy.CollectOwnedStringIds(original))
+        {
+            var text = entries.GetValueOrDefault(id) ?? await _gameData.LookupStringKeyAsync(id);
+            if (text != null) values[id] = text;
+        }
+        var changes = TechnologyStringIdPolicy.RenameOwnedStringIds(original, candidate,
+            (string?)candidate.Attribute("name") ?? "", values.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        return changes.DistinctBy(change => change.NewId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(change => change.NewId, change => values[change.OldId], StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<bool> SaveInlineTransformCommandDefinitionAsync(TransformCommandAssignmentState state)
@@ -35031,6 +35391,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             var commandDoc = commandFile.Document;
             var transformDoc = transformFile.Document;
             var technologyDoc = technologyFile.Document;
+            var stringState = state.LoadedStringsState ?? CaptureCurrentModStringsStateForEdit();
+            var originalCommand = commandDoc.Root!.Elements().FirstOrDefault(element =>
+                GetProtoUnitCommandName(element).Equals(sourceName, StringComparison.OrdinalIgnoreCase));
+            originalCommand = originalCommand == null ? null : new XElement(originalCommand);
+            var sourceTechnologyName = state.Definition.Values.GetValueOrDefault("associatedtech", sourceName);
+            var originalTechnology = FindTechnologyByName(technologyDoc, sourceTechnologyName);
+            originalTechnology = originalTechnology == null ? state.LoadedAssociatedTechnologySnapshot : new XElement(originalTechnology);
 
             ProtoUnitCommandDefinition updated;
             XElement? existingCustom = null;
@@ -35117,6 +35484,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             updated.RepeatableValues.Clear();
+            if (renamingOwnedBundle) updated.Values["associatedtech"] = desiredName;
             foreach (var pair in state.Definition.RepeatableValues)
                 updated.RepeatableValues[pair.Key] = pair.Value.ToList();
             updated.Flags.Clear();
@@ -35127,10 +35495,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 updated.Flags,
                 state.IsMultiple ? ProtoUnitCommandTransformKind.Multiple : ProtoUnitCommandTransformKind.Unique);
 
-            var prepared = PrepareProtoUnitCommandStrings(
+            var updates = await PrepareProtoUnitCommandStringsAsync(
                 updated,
-                creatingNew ? desiredName : sourceName,
-                state.StringTexts);
+                creatingCopy ? (creatingNew ? null : _protoUnitCommandCatalog.GetValueOrDefault(sourceName)) : originalCommand,
+                state.StringTexts, copying: creatingCopy);
             if (creatingCopy)
                 commandDoc.Root!.Add(updated.ToElement());
             else
@@ -35149,7 +35517,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var associatedName = updated.Values.GetValueOrDefault("associatedtech", "").Trim();
                 if (string.IsNullOrWhiteSpace(associatedName))
                     throw new InvalidOperationException("The Transform command requires an associated technology.");
-                state.AssociatedTechnology!.Name = associatedName;
+                var associatedTechnology = TransformAssociatedTechnologyDefinition.FromElement(state.AssociatedTechnology!.ToElement());
+                associatedTechnology.Name = associatedName;
 
                 var existingTechnology = FindTechnologyByName(technologyDoc, associatedName);
                 var replacingOwnedTechnology = !creatingCopy && existingTechnology != null;
@@ -35164,11 +35533,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                         $"Technology '{associatedName}' changed on disk after it was opened. Reload the Transform command before saving so those changes are not overwritten.");
                 }
 
-                var technologyElement = state.AssociatedTechnology.ToElement();
+                var technologyElement = associatedTechnology.ToElement();
+                if (originalTechnology != null)
+                    foreach (var update in await PrepareTransformTechnologyStringsAsync(originalTechnology, technologyElement)) updates[update.Key] = update.Value;
                 if (replacingOwnedTechnology)
                     existingTechnology!.ReplaceWith(technologyElement);
                 else
                     technologyDoc.Root!.Add(technologyElement);
+                TechnologyXmlOrderPolicy.NormalizeForEditor(technologyElement);
 
                 var technologyValidation = TechnologyDocumentSafety.ValidateModDocument(technologyDoc);
                 if (!technologyValidation.IsValid)
@@ -35180,27 +35552,30 @@ public partial class ProtoEditorWindow : SimpleWindow
             var preparedDocuments = savesAssociatedTechnology
                 ? new[] { commandFile, transformFile, technologyFile }
                 : new[] { commandFile, transformFile };
-            ModDocumentPersistence.Execute(preparedDocuments, [stringPath], expected, () =>
+            var owned = !creatingCopy && originalCommand != null
+                ? ProtoUnitCommandStringPolicy.CollectOwnedStringIds(originalCommand).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!creatingCopy && savesAssociatedTechnology && originalTechnology != null)
+                owned.UnionWith(TechnologyStringIdPolicy.CollectOwnedStringIds(originalTechnology));
+            var proposed = preparedDocuments.ToDictionary(file => file.Path, file => file.Document, StringComparer.OrdinalIgnoreCase);
+            var cleanup = PrepareCommandStringSave(commandPath, proposed, owned, updates, creatingCopy ? "" : sourceName);
+            foreach (var file in preparedDocuments) expected[file.Path] = file.LoadedState;
+            if (!string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
+            await ModDocumentPersistence.ExecuteAsync(preparedDocuments, cleanup.WritesStrings ? [stringPath] : [], expected, async () =>
             {
-                SaveCurrentModStringEntries(prepared.Entries, StringTableSection.UnitCommands, updateSession: false);
+                cleanup.Inspection.ValidateReadDependencies();
+                await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),
+                    StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
                 SaveProtoUnitCommandMods(commandDoc);
                 SaveProtoUnitTransformMods(transformDoc);
                 if (savesAssociatedTechnology)
                     SaveAbilityXmlDocument(technologyDoc, technologyPath);
             });
-            AdoptSavedModStringEntries(prepared.Entries);
-
-            if (prepared.OldGeneratedIds.Count > 0)
-            {
-                await CleanupProtoUnitCommandStringsWithWarningAsync(
-                    prepared.Entries,
-                    prepared.OldGeneratedIds,
-                    commandDoc,
-                    this,
-                    "The Transform command save");
-            }
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
 
             state.CommandName = desiredName;
+            state.LoadedStringsState = CaptureCurrentModStringsStateForEdit();
             state.SourceCommandName = desiredName;
             state.SourceIsBuiltIn = false;
             state.Definition = updated;
@@ -35213,8 +35588,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             var savedTransform = FindProtoUnitTransformByCommand(transformDoc, desiredName);
             state.LoadedTransformSnapshot = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
             state.LoadedAssociatedTechnologySnapshot = savesAssociatedTechnology
-                ? state.AssociatedTechnology?.ToElement()
+                ? new XElement(FindTechnologyByName(technologyDoc, updated.Values.GetValueOrDefault("associatedtech", ""))!)
                 : null;
+            if (savesAssociatedTechnology)
+                state.AssociatedTechnology = TransformAssociatedTechnologyDefinition.FromElement(state.LoadedAssociatedTechnologySnapshot!);
             if (renamingOwnedBundle && _modXmlDoc != null)
             {
                 GameIdentifierReferencePolicy.RenameReferences(
@@ -35254,6 +35631,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var definition = ProtoUnitCommandDefinition.FromElement(element);
         var transformDefinition = LoadProtoUnitTransformDefinition(name);
+        var openedStringsState = CaptureCurrentModStringsStateForEdit();
         var stringTexts = await ResolveProtoUnitCommandStringTextsAsync(definition);
         var originalName = name;
         var lastSavedCommandElement = NormalizeProtoUnitCommandForComparison(element);
@@ -35315,7 +35693,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             confirmButtonText: "Reload");
                         await reloadPrompt.ShowDialog(editor!);
                         if (reloadPrompt.Confirmed)
-                            editor!.Close();
+                            editor!.DiscardAndClose();
                         return false;
                     }
 
@@ -35335,11 +35713,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                             confirmButtonText: "Reload");
                         await reloadPrompt.ShowDialog(editor!);
                         if (reloadPrompt.Confirmed)
-                            editor!.Close();
+                            editor!.DiscardAndClose();
                         return false;
                     }
 
-                    var prepared = PrepareProtoUnitCommandStrings(updated, originalName, updatedStringTexts);
+                    var originalCommand = new XElement(existing);
+                    var updates = await PrepareProtoUnitCommandStringsAsync(updated, originalCommand, updatedStringTexts);
                     if (renamed)
                     {
                         var unknown = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
@@ -35355,7 +35734,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
 
                     var replacementCommand = updated.ToElement();
-                    XmlTriviaPreserver.Preserve(existing, replacementCommand);
+                    if (!updated.PreserveSourceStructure) XmlTriviaPreserver.Preserve(existing, replacementCommand);
                     existing.ReplaceWith(replacementCommand);
                     if (renamed)
                         GameIdentifierReferencePolicy.RenameReferences(
@@ -35398,11 +35777,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                             .Where(path => !string.IsNullOrWhiteSpace(path))
                             .Select(path => Path.GetFullPath(path!))
                             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
                         referenceMigration = GameIdentifierReferenceMigrationPlan.Prepare(
-                            GetGameIdentifierReferenceFiles().Where(file =>
+                            referenceFiles.Where(file =>
                                 !excluded.Contains(Path.GetFullPath(file.Path))),
                             GameIdentifierKind.ProtoUnitCommand,
-                            [new KeyValuePair<string, string>(originalName, updated.Name)]);
+                            [new KeyValuePair<string, string>(originalName, updated.Name)], discovery: discovery);
                     }
 
                     var stringPath = GetCurrentModStringsPath();
@@ -35414,13 +35794,27 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var expected = CaptureExpectedEditorFileStates(
                         additionalPaths,
                         referenceMigration?.ExpectedStates);
-                    ModDocumentPersistence.Execute(
+                    var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+                    { [commandPath] = doc, [transformPath] = transformDoc };
+                    if (updatedProtoDoc != null && !string.IsNullOrWhiteSpace(_modFilePath)) proposed[_modFilePath] = updatedProtoDoc;
+                    foreach (var path in referenceMigration?.Paths ?? [])
+                        if (referenceMigration!.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+                    var cleanup = PrepareCommandStringSave(commandPath, proposed,
+                        ProtoUnitCommandStringPolicy.CollectOwnedStringIds(originalCommand), updates, originalName);
+                    expected[commandFile.Path] = commandFile.LoadedState;
+                    expected[transformFile.Path] = transformFile.LoadedState;
+                    if (!string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = openedStringsState;
+                    cleanup.Inspection.MergeExpectedStatesInto(expected);
+                    await ModDocumentPersistence.ExecuteAsync(
                         [commandFile, transformFile],
                         additionalPaths,
                         expected,
-                        () =>
+                        async () =>
                         {
-                            SaveCurrentModStringEntries(prepared.Entries, StringTableSection.UnitCommands, updateSession: false);
+                            cleanup.Inspection.ValidateReadDependencies();
+                            referenceMigration?.ValidateDiscovery();
+                            await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),
+                                StringTableSection.UnitCommands, removalsAlreadyChecked: true, updateSession: false);
                             SaveProtoUnitCommandMods(doc);
                             if (transformNeedsWrite)
                                 SaveProtoUnitTransformMods(transformDoc);
@@ -35428,27 +35822,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 SaveXmlDocumentAtomic(updatedProtoDoc, _modFilePath);
                             referenceMigration?.Save(SaveXmlDocumentAtomic);
                         });
-                    AdoptSavedModStringEntries(prepared.Entries);
+                    AdoptCommittedManagerStrings(cleanup.WritesStrings);
+                    openedStringsState = CaptureCurrentModStringsStateForEdit();
 
                     if (updatedProtoDoc != null)
                         AdoptSavedProtoDocument(updatedProtoDoc);
                     if (referenceMigration != null)
                         AdoptGameIdentifierReferenceMigration(referenceMigration);
 
-                    if (prepared.OldGeneratedIds.Count > 0)
-                    {
-                        await CleanupProtoUnitCommandStringsWithWarningAsync(
-                            prepared.Entries,
-                            prepared.OldGeneratedIds,
-                            doc,
-                            editor!,
-                            "The command save");
-                    }
-
                     var savedCommand = doc.Descendants().FirstOrDefault(command =>
                         command.Name.LocalName.Equals("protounitcommand", StringComparison.OrdinalIgnoreCase) &&
                         GetProtoUnitCommandName(command).Equals(updated.Name, StringComparison.OrdinalIgnoreCase));
                     lastSavedCommandElement = NormalizeProtoUnitCommandForComparison(savedCommand ?? updated.ToElement());
+                    if (savedCommand != null) updated.AdoptSavedElement(savedCommand);
                     var savedTransform = FindProtoUnitTransformByCommand(transformDoc, updated.Name);
                     lastSavedTransformElement = savedTransform == null ? null : NormalizeXmlElementForComparison(savedTransform);
                     if (renamed)
@@ -35506,8 +35892,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        // Unit Type mutations can migrate references in both ProtoUnits and
-        // powers_mods.xml. Persist every editor that owns those documents first.
+        // Unit Type mutations can migrate references across editor documents.
+        // Persist every editor that owns those documents first.
         if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
 
@@ -35538,6 +35924,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _cachedUnitTypeDefinitions = null;
         _cachedBuildLimitTargets = null;
         RefreshTechnologyViewAfterTechTypeChanges();
+        RefreshRetainedSelectorCatalogs();
         if (!string.IsNullOrWhiteSpace(_currentUnitName))
         {
             var tabIndex = _editorTabs.SelectedIndex;
@@ -35583,21 +35970,23 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _cachedTechTypeDefinitions = null;
         RefreshTechnologyViewAfterTechTypeChanges();
+        RefreshRetainedSelectorCatalogs();
     }
 
     private async Task OpenCultureManagerAsync()
     {
+        if (_godsNavigationButton.Flyout is { IsOpen: true } menu)
+        {
+            // Finish closing the navigation popup before synchronous catalog work
+            // and native dialog creation. Otherwise it closes during ShowDialog.
+            menu.Hide();
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+        }
         if (_modXmlRoot == null && !await EnsureLocalModAsync())
             return;
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
 
-        if (_majorGodView?.IsDirty == true)
-        {
-            if (!await _majorGodView.SaveAsync())
-                return;
-            _powerView?.AcknowledgeStringFileSavedByEditor();
-        }
         if (!await SavePendingChangesBeforeImmediateManagerAsync())
             return;
 
@@ -35610,11 +35999,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         _cachedCultureDefinitions = null;
         _cachedCultureNames = null;
-        var items = GetCultureDefinitions()
+        var definitions = GetCultureDefinitions();
+        var usageCounts = GetCultureUsageCountsForDisplay(definitions.Select(definition => definition.Name));
+        var items = definitions
             .Select(definition => new CultureManagerItem(
                 definition.Name,
                 definition.IsBuiltIn,
-                CountCultureUsage(definition.Name)))
+                usageCounts.GetValueOrDefault(definition.Name)))
             .ToList();
         var manager = new CultureManagerWindow(
             items,
@@ -35627,9 +36018,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.Culture, name, "Culture", owner: owner));
         await manager.ShowDialog(this);
-
-        _powerView?.AcknowledgeStringFileSavedByEditor();
-
         _cachedCultureDefinitions = null;
         _cachedCultureNames = null;
         RefreshEditorsAfterCultureChanges();
@@ -35696,6 +36084,22 @@ public partial class ProtoEditorWindow : SimpleWindow
         catch
         {
             return 0;
+        }
+    }
+
+    private IReadOnlyDictionary<string, int> GetCultureUsageCountsForDisplay(IEnumerable<string> cultureNames)
+    {
+        try
+        {
+            return ModDeletionSafety.CountIdentifierReferencesForDisplay(
+                GetGameIdentifierReferenceFiles(), GameIdentifierKind.Culture, cultureNames,
+                GetCurrentModRootDirectory());
+        }
+        catch
+        {
+            // Preserve the existing optional display-count fallback. Rename/delete
+            // still perform their own authoritative inspection and report failures.
+            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         }
     }
 
@@ -35773,19 +36177,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ?? throw new InvalidOperationException($"Custom Culture '{originalName}' was not found.");
             GodModuleFieldValidation.ValidateCultureDefinition(definition, originalName);
             var previousDisplayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
+            var originalDefinition = new XElement(currentDefinition);
             var candidateName = CultureCatalog.ReadField(definition, "name");
             if (CultureCatalog.OwnsDisplayNameId(candidateName, CultureCatalog.ReadField(definition, "displaynameid")))
                 EnsureCultureGeneratedStringNamespaceAvailable(candidateName, cultureFile.Document, originalName);
             if (!CultureCatalog.ReplaceDefinition(cultureFile.Document, originalName, definition))
                 throw new InvalidOperationException($"Custom Culture '{originalName}' was not found.");
             var displayNameId = CultureCatalog.ReadField(definition, "displaynameid");
-            var writesString = displayNameUpdate != null && displayNameId.Length > 0;
-            var stringPath = writesString ? GetCurrentModStringsPath() : null;
-            if (writesString && (string.IsNullOrWhiteSpace(stringPath) || openedStringsState == null))
-                throw new IOException("The Culture string file has no opening fingerprint. Reopen the editor before saving.");
-            if (writesString)
+            var stringPath = GetCurrentModStringsPath();
+            var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (displayNameUpdate != null && displayNameId.Length > 0)
             {
-                var entries = LoadCurrentModStringEntries(requireReadable: true);
+                updates[displayNameId] = displayNameUpdate;
+                var entries = OwnedStringSavePreparation.ReadEntries(stringPath);
                 if (entries.ContainsKey(displayNameId) &&
                     !displayNameId.Equals(previousDisplayNameId, StringComparison.OrdinalIgnoreCase))
                 {
@@ -35793,28 +36197,28 @@ public partial class ProtoEditorWindow : SimpleWindow
                         $"String ID '{displayNameId}' already exists and is not owned by this Culture. No string was overwritten.");
                 }
             }
+            var cleanup = PrepareCultureStringSave(cultureFile, originalDefinition, updates, []);
+            if (cleanup.WritesStrings && (string.IsNullOrWhiteSpace(stringPath) || openedStringsState == null))
+                throw new IOException("The Culture string file has no opening fingerprint. Reopen the editor before saving.");
             var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrWhiteSpace(stringPath) && openedStringsState != null)
+            expected[cultureFile.Path] = cultureFile.LoadedState;
+            if (cleanup.WritesStrings && !string.IsNullOrWhiteSpace(stringPath) && openedStringsState != null)
                 expected[Path.GetFullPath(stringPath)] = openedStringsState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
             await ModDocumentPersistence.ExecuteAsync(
                 [cultureFile],
-                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                cleanup.WritesStrings ? [stringPath] : [],
                 expected,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
                     SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
-                    if (writesString)
-                    {
-                        await SaveCultureStringValuesAsync(
-                            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                            {
-                                [displayNameId] = displayNameUpdate!
-                            },
-                            []);
-                    }
+                    if (cleanup.WritesStrings)
+                        await SaveCultureStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals);
                 });
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             InvalidateSuggestionCaches();
-            _statusMessage.Text = $"Culture '{originalName}' saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception exception)
@@ -35835,6 +36239,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var currentDefinition = CultureCatalog.FindDefinition(cultureFile.Document.Root!, oldName)
                 ?? throw new InvalidOperationException($"Custom Culture '{oldName}' was not found.");
             EnsureCultureGeneratedStringNamespaceAvailable(newName, cultureFile.Document, oldName);
+            var originalDefinition = new XElement(currentDefinition);
             var oldDisplayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
             var ownedStringRename = CultureCatalog.RenameOwnedDisplayNameId(
                 currentDefinition,
@@ -35853,42 +36258,47 @@ public partial class ProtoEditorWindow : SimpleWindow
                 stringPath = GetCurrentModStringsPath()
                     ?? throw new InvalidOperationException("The active mod stringmods file path could not be resolved.");
                 stringState = CaptureCurrentModStringsStateForEdit();
-                var entries = LoadCurrentModStringEntries();
-                if (entries.ContainsKey(newDisplayNameId))
-                {
-                    throw new InvalidOperationException(
-                        $"String ID '{newDisplayNameId}' already exists and is not owned by this Culture. Choose another name.");
-                }
-                var displayText = entries.GetValueOrDefault(oldDisplayNameId) ??
-                                  await ResolveDisplayStringAsync(oldDisplayNameId) ?? oldName;
-                stringUpdates[newDisplayNameId] = displayText;
-                stringRemovals.Add(oldDisplayNameId);
+                var entries = OwnedStringSavePreparation.ReadEntries(stringPath);
+                var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (entries.TryGetValue(oldDisplayNameId, out var existing)) values[oldDisplayNameId] = existing;
+                else if (await ResolveDisplayStringAsync(oldDisplayNameId) is { } text && !text.Equals(oldDisplayNameId, StringComparison.Ordinal))
+                    values[oldDisplayNameId] = text;
+                var owned = CultureCatalog.CollectOwnedStringIds(originalDefinition);
+                var plan = OwnedStringLifecyclePolicy.Prepare([ownedStringRename], [], owned, entries, values, owned, new HashSet<string>());
+                OwnedStringSavePreparation.KeepOnlyApprovedRenames(originalDefinition, currentDefinition, [ownedStringRename], plan);
+                foreach (var update in plan.StringUpdates) stringUpdates[update.Key] = update.Value;
+                foreach (var change in plan.ReferenceRenames) stringRemovals.Add(change.OldId);
             }
 
             var fullCulturePath = Path.GetFullPath(culturePath);
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
             var migration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file =>
+                referenceFiles.Where(file =>
                     !Path.GetFullPath(file.Path).Equals(fullCulturePath, StringComparison.OrdinalIgnoreCase)),
                 GameIdentifierKind.Culture,
-                [new KeyValuePair<string, string>(oldName, newName)]);
+                [new KeyValuePair<string, string>(oldName, newName)], discovery: discovery);
             var expectedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(
                 migration.ExpectedStates,
                 StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrWhiteSpace(stringPath) && stringState != null)
+            var cleanup = PrepareCultureStringSave(cultureFile, originalDefinition, stringUpdates, stringRemovals, migration);
+            expectedStates[cultureFile.Path] = cultureFile.LoadedState;
+            if (cleanup.WritesStrings && !string.IsNullOrWhiteSpace(stringPath) && stringState != null)
                 expectedStates[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expectedStates);
             await ModDocumentPersistence.ExecuteAsync(
                 [cultureFile],
-                migration.Paths.Concat(string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath]),
+                migration.Paths.Concat(cleanup.WritesStrings ? [stringPath!] : []),
                 expectedStates,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
+                    migration.ValidateDiscovery();
                     SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
                     migration.Save(SaveXmlDocumentAtomic);
-                    // The string writer adopts its cache, so it must be the final step of
-                    // the disk transaction after every operation that can still fail.
-                    if (stringUpdates.Count > 0 || stringRemovals.Count > 0)
-                        await SaveCultureStringValuesAsync(stringUpdates, stringRemovals);
+                    if (cleanup.WritesStrings)
+                        await SaveCultureStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals);
                 });
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             var migratedProtoDocument = migration.GetDocument(_modFilePath);
             if (migratedProtoDocument != null)
                 AdoptSavedProtoDocument(migratedProtoDocument);
@@ -35910,33 +36320,41 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(path)) return false;
         try
         {
-            if (!await EnsureIdentifierCanBeDeletedAsync(GameIdentifierKind.Culture, name, "Culture"))
+            ModDeletionInspection? deletionCheck = null;
+            if (!await EnsureIdentifierCanBeDeletedAsync(GameIdentifierKind.Culture, name, "Culture",
+                    captureInspection: inspection => deletionCheck = inspection))
                 return false;
             var cultureFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Cultures);
             var currentDefinition = CultureCatalog.FindDefinition(cultureFile.Document.Root!, name)
                 ?? throw new InvalidOperationException($"Custom Culture '{name}' was not found.");
             var displayNameId = CultureCatalog.ReadField(currentDefinition, "displaynameid");
+            var originalDefinition = new XElement(currentDefinition);
             var stringRemovals = CultureCatalog.OwnsDisplayNameId(name, displayNameId)
                 ? new[] { displayNameId }
                 : [];
             if (!CultureCatalog.DeleteDefinition(cultureFile.Document, name))
                 throw new InvalidOperationException($"Custom Culture '{name}' was not found.");
-            var stringPath = stringRemovals.Length > 0 ? GetCurrentModStringsPath() : null;
+            var stringPath = GetCurrentModStringsPath();
+            var stringState = CaptureCurrentModStringsStateForEdit();
+            var cleanup = PrepareCultureStringSave(cultureFile, originalDefinition,
+                new Dictionary<string, string>(), stringRemovals);
             var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrWhiteSpace(stringPath))
-                expected[Path.GetFullPath(stringPath)] = CaptureCurrentModStringsStateForEdit();
+            expected[cultureFile.Path] = cultureFile.LoadedState;
+            if (cleanup.WritesStrings && !string.IsNullOrWhiteSpace(stringPath)) expected[Path.GetFullPath(stringPath)] = stringState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
             await ModDocumentPersistence.ExecuteAsync(
                 [cultureFile],
-                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                cleanup.WritesStrings ? [stringPath] : [],
                 expected,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
+                    deletionCheck!.ValidateReadDependencies();
                     SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
-                    if (stringRemovals.Length > 0)
-                        await SaveCultureStringValuesAsync(
-                            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                            stringRemovals);
+                    if (cleanup.WritesStrings)
+                        await SaveCultureStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals);
                 });
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             InvalidateSuggestionCaches();
             _statusMessage.Text = $"Culture '{name}' removed.";
             return true;
@@ -35962,15 +36380,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             mutation(cultureFile.Document);
             stringUpdates ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             stringRemovals ??= [];
-            var writesStrings = stringUpdates.Count > 0 || stringRemovals.Count > 0;
-            var stringPath = writesStrings ? GetCurrentModStringsPath() : null;
-            if (writesStrings && string.IsNullOrWhiteSpace(stringPath))
+            var stringPath = GetCurrentModStringsPath();
+            var stringState = CaptureCurrentModStringsStateForEdit();
+            var cleanup = PrepareCultureStringSave(cultureFile, null, stringUpdates, stringRemovals);
+            if (cleanup.WritesStrings && string.IsNullOrWhiteSpace(stringPath))
                 throw new InvalidOperationException("The active mod stringmods file path could not be resolved.");
             var expected = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrWhiteSpace(stringPath))
+            expected[cultureFile.Path] = cultureFile.LoadedState;
+            if (cleanup.WritesStrings && !string.IsNullOrWhiteSpace(stringPath))
             {
-                expected[Path.GetFullPath(stringPath)] = CaptureCurrentModStringsStateForEdit();
-                var existingStrings = LoadCurrentModStringEntries();
+                expected[Path.GetFullPath(stringPath)] = stringState;
+                var existingStrings = OwnedStringSavePreparation.ReadEntries(stringPath);
                 var collision = stringUpdates.Keys.FirstOrDefault(existingStrings.ContainsKey);
                 if (collision != null)
                 {
@@ -35978,18 +36398,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                         $"String ID '{collision}' already exists and is not owned by the new Culture. Choose another name.");
                 }
             }
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
             await ModDocumentPersistence.ExecuteAsync(
                 [cultureFile],
-                string.IsNullOrWhiteSpace(stringPath) ? [] : [stringPath],
+                cleanup.WritesStrings ? [stringPath] : [],
                 expected,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
                     SaveCultureXmlDocument(cultureFile.Document, cultureFile.Path);
-                    if (writesStrings)
-                        await SaveCultureStringValuesAsync(stringUpdates, stringRemovals);
+                    if (cleanup.WritesStrings)
+                        await SaveCultureStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals);
                 });
+            AdoptCommittedManagerStrings(cleanup.WritesStrings);
             InvalidateSuggestionCaches();
-            _statusMessage.Text = "Culture changes saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception exception)
@@ -35997,6 +36420,31 @@ public partial class ProtoEditorWindow : SimpleWindow
             await new Prompt(PromptType.Error, $"Unable to {operation}", exception.Message).ShowDialog(this);
             return false;
         }
+    }
+
+    private OwnedStringSavePreparation.Result PrepareCultureStringSave(PreparedModXmlDocument cultureFile,
+        XElement? originalDefinition, IReadOnlyDictionary<string, string> updates, IEnumerable<string> removals,
+        GameIdentifierReferenceMigrationPlan? migration = null)
+    {
+        var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [cultureFile.Path] = cultureFile.Document };
+        foreach (var path in migration?.Paths ?? [])
+            if (migration!.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+        var currentOwned = (cultureFile.Document.Root?.Elements() ?? []).Where(element =>
+                element.Name.LocalName.Equals(CultureCatalog.EntryName, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(CultureCatalog.CollectOwnedStringIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return OwnedStringSavePreparation.Prepare(cultureFile.Path, GetCurrentModStringsPath(), proposed,
+            CultureCatalog.CollectOwnedStringIds(originalDefinition), currentOwned, updates, removals,
+            (ids, documents) => PrepareOwnedStringSaveInspection(ids, documents, cultureFile.Path));
+    }
+
+    private void AdoptCommittedManagerStrings(bool writesStrings)
+    {
+        if (!writesStrings) return;
+        InvalidateModStringEntriesCache();
+        LoadCurrentModStringEntries(requireReadable: true);
+        _technologyView?.AcknowledgeStringFileSavedByEditor();
+        _powerView?.AcknowledgeStringFileSavedByEditor();
+        _majorGodView?.AcknowledgeStringFileSavedByEditor();
     }
 
     private void EnsureCultureNameAvailable(string name, string? ignoredCustomName = null)
@@ -36043,6 +36491,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var modifiedGods = _majorGodView?.IsModifiedMode == true;
         if (ReferenceEquals(_technologyHost.Content, _majorGodView))
             _technologyHost.Content = null;
+        _majorGodView?.ReleaseMajorGodXmlEditing();
         _majorGodView = null;
         RefreshTechnologyViewAfterTechTypeChanges();
         if (_activeEntityKind == EditorEntityKind.MajorGods)
@@ -36059,11 +36508,6 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_modXmlRoot == null && !await EnsureLocalModAsync()) return;
         if (_modXmlRoot == null || string.IsNullOrWhiteSpace(_modFilePath)) return;
-        if (_majorGodView?.IsDirty == true)
-        {
-            if (!await _majorGodView.SaveAsync()) return;
-            _powerView?.AcknowledgeStringFileSavedByEditor();
-        }
         if (!await SavePendingChangesBeforeImmediateManagerAsync()) return;
 
         var path = GetCurrentModGameplayFilePath(MinorGodCatalog.ModFileName);
@@ -36185,7 +36629,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     PromptType.Confirm,
                     "Create associated Technology?",
                     $"No AgeUpgrade technology exists for '{name}'. Create one now?",
-                    confirmButtonText: "OK");
+                    confirmButtonText: "Create technology", actionRole: PromptActionRole.Positive);
                 await proposal.ShowDialog(owner);
                 if (!proposal.Confirmed) return null;
 
@@ -36325,7 +36769,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 expected,
                 () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
             InvalidateSuggestionCaches();
-            _statusMessage.Text = $"Minor God '{MinorGodCatalog.GetDisplayName(newTechName)}' saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception exception)
@@ -36349,11 +36793,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (technologyDependency.AllNames.Contains(techName, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Technology '{techName}' still exists. Delete that Technology to remove its Minor God atomically.");
             EnsureMinorGodDefinitionsHaveTechnologies(minorGodFile.Document, technologyDependency.AgeUpgradeNames);
+            var deletionChecks = PrepareStagedDeletionChecks([techName],
+                new Dictionary<string, XDocument> { [minorGodFile.Path] = minorGodFile.Document }, null);
             ModDocumentPersistence.Execute(
                 [minorGodFile],
                 string.IsNullOrWhiteSpace(technologyDependency.Path) ? [] : [technologyDependency.Path],
                 CreateDependencyExpectedState(technologyDependency.Path, technologyDependency.State),
-                () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
+                () =>
+                {
+                    foreach (var inspection in deletionChecks) inspection.ValidateReadDependencies();
+                    SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path);
+                });
             InvalidateSuggestionCaches();
             _statusMessage.Text = $"Minor God '{MinorGodCatalog.GetDisplayName(techName)}' removed.";
             return true;
@@ -36381,7 +36831,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 CreateDependencyExpectedState(technologyDependency.Path, technologyDependency.State),
                 () => SaveMinorGodXmlDocument(minorGodFile.Document, minorGodFile.Path));
             InvalidateSuggestionCaches();
-            _statusMessage.Text = "Minor God changes saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception exception)
@@ -36464,11 +36914,14 @@ public partial class ProtoEditorWindow : SimpleWindow
         // The Minor God lifecycle document is committed in the same transaction as
         // techtree_mods.xml. Only refresh caches after that transaction succeeds.
         _cachedMinorGodDefinitions = null;
+        InvalidateModStringEntriesCache();
+        LoadCurrentModStringEntries(requireReadable: true);
         InvalidateSuggestionCaches(includeTechNames: true);
         _majorGodView?.UpdateTechnologyCatalogs(
             GetMajorGodTechnologyNames(),
             GetMajorGodTechnologyFlagNames(),
             GetTechnologyTechTypeNames());
+        RefreshPowerSelectorCatalogs();
         return Task.CompletedTask;
     }
 
@@ -36489,7 +36942,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             "Remove associated Minor God?",
             $"Technology '{techName}' is associated with Minor God '{minorGodName}'.\n\n" +
             "Continuing will remove the Minor God entry together with the Technology change. Cancel keeps both unchanged.",
-            confirmButtonText: "Continue");
+            confirmButtonText: "Remove minor god", actionRole: PromptActionRole.Destructive);
         await prompt.ShowDialog(owner);
         return prompt.Confirmed;
     }
@@ -36554,6 +37007,11 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         if (_technologyView == null)
             return;
+        if (_technologyView.IsDirty || _technologyView.HasXmlEditingSession)
+        {
+            RefreshTechnologySelectorCatalogs();
+            return;
+        }
 
         var modified = _technologyView.IsModifiedMode;
         var selectedTechnology = _technologyView.CurrentTechnologyName;
@@ -36572,40 +37030,14 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private static void KeepAutoCompleteTextStartVisible(AutoCompleteBox autoCompleteBox)
-    {
-        void ResetTextViewport()
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var textEditor = autoCompleteBox.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
-                if (textEditor == null) return;
-                textEditor.SelectionStart = 0;
-                textEditor.SelectionEnd = 0;
-                textEditor.CaretIndex = 0;
-            }, DispatcherPriority.Background);
-        }
-
-        autoCompleteBox.AttachedToVisualTree += (_, _) => ResetTextViewport();
-        autoCompleteBox.SelectionChanged += (_, _) => ResetTextViewport();
-        autoCompleteBox.LostFocus += (_, _) => ResetTextViewport();
-    }
+        => EditorFieldInteraction.ConfigureStartVisibility(autoCompleteBox);
 
     private async Task OpenIconManagerAsync()
     {
         if (!string.IsNullOrWhiteSpace(_currentUnitName)) ApplyCurrentEdits();
-        if (_baseGameIconPaths.Count == 0)
-            await LoadBaseGameIconCatalogAsync();
-        LoadCurrentModAssetCatalogs();
+        if (!await EnsureCustomAssetCatalogAvailableAsync(AssetReferenceKind.Icon)) return;
+        if (!await EnsureBaseGameAssetCatalogAvailableAsync(AssetReferenceKind.Icon)) return;
         var customCountBefore = _customIconPaths.Count;
-
-        if (_baseGameIconPaths.Count == 0 && _customIconPaths.Count == 0)
-        {
-            await new Prompt(
-                PromptType.Error,
-                "Icons unavailable",
-                "UITextureCache.bar could not be found or read. Check the Data.bar path in Settings.").ShowDialog(this);
-            return;
-        }
 
         var resourcesDirectory = GetCurrentModIconResourcesDirectory();
         if (resourcesDirectory != null)
@@ -36620,7 +37052,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var moved = await MoveCustomIconAsync(item, destination);
                 assetMoved |= moved;
                 return moved;
-            });
+            }, originalSources: _baseGameIconSources);
         await manager.ShowDialog(this);
         LoadCurrentModAssetCatalogs();
         if ((_customIconPaths.Count != customCountBefore || assetMoved) && !string.IsNullOrWhiteSpace(_currentUnitName))
@@ -36634,19 +37066,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async Task OpenAnimFileManagerAsync()
     {
         if (!string.IsNullOrWhiteSpace(_currentUnitName)) ApplyCurrentEdits();
-        if (_baseGameAnimFiles.Count == 0)
-            await LoadBaseGameAnimFileCatalogAsync();
-        LoadCurrentModAssetCatalogs();
+        if (!await EnsureCustomAssetCatalogAvailableAsync(AssetReferenceKind.Animation)) return;
+        if (!await EnsureBaseGameAssetCatalogAvailableAsync(AssetReferenceKind.Animation)) return;
         var customCountBefore = _customAnimFiles.Count;
-
-        if (_baseGameAnimFiles.Count == 0 && _customAnimFiles.Count == 0)
-        {
-            await new Prompt(
-                PromptType.Error,
-                "Animation files unavailable",
-                "No animation XML files could be read from Art*.bar. Check the Data.bar path in Settings.").ShowDialog(this);
-            return;
-        }
 
         var baseArtDirectory = ResolveArtDirectoryPath(ResolveDataBarPath());
         var customArtDirectory = GetCurrentModArtDirectory();
@@ -36672,10 +37094,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var moved = await MoveCustomAnimFileAsync(item, destination);
                 assetMoved |= moved;
                 return moved;
-            });
+            }, loadXmlResultAsync: animFile => animFile.IsCustom
+                ? AnimFileCatalog.LoadCustomXmlResultAsync(customArtDirectory, animFile.Path)
+                : baseArtDirectory == null
+                    ? Task.FromResult(AssetPayloadResult<string>.Failure(animFile.Path, "Art archive directory is unavailable."))
+                    : AnimFileCatalog.LoadXmlResultAsync(baseArtDirectory, animFile));
         await manager.ShowDialog(this);
         LoadCurrentModAssetCatalogs();
-        if ((_customAnimFiles.Count != customCountBefore || assetMoved) && !string.IsNullOrWhiteSpace(_currentUnitName))
+        if (manager.HasSavedXml)
+        {
+            _animFileAnimationCache.Clear();
+            _currentUnitAnimationCatalogTask = null;
+            _currentUnitAnimationCatalogResolved = false;
+        }
+        if ((_customAnimFiles.Count != customCountBefore || assetMoved || manager.HasSavedXml) && !string.IsNullOrWhiteSpace(_currentUnitName))
         {
             var tabIndex = _editorTabs.SelectedIndex;
             BuildEditorPanel(_currentUnitName, resetScroll: false);
@@ -36686,19 +37118,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     private async Task OpenSoundSetManagerAsync()
     {
         if (!string.IsNullOrWhiteSpace(_currentUnitName)) ApplyCurrentEdits();
-        if (_baseGameSoundSets.Count == 0)
-            await LoadBaseGameSoundSetCatalogAsync();
-        LoadCurrentModAssetCatalogs();
+        if (!await EnsureCustomAssetCatalogAvailableAsync(AssetReferenceKind.SoundSet)) return;
+        if (!await EnsureBaseGameAssetCatalogAvailableAsync(AssetReferenceKind.SoundSet)) return;
         var customCountBefore = _customSoundSets.Count;
-
-        if (_baseGameSoundSets.Count == 0 && _customSoundSets.Count == 0)
-        {
-            await new Prompt(
-                PromptType.Error,
-                "Sound sets unavailable",
-                "No sound-set XML files could be read from Sound.bar. Check the Data.bar path in Settings.").ShowDialog(this);
-            return;
-        }
 
         var soundArchivePath = ResolveSoundArchivePath(ResolveDataBarPath());
         var customSoundDirectory = GetCurrentModSoundDirectory();
@@ -36723,10 +37145,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                 assetMoved |= moved;
                 return moved;
             },
-            XmlAssetManagerProfile.SoundSet);
+            XmlAssetManagerProfile.SoundSet,
+            loadXmlResultAsync: soundSet => soundSet.IsCustom
+                ? AnimFileCatalog.LoadCustomXmlResultAsync(customSoundDirectory, soundSet.Path)
+                : soundArchivePath == null
+                    ? Task.FromResult(AssetPayloadResult<string>.Failure(soundSet.Path, "Sound archive is unavailable."))
+                    : SoundSetCatalog.LoadXmlResultAsync(soundArchivePath, soundSet));
         await manager.ShowDialog(this);
         LoadCurrentModAssetCatalogs();
-        if ((_customSoundSets.Count != customCountBefore || assetMoved) && !string.IsNullOrWhiteSpace(_currentUnitName))
+        if ((_customSoundSets.Count != customCountBefore || assetMoved || manager.HasSavedXml) && !string.IsNullOrWhiteSpace(_currentUnitName))
         {
             var tabIndex = _editorTabs.SelectedIndex;
             BuildEditorPanel(_currentUnitName, resetScroll: false);
@@ -36738,10 +37165,18 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         var resourcesDirectory = GetCurrentModIconResourcesDirectory();
         if (resourcesDirectory == null) return false;
-        var relative = IconManagerWindow.RemoveResourcesPrefix(item.FullPath);
-        if (!TryResolveExistingAsset(resourcesDirectory, relative, ".png", "resources", out var sourcePath))
-            return await ShowAssetMoveErrorAsync("Icon unavailable", "The custom icon could not be found inside this mod.");
-        return await MoveCustomAssetAsync(sourcePath, item.FullPath, destination, "icon", "icon");
+        IconMoveIdentity identity;
+        try
+        {
+            if (!item.IsCustom || item.Source == null)
+                throw new InvalidOperationException("Select a custom icon with a resolved physical source. Reopen the icon manager if needed.");
+            identity = IconMoveIdentity.Prepare(resourcesDirectory, item.Source, destination);
+        }
+        catch (Exception exception)
+        {
+            return await ShowAssetMoveErrorAsync("Icon move blocked", exception.Message);
+        }
+        return await MoveCustomAssetAsync(identity.SourcePath, identity.OldXmlValue, identity.Destination, "icon", "icon", identity);
     }
 
     private async Task<bool> MoveCustomAnimFileAsync(AnimFileCatalogEntry item, AssetDestination destination)
@@ -36782,33 +37217,69 @@ public partial class ProtoEditorWindow : SimpleWindow
         return false;
     }
 
+    private bool HasPendingAssetMoveChanges()
+        => _isDirty || _dirtyUnitNames.Count > 0 || _technologyView?.IsDirty == true ||
+           _majorGodView?.IsDirty == true || _powerView?.IsDirty == true || HasUnsavedTacticsEditorChanges();
+
+    private void CommitAssetMove(AssetMovePlan plan)
+    {
+        if (HasPendingAssetMoveChanges())
+            throw new InvalidOperationException("Save all editor changes before moving this asset, then retry.");
+        plan.Commit(GetGameIdentifierReferenceFiles(), SaveXmlDocumentAtomic);
+    }
+
+    private void AdoptAssetMove(AssetMovePlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(_modFilePath) && plan.References.GetDocument(_modFilePath) is { } document)
+        {
+            AdoptSavedProtoDocument(document);
+            RefreshSavedDocumentSnapshots(EditorEntityKind.Units);
+        }
+        AdoptReferenceMigrationPaths(plan.References.Paths, preserveTechnologyView: true);
+        InvalidateSuggestionCaches();
+    }
+
     private async Task<bool> MoveCustomAssetAsync(
         string sourcePath,
         string oldXmlValue,
         AssetDestination destination,
         string elementName,
-        string assetLabel)
+        string assetLabel,
+        IconMoveIdentity? iconIdentity = null)
     {
         if (_modXmlDoc?.Root == null || string.IsNullOrWhiteSpace(_modFilePath))
             return false;
-        if (_isDirty || _dirtyUnitNames.Count > 0)
+        if (HasPendingAssetMoveChanges())
         {
             await new Prompt(
                 PromptType.Error,
                 "Save changes first",
-                $"Save the current ProtoUnit changes before renaming or moving this {assetLabel}. This prevents unvalidated edits from being committed by the asset migration.").ShowDialog(this);
+                $"Save all editor changes before renaming or moving this {assetLabel}. This prevents unsaved drafts from being overwritten by the asset migration.").ShowDialog(this);
             return false;
         }
         if (!await ReloadExternallyChangedUnitFilesAsync())
             return false;
-        if (File.Exists(destination.AbsolutePath))
-            return await ShowAssetMoveErrorAsync("Destination exists", "A file already exists at the selected destination.");
-
-        var impact = ProtoUnitAssetReferenceMigration.Inspect(_modXmlDoc.Root, elementName, oldXmlValue);
-        var units = impact.UnitNames.Count == 0
-            ? "No ProtoUnit currently references this asset."
-            : $"{impact.ReferenceCount} reference(s) in {impact.UnitNames.Count} ProtoUnit(s) will be updated:\n" +
-              string.Join(", ", impact.UnitNames.Take(12)) + (impact.UnitNames.Count > 12 ? ", …" : "");
+        AssetMovePlan plan;
+        try
+        {
+            var kind = elementName.ToLowerInvariant() switch
+            {
+                "icon" => AssetReferenceKind.Icon,
+                "animfile" => AssetReferenceKind.Animation,
+                "soundsetfile" => AssetReferenceKind.SoundSet,
+                _ => throw new ArgumentException("Unsupported asset kind.", nameof(elementName))
+            };
+            if (!await EnsureCustomAssetCatalogAvailableAsync(kind)) return false;
+            var files = GetGameIdentifierReferenceFiles();
+            plan = iconIdentity == null
+                ? new AssetMovePlan(sourcePath, destination.AbsolutePath, files, kind, oldXmlValue, destination.XmlValue)
+                : new AssetMovePlan(iconIdentity, files);
+        }
+        catch (Exception exception)
+        {
+            return await ShowAssetMoveErrorAsync("Asset move blocked", exception.Message);
+        }
+        var impact = $"{plan.References.ReferenceCount} reference(s) in {plan.References.Paths.Count} mod document(s) will be updated.";
         var moveTitle = elementName.ToLowerInvariant() switch
         {
             "icon" => "Rename/Move Icon",
@@ -36818,37 +37289,38 @@ public partial class ProtoEditorWindow : SimpleWindow
         var confirmation = new Prompt(
             PromptType.Confirm,
             moveTitle,
-            $"{oldXmlValue}\n→ {destination.XmlValue}\n\n{units}\n\nThe file move and reference updates will be saved together.",
-            confirmButtonText: "Save");
+            $"{oldXmlValue}\n→ {destination.XmlValue}\n\n{impact}\n\nThe file move and reference updates will be saved together.",
+            confirmButtonText: "Save", actionRole: PromptActionRole.Positive);
+        if (elementName.Equals("icon", StringComparison.OrdinalIgnoreCase))
+        {
+            var manager = OwnedWindows.OfType<IconManagerWindow>().FirstOrDefault(window => window.IsVisible);
+            confirmation.FitToContent(
+                Math.Clamp((manager?.ClientSize.Width ?? ClientSize.Width) - 40, 320, 600),
+                Math.Clamp((manager?.ClientSize.Height ?? ClientSize.Height) - 40, 160, 360));
+        }
         await confirmation.ShowDialog(this);
         if (!confirmation.Confirmed) return false;
 
-        var documentBackup = new XDocument(_modXmlDoc);
         try
         {
-            var paths = new[] { sourcePath, destination.AbsolutePath, _modFilePath };
-            FileIntegrityTransaction.Execute(
-                paths,
-                CaptureExpectedEditorFileStates(paths),
-                () =>
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination.AbsolutePath)!);
-                    File.Move(sourcePath, destination.AbsolutePath, overwrite: false);
-                    ProtoUnitAssetReferenceMigration.Replace(_modXmlDoc.Root!, elementName, oldXmlValue, destination.XmlValue);
-                    SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
-                });
-            _loadedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
-            InvalidateSuggestionCaches();
-            _statusMessage.Text = $"Custom {assetLabel} moved and ProtoUnit references updated.";
-            return true;
+            CommitAssetMove(plan);
         }
         catch (Exception exception)
         {
-            _modXmlDoc = documentBackup;
-            _modXmlRoot = documentBackup.Root;
             await new Prompt(PromptType.Error, "Asset move failed", exception.Message).ShowDialog(this);
             return false;
         }
+        try
+        {
+            AdoptAssetMove(plan);
+            _statusMessage.Text = $"Custom {assetLabel} moved and references updated across the mod.";
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Asset moved; refresh failed",
+                $"The file move and reference updates were saved. Reopen the editor before further editing.\n\n{exception.Message}").ShowDialog(this);
+        }
+        return true;
     }
 
     private async Task<bool> ShowAssetMoveErrorAsync(string title, string message)
@@ -36862,32 +37334,51 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private Dictionary<string, int> GetUnitTypeUsageCounts()
     {
-        var unitsByType = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        void Count(XElement? root)
+        var knownTypes = GetUnitTypeDefinitions().Select(item => item.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ownersByType = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        void Count(XElement? root, string scope)
         {
             if (root == null) return;
-            foreach (var unit in root.Elements().Where(element =>
-                         element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)))
+            var index = 0;
+            foreach (var owner in root.Elements())
             {
-                var unitName = unit.Attribute("name")?.Value?.Trim() ?? unit.Element("name")?.Value?.Trim() ?? "(unnamed)";
-                foreach (var typeName in unit.Elements()
-                             .Where(element => element.Name.LocalName.Equals("unittype", StringComparison.OrdinalIgnoreCase))
-                             .Select(element => element.Value.Trim())
-                             .Where(name => name.Length > 0)
-                             .Distinct(StringComparer.OrdinalIgnoreCase))
+                var ownerName = owner.Attribute("name")?.Value ?? owner.Element("name")?.Value ??
+                    owner.Nodes().OfType<XText>().FirstOrDefault(text => !string.IsNullOrWhiteSpace(text.Value))?.Value ??
+                    (++index).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var ownerKey = scope + "\0" + owner.Name.LocalName + "\0" + ownerName.Trim();
+                // Shared policy classifies each field once for all catalog types.
+                // A display count never substitutes for deletion preflight.
+                foreach (var typeName in GameIdentifierReferencePolicy.FindRecognizedUnitTypeIdentifiers(owner, knownTypes))
                 {
-                    if (!unitsByType.TryGetValue(typeName, out var unitNames))
-                        unitsByType[typeName] = unitNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    unitNames.Add(unitName);
+                    if (!ownersByType.TryGetValue(typeName, out var owners))
+                        ownersByType[typeName] = owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    owners.Add(ownerKey);
                 }
             }
         }
-        Count(_barXmlRoot);
-        Count(_modXmlRoot);
-        return unitsByType.ToDictionary(
-            entry => entry.Key,
-            entry => entry.Value.Count,
-            StringComparer.OrdinalIgnoreCase);
+        Count(_barXmlRoot, nameof(TechnologyReferenceDocumentKind.ProtoUnits));
+        Count(_modXmlRoot, nameof(TechnologyReferenceDocumentKind.ProtoUnits));
+        foreach (var document in GetBaseTechtreeDocumentsFromLoadedBar())
+            Count(document.Root, nameof(TechnologyReferenceDocumentKind.Techtree));
+        foreach (var file in ModReferenceFileCatalog.Discover(GetCurrentModRootDirectory())
+                     .Where(file => file.Kind != TechnologyReferenceDocumentKind.Other &&
+                         !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var scope = file.Kind is TechnologyReferenceDocumentKind.ProtoUnits or TechnologyReferenceDocumentKind.Techtree
+                    ? file.Kind.ToString() : file.Path;
+                Count(ModReferenceDocumentReader.Load(file.Path).Root, scope);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                                              System.Xml.XmlException or InvalidDataException or InvalidOperationException)
+            {
+                // A display count never replaces the authoritative deletion inspection,
+                // which still reports unreadable/unsupported references and refuses deletion.
+            }
+        }
+        return ownersByType.ToDictionary(entry => entry.Key, entry => entry.Value.Count, StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<bool> CreateUnitTypeAsync(string name)
@@ -36928,11 +37419,15 @@ public partial class ProtoEditorWindow : SimpleWindow
         try
         {
             EnsureUnitTypeNameAvailable(newName, oldName);
-            var unitTypeDocument = UnitTypeCatalog.LoadOrCreateModDocument(unitTypePath);
+            var preparedType = ModDocumentPersistence.Prepare(unitTypePath, ModXmlDocumentKind.UnitTypes);
+            var unitTypeDocument = preparedType.Document;
             if (!UnitTypeCatalog.RenameDefinition(unitTypeDocument, oldName, newName))
                 throw new InvalidOperationException($"Custom Unit Type '{oldName}' was not found.");
 
             var protoDocument = new XDocument(_modXmlDoc);
+            var oppositeProtoUnitNames = GetProtoUnitNamesForMigration();
+            GameIdentifierReferenceMigrationPlan.ValidateUnitReferenceIdentity(protoDocument,
+                GameIdentifierKind.UnitType, oldName, newName, oppositeProtoUnitNames, _modFilePath);
             var unsupportedReferences = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
                 protoDocument, GameIdentifierKind.UnitType, oldName);
             if (unsupportedReferences.Count > 0)
@@ -36947,19 +37442,25 @@ public partial class ProtoEditorWindow : SimpleWindow
                 oldName,
                 newName);
 
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
             var referenceMigration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file =>
+                referenceFiles.Where(file =>
                     !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase)),
                 GameIdentifierKind.UnitType,
-                [new KeyValuePair<string, string>(oldName, newName)]);
+                [new KeyValuePair<string, string>(oldName, newName)],
+                oppositeUnitKindNames: oppositeProtoUnitNames, discovery: discovery);
 
             var paths = new List<string?> { unitTypePath, _modFilePath };
             paths.AddRange(referenceMigration.Paths);
-            FileIntegrityTransaction.Execute(
-                paths,
-                CaptureExpectedEditorFileStates(paths, referenceMigration.ExpectedStates),
+            var expected = CaptureExpectedEditorFileStates(paths, referenceMigration.ExpectedStates);
+            // The mutation's loaded version remains authoritative even if a later
+            // reference scan captured a newer version of the same type file.
+            expected[preparedType.Path] = preparedType.LoadedState;
+            ModDocumentPersistence.Execute(
+                [preparedType], paths, expected,
                 () =>
                 {
+                    referenceMigration.ValidateDiscovery();
                     SaveUnitTypeXmlDocument(unitTypeDocument, unitTypePath);
                     SaveXmlDocumentAtomic(protoDocument, _modFilePath);
                     referenceMigration.Save(SaveXmlDocumentAtomic);
@@ -36991,17 +37492,20 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 [Path.GetFullPath(_modFilePath)] = _modXmlDoc
             };
+            ModDeletionInspection? deletionCheck = null;
             if (!await EnsureIdentifierCanBeDeletedAsync(
-                    GameIdentifierKind.UnitType, name, "Unit Type", overrides))
+                    GameIdentifierKind.UnitType, name, "Unit Type", overrides,
+                    captureInspection: inspection => deletionCheck = inspection))
                 return false;
 
-            var unitTypeDocument = UnitTypeCatalog.LoadOrCreateModDocument(unitTypePath);
+            var preparedType = ModDocumentPersistence.Prepare(unitTypePath, ModXmlDocumentKind.UnitTypes);
+            var unitTypeDocument = preparedType.Document;
             if (!UnitTypeCatalog.DeleteDefinition(unitTypeDocument, name))
                 throw new InvalidOperationException($"Custom Unit Type '{name}' was not found.");
 
-            var paths = new[] { unitTypePath };
-            FileIntegrityTransaction.Execute(paths, CaptureExpectedEditorFileStates(paths), () =>
+            ModDocumentPersistence.Execute([preparedType], null, null, () =>
             {
+                deletionCheck!.ValidateReadDependencies();
                 SaveUnitTypeXmlDocument(unitTypeDocument, unitTypePath);
             });
 
@@ -37023,11 +37527,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         try
         {
-            var document = UnitTypeCatalog.LoadOrCreateModDocument(path);
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.UnitTypes);
+            var document = prepared.Document;
             mutation(document);
-            FileIntegrityTransaction.Execute([path], () => SaveUnitTypeXmlDocument(document, path));
+            ModDocumentPersistence.Execute([prepared], null, null, () => SaveUnitTypeXmlDocument(document, path));
             InvalidateSuggestionCaches();
-            _statusMessage.Text = $"Unit Type changes saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception ex)
@@ -37093,11 +37598,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         try
         {
             EnsureTechTypeNameAvailable(newName, oldName);
-            var typeStateBefore = FileIntegrityTransaction.CaptureState(techTypePath);
-            var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
-            var typeStateAfter = FileIntegrityTransaction.CaptureState(techTypePath);
-            if (typeStateBefore != typeStateAfter)
-                throw new IOException($"'{techTypePath}' changed while the rename was being prepared.");
+            var preparedType = ModDocumentPersistence.Prepare(techTypePath, ModXmlDocumentKind.TechTypes);
+            var techTypeDocument = preparedType.Document;
             if (!TechTypeCatalog.RenameDefinition(techTypeDocument, oldName, newName))
                 throw new InvalidOperationException($"Custom Tech Type '{oldName}' was not found.");
 
@@ -37121,20 +37623,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             var excluded = new[] { techTypePath, techtreePath }
                 .Select(Path.GetFullPath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
             var migration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file => !excluded.Contains(Path.GetFullPath(file.Path))),
+                referenceFiles.Where(file => !excluded.Contains(Path.GetFullPath(file.Path))),
                 GameIdentifierKind.TechType,
-                [new KeyValuePair<string, string>(oldName, newName)]);
+                [new KeyValuePair<string, string>(oldName, newName)], discovery: discovery);
             var paths = new List<string?> { techTypePath };
             if (renamedReferences > 0)
                 paths.Add(techtreePath);
             paths.AddRange(migration.Paths);
             var expected = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
-            expected[Path.GetFullPath(techTypePath)] = typeStateAfter;
-            if (renamedReferences > 0)
-                expected[Path.GetFullPath(techtreePath)] = treeStateAfter;
-            FileIntegrityTransaction.Execute(paths, expected, () =>
+            expected[preparedType.Path] = preparedType.LoadedState;
+            // The tree was inspected even when it had no references to rewrite.
+            expected[Path.GetFullPath(techtreePath)] = treeStateAfter;
+            ModDocumentPersistence.Execute([preparedType], paths, expected, () =>
             {
+                migration.ValidateDiscovery();
                 SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
                 if (renamedReferences > 0)
                     SaveXmlDocumentAtomic(techtreeDocument, techtreePath);
@@ -37162,17 +37666,20 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
+            ModDeletionInspection? deletionCheck = null;
             if (!await EnsureIdentifierCanBeDeletedAsync(
-                    GameIdentifierKind.TechType, name, "Tech Type"))
+                    GameIdentifierKind.TechType, name, "Tech Type",
+                    captureInspection: inspection => deletionCheck = inspection))
                 return false;
 
-            var techTypeDocument = TechTypeCatalog.LoadOrCreateModDocument(techTypePath);
+            var preparedType = ModDocumentPersistence.Prepare(techTypePath, ModXmlDocumentKind.TechTypes);
+            var techTypeDocument = preparedType.Document;
             if (!TechTypeCatalog.DeleteDefinition(techTypeDocument, name))
                 throw new InvalidOperationException($"Custom Tech Type '{name}' was not found.");
 
-            var paths = new[] { techTypePath };
-            FileIntegrityTransaction.Execute(paths, () =>
+            ModDocumentPersistence.Execute([preparedType], null, null, () =>
             {
+                deletionCheck!.ValidateReadDependencies();
                 SaveTechTypeXmlDocument(techTypeDocument, techTypePath);
             });
 
@@ -37195,11 +37702,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
-            var document = TechTypeCatalog.LoadOrCreateModDocument(path);
+            var prepared = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.TechTypes);
+            var document = prepared.Document;
             mutation(document);
-            FileIntegrityTransaction.Execute([path], () => SaveTechTypeXmlDocument(document, path));
+            ModDocumentPersistence.Execute([prepared], null, null, () => SaveTechTypeXmlDocument(document, path));
             InvalidateSuggestionCaches();
-            _statusMessage.Text = "Tech Type changes saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
             return true;
         }
         catch (Exception ex)
@@ -37298,21 +37806,20 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void EnsureAbilityCatalogLoadedForManager()
     {
-        if (_abilityPowerCatalog.Count > 0)
-            return;
-
+        // Refresh even a warm catalog: powers_mods.xml is shared with Powers,
+        // whose create/duplicate/rename operations may have changed membership.
         // The main document now intentionally starts empty, so the normal per-unit
         // ability loader may not have run before the global manager is opened.
         // Preserve every in-memory unit draft while using a non-unit key to load only
         // the shared ability/power catalog.
         var preservedDrafts = CloneAbilityDrafts(_abilityDrafts);
-        var preservedNames = _availableAbilityNames.ToList();
         LoadAbilitySources("__ability_manager_catalog__");
 
         _abilityDrafts.Clear();
         foreach (var entry in preservedDrafts)
             _abilityDrafts[entry.Key] = entry.Value;
-        _availableAbilityNames = preservedNames
+        _availableAbilityNames = _availableAbilityNames
+            .Concat(preservedDrafts.Values.Select(draft => draft.Name))
             .Concat(_abilityPowerCatalog.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -37377,59 +37884,41 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> DuplicateManagedAbilityAsync(string sourceName, bool sourceIsBuiltIn, string newName)
     {
-        if (!_abilityPowerCatalog.TryGetValue(sourceName, out var source))
-            return false;
-        var clone = new XElement(source);
-        clone.SetAttributeValue("name", newName);
+        if (!_abilityPowerCatalog.TryGetValue(sourceName, out var source) || !PowerCatalog.IsAbilityPower(source)) return false;
         try
         {
             var path = GetCurrentModGameplayFilePath("powers_mods.xml")
                 ?? throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
+            var stringsState = CaptureCurrentModStringsStateForEdit();
             var powerFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Powers);
-            if (powerFile.Document.Root!.Elements().Any(element =>
-                    element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                    GetAbilityElementName(element).Equals(newName, StringComparison.OrdinalIgnoreCase)))
+            if (powerFile.Document.Root!.Elements().Any(element => GetAbilityElementName(element).Equals(newName, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException($"An ability named '{newName}' already exists.");
-            var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
-            var stringsChanged = false;
-            foreach (var tag in new[] { "displaynameid", "rolloverid" })
+            var clone = new XElement(source);
+            clone.SetAttributeValue("name", newName);
+            var entries = new Dictionary<string, string>(LoadCurrentModStringEntries(requireReadable: true), StringComparer.OrdinalIgnoreCase);
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var field in AbilityStringPolicy.Fields(clone))
             {
-                var element = clone.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
-                var sourceId = element?.Value?.Trim() ?? "";
-                if (string.IsNullOrWhiteSpace(sourceId))
-                    continue;
-
-                string? sourceText = null;
-                if (!stringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
-                if (sourceText == null)
-                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while duplicating '{sourceName}'. The duplicate was not created.");
-
-                var rollover = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase);
-                var newId = BuildUniqueAbilityStringId(newName, rollover, stringEntries);
-                element!.Value = newId;
-                stringEntries[newId] = sourceText;
-                stringsChanged = true;
+                var id = field.Value.Trim();
+                if (id.Length == 0) continue;
+                if (aliases.TryGetValue(id, out var allocated)) { XmlTriviaPreserver.SetText(field, allocated); continue; }
+                var text = entries.GetValueOrDefault(id) ?? await _gameData.LookupStringKeyAsync(id);
+                if (text == null) continue; // Preserve an unresolved reference; never invent placeholder text.
+                var next = BuildUniqueAbilityStringId(newName, field.Name.LocalName == "rolloverid", entries);
+                aliases[id] = next;
+                XmlTriviaPreserver.SetText(field, next);
+                entries[next] = text;
             }
             PowerCatalog.AddNewEntry(powerFile.Document, clone, PowerDocumentSection.Abilities);
-            var stringPath = stringsChanged ? GetCurrentModStringsPath() : null;
-            var expected = CaptureExpectedEditorFileStates([stringPath]);
-            ModDocumentPersistence.Execute([powerFile], [stringPath], expected, () =>
-            {
-                if (stringsChanged)
-                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities, updateSession: false);
-                SaveAbilityXmlDocument(powerFile.Document, path);
-            });
-            if (stringsChanged)
-                AdoptSavedModStringEntries(stringEntries);
+            var cleanup = PrepareAbilityStringSave(powerFile, [(new XElement("power", new XAttribute("name", newName)), clone)], [], entries);
+            await PersistAbilityChangesAsync(powerFile, cleanup, stringsState);
             _abilityPowerCatalog[newName] = new XElement(clone);
             RegisterAvailableAbilityName(newName);
             return true;
         }
         catch (Exception ex)
         {
-            var prompt = new Prompt(PromptType.Error, "Unable to duplicate ability", ex.Message);
-            await prompt.ShowDialog(this);
+            await new Prompt(PromptType.Error, "Unable to duplicate ability", ex.Message).ShowDialog(this);
             return false;
         }
     }
@@ -37470,7 +37959,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<string?> OpenManagedAbilityEditorAsync(Window owner, string abilityName, bool isBuiltIn)
     {
-        if (!_abilityPowerCatalog.TryGetValue(abilityName, out var power))
+        if (!_abilityPowerCatalog.TryGetValue(abilityName, out var power) || !PowerCatalog.IsAbilityPower(power))
         {
             var prompt = new Prompt(PromptType.Error, "Ability not found", $"Could not load '{abilityName}'.");
             await prompt.ShowDialog(this);
@@ -37487,17 +37976,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             isBuiltIn ? null : async (originalName, updatedPower, updatedStringEntries, loadedStringState) =>
             {
                 var newName = GetAbilityElementName(updatedPower);
-                await SaveManagedAbilityPowerAsync(
+                await SaveManagedAbilityPowerCoreAsync(
                     newName,
                     updatedPower,
                     originalName,
                     updatedStringEntries,
                     lastSavedPower,
-                    loadedStringState);
-                if (!originalName.Equals(newName, StringComparison.OrdinalIgnoreCase))
-                    _abilityPowerCatalog.Remove(originalName);
-                _abilityPowerCatalog[newName] = new XElement(updatedPower);
-                lastSavedPower = NormalizeXmlElementForComparison(updatedPower);
+                    loadedStringState,
+                    preserveUnknownPlacementAttributes: !editor.IsSavingStandaloneRawXml);
+                // The transaction publishes the committed record, including preserved
+                // placement attributes. Compare the next Save with that exact version.
+                lastSavedPower = NormalizeXmlElementForComparison(_abilityPowerCatalog[newName]);
 
                 // The standalone ability editor has its own string cache. It may have just
                 // written Display Name/Rollover values to stringmods.txt, so never rebuild
@@ -37506,156 +37995,71 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
                     BuildEditorPanel(_currentUnitName, resetScroll: false);
             },
-            _abilityPowerCatalog.Keys);
+            _abilityPowerCatalog.Keys,
+            unitNamesProvider: GetAvailableTrainUnitNames,
+            unitTypeNamesProvider: GetKnownUnitTypeNames);
         await editor.ShowDialog(owner);
         return editor.CurrentAbilityDefinitionName;
     }
 
-    private async Task SaveManagedAbilityPowerAsync(
-        string abilityName,
-        XElement updatedPower,
-        string? originalName,
-        Dictionary<string, string>? editedStringEntries = null,
-        XElement? expectedPower = null,
+    private Task SaveManagedAbilityPowerAsync(
+        string abilityName, XElement updatedPower, string? originalName,
+        Dictionary<string, string>? editedStringEntries = null, XElement? expectedPower = null,
         FileIntegrityTransaction.FileState? editedStringFileState = null)
+        => SaveManagedAbilityPowerCoreAsync(abilityName, updatedPower, originalName, editedStringEntries,
+            expectedPower, editedStringFileState, preserveUnknownPlacementAttributes: true);
+
+    private async Task SaveManagedAbilityPowerCoreAsync(
+        string abilityName, XElement updatedPower, string? originalName,
+        Dictionary<string, string>? editedStringEntries, XElement? expectedPower,
+        FileIntegrityTransaction.FileState? editedStringFileState, bool preserveUnknownPlacementAttributes)
     {
-        var path = GetCurrentModGameplayFilePath("powers_mods.xml");
-        if (string.IsNullOrWhiteSpace(path))
-            throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
+        var path = GetCurrentModGameplayFilePath("powers_mods.xml")
+            ?? throw new InvalidOperationException("The active mod powers_mods.xml path could not be resolved.");
+        var stringsState = editedStringFileState ?? CaptureCurrentModStringsStateForEdit();
         var powerFile = ModDocumentPersistence.Prepare(path, ModXmlDocumentKind.Powers);
         var doc = powerFile.Document;
-        var root = doc.Root!;
-
         var oldName = string.IsNullOrWhiteSpace(originalName) ? abilityName : originalName;
-        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
-        {
-            var collision = root.Elements().Any(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                                                         GetAbilityElementName(e).Equals(abilityName, StringComparison.OrdinalIgnoreCase));
-            collision |= _abilityPowerCatalog.Keys.Any(name =>
-                !name.Equals(oldName, StringComparison.OrdinalIgnoreCase) &&
-                name.Equals(abilityName, StringComparison.OrdinalIgnoreCase));
-            if (collision)
-                throw new InvalidOperationException($"An ability named '{abilityName}' already exists. Choose a different internal name.");
-        }
-        var existing = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                                                                GetAbilityElementName(e).Equals(oldName, StringComparison.OrdinalIgnoreCase));
-        if (expectedPower != null &&
-            (existing == null || !XNode.DeepEquals(NormalizeXmlElementForComparison(existing), expectedPower)))
-        {
-            throw new IOException(
-                $"Ability '{oldName}' changed in powers_mods.xml after this editor was opened. " +
-                "No files were written. Close and reopen the ability to load the external version.");
-        }
+        var renaming = !oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase);
+        if (renaming && (doc.Root!.Elements().Any(element => GetAbilityElementName(element).Equals(abilityName, StringComparison.OrdinalIgnoreCase)) ||
+            _abilityPowerCatalog.Keys.Any(name => !name.Equals(oldName, StringComparison.OrdinalIgnoreCase) && name.Equals(abilityName, StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidOperationException($"An ability named '{abilityName}' already exists. Choose a different internal name.");
+        var existing = doc.Root!.Elements().FirstOrDefault(element => GetAbilityElementName(element).Equals(oldName, StringComparison.OrdinalIgnoreCase));
+        if (!PowerCatalog.IsAbilityPower(updatedPower) || (existing != null && !PowerCatalog.IsAbilityPower(existing)))
+            throw new InvalidDataException("God Powers cannot be saved through the Ability editor. Open the definition in Powers. No files were written.");
+        if (expectedPower != null && (existing == null || !XNode.DeepEquals(NormalizeXmlElementForComparison(existing), expectedPower)))
+            throw new IOException($"Ability '{oldName}' changed after this editor was opened. No files were written. Close and reopen the ability.");
+        var original = existing == null ? new XElement("power", new XAttribute("name", oldName)) : new XElement(existing);
         var replacement = new XElement(updatedPower);
         replacement.Name = "power";
         replacement.SetAttributeValue("name", abilityName);
-        // The user may have edited powers_mods.xml manually while this editor was open.
-        // Preserve unsupported placement attributes from the current on-disk power, not only
-        // from the stale PowerSource captured when the editor window was opened.
-        MergeUnknownPlacementAttributes(existing, replacement);
-
-        Dictionary<string, string>? renamedStringEntries = editedStringEntries == null
-            ? null
-            : new Dictionary<string, string>(editedStringEntries, StringComparer.OrdinalIgnoreCase);
-        var oldStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
+        if (preserveUnknownPlacementAttributes) MergeUnknownPlacementAttributes(existing, replacement);
+        if (existing != null) { XmlTriviaPreserver.Preserve(existing, replacement); existing.ReplaceWith(replacement); }
+        else PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities);
+        GameIdentifierReferenceMigrationPlan? migration = null;
+        if (renaming)
         {
-            renamedStringEntries ??= LoadCurrentModStringEntries(requireReadable: true);
-            foreach (var tag in new[] { "displaynameid", "rolloverid" })
-            {
-                var replacementElement = replacement.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
-                var sourceId = replacementElement?.Value?.Trim() ?? "";
-                if (string.IsNullOrWhiteSpace(sourceId))
-                    continue;
-
-                string? sourceText = null;
-                if (!renamedStringEntries.TryGetValue(sourceId, out sourceText))
-                    sourceText = await _gameData.LookupStringKeyAsync(sourceId);
-                if (sourceText == null)
-                    throw new InvalidOperationException($"Could not resolve string '{sourceId}' while renaming '{oldName}'. The ability was not renamed.");
-
-                var rollover = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase);
-                var newId = BuildUniqueAbilityStringId(abilityName, rollover, renamedStringEntries);
-                replacementElement!.Value = newId;
-                var updatedElement = updatedPower.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
-                if (updatedElement != null)
-                    updatedElement.Value = newId;
-                renamedStringEntries[newId] = sourceText;
-                oldStringIds.Add(sourceId);
-            }
-
-        }
-
-        if (existing != null)
-        {
-            XmlTriviaPreserver.Preserve(existing, replacement);
-            existing.ReplaceWith(replacement);
-        }
-        else
-        {
-            PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities);
-        }
-        if (!oldName.Equals(abilityName, StringComparison.OrdinalIgnoreCase))
-        {
-            var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedReferences(
-                doc, GameIdentifierKind.Ability, oldName);
-            if (unsupported.Count > 0)
-                throw new InvalidOperationException(
-                    $"'{oldName}' was not renamed because powers_mods.xml contains unsupported ability reference field(s): " +
-                    string.Join(", ", unsupported) + ". No files were written.");
+            var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedReferences(doc, GameIdentifierKind.Ability, oldName);
+            if (unsupported.Count > 0) throw new InvalidOperationException($"'{oldName}' has unsupported Ability reference fields: {string.Join(", ", unsupported)}. No files were written.");
             GameIdentifierReferencePolicy.RenameReferences(doc, GameIdentifierKind.Ability, oldName, abilityName);
-
-            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file =>
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
+            migration = GameIdentifierReferenceMigrationPlan.Prepare(referenceFiles.Where(file =>
                     !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)),
-                GameIdentifierKind.Ability,
-                [new KeyValuePair<string, string>(oldName, abilityName)]);
-            var stringPath = GetCurrentModStringsPath();
-            var paths = new List<string?> { path };
-            if (renamedStringEntries != null)
-                paths.Add(stringPath);
-            paths.AddRange(migration.Paths);
-            var expected = CaptureExpectedEditorFileStates(paths.Where(candidate =>
-                !string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase)), migration.ExpectedStates);
-            if (editedStringFileState != null && !string.IsNullOrWhiteSpace(stringPath))
-                expected[Path.GetFullPath(stringPath)] = editedStringFileState;
-            ModDocumentPersistence.Execute([powerFile], paths.Where(candidate =>
-                !string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase)), expected, () =>
-            {
-                if (renamedStringEntries != null)
-                    SaveCurrentModStringEntries(
-                        renamedStringEntries,
-                        StringTableSection.Abilities,
-                        editedStringFileState,
-                        updateSession: false);
-                SaveAbilityXmlDocument(doc, path);
-                migration.Save(SaveXmlDocumentAtomic);
-            });
-            if (renamedStringEntries != null)
-                AdoptSavedModStringEntries(renamedStringEntries);
-            AdoptGameIdentifierReferenceMigration(migration);
-            RenamePendingAbilityDraftReferences(oldName, abilityName);
+                GameIdentifierKind.Ability, [new KeyValuePair<string, string>(oldName, abilityName)],
+                bindingModPath: _modFilePath, discovery: discovery);
         }
-        else
+        var cleanup = PrepareAbilityStringSave(powerFile, [(original, replacement)], [], editedStringEntries, migration);
+        await PersistAbilityChangesAsync(powerFile, cleanup, stringsState, migration);
+        // Only publish adopted references/cache after every file has committed successfully.
+        foreach (var tag in AbilityStringPolicy.FieldTags)
         {
-            var stringPath = editedStringEntries == null ? null : GetCurrentModStringsPath();
-            var expected = CaptureExpectedEditorFileStates([stringPath]);
-            if (editedStringFileState != null && !string.IsNullOrWhiteSpace(stringPath))
-                expected[Path.GetFullPath(stringPath)] = editedStringFileState;
-            ModDocumentPersistence.Execute([powerFile], [stringPath], expected, () =>
-            {
-                if (editedStringEntries != null)
-                    SaveCurrentModStringEntries(
-                        editedStringEntries,
-                        StringTableSection.Abilities,
-                        editedStringFileState,
-                        updateSession: false);
-                SaveAbilityXmlDocument(doc, path);
-            });
-            if (editedStringEntries != null)
-                AdoptSavedModStringEntries(editedStringEntries);
+            var saved = replacement.Element(tag);
+            var field = updatedPower.Element(tag);
+            if (saved == null) field?.Remove();
+            else if (field == null) updatedPower.Add(new XElement(saved));
+            else XmlTriviaPreserver.SetText(field, saved.Value);
         }
-
+        if (renaming) { _abilityPowerCatalog.Remove(oldName); RenamePendingAbilityDraftReferences(oldName, abilityName); }
         _abilityPowerCatalog[abilityName] = new XElement(replacement);
         RegisterAvailableAbilityName(abilityName);
     }
@@ -37713,109 +38117,63 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(powersPath)) return;
         try
         {
+            var stringsState = CaptureCurrentModStringsStateForEdit();
             var powerFile = ModDocumentPersistence.Prepare(powersPath, ModXmlDocumentKind.Powers);
             var doc = powerFile.Document;
-            var root = doc.Root!;
-
-            var deletedNames = result.DeletedNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var deletedName in deletedNames)
-            {
-                if (!await EnsureIdentifierCanBeDeletedAsync(
-                        GameIdentifierKind.Ability, deletedName, "Ability"))
-                    return;
-            }
-            var deletedStringIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var power in root.Elements().Where(element =>
-                         element.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                         deletedNames.Contains(GetAbilityElementName(element))))
-            {
-                foreach (var id in GetAbilityDefinitionStringIds(power))
-                    deletedStringIds.Add(id);
-            }
-
-            var approvedStringIds = await ReviewOrphanStringsAsync(
-                deletedStringIds.Where(id => id.StartsWith("STR_ABILITY_", StringComparison.OrdinalIgnoreCase)),
-                deletedNames.Count == 1
-                    ? $"Deleting ability '{deletedNames.First()}'"
-                    : "Deleting the selected abilities",
-                this);
-            Dictionary<string, string>? stringEntries = null;
-            if (approvedStringIds.Count > 0)
-                stringEntries = LoadCurrentModStringEntries(requireReadable: true);
-
+            var originals = doc.Root!.Elements("power").ToDictionary(GetAbilityElementName, power =>
+                (Before: new XElement(power), After: power), StringComparer.OrdinalIgnoreCase);
+            foreach (var name in result.Renames.Select(rename => rename.OldName).Concat(result.DeletedNames))
+                if (originals.TryGetValue(name, out var entry) && !PowerCatalog.IsAbilityPower(entry.Before))
+                    throw new InvalidDataException($"'{name}' is a God Power and cannot be changed through Manage Abilities. No files were written.");
             foreach (var rename in result.Renames)
             {
-                var power = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                                                                    GetAbilityElementName(e).Equals(rename.OldName, StringComparison.OrdinalIgnoreCase));
-                if (power == null) continue;
+                var power = doc.Root.Elements("power").FirstOrDefault(element => GetAbilityElementName(element).Equals(rename.OldName, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidOperationException($"Ability '{rename.OldName}' was not found. No files were written.");
+                if (doc.Root.Elements("power").Any(other => !ReferenceEquals(other, power) && GetAbilityElementName(other).Equals(rename.NewName, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException($"Ability '{rename.NewName}' already exists. No files were written.");
                 power.SetAttributeValue("name", rename.NewName);
             }
-
-            foreach (var deletedName in result.DeletedNames)
+            var deletedNames = result.DeletedNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var power in doc.Root.Elements("power").Where(power => deletedNames.Contains(GetAbilityElementName(power))).ToArray()) power.Remove();
+            var deleted = originals.Where(pair => pair.Value.After.Parent == null).ToArray();
+            var edits = originals.Values.Where(pair => pair.After.Parent != null &&
+                !GetAbilityElementName(pair.Before).Equals(GetAbilityElementName(pair.After), StringComparison.OrdinalIgnoreCase)).ToArray();
+            // Collapse intermediate names: string and external-reference migrations target only final identities.
+            var renames = edits.Select(edit => new KeyValuePair<string, string>(GetAbilityElementName(edit.Before), GetAbilityElementName(edit.After))).ToList();
+            foreach (var rename in renames)
             {
-                foreach (var power in root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) &&
-                                                                      GetAbilityElementName(e).Equals(deletedName, StringComparison.OrdinalIgnoreCase)).ToList())
-                    power.Remove();
+                var unsupported = GameIdentifierReferencePolicy.FindUnrecognizedReferences(doc, GameIdentifierKind.Ability, rename.Key);
+                if (unsupported.Count > 0) throw new InvalidOperationException($"'{rename.Key}' has unsupported Ability reference fields. No files were written.");
+                GameIdentifierReferencePolicy.RenameReferences(doc, GameIdentifierKind.Ability, rename.Key, rename.Value);
             }
-
-            var stringsChanged = false;
-            if (stringEntries != null && approvedStringIds.Count > 0)
-            {
-                var sharedCatalogStringIds = _abilityPowerCatalog
-                    .Where(entry => !deletedNames.Contains(entry.Key))
-                    .SelectMany(entry => GetAbilityDefinitionStringIds(entry.Value))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(
-                    approvedStringIds.Where(id => !sharedCatalogStringIds.Contains(id)),
-                    [doc],
-                    [powersPath]);
-                foreach (var id in safeRemovals)
-                    stringsChanged |= stringEntries.Remove(id);
-            }
-
-            var stringPath = GetCurrentModStringsPath();
-            var renames = result.Renames
-                .Select(rename => new KeyValuePair<string, string>(rename.OldName, rename.NewName))
-                .ToList();
-            var migration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file =>
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
+            var migration = GameIdentifierReferenceMigrationPlan.Prepare(referenceFiles.Where(file =>
                     !Path.GetFullPath(file.Path).Equals(Path.GetFullPath(powersPath), StringComparison.OrdinalIgnoreCase)),
-                GameIdentifierKind.Ability,
-                renames);
-            var paths = new List<string?>();
-            if (stringsChanged)
-                paths.Add(stringPath);
-            paths.AddRange(migration.Paths);
-            var expected = CaptureExpectedEditorFileStates(paths, migration.ExpectedStates);
-            ModDocumentPersistence.Execute([powerFile], paths, expected, () =>
+                GameIdentifierKind.Ability, renames, bindingModPath: _modFilePath, discovery: discovery);
+            var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [powerFile.Path] = doc };
+            foreach (var path in migration.Paths)
+                if (migration.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+            var deletionChecks = new List<ModDeletionInspection>();
+            foreach (var entry in deleted)
+                if (!await EnsureIdentifierCanBeDeletedAsync(GameIdentifierKind.Ability, entry.Key, "Ability", proposed,
+                        captureInspection: deletionChecks.Add)) return;
+            var cleanup = PrepareAbilityStringSave(powerFile, edits, deleted.Select(entry => entry.Value.Before), null, migration);
+            await PersistAbilityChangesAsync(powerFile, cleanup, stringsState, migration, deletionChecks);
+            foreach (var entry in deleted) _abilityPowerCatalog.Remove(entry.Key);
+            foreach (var edit in edits)
             {
-                SaveAbilityXmlDocument(doc, powersPath);
-                if (stringsChanged && stringEntries != null)
-                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities, updateSession: false);
-                migration.Save(SaveXmlDocumentAtomic);
-            });
-            if (stringsChanged && stringEntries != null)
-                AdoptSavedModStringEntries(stringEntries);
-            AdoptGameIdentifierReferenceMigration(migration);
-            foreach (var rename in result.Renames)
-            {
-                if (_abilityPowerCatalog.Remove(rename.OldName, out var cached))
-                {
-                    cached.SetAttributeValue("name", rename.NewName);
-                    _abilityPowerCatalog[rename.NewName] = cached;
-                }
-                RenamePendingAbilityDraftReferences(rename.OldName, rename.NewName);
+                var oldName = GetAbilityElementName(edit.Before);
+                var newName = GetAbilityElementName(edit.After);
+                _abilityPowerCatalog.Remove(oldName);
+                _abilityPowerCatalog[newName] = new XElement(edit.After);
+                RenamePendingAbilityDraftReferences(oldName, newName);
             }
-            foreach (var deletedName in deletedNames)
-                _abilityPowerCatalog.Remove(deletedName);
-            if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName))
-                BuildEditorPanel(_currentUnitName, resetScroll: false);
-            _statusMessage.Text = "Ability changes saved.";
+            if (!_isDirty && !string.IsNullOrWhiteSpace(_currentUnitName)) BuildEditorPanel(_currentUnitName, resetScroll: false);
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
         }
         catch (Exception ex)
         {
-            var prompt = new Prompt(PromptType.Error, "Unable to manage abilities", ex.Message);
-            await prompt.ShowDialog(this);
+            await new Prompt(PromptType.Error, "Unable to manage abilities", ex.Message).ShowDialog(this);
         }
     }
 
@@ -37836,7 +38194,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 name,
                 IsBuiltIn: !customNames.Contains(name),
                 IsModifiedBuiltIn: customNames.Contains(name) && builtInNames.Contains(name),
-                UsageCount: usageCounts.GetValueOrDefault(name)))
+                UsageCount: usageCounts.GetValueOrDefault(name),
+                Source: customNames.Contains(name) ? ManagedTacticsSource.Resolve(GetModTacticsDirectory()!, name) : null))
             .ToList();
 
         var window = new TacticsManagerWindow(
@@ -37850,17 +38209,45 @@ public partial class ProtoEditorWindow : SimpleWindow
         await window.ShowDialog(this);
     }
 
+    private async Task<bool> CommitPendingEntityDraftsAsync()
+    {
+        if (_technologyView?.IsDirty == true && !await _technologyView.CommitCurrentTechnologyAsync())
+            return false;
+        if (_technologyView?.HasXmlEditingSession == true && !await _technologyView.PrepareTechnologyXmlForSaveAsync())
+            return false;
+        if (_majorGodView?.IsDirty == true && !await _majorGodView.CommitCurrentMajorGodAsync())
+            return false;
+        if (_majorGodView?.HasXmlEditingSession == true && !await _majorGodView.PrepareMajorGodXmlForSaveAsync())
+            return false;
+        if (_powerView?.HasXmlEditingSession == true && !await _powerView.PreparePowerXmlForSaveAsync())
+            return false;
+        return _powerView?.IsDirty != true || await _powerView.CommitCurrentPowerAsync();
+    }
+
     private async Task<bool> SavePendingChangesBeforeImmediateManagerAsync()
     {
+        using var feedback = HasPendingSaveEdits() ? _saveFeedback.BeginSave() : null;
+        // Materialize every editor's pending references before any deletion can
+        // commit, including controls in the currently selected editor.
+        if (_isDirty && !await CaptureCurrentUnitDraftAsync())
+            return false;
+        if (!await CommitPendingEntityDraftsAsync())
+            return false;
+        // Save before Technology/Unit renames can migrate and reload this document.
+        // This also covers a Major God draft held by an inactive or pinned tab.
+        if (_majorGodView?.IsDirty == true)
+        {
+            if (!await _majorGodView.SaveAsync())
+                return false;
+            RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
+        }
         if (_technologyView?.IsDirty == true)
         {
             if (!await _technologyView.SaveAsync())
                 return false;
             _powerView?.AcknowledgeStringFileSavedByEditor();
+            RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
         }
-        if (_powerView?.IsDirty == true && !await _powerView.CommitCurrentPowerAsync())
-            return false;
-
         if (_isDirty)
         {
             await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
@@ -37869,18 +38256,155 @@ public partial class ProtoEditorWindow : SimpleWindow
             _powerView?.AcknowledgePowerFileSavedByEditor();
         }
 
-        return _powerView?.IsDirty != true || await _powerView.SaveAsync();
+        if (_powerView?.IsDirty == true)
+        {
+            if (!await _powerView.SaveAsync())
+                return false;
+            RefreshSavedDocumentSnapshots(EditorEntityKind.Powers);
+        }
+        feedback?.Complete(HasPendingSaveEdits());
+        return true;
     }
 
-    private Task<bool> ValidateManagedTacticsDeletionAsync(Window owner, string tacticsName)
+    private async Task<bool> ConfirmPendingChangesBeforeImmediateDeletionAsync()
     {
+        if (!_isDirty && _technologyView?.IsDirty != true &&
+            _majorGodView?.IsDirty != true && _powerView?.IsDirty != true)
+            return true;
+
+        var prompt = new Prompt(PromptType.Confirm, "Save changes before deletion",
+            "There are unsaved changes. Save them before continuing to the deletion confirmation? " +
+            "If a later save fails, earlier successful saves remain saved; deletion will not proceed.",
+            confirmButtonText: "Save changes and continue", actionRole: PromptActionRole.Positive);
+        await prompt.ShowDialog(this);
+        return prompt.Confirmed && await SavePendingChangesBeforeImmediateManagerAsync();
+    }
+
+    private async Task DeleteEntityImmediatelyAsync(EditorEntityKind kind)
+    {
+        if (_isUnitSaveInProgress) return;
+        string? CurrentName() => kind switch
+        {
+            EditorEntityKind.Technologies => _technologyView?.CurrentTechnologyName,
+            EditorEntityKind.Powers => _powerView?.CurrentPowerName,
+            EditorEntityKind.MajorGods => _majorGodView?.CurrentMajorGodName,
+            _ => null
+        };
+        var editable = kind switch
+        {
+            EditorEntityKind.Technologies => _technologyView?.IsModifiedMode == true,
+            EditorEntityKind.Powers => _powerView?.IsModifiedMode == true,
+            EditorEntityKind.MajorGods => _majorGodView?.IsModifiedMode == true,
+            _ => false
+        };
+        var name = CurrentName();
+        if (!editable || string.IsNullOrWhiteSpace(name)) return;
+        var targetTab = _openDocumentTabs.FirstOrDefault(tab => tab.EntityKind == kind && tab.IsModified &&
+            string.Equals(tab.EntityName, name, StringComparison.OrdinalIgnoreCase));
+        var label = kind switch
+        {
+            EditorEntityKind.Technologies => "Technology",
+            EditorEntityKind.Powers => "Power",
+            _ => "Major God"
+        };
+        var saved = kind switch
+        {
+            EditorEntityKind.Technologies => _technologyView!.IsCurrentEntrySaved,
+            EditorEntityKind.Powers => _powerView!.IsCurrentEntrySaved,
+            _ => _majorGodView!.IsCurrentEntrySaved
+        };
+        var originalPath = _modFilePath;
+        _isUnitSaveInProgress = true;
+        _saveButton.IsEnabled = false;
+        try
+        {
+            if (!saved)
+            {
+                var discard = new Prompt(PromptType.Confirm, $"Discard new {label}",
+                    $"Discard the never-saved {label} '{name}'? Other unsaved changes will be kept.",
+                    confirmButtonText: $"Discard {label}", actionRole: PromptActionRole.Destructive).FitToContent(520, 240);
+                await discard.ShowDialog(this);
+                if (!discard.Confirmed) return;
+                if (kind == EditorEntityKind.Technologies) _technologyView!.DiscardTechnologyChanges(name, null);
+                else if (kind == EditorEntityKind.Powers) _powerView!.DiscardPowerChanges(name, null);
+                else _majorGodView!.DiscardMajorGodChanges(name, null);
+            }
+            else
+            {
+                if (!await ConfirmPendingChangesBeforeImmediateDeletionAsync()) return;
+                if (!string.Equals(originalPath, _modFilePath, StringComparison.OrdinalIgnoreCase)) return;
+                // A successful save can rebind a browser and clear its selection.
+                // Resolve the saved target from the tracked tab/identity as well.
+                name = CurrentName() ?? targetTab?.EntityName ?? name;
+                if (string.IsNullOrWhiteSpace(name)) return;
+                if (CurrentName() == null)
+                {
+                    if (kind == EditorEntityKind.Technologies && _technologyView!.LoadSavedTechnologyElement(name) != null)
+                        _technologyView.SelectTechnology(name);
+                    else if (kind == EditorEntityKind.Powers && _powerView!.LoadSavedPowerElement(name) != null)
+                        _powerView.SelectPower(name);
+                    else if (kind == EditorEntityKind.MajorGods && _majorGodView!.LoadSavedMajorGodElement(name) != null)
+                        _majorGodView.SelectMajorGod(name);
+                }
+                if (!string.Equals(CurrentName(), name, StringComparison.OrdinalIgnoreCase)) return;
+                if (_activeEntityKind == kind)
+                    _technologyHost.Content = kind switch
+                    {
+                        EditorEntityKind.Technologies => _technologyView,
+                        EditorEntityKind.Powers => _powerView,
+                        _ => _majorGodView
+                    };
+                if (kind == EditorEntityKind.Technologies) await _technologyView!.DeleteAndSaveCurrentTechnologyAsync(this);
+                else if (kind == EditorEntityKind.Powers) await _powerView!.DeleteAndSaveCurrentPowerAsync();
+                else await _majorGodView!.DeleteAndSaveCurrentMajorGodAsync(this);
+                var remains = kind switch
+                {
+                    EditorEntityKind.Technologies => _technologyView!.GetTechnologyNames(true).Contains(name, StringComparer.OrdinalIgnoreCase),
+                    EditorEntityKind.Powers => _powerView!.GetPowerNames(true).Contains(name, StringComparer.OrdinalIgnoreCase),
+                    _ => _majorGodView!.GetMajorGodNames(true).Contains(name, StringComparer.OrdinalIgnoreCase)
+                };
+                if (remains) return;
+            }
+            RefreshSavedDocumentSnapshots(kind);
+            RemoveDeletedDocumentTabs(kind, name);
+            InvalidateSuggestionCaches();
+            RefreshUnitList();
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, $"Unable to delete {label}",
+                $"The {label} was not deleted. " + exception.Message)
+                { Width = 680, Height = 320 }.ShowDialog(this);
+        }
+        finally
+        {
+            _isUnitSaveInProgress = false;
+            _saveButton.IsEnabled = true;
+        }
+    }
+
+    private async Task<bool> ValidateManagedTacticsDeletionAsync(Window owner, string tacticsName)
+    {
+        if (!await EnsureManagedTacticsEditableAsync(owner, tacticsName)) return false;
         var path = GetCustomTacticsPath(tacticsName);
-        return EnsureIdentifierCanBeDeletedAsync(
-            GameIdentifierKind.Tactics,
-            tacticsName,
-            "Tactics file",
-            excludedPaths: path == null ? null : [path],
-            owner: owner);
+        return await EnsureIdentifierCanBeDeletedAsync(
+            GameIdentifierKind.Tactics, tacticsName, "Tactics file",
+            excludedPaths: path == null ? null : [path], owner: owner);
+    }
+
+    private async Task<bool> EnsureManagedTacticsEditableAsync(Window owner, string name)
+    {
+        try
+        {
+            var directory = GetModTacticsDirectory() ?? throw new InvalidOperationException("No mod is loaded.");
+            ManagedTacticsSource.Resolve(directory, name).RequireEditable();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Tactics is read-only", exception.Message).ShowDialog(owner);
+            return false;
+        }
     }
 
     private async Task<bool> CreateManagedTacticsFileAsync(string tacticsName)
@@ -37891,23 +38415,16 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
-            if (File.Exists(path))
-            {
-                var existingPrompt = new Prompt(
-                    PromptType.Error,
-                    "Tactics already exists",
-                    $"A tactics file named '{tacticsName}' already exists.");
-                await existingPrompt.ShowDialog(this);
-                return false;
-            }
+            var target = ManagedTacticsSource.Resolve(GetModTacticsDirectory()!, tacticsName);
+            target.RequireMissing();
 
             var document = XDocument.Parse(NewTacticsTemplate, LoadOptions.PreserveWhitespace);
             var prepared = new PreparedModXmlDocument(
                 Path.GetFullPath(path),
                 ModXmlDocumentKind.Tactics,
                 document,
-                FileIntegrityTransaction.CaptureState(path));
-            ModDocumentPersistence.Execute([prepared], null, null,
+                target.ExpectedStates[Path.GetFullPath(path)]);
+            ModDocumentPersistence.Execute([prepared], null, target.ExpectedStates,
                 () => SaveTacticsDocumentAtomic(document, path));
             _tacticsActionCache.Clear();
             _tacticsLoadDiagnostics.Clear();
@@ -37931,38 +38448,21 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         try
         {
-            if (File.Exists(targetPath))
-            {
-                var existingPrompt = new Prompt(
-                    PromptType.Error,
-                    "Tactics already exists",
-                    $"A tactics file named '{newName}' already exists.");
-                await existingPrompt.ShowDialog(this);
-                return false;
-            }
+            var target = ManagedTacticsSource.Resolve(GetModTacticsDirectory()!, newName);
+            target.RequireMissing();
 
             if (!sourceIsBuiltIn)
             {
-                var sourcePath = GetCustomTacticsPath(sourceName);
-                if (sourcePath == null || !File.Exists(sourcePath))
+                var source = ManagedTacticsSource.Resolve(GetModTacticsDirectory()!, sourceName);
+                var document = source.Load();
+                var sourcePath = source.Paths.Single();
+                var states = target.ExpectedStates.Concat(source.ExpectedStates)
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+                FileIntegrityTransaction.Execute([targetPath], states, () =>
                 {
-                    var missingPrompt = new Prompt(
-                        PromptType.Error,
-                        "Tactics file not found",
-                        $"Could not find '{sourceName}' in the active mod tactics folder.");
-                    await missingPrompt.ShowDialog(this);
-                    return false;
-                }
-
-                var loadedSource = ModXmlDocumentSafety.LoadExisting(sourcePath, ModXmlDocumentKind.Tactics);
-                FileIntegrityTransaction.Execute(
-                    [sourcePath, targetPath],
-                    new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        [Path.GetFullPath(sourcePath)] = loadedSource.FileState,
-                        [Path.GetFullPath(targetPath)] = FileIntegrityTransaction.CaptureState(targetPath)
-                    },
-                    () => CopyTacticsFileAtomic(sourcePath, targetPath));
+                    if (source.IsCompiled) SaveTacticsDocumentAtomic(document, targetPath);
+                    else CopyTacticsFileAtomic(sourcePath, targetPath);
+                });
             }
             else
             {
@@ -37981,8 +38481,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Path.GetFullPath(targetPath),
                     ModXmlDocumentKind.Tactics,
                     document,
-                    FileIntegrityTransaction.CaptureState(targetPath));
-                ModDocumentPersistence.Execute([prepared], null, null,
+                    target.ExpectedStates[Path.GetFullPath(targetPath)]);
+                ModDocumentPersistence.Execute([prepared], null, target.ExpectedStates,
                     () => SaveTacticsDocumentAtomic(document, targetPath));
             }
 
@@ -38002,17 +38502,15 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task<bool> RenameManagedTacticsFileAsync(string oldName, string newName)
     {
+        if (!await EnsureManagedTacticsEditableAsync(this, oldName)) return false;
         var result = new TacticsManagerResult();
         result.Renames.Add(new TacticsRenameOperation(oldName, newName));
-        await ApplyTacticsManagerChangesAsync(result);
-
-        var oldPath = GetCustomTacticsPath(oldName);
-        var newPath = GetCustomTacticsPath(newName);
-        return newPath != null && File.Exists(newPath) && (oldPath == null || !File.Exists(oldPath));
+        return await ApplyTacticsManagerChangesAsync(result);
     }
 
     private async Task<bool> DeleteManagedTacticsFileAsync(string tacticsName)
     {
+        if (!await EnsureManagedTacticsEditableAsync(this, tacticsName)) return false;
         var candidatePath = GetCustomTacticsPath(tacticsName);
         if (!await EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.Tactics,
@@ -38022,10 +38520,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         var result = new TacticsManagerResult();
         result.DeletedNames.Add(tacticsName);
-        await ApplyTacticsManagerChangesAsync(result);
-
-        var path = GetCustomTacticsPath(tacticsName);
-        return path == null || !File.Exists(path);
+        return await ApplyTacticsManagerChangesAsync(result);
     }
 
     private async Task OpenManagedTacticsEditorAsync(Window owner, string tacticsName, bool isBuiltIn)
@@ -38033,22 +38528,21 @@ public partial class ProtoEditorWindow : SimpleWindow
         XDocument document;
         string? customPath = null;
         FileIntegrityTransaction.FileState? expectedCustomState = null;
+        ManagedTacticsSource? source = null;
+        var readOnly = isBuiltIn;
 
         if (!isBuiltIn)
         {
-            customPath = GetCustomTacticsPath(tacticsName);
-            if (customPath == null || !File.Exists(customPath))
-            {
-                var prompt = new Prompt(PromptType.Error, "Tactics file not found", $"Could not find '{tacticsName}' in the active mod tactics folder.");
-                await prompt.ShowDialog(this);
-                return;
-            }
-
             try
             {
-                var loaded = ModXmlDocumentSafety.LoadExisting(customPath, ModXmlDocumentKind.Tactics);
-                document = loaded.Document;
-                expectedCustomState = loaded.FileState;
+                source = ManagedTacticsSource.Resolve(GetModTacticsDirectory()!, tacticsName);
+                document = source.Load(allowAmbiguousView: true);
+                readOnly = !source.CanEdit;
+                if (!readOnly)
+                {
+                    customPath = source.RequireEditable();
+                    expectedCustomState = source.ExpectedStates[customPath];
+                }
             }
             catch (Exception exception)
             {
@@ -38078,7 +38572,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var editor = new TacticsEditorWindow();
         await editor.InitializeTacticsActionEditorAsync(
             tacticsName,
-            isBuiltIn,
+            readOnly,
             document,
             customPath == null
                 ? null
@@ -38130,7 +38624,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                         ModXmlDocumentKind.Tactics,
                         updatedDocument,
                         expectedCustomState);
-                    ModDocumentPersistence.Execute([prepared], null, null,
+                    ModDocumentPersistence.Execute([prepared], null, source!.ExpectedStates
+                        .ToDictionary(pair => pair.Key, pair => pair.Key.Equals(customPath, StringComparison.OrdinalIgnoreCase)
+                            ? expectedCustomState! : pair.Value, StringComparer.OrdinalIgnoreCase),
                         () => SaveTacticsDocumentAtomic(updatedDocument, customPath));
                     expectedCustomState = FileIntegrityTransaction.CaptureState(customPath);
                     _tacticsActionCache.Clear();
@@ -38145,7 +38641,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
 
                     return TacticsDocumentSaveOutcome.Saved;
-                });
+                },
+            unitNamesProvider: GetAvailableTrainUnitNames,
+            unitTypeNamesProvider: GetKnownUnitTypeNames,
+            gameDataOwner: this);
         await editor.ShowDialog(owner);
     }
 
@@ -38341,34 +38840,42 @@ public partial class ProtoEditorWindow : SimpleWindow
         return new Dictionary<string, ProtoAction>(StringComparer.OrdinalIgnoreCase);
     }
 
-    private async Task ApplyTacticsManagerChangesAsync(TacticsManagerResult result)
+    private async Task<bool> ApplyTacticsManagerChangesAsync(TacticsManagerResult result)
     {
         if (_modXmlRoot == null || _modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
-            return;
+            return false;
         if (!await ReloadExternallyChangedUnitFilesAsync())
-            return;
+            return false;
 
         var tacticsDirectory = GetModTacticsDirectory();
         if (tacticsDirectory == null)
-            return;
+            return false;
         Directory.CreateDirectory(tacticsDirectory);
 
         try
         {
+            var deletionChecks = new List<ModDeletionInspection>();
+            var preparedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
             foreach (var deletedName in result.DeletedNames)
             {
-                var deletedPath = GetCustomTacticsPath(deletedName);
+                var source = ManagedTacticsSource.Resolve(tacticsDirectory, deletedName);
+                var deletedPath = source.RequireEditable();
+                foreach (var state in source.ExpectedStates) preparedStates[state.Key] = state.Value;
+                // Excluded from self-reference scanning, but still guard the
+                // exact file the user agreed to delete against replacement.
+                if (deletedPath != null)
+                    preparedStates[Path.GetFullPath(deletedPath)] = FileIntegrityTransaction.CaptureState(deletedPath);
                 if (!await EnsureIdentifierCanBeDeletedAsync(
                         GameIdentifierKind.Tactics,
                         deletedName,
                         "Tactics file",
-                        excludedPaths: deletedPath == null ? null : [deletedPath]))
-                    return;
+                        excludedPaths: deletedPath == null ? null : [deletedPath],
+                        captureInspection: deletionChecks.Add))
+                    return false;
             }
             var candidateProtoDocument = new XDocument(_modXmlDoc);
             var techtreePath = GetCurrentModGameplayFilePath("techtree_mods.xml");
             XDocument? candidateTechtreeDocument = null;
-            var preparedStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrWhiteSpace(techtreePath) && File.Exists(techtreePath))
             {
                 var stateBeforeRead = FileIntegrityTransaction.CaptureState(techtreePath);
@@ -38383,12 +38890,13 @@ public partial class ProtoEditorWindow : SimpleWindow
             var preparedRenames = new List<(string OldPath, string NewPath)>();
             foreach (var rename in result.Renames)
             {
-                var oldPath = GetCustomTacticsPath(rename.OldName);
-                var newPath = GetCustomTacticsPath(rename.NewName);
-                if (oldPath == null || newPath == null || !File.Exists(oldPath))
-                    continue;
-                if (File.Exists(newPath))
-                    throw new IOException($"A tactics file named '{rename.NewName}' already exists.");
+                var source = ManagedTacticsSource.Resolve(tacticsDirectory, rename.OldName);
+                var target = ManagedTacticsSource.Resolve(tacticsDirectory, rename.NewName);
+                var oldPath = source.RequireEditable();
+                target.RequireMissing();
+                var newPath = target.XmlPath;
+                foreach (var state in source.ExpectedStates.Concat(target.ExpectedStates))
+                    preparedStates[state.Key] = state.Value;
 
                 preparedRenames.Add((oldPath, newPath));
                 transactionPaths.Add(oldPath);
@@ -38411,15 +38919,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             var tacticsOperations = result.Renames.Select(rename =>
                     new KeyValuePair<string, string>(rename.OldName, rename.NewName))
                 .ToList();
+            var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
             var referenceMigration = GameIdentifierReferenceMigrationPlan.Prepare(
-                GetGameIdentifierReferenceFiles().Where(file =>
+                referenceFiles.Where(file =>
                     !excludedRenamePaths.Contains(Path.GetFullPath(file.Path))),
                 GameIdentifierKind.Tactics,
-                tacticsOperations);
+                tacticsOperations, discovery: discovery);
             transactionPaths.AddRange(referenceMigration.Paths);
             foreach (var state in referenceMigration.ExpectedStates)
-                preparedStates[state.Key] = state.Value;
+                preparedStates.TryAdd(state.Key, state.Value);
 
+            foreach (var name in result.CreatedNames)
+            {
+                var target = ManagedTacticsSource.Resolve(tacticsDirectory, name);
+                target.RequireMissing();
+                foreach (var state in target.ExpectedStates) preparedStates[state.Key] = state.Value;
+            }
             var pathsToCreate = result.CreatedNames
                 .Select(GetCustomTacticsPath)
                 .Where(path => path != null && !File.Exists(path))
@@ -38440,6 +38955,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 CaptureExpectedEditorFileStates(transactionPaths, preparedStates),
                 () =>
                 {
+                    referenceMigration.ValidateDiscovery();
+                    foreach (var inspection in deletionChecks)
+                        inspection.ValidateReadDependencies();
                     foreach (var (oldPath, newPath) in preparedRenames)
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(newPath)!);
@@ -38480,15 +38998,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             _fileLabel.Text = _modFilePath;
             if (_isDirty)
                 _fileLabel.Text += " *";
-            _statusMessage.Text = "Tactics changes saved.";
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
 
             if (!string.IsNullOrWhiteSpace(_currentUnitName))
                 BuildEditorPanel(_currentUnitName, resetScroll: false);
+            return true;
         }
         catch (Exception ex)
         {
             var prompt = new Prompt(PromptType.Error, "Unable to manage tactics", ex.Message);
             await prompt.ShowDialog(this);
+            return false;
         }
     }
 
@@ -38978,6 +39498,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ClearEditorPanels()
     {
+        _unitXmlController.Bind(null, false);
         _statsEditorPanel.Children.Clear();
         _actionsEditorPanel.Children.Clear();
         _commandsEditorPanel.Children.Clear();
@@ -38991,6 +39512,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void BuildEditorPanel(string unitName, bool resetScroll = true)
     {
+        EditorValidationNavigation.Clear(this);
         // A newly selected unit should always show the persisted XML first.
         // This avoids projecting a form while its asynchronous fields are still
         // being populated. MarkDirty switches back to the live form projection.
@@ -39045,6 +39567,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         _optionalCommandRows.Clear();
         _protoActionWidgets.Clear();
         _buildLimitRows.Clear();
+        _dynamicBuildLimitTypes.Clear();
+        _resourceRowEditors.Clear();
+        _removedResourceModules.Clear();
+        _resourceRespawnRatesSource = null;
         _resourceConversionRows.Clear();
         _dependentUnitRows.Clear();
         _spawnRows.Clear();
@@ -39132,6 +39658,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         _suppressUnitNameChange = false;
         _unitNameBox.IsReadOnly = _isReadOnly;
         _unitNameBox.IsEnabled = !_isReadOnly;
+        ConfigureUnitField(_unitNameBox, EditorFieldWidthRole.SingleLineText);
         _fieldControls[ProtoUnitNameFieldKey] = _unitNameBox;
 
         AddSectionHeader("Properties");
@@ -39147,6 +39674,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             VerticalAlignment = VerticalAlignment.Top
         };
         int gridRow = 0;
+        int identityRowCount = 0;
 
         foreach (var field in ProtoConstants.SimpleFields)
         {
@@ -39202,6 +39730,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     if (!_isPopulating && await CheckStartLocalMod()) MarkDirty();
                 };
+                ConfigureUnitField(displayNameTb, EditorFieldWidthRole.SingleLineText);
                 displayRow.Children.Add(displayNameTb);
                 _fieldControls["displaynameid"] = displayNameTb;
 
@@ -39231,6 +39760,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 0, 4)
                 });
+                ConfigureUnitField(editorNameTb, EditorFieldWidthRole.SingleLineText);
                 editorRow.Children.Add(editorNameTb);
                 Grid.SetColumn(editorRow, 1);
                 Grid.SetRow(editorRow, gridRow);
@@ -39262,6 +39792,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (field.Tag.Equals("obstructionradiusx", StringComparison.OrdinalIgnoreCase))
             {
+                identityRowCount = gridRow;
                 propertiesGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
                 var obstructionLabel = new TextBlock
@@ -39360,6 +39891,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(turnRateTb, 5);
                 obstructionGrid.Children.Add(turnRateTb);
 
+                EditorFormLayout.WrapGridColumns(obstructionGrid, [0, 1], [2, 3], [4, 5]);
                 Grid.SetColumn(obstructionGrid, 1);
                 Grid.SetRow(obstructionGrid, gridRow);
                 propertiesGrid.Children.Add(obstructionGrid);
@@ -39423,7 +39955,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var grid = new Grid
                     {
                         ColumnDefinitions = new ColumnDefinitions($"Auto, {width}"),
-                        Margin = new Thickness(0, 0, 4, 0)
+                        Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, 0)
                     };
 
                     var textLabel = new TextBlock
@@ -39518,25 +40050,23 @@ public partial class ProtoEditorWindow : SimpleWindow
                         if (_isReadOnly)
                             return;
 
-                        var removeButton = new Button
-                        {
-                            Classes = { "remove-button" },
-                            Margin = new Thickness(2, 4, 8, 4)
-                        };
+                        var removeButton = EditorRemoveButtons.Field(new Thickness(EditorFormLayout.CrossGap, 4, 0, 4));
+                        modifiersHost.Children.Remove(fieldGrid);
+                        var pair = EditorFormLayout.WithCross(fieldGrid, removeButton);
+                        pair.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, 0);
                         removeButton.Click += async (_, _) =>
                         {
                             if (!await CheckStartLocalMod())
                                 return;
                             _fieldControls.Remove(modifier.Key);
-                            modifiersHost.Children.Remove(fieldGrid);
-                            modifiersHost.Children.Remove(removeButton);
+                            modifiersHost.Children.Remove(pair);
                             ShowModifierAddButton((modifier.Key, modifier.Label, "", modifier.DefaultValue));
                             MarkDirty();
                         };
                         if (insertAtStart)
-                            modifiersHost.Children.Insert(1, removeButton);
+                            modifiersHost.Children.Insert(0, pair);
                         else
-                            modifiersHost.Children.Add(removeButton);
+                            modifiersHost.Children.Add(pair);
                     }
 
                     void ShowModifierChoices()
@@ -39598,10 +40128,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 }
 
-                var maxHitPointsGrid = CreateInlineField("Max", 120, maxHitPointsInitial, out var maxHitPointsTb);
+                var maxHitPointsGrid = CreateInlineField("Max", EditorFormLayout.NumericWidth, maxHitPointsInitial, out var maxHitPointsTb);
                 hitPointsGrid.Children.Add(maxHitPointsGrid);
 
-                var initialHitPointsGrid = CreateInlineField("Initial", 120, initialHitPointsInitial, out var initialHitPointsTb);
+                var initialHitPointsGrid = CreateInlineField("Initial", EditorFormLayout.NumericWidth, initialHitPointsInitial, out var initialHitPointsTb);
                 hitPointsGrid.Children.Add(initialHitPointsGrid);
 
                 Button? addRegenButton = null;
@@ -39790,12 +40320,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                     if (string.IsNullOrWhiteSpace(initialShieldInitial))
                         initialShieldInitial = maxShieldInitial;
 
-                    var maxShieldGrid = CreateInlineField("Max", 120, maxShieldInitial, out var maxShieldTb);
+                    var maxShieldGrid = CreateInlineField("Max", EditorFormLayout.NumericWidth, maxShieldInitial, out var maxShieldTb);
                     shieldGrid.Children.Add(maxShieldGrid);
                     shieldControls.Add(maxShieldGrid);
                     _fieldControls["maxshieldpoints"] = maxShieldTb;
 
-                    var initialShieldGrid = CreateInlineField("Initial", 120, initialShieldInitial, out var initialShieldTb);
+                    var initialShieldGrid = CreateInlineField("Initial", EditorFormLayout.NumericWidth, initialShieldInitial, out var initialShieldTb);
                     shieldGrid.Children.Add(initialShieldGrid);
                     shieldControls.Add(initialShieldGrid);
                     _fieldControls["initialshieldpoints"] = initialShieldTb;
@@ -39949,8 +40479,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                             }
                             MarkDirty();
                         };
-                        shieldGrid.Children.Add(removeButton);
-                        shieldControls.Add(removeButton);
+                        var initialIndex = shieldGrid.Children.IndexOf(initialShieldGrid);
+                        shieldGrid.Children.Remove(initialShieldGrid);
+                        initialShieldGrid.Margin = new Thickness(0);
+                        removeButton.Margin = new Thickness(EditorFormLayout.CrossGap, 4, 0, 4);
+                        removeButton.VerticalAlignment = VerticalAlignment.Center;
+                        var shieldPair = EditorFormLayout.WithCross(initialShieldGrid, removeButton);
+                        shieldPair.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, 0);
+                        shieldGrid.Children.Insert(initialIndex, shieldPair);
+                        shieldControls.Remove(initialShieldGrid);
+                        shieldControls.Add(shieldPair);
                     }
                 }
 
@@ -40016,7 +40554,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 0, 4)
                 };
-                EditorNumericFieldStyle.ConfigureNumericTextBox(populationTb);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(populationTb, EditorFieldWidthRole.Numeric);
+                ConfigureUnitField(populationTb, EditorFieldWidthRole.Numeric);
                 populationTb.AddHandler(InputElement.TextInputEvent, (_, args) =>
                 {
                     if (string.IsNullOrWhiteSpace(args.Text) || !args.Text.All(char.IsDigit)) args.Handled = true;
@@ -40034,6 +40573,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(row, 1);
                 Grid.SetRow(row, gridRow);
                 propertiesGrid.Children.Add(row);
+                EditorFormLayout.WrapGridColumns(row, [0], [1, 2]);
                 _fieldControls[pointsTag] = pointsTb;
                 pointsRowLabel = rowLabel;
                 pointsEditor = pointsTb;
@@ -40084,6 +40624,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IsEnabled = !_isReadOnly,
                         Margin = new Thickness(0, 4, 12, 4)
                     };
+                    ConfigureUnitField(combo, EditorFieldWidthRole.LongEnum);
                     combo.SelectionChanged += async (_, _) =>
                     {
                         if (!_isPopulating && await CheckStartLocalMod()) MarkDirty();
@@ -40113,7 +40654,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                         IsEnabled = !_isReadOnly,
                         Margin = new Thickness(0, 4, 0, 4)
                     };
-                    EditorNumericFieldStyle.ConfigureNumericTextBox(weightTb);
+                    EditorNumericFieldStyle.ConfigureNumericTextBox(weightTb, EditorFieldWidthRole.Numeric);
+                    ConfigureUnitField(weightTb, EditorFieldWidthRole.Numeric);
                     weightTb.AddHandler(InputElement.TextInputEvent, (_, args) =>
                     {
                         if (string.IsNullOrWhiteSpace(args.Text) || !args.Text.All(char.IsDigit)) args.Handled = true;
@@ -40130,6 +40672,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     _fieldControls["weightclass"] = weightTb;
                 }
 
+                EditorFormLayout.WrapGridColumns(behaviorRow, [0], [1, 2], [3, 4]);
                 Grid.SetColumn(behaviorRow, 1);
                 Grid.SetRow(behaviorRow, gridRow);
                 propertiesGrid.Children.Add(behaviorRow);
@@ -40179,6 +40722,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 16, 4)
                 };
+                ConfigureUnitField(movementTypeCb, EditorFieldWidthRole.ShortEnum);
                 movementTypeCb.SelectionChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -40290,6 +40834,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     MarkDirty();
                 };
 
+                EditorFormLayout.WrapGridColumns(movementGrid, [0], [1, 2], [3, 4, 5]);
                 Grid.SetColumn(movementGrid, 1);
                 Grid.SetRow(movementGrid, gridRow);
                 propertiesGrid.Children.Add(movementGrid);
@@ -40353,6 +40898,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var allCulturePathValues = suggestionList
                         .Concat(fieldEntries.Select(entry => entry.Value));
                     var editor = CreateAssetPathEditor(field.Tag, value, GetAssetPathSuggestions(field.Tag, allCulturePathValues));
+                    ConfigureUnitField(editor, EditorFieldWidthRole.AssetPath);
                     editor.IsEnabled = !_isReadOnly;
                     editor.Margin = margin;
                     if (field.Tag.Equals("animfile", StringComparison.OrdinalIgnoreCase))
@@ -40360,24 +40906,26 @@ public partial class ProtoEditorWindow : SimpleWindow
                     return editor;
                 }
 
-                ComboBox CreateDefaultCultureSelector() => new()
+                ComboBox CreateDefaultCultureSelector() => ConfigureUnitField(new ComboBox
                 {
                     ItemsSource = new[] { "Default" },
                     SelectedItem = "Default",
                     Width = 100,
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 4, 8, 4)
-                };
+                }, EditorFieldWidthRole.ShortEnum);
 
                 void ConfigureDefaultRow()
                 {
                     if (defaultAcb == null || defaultRow == null)
                         return;
+                    if (defaultAcb.Parent is Panel previousFieldHost) previousFieldHost.Children.Remove(defaultAcb);
+                    if (btnAddCulture?.Parent is Panel previousButtonHost) previousButtonHost.Children.Remove(btnAddCulture);
                     defaultRow.Children.Clear();
                     defaultRow.ColumnDefinitions.Clear();
                     if (defaultRowHasSelector)
                     {
-                        defaultRow.ColumnDefinitions.Add(new ColumnDefinition(100, GridUnitType.Pixel));
+                        defaultRow.ColumnDefinitions.Add(new ColumnDefinition(108, GridUnitType.Pixel));
                         defaultRow.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
                         defaultRow.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
                         defaultRow.Children.Add(CreateDefaultCultureSelector());
@@ -40396,6 +40944,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Grid.SetColumn(btnAddCulture, defaultRowHasSelector ? 2 : 1);
                         defaultRow.Children.Add(btnAddCulture);
                     }
+                    defaultRow.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    if (defaultRowHasSelector) EditorFormLayout.WrapFlowingGridColumns(defaultRow, [0, 1], [2]);
+                    else EditorFormLayout.WrapFlowingGridColumns(defaultRow, [0], [1]);
                 }
 
                 bool showDefaultRow = !_isReadOnly || defaultEntry != null || cultureEntries.Count == 0;
@@ -40414,7 +40965,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var rowGrid = new Grid
                     {
-                        ColumnDefinitions = new ColumnDefinitions("100, Auto, Auto"),
+                        ColumnDefinitions = new ColumnDefinitions("158, Auto, Auto"),
                         Margin = new Thickness(0, 0, 0, 0),
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
@@ -40430,6 +40981,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Width = 80,
                         Margin = new Thickness(0, 4, 8, 4)
                     };
+                    ConfigureUnitField(cultureCb, EditorFieldWidthRole.CompactReference);
                     cultureCb.SelectionChanged += async (s, e) =>
                     {
                         if (!_isPopulating)
@@ -40442,7 +40994,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Grid.SetColumn(cultureCb, 0);
                     rowGrid.Children.Add(cultureCb);
 
-                    var valueAcb = CreateValueEditor(value, new Thickness(0, 4, 8, 4));
+                    var valueAcb = CreateValueEditor(value, new Thickness(0, 4, 0, 4));
                     if (field.Tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
                         valueAcb.FullValueChanged += (_, _) => RefreshCultureIconPreview();
                     Grid.SetColumn(valueAcb, 1);
@@ -40462,7 +41014,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             Classes = { "remove-button" },
                             VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(2, 4, 0, 4)
+                            Margin = new Thickness(EditorFormLayout.CrossGap, 4, 0, 4)
                         };
                         btnDel.Click += async (s, e) =>
                         {
@@ -40648,10 +41200,10 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (field.Tag.Equals("rollovertextid", StringComparison.OrdinalIgnoreCase))
                 {
-                    tb.MinHeight = 54;
-                    tb.AcceptsReturn = true;
-                    tb.TextWrapping = TextWrapping.Wrap;
+                    EditorRolloverField.Configure(tb);
                 }
+                else if (field.Tag.Equals("shortrollovertextid", StringComparison.OrdinalIgnoreCase))
+                    ConfigureUnitField(tb, EditorFieldWidthRole.ShortRollover);
 
                 tb.TextChanged += async (s, e) =>
                 {
@@ -40668,25 +41220,69 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (AssetPathFieldTags.Contains(field.Tag))
             {
                 control = CreateAssetPathEditor(field.Tag, initialValue, GetAssetPathSuggestions(field.Tag));
+                ConfigureUnitField(control, EditorFieldWidthRole.AssetPath);
             }
             else if (field.Mode == FieldInputMode.Number && control is TextBox numericTextBox)
                 AttachDecimalBehavior(numericTextBox);
 
+            if (field.Tag is not ("rollovertextid" or "shortrollovertextid"))
+                ConfigureUnitField(control, field.Mode == FieldInputMode.Number ? EditorFieldWidthRole.Numeric :
+                    AssetPathFieldTags.Contains(field.Tag) ? EditorFieldWidthRole.AssetPath :
+                    control is ComboBox ? EditorFieldWidthRole.ShortEnum :
+                    field.Mode == FieldInputMode.Suggest ? EditorFieldWidthRole.Reference : EditorFieldWidthRole.SingleLineText);
             Grid.SetColumn(control, 1);
             Grid.SetRow(control, gridRow);
             propertiesGrid.Children.Add(control);
+            if (EditorRolloverField.IsLong(control))
+            {
+                var rolloverLabel = propertiesGrid.Children.OfType<TextBlock>().First(label => Grid.GetRow(label) == gridRow && Grid.GetColumn(label) == 0);
+                rolloverLabel.VerticalAlignment = VerticalAlignment.Top;
+                EditorRolloverField.Constrain((TextBox)control);
+            }
 
             _fieldControls[field.Tag] = control;
             gridRow++;
         }
 
-        var propertiesLayout = new Grid
+        // Only identity/assets share the portrait's compact width budget. The
+        // remaining stats need the full form width for their existing wrap groups.
+        var identityGrid = new Grid
         {
-            HorizontalAlignment = HorizontalAlignment.Left
+            ColumnDefinitions = new ColumnDefinitions($"{EditorFormLayout.LabelColumnWidth},*")
         };
-        propertiesLayout.Children.Add(propertiesGrid);
+        for (var row = 0; row < identityRowCount; row++)
+        {
+            var definition = propertiesGrid.RowDefinitions[0];
+            propertiesGrid.RowDefinitions.RemoveAt(0);
+            identityGrid.RowDefinitions.Add(definition);
+        }
+        foreach (var child in propertiesGrid.Children.ToArray())
+        {
+            var row = Grid.GetRow(child);
+            if (row < identityRowCount)
+            {
+                propertiesGrid.Children.Remove(child);
+                identityGrid.Children.Add(child);
+            }
+            else Grid.SetRow(child, row - identityRowCount);
+        }
+        identityGrid.SizeChanged += (_, _) =>
+        {
+            foreach (var control in identityGrid.GetLogicalDescendants().OfType<Control>())
+            {
+                if (!EditorFormLayout.TryGetWidthRole(control, out var role) ||
+                    role is not (EditorFieldWidthRole.SingleLineText or EditorFieldWidthRole.ShortRollover)) continue;
+                control.MinWidth = 0;
+                control.MaxWidth = Math.Min(EditorFormLayout.WidthFor(role), Math.Max(0,
+                    identityGrid.Bounds.Width - EditorFormLayout.LabelColumnWidth - control.Margin.Left - control.Margin.Right));
+            }
+        };
+        var propertiesLayout = new Grid();
+        propertiesLayout.Children.Add(identityGrid);
         propertiesLayout.Children.Add(iconPreview);
+        EditorRolloverField.ConfigureIdentity(propertiesLayout, identityGrid, iconPreview);
         _activeEditorPanel.Children.Add(propertiesLayout);
+        _activeEditorPanel.Children.Add(propertiesGrid);
 
         var structureEditorsContainer = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
         var structureAddButtonsRow = new WrapPanel { Orientation = Orientation.Horizontal };
@@ -40733,12 +41329,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         };
 
         List<ProtoBuildLimitEntry> ReadCurrentBuildLimitEntries()
-            => _buildLimitRows
-                .Select(row => new ProtoBuildLimitEntry
-                {
-                    Value = row.ValueAcb.Text?.Trim() ?? "",
-                    Weight = row.WeightTb?.Text?.Trim() ?? "",
-                })
+            => ReadBuildLimitEntries()
                 .Where(x => !string.IsNullOrWhiteSpace(x.Value) || !string.IsNullOrWhiteSpace(x.Weight))
                 .ToList();
 
@@ -40750,6 +41341,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             PlaceStructureAddButtonsAfter(buildLimitContainer);
             buildLimitContainer.Children.Clear();
             _buildLimitRows.Clear();
+            _dynamicBuildLimitTypes.Clear();
             _currentBuildLimitMode = initialMode;
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("150, 90, Auto, Auto") };
 
@@ -40799,6 +41391,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 Width = 180
             };
+            ConfigureUnitField(modeCb, EditorFieldWidthRole.LongEnum);
+            _fieldControls["buildlimit.mode"] = modeCb;
             modePanel.Children.Add(modeCb);
             Grid.SetColumn(modePanel, 2);
             grid.Children.Add(modePanel);
@@ -40810,8 +41404,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var rowPanel = new Grid
                 {
                     ColumnDefinitions = mode == BuildLimitMode.Shared
-                        ? new ColumnDefinitions("380, 90, Auto")
-                        : new ColumnDefinitions("380, Auto"),
+                        ? new ColumnDefinitions("212, 90, Auto")
+                        : new ColumnDefinitions("200, Auto"),
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -40820,8 +41414,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     entry?.Value ?? "",
                     buildLimitSuggestions,
                     mode == BuildLimitMode.Dynamic ? "Unit Type or Proto Unit" : "Shared Unit Type or Proto Unit");
-                valueAcb.Width = 380;
-                valueAcb.MaxWidth = 380;
+                ConfigureUnitField(valueAcb, EditorFieldWidthRole.Reference);
                 valueAcb.Margin = mode == BuildLimitMode.Shared
                     ? new Thickness(0, 0, 8, 0)
                     : new Thickness(0);
@@ -40900,7 +41493,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         Classes = { "remove-button" },
                         VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(2, 0, 0, 0)
+                        Margin = new Thickness(EditorFormLayout.CrossGap, 0, 0, 0)
                     };
                     btnDelRow.Click += async (s, e) =>
                     {
@@ -40932,16 +41525,27 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 _currentBuildLimitMode = mode;
                 _buildLimitRows.Clear();
+                _dynamicBuildLimitTypes.Clear();
+                _fieldControls.Remove("dynamicbuildlimitunittypes");
                 detailsContainer.Children.Clear();
 
                 if (mode == BuildLimitMode.Standard)
                     return;
 
+                if (mode == BuildLimitMode.Dynamic)
+                {
+                    _dynamicBuildLimitTypes.AddRange((seedEntries ?? []).Select(entry => entry.Value));
+                    detailsContainer.Children.Add(CreateStatsCatalogChipGroup(
+                        "Unit", _dynamicBuildLimitTypes, buildLimitSuggestions, out var picker, inlineChips: true));
+                    if (picker != null) _fieldControls["dynamicbuildlimitunittypes"] = picker;
+                    return;
+                }
+
                 var headerGrid = new Grid
                 {
                     ColumnDefinitions = mode == BuildLimitMode.Shared
-                        ? new ColumnDefinitions("380, 90, Auto")
-                        : new ColumnDefinitions("380, Auto"),
+                        ? new ColumnDefinitions("212, 90, Auto")
+                        : new ColumnDefinitions("200, Auto"),
                     Margin = new Thickness(0, 0, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
@@ -41011,7 +41615,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 0, 0) };
+                var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(EditorFormLayout.CrossGap, 0, 0, 0) };
                 btnDel.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -41025,6 +41629,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(btnDel, 3);
                 grid.Children.Add(btnDel);
             }
+            EditorFormLayout.WrapLabeledGridColumns(grid, [1], [2, 3]);
             buildLimitContainer.Children.Add(grid);
             buildLimitContainer.Children.Add(detailsContainer);
             RenderBuildLimitModeDetails(initialMode, initialEntries);
@@ -41037,7 +41642,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (addBuildLimitButton != null)
                 structureAddButtonsRow.Children.Remove(addBuildLimitButton);
             _fieldControls.Remove("buildlimit");
+            _fieldControls.Remove("buildlimit.mode");
+            _fieldControls.Remove("dynamicbuildlimitunittypes");
             _buildLimitRows.Clear();
+            _dynamicBuildLimitTypes.Clear();
             _currentBuildLimitMode = BuildLimitMode.Standard;
             if (!_isReadOnly)
             {
@@ -41101,7 +41709,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void AttachIntegerOnlyBehavior(TextBox textBox, string defaultValue)
             {
-                EditorNumericFieldStyle.ConfigureNumericTextBox(textBox);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(textBox, EditorFieldWidthRole.Numeric);
+                ConfigureUnitField(textBox, EditorFieldWidthRole.Numeric);
                 textBox.AddHandler(InputElement.TextInputEvent, (sender, args) =>
                 {
                     if (string.IsNullOrWhiteSpace(args.Text) || !args.Text.All(char.IsDigit))
@@ -41237,104 +41846,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 topGrid.Children.Add(btnDel);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(topGrid, [1], [2], [3, 4]);
             containContainer.Children.Add(topGrid);
 
             StackPanel CreateContainPicker(string title, HashSet<string> values)
-            {
-                var group = new StackPanel { Spacing = 2 };
-                AutoCompleteBox? acbAdd = null;
-                var selectorRow = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                var titleLabel = new TextBlock
-                {
-                    Text = title,
-                    FontWeight = FontWeight.Bold,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                selectorRow.Children.Add(titleLabel);
-                group.Children.Add(selectorRow);
-
-                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-                group.Children.Add(wrap);
-
-                void RefreshDisplay()
-                {
-                    if (acbAdd != null)
-                        acbAdd.ItemsSource = containSuggestions.Where(value => !values.Contains(value)).ToList();
-                    wrap.Children.Clear();
-                    foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                    {
-                        var chip = CreateChip(value, async () =>
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                values.Remove(value);
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                            }
-                        });
-                        wrap.Children.Add(chip);
-                    }
-                }
-
-                RefreshDisplay();
-
-                if (!_isReadOnly)
-                {
-                    acbAdd = new AutoCompleteBox
-                    {
-                        FilterMode = AutoCompleteFilterMode.Contains,
-                        ItemsSource = containSuggestions.Where(value => !values.Contains(value)).ToList(),
-                        Width = 150,
-                        MaxWidth = 150,
-                        HorizontalAlignment = HorizontalAlignment.Left,
-                        Margin = new Thickness(0, 4, 0, 4)
-                    };
-                    EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
-
-                    async void PerformAdd()
-                    {
-                        string input = acbAdd.Text?.Trim() ?? "";
-                        string? match = containSuggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                        if (!string.IsNullOrEmpty(match) && !values.Contains(match))
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                values.Add(match);
-                                acbAdd.Text = "";
-                                acbAdd.SelectedItem = null;
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                                Dispatcher.UIThread.Post(() =>
-                                {
-                                    if (acbAdd.IsEnabled && string.IsNullOrWhiteSpace(acbAdd.Text))
-                                        acbAdd.IsDropDownOpen = true;
-                                });
-                            }
-                        }
-                    }
-
-                    acbAdd.SelectionChanged += (s, e) =>
-                    {
-                        if (acbAdd.SelectedItem is string sel)
-                        {
-                            acbAdd.Text = sel;
-                            PerformAdd();
-                        }
-                    };
-                    selectorRow.Children.Add(acbAdd);
-                }
-
-                return group;
-            }
+                => CreateStatsCatalogChipGroup(title, values, containSuggestions, out _);
 
             var containPickersRow = new Grid
             {
@@ -41366,6 +41882,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 else if (key.Equals("containedregenrate", StringComparison.OrdinalIgnoreCase)) containedRegenRateValue = value;
             }
 
+            bool containBonusExpanded = false;
             void RenderContainBonusFields(string? preferredKey = null)
             {
                 containBonusContainer.Children.Clear();
@@ -41379,6 +41896,20 @@ public partial class ProtoEditorWindow : SimpleWindow
                     (Key: "containedregenrate", Label: "Regen rate")
                 };
                 var hasAnyField = definitions.Any(definition => !string.IsNullOrWhiteSpace(GetContainBonusValue(definition.Key)));
+                if (!containBonusExpanded && !hasAnyField)
+                {
+                    if (_isReadOnly) return;
+                    var opener = new Button
+                    {
+                        Content = "Bonus stats", Classes = { "add-component" },
+                        Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0),
+                        HorizontalAlignment = HorizontalAlignment.Left
+                    };
+                    opener.Click += (_, _) => { containBonusExpanded = true; RenderContainBonusFields(); };
+                    containBonusContainer.Children.Add(opener);
+                    return;
+                }
+                containBonusExpanded = true;
                 if (hasAnyField)
                 {
                     containBonusContainer.Children.Add(new TextBlock
@@ -41455,6 +41986,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Grid.SetColumn(removeButton, 2);
                         fieldGroup.Children.Add(removeButton);
                     }
+                    EditorFormLayout.WrapGridColumns(fieldGroup, [0, 1, 2]);
                     row.Children.Add(fieldGroup);
                 }
 
@@ -41531,10 +42063,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         var protoActionSuggestions = _protoActionNameSuggestions;
 
         void AttachDecimalBehavior(TextBox textBox)
-            => EditorNumericInputBehavior.AttachUnsignedDecimal(textBox);
+        {
+            ConfigureUnitField(textBox, EditorFieldWidthRole.Numeric);
+            EditorNumericInputBehavior.AttachUnsignedDecimal(textBox);
+        }
 
         void AttachSignedDecimalBehavior(TextBox textBox)
-            => EditorNumericInputBehavior.AttachSignedDecimal(textBox);
+        {
+            ConfigureUnitField(textBox, EditorFieldWidthRole.Numeric);
+            EditorNumericInputBehavior.AttachSignedDecimal(textBox);
+        }
 
         async Task HandleOtherFieldChangedAsync()
         {
@@ -41551,6 +42089,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void RemoveOtherSpecificContainer(string key, params string[] fieldKeys)
         {
+            ForgetResourceRows(key, markRemoved: true);
             if (_otherSpecificAttributeContainers.TryGetValue(key, out var control))
             {
                 otherSpecificContainer.Children.Remove(control);
@@ -41569,7 +42108,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             return suggestions.ToList();
         }
 
-        AutoCompleteBox CreateOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? placeholder = null)
+        AutoCompleteBox CreateOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? placeholder = null,
+            EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
         {
             var acb = new AutoCompleteBox
             {
@@ -41579,7 +42119,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ItemsSource = MaterializeSuggestionItems(suggestions),
                 IsEnabled = !_isReadOnly
             };
-            EditorTextFieldStyle.ConfigureSelector(acb);
+            EditorTextFieldStyle.ConfigureSelector(acb, role);
+            ConfigureUnitField(acb, role);
             EnableDropdownAutoComplete(acb, selectAllOnFirstClick: false);
             FreezeEditorScrollWhileDropDownIsOpen(acb, _editorScroll);
             acb.TextChanged += async (s, e) => await HandleOtherFieldChangedAsync();
@@ -41675,18 +42216,20 @@ public partial class ProtoEditorWindow : SimpleWindow
         StrictSearchableComboBox CreateStrictSearchableOtherComboBox(
             string initialValue,
             IEnumerable<string> options,
-            string? placeholder = null)
+            string? placeholder = null,
+            Func<string>? originalValueProvider = null)
         {
             var comboBox = new StrictSearchableComboBox(
                 options,
                 initialValue,
                 preserveUnknownInitialValue: true)
             {
-                PlaceholderText = placeholder,
+                // The adjacent label already names this field. Keep validation
+                // captions below, without another dim label inside the input.
+                PlaceholderText = null,
                 IsEnabled = !_isReadOnly
             };
-            comboBox.Width = EditorTextFieldStyle.StandardWidth;
-            comboBox.MaxWidth = EditorTextFieldStyle.StandardWidth;
+            ConfigureUnitField(comboBox, EditorFieldWidthRole.LongEnum);
             comboBox.HorizontalAlignment = HorizontalAlignment.Left;
             comboBox.ValueCommitted += async (_, _) => await HandleOtherFieldChangedAsync();
             RegisterStatsStrictReferenceEditor(
@@ -41695,8 +42238,39 @@ public partial class ProtoEditorWindow : SimpleWindow
                 () => comboBox.Text?.Trim() ?? "",
                 initialValue?.Trim() ?? "",
                 comboBox.Options,
-                allowEmpty: true);
+                allowEmpty: true,
+                currentOptions: () => comboBox.Options,
+                currentOriginalValue: originalValueProvider);
             return comboBox;
+        }
+
+        StrictSearchableComboBox CreateStatsSpecificDamageTypeCombo(
+            StrictSearchableComboBox modifyType, string originalModifyType, string originalDamageType, TextBlock label)
+        {
+            string CurrentModify() => ProtoUnitStatsConditionalPolicy.ResolveModifyTypeOrLegacy(modifyType.Text, originalModifyType);
+            var original = ProtoUnitStatsConditionalPolicy.ResolveModifyTypeOrLegacy(originalModifyType, originalModifyType);
+            var appliedModify = CurrentModify();
+            var choices = GetProtoActionSpecificDamageTypes(appliedModify).ToList();
+            var combo = CreateStrictSearchableOtherComboBox(originalDamageType, choices, "Damage Type",
+                originalValueProvider: () => CurrentModify().Equals(original, StringComparison.OrdinalIgnoreCase) ? originalDamageType : "");
+            ConfigureUnitField(combo, EditorFieldWidthRole.ShortEnum);
+            void Refresh()
+            {
+                var current = CurrentModify();
+                var changed = !current.Equals(appliedModify, StringComparison.OrdinalIgnoreCase);
+                choices.Clear();
+                choices.AddRange(GetProtoActionSpecificDamageTypes(current));
+                combo.RefreshCatalogOptions(clearInvalidValue: changed && !_isPopulating);
+                appliedModify = current;
+                label.IsVisible = combo.IsVisible = ProtoUnitStatsConditionalPolicy.RequiresDamageType(current);
+                if (!combo.IsVisible) combo.Text = "";
+            }
+            modifyType.PropertyChanged += (_, args) =>
+            {
+                if (args.Property == ComboBox.TextProperty) Refresh();
+            };
+            Refresh();
+            return combo;
         }
 
         TextBox CreateOtherTextBox(string initialValue, bool numeric = false, bool signedNumeric = false)
@@ -41716,7 +42290,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
             else
             {
-                EditorTextFieldStyle.ConfigureTextBox(tb);
+                EditorTextFieldStyle.ConfigureTextBox(tb, EditorFieldWidthRole.SingleLineText);
+                ConfigureUnitField(tb, EditorFieldWidthRole.SingleLineText);
             }
             tb.TextChanged += async (s, e) => await HandleOtherFieldChangedAsync();
             return tb;
@@ -41728,16 +42303,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return;
 
             var attributeLabel = GetOtherSpecificAttributeLabel(key);
-            var labelColumnWidth = attributeLabel.Length * 7.5 + 12 > 150
-                ? Math.Min(180, attributeLabel.Length * 7.5 + 12)
-                : 150;
             var rowGrid = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions($"{labelColumnWidth}, Auto, Auto"),
+                ColumnDefinitions = new ColumnDefinitions($"{EditorFormLayout.LabelColumnWidth}, Auto, Auto"),
                 Margin = new Thickness(0, 2, 0, 2),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             var label = new TextBlock { Text = attributeLabel, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
+            label.TextWrapping = TextWrapping.Wrap;
             Grid.SetColumn(label, 0);
             rowGrid.Children.Add(label);
 
@@ -41814,6 +42387,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 editor = CreateOtherTextBox(initialValue, OtherSpecificSimpleNumberTags.Contains(tag), signedNumeric);
             }
 
+            ConfigureUnitField(editor, tag switch
+            {
+                "culture" => EditorFieldWidthRole.Reference,
+                "placementfile" => EditorFieldWidthRole.AssetPath,
+                "initialunitaistance" => EditorFieldWidthRole.LongEnum,
+                "pathabilityflags" or "resourcesubtype" => EditorFieldWidthRole.LongEnum,
+                _ when OtherSpecificSimpleSuggestionTags.Contains(tag) => EditorFieldWidthRole.Reference,
+                _ when OtherSpecificSimpleNumberTags.Contains(tag) => EditorFieldWidthRole.Numeric,
+                _ => EditorFieldWidthRole.SingleLineText
+            });
             Grid.SetColumn(editor, 1);
             rowGrid.Children.Add(editor);
             _fieldControls[tag] = editor;
@@ -41839,7 +42422,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly && !isManagedProtoActionReference)
             {
-                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                var deleteButton = EditorRemoveButtons.Field();
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -41953,6 +42536,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42068,6 +42652,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4], [5, 6, 7]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42087,8 +42672,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var partisantypeInitial = ProtoXmlHandler.GetSimpleField(unit, "partisantype") ?? "";
             var partisantypeAcb = CreateValidatedOtherSuggestionBox(partisantypeInitial, otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
-            partisantypeAcb.Width = 260;
-            partisantypeAcb.MaxWidth = 260;
+            ConfigureUnitField(partisantypeAcb, EditorFieldWidthRole.Reference);
             partisantypeAcb.Margin = new Thickness(0);
             Grid.SetColumn(partisantypeAcb, 2);
             rowGrid.Children.Add(partisantypeAcb);
@@ -42120,6 +42704,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42141,9 +42726,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             var bloodGroupInitial = ProtoXmlHandler.GetSimpleField(unit, "bloodgroupoverride") ?? "";
             var bloodGroupAcb = CreateValidatedOtherSuggestionBox(bloodGroupInitial, GetKnownBloodGroupNames(), "Blood Group");
-            bloodGroupAcb.Width = 300;
-            bloodGroupAcb.MaxWidth = 300;
+            ConfigureUnitField(bloodGroupAcb, EditorFieldWidthRole.Reference);
             bloodGroupAcb.Margin = new Thickness(0);
+            bloodGroupAcb.PlaceholderText = null;
             Grid.SetColumn(bloodGroupAcb, 2);
             row1.Children.Add(bloodGroupAcb);
             _fieldControls["bloodgroupoverride"] = bloodGroupAcb;
@@ -42161,34 +42746,31 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 3);
+                Grid.SetColumn(deleteButton, 7);
                 row1.Children.Add(deleteButton);
             }
 
-            stack.Children.Add(row1);
-
-            var row2 = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 100, Auto, 100"), Margin = new Thickness(0, 2, 0, 2) };
-            row2.Children.Add(new TextBlock { Text = "", VerticalAlignment = VerticalAlignment.Center });
 
             var bloodScaleLabel = new TextBlock { Text = "Blood Scale", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-            Grid.SetColumn(bloodScaleLabel, 1);
-            row2.Children.Add(bloodScaleLabel);
+            Grid.SetColumn(bloodScaleLabel, 3);
+            row1.Children.Add(bloodScaleLabel);
 
             var bloodScaleTb = CreateOtherTextBox(ProtoXmlHandler.GetSimpleField(unit, "bloodscalemodify") ?? "1", true, true);
-            Grid.SetColumn(bloodScaleTb, 2);
-            row2.Children.Add(bloodScaleTb);
+            Grid.SetColumn(bloodScaleTb, 4);
+            row1.Children.Add(bloodScaleTb);
             _fieldControls["bloodscalemodify"] = bloodScaleTb;
 
             var boneScaleLabel = new TextBlock { Text = "Bone Scale", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(boneScaleLabel, 3);
-            row2.Children.Add(boneScaleLabel);
+            Grid.SetColumn(boneScaleLabel, 5);
+            row1.Children.Add(boneScaleLabel);
 
             var boneScaleTb = CreateOtherTextBox(ProtoXmlHandler.GetSimpleField(unit, "bonescalemodify") ?? "1", true, true);
-            Grid.SetColumn(boneScaleTb, 4);
-            row2.Children.Add(boneScaleTb);
+            Grid.SetColumn(boneScaleTb, 6);
+            row1.Children.Add(boneScaleTb);
             _fieldControls["bonescalemodify"] = boneScaleTb;
 
-            stack.Children.Add(row2);
+            EditorFormLayout.WrapLabeledGridColumns(row1, [1, 2], [3, 4], [5, 6, 7]);
+            stack.Children.Add(row1);
 
             RegisterOtherSpecificContainer(key, stack);
             otherSpecificContainer.Children.Add(stack);
@@ -42239,6 +42821,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42288,6 +42871,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42310,8 +42894,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ProtoConstants.GetShadingTypeDisplayName((string?)element?.Attribute("type")),
                 KnownInitialShadingTypes,
                 "Type");
-            typeCb.Width = 150;
-            typeCb.MaxWidth = 150;
+            ConfigureUnitField(typeCb, EditorFieldWidthRole.ShortEnum);
             typeCb.Margin = new Thickness(0);
             Grid.SetColumn(typeCb, 2);
             rowGrid.Children.Add(typeCb);
@@ -42343,6 +42926,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42367,8 +42951,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ProtoConstants.GetShadingTypeDisplayName((string?)element?.Attribute("type")),
                 KnownInitialShadingTypes,
                 "Type");
-            typeCb.Width = 150;
-            typeCb.MaxWidth = 150;
+            ConfigureUnitField(typeCb, EditorFieldWidthRole.ShortEnum);
             typeCb.Margin = new Thickness(0);
             Grid.SetColumn(typeCb, 2);
             row1.Children.Add(typeCb);
@@ -42387,43 +42970,40 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 3);
+                Grid.SetColumn(deleteButton, 9);
                 row1.Children.Add(deleteButton);
             }
 
-            stack.Children.Add(row1);
-
-            var row2 = new Grid { ColumnDefinitions = new ColumnDefinitions("150, Auto, 100, Auto, 100, Auto, 100"), Margin = new Thickness(0, 2, 0, 2) };
-            row2.Children.Add(new TextBlock { Text = "", VerticalAlignment = VerticalAlignment.Center });
 
             var thresholdLabel = new TextBlock { Text = "Threshold", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-            Grid.SetColumn(thresholdLabel, 1);
-            row2.Children.Add(thresholdLabel);
+            Grid.SetColumn(thresholdLabel, 3);
+            row1.Children.Add(thresholdLabel);
 
             var thresholdTb = CreateOtherTextBox((string?)element?.Attribute("threshold") ?? "1", true);
-            Grid.SetColumn(thresholdTb, 2);
-            row2.Children.Add(thresholdTb);
+            Grid.SetColumn(thresholdTb, 4);
+            row1.Children.Add(thresholdTb);
             _fieldControls["damageshading.threshold"] = thresholdTb;
 
             var rateLabel = new TextBlock { Text = "Rate", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(rateLabel, 3);
-            row2.Children.Add(rateLabel);
+            Grid.SetColumn(rateLabel, 5);
+            row1.Children.Add(rateLabel);
 
             var rateTb = CreateOtherTextBox((string?)element?.Attribute("rate") ?? "1", true);
-            Grid.SetColumn(rateTb, 4);
-            row2.Children.Add(rateTb);
+            Grid.SetColumn(rateTb, 6);
+            row1.Children.Add(rateTb);
             _fieldControls["damageshading.rate"] = rateTb;
 
             var timeLabel = new TextBlock { Text = "Time (ms)", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(timeLabel, 5);
-            row2.Children.Add(timeLabel);
+            Grid.SetColumn(timeLabel, 7);
+            row1.Children.Add(timeLabel);
 
             var timeTb = CreateOtherTextBox((string?)element?.Attribute("time") ?? "1000", true);
-            Grid.SetColumn(timeTb, 6);
-            row2.Children.Add(timeTb);
+            Grid.SetColumn(timeTb, 8);
+            row1.Children.Add(timeTb);
             _fieldControls["damageshading.time"] = timeTb;
 
-            stack.Children.Add(row2);
+            EditorFormLayout.WrapLabeledGridColumns(row1, [1, 2], [3, 4], [5, 6], [7, 8, 9]);
+            stack.Children.Add(row1);
 
             RegisterOtherSpecificContainer(key, stack);
             otherSpecificContainer.Children.Add(stack);
@@ -42432,61 +43012,20 @@ public partial class ProtoEditorWindow : SimpleWindow
         void AddKillRewardEditor()
         {
             const string key = "killrewarddata";
-            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
-                return;
-
-            var existingValues = unit.Elements("killreward")
-                .Where(x => !string.IsNullOrWhiteSpace((string?)x.Attribute("resourcetype")))
-                .ToDictionary(
-                    x => (string?)x.Attribute("resourcetype") ?? "",
-                    x => x.Value?.Trim() ?? "",
-                    StringComparer.OrdinalIgnoreCase);
-
-            var rowGrid = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("150, Auto, 90, Auto, 90, Auto, 90, Auto, 90, Auto"),
-                Margin = new Thickness(0, 2, 0, 2)
-            };
-            rowGrid.Children.Add(new TextBlock { Text = "Kill Reward", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-
-            foreach (var rtype in ProtoConstants.KnownResourceTypes)
-            {
-                int index = Array.IndexOf(ProtoConstants.KnownResourceTypes, rtype);
-                int labelColumn = 1 + (index * 2);
-                int valueColumn = labelColumn + 1;
-
-                var label = new TextBlock
-                {
-                    Text = rtype,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(index == 0 ? 0 : 8, 4, 10, 4)
-                };
-                Grid.SetColumn(label, labelColumn);
-                rowGrid.Children.Add(label);
-
-                var tb = CreateOtherTextBox(existingValues.TryGetValue(rtype, out var value) ? value : "", true);
-                Grid.SetColumn(tb, valueColumn);
-                rowGrid.Children.Add(tb);
-                _fieldControls[$"killreward:{rtype}"] = tb;
-            }
-
+            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers)) return;
+            var rowGrid = CreateResourceRowsGrid(key, "Kill Reward", "killreward", "resourcetype", "killreward:",
+                unit.Elements("killreward"), value => CreateOtherTextBox(value, true));
             if (!_isReadOnly)
             {
-                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
-                deleteButton.Click += async (s, e) =>
+                var remove = EditorRemoveButtons.Card(description: "Remove Kill Reward");
+                remove.Click += async (_, _) =>
                 {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                    {
-                        RemoveOtherSpecificContainer(key, ProtoConstants.KnownResourceTypes.Select(x => $"killreward:{x}").ToArray());
-                        MarkDirty();
-                        RenderOtherSpecificAddControls();
-                    }
+                    if (!await CheckStartLocalMod()) return;
+                    RemoveOtherSpecificContainer(key);
+                    MarkDirty(); RenderOtherSpecificAddControls();
                 };
-                Grid.SetColumn(deleteButton, 9);
-                rowGrid.Children.Add(deleteButton);
+                Grid.SetColumn(remove, 2); rowGrid.Children.Add(remove);
             }
-
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -42497,48 +43036,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
                 return;
 
-            var existingValues = unit.Elements("ResourceReturn")
-                .Where(x => !string.IsNullOrWhiteSpace((string?)x.Attribute("resourceType")))
-                .ToDictionary(
-                    x => (string?)x.Attribute("resourceType") ?? "",
-                    x => x.Value?.Trim() ?? "",
-                    StringComparer.OrdinalIgnoreCase);
-
             var stack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
-
-            var rowGrid = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("150, Auto, 90, Auto, 90, Auto, 90, Auto, 90, Auto"),
-                Margin = new Thickness(0, 2, 0, 2)
-            };
-            rowGrid.Children.Add(new TextBlock
-            {
-                Text = GetOtherSpecificAttributeLabel(key),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 10, 4)
-            });
-
-            foreach (var rtype in ProtoConstants.KnownResourceTypes)
-            {
-                int index = Array.IndexOf(ProtoConstants.KnownResourceTypes, rtype);
-                int labelColumn = 1 + (index * 2);
-                int valueColumn = labelColumn + 1;
-
-                var label = new TextBlock
-                {
-                    Text = rtype,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(index == 0 ? 0 : 8, 4, 10, 4)
-                };
-                Grid.SetColumn(label, labelColumn);
-                rowGrid.Children.Add(label);
-
-                var tb = CreateOtherTextBox(existingValues.TryGetValue(rtype, out var value) ? value : "", true);
-                Grid.SetColumn(tb, valueColumn);
-                rowGrid.Children.Add(tb);
-                _fieldControls[$"resourcereturn:{rtype}"] = tb;
-            }
-
+            var rowGrid = CreateResourceRowsGrid(key, GetOtherSpecificAttributeLabel(key), "ResourceReturn", "resourceType", "resourcereturn:",
+                unit.Elements("ResourceReturn"), value => CreateOtherTextBox(value, true));
             stack.Children.Add(rowGrid);
 
             var flagRow = new StackPanel
@@ -42574,13 +43074,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button
-                {
-                    Classes = { "remove-button" },
-                    VerticalAlignment = VerticalAlignment.Center,
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Margin = new Thickness(2, 0, 0, 0)
-                };
+                var deleteButton = EditorRemoveButtons.Card(description: "Remove resource section");
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -42595,7 +43089,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 9);
+                Grid.SetColumn(deleteButton, 2);
                 rowGrid.Children.Add(deleteButton);
             }
 
@@ -42609,48 +43103,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
                 return;
 
-            var existingValues = unit.Elements("ResourceReturnRate")
-                .Where(x => !string.IsNullOrWhiteSpace((string?)x.Attribute("resourceType")))
-                .ToDictionary(
-                    x => (string?)x.Attribute("resourceType") ?? "",
-                    x => x.Value?.Trim() ?? "",
-                    StringComparer.OrdinalIgnoreCase);
-
             var stack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
-
-            var rowGrid = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("150, Auto, 100, Auto, 100, Auto, 100, Auto, 100, Auto"),
-                Margin = new Thickness(0, 2, 0, 2)
-            };
-            rowGrid.Children.Add(new TextBlock
-            {
-                Text = GetOtherSpecificAttributeLabel(key),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 10, 4)
-            });
-
-            foreach (var rtype in ProtoConstants.KnownResourceTypes)
-            {
-                int index = Array.IndexOf(ProtoConstants.KnownResourceTypes, rtype);
-                int labelColumn = 1 + (index * 2);
-                int valueColumn = labelColumn + 1;
-
-                var label = new TextBlock
-                {
-                    Text = rtype,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(index == 0 ? 0 : 12, 4, 10, 4)
-                };
-                Grid.SetColumn(label, labelColumn);
-                rowGrid.Children.Add(label);
-
-                var tb = CreateOtherTextBox(existingValues.TryGetValue(rtype, out var value) ? value : "", true);
-                Grid.SetColumn(tb, valueColumn);
-                rowGrid.Children.Add(tb);
-                _fieldControls[$"resourcereturnrate:{rtype}"] = tb;
-            }
-
+            var rowGrid = CreateResourceRowsGrid(key, GetOtherSpecificAttributeLabel(key), "ResourceReturnRate", "resourceType", "resourcereturnrate:",
+                unit.Elements("ResourceReturnRate"), value => CreateOtherTextBox(value, true));
             stack.Children.Add(rowGrid);
 
             var flagRow = new StackPanel
@@ -42696,13 +43151,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var deleteButton = new Button
-                {
-                    Classes = { "remove-button" },
-                    VerticalAlignment = VerticalAlignment.Center,
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Margin = new Thickness(2, 0, 0, 0)
-                };
+                var deleteButton = EditorRemoveButtons.Card(description: "Remove resource section");
                 deleteButton.Click += async (s, e) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -42717,7 +43166,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 9);
+                Grid.SetColumn(deleteButton, 2);
                 rowGrid.Children.Add(deleteButton);
             }
 
@@ -42774,8 +43223,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(zTb);
 
                 var attachBoneLabel = new TextBlock { Text = "Attach Bone", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 8, 4) };
-                Grid.SetColumn(attachBoneLabel, 5);
-                rowGrid.Children.Add(attachBoneLabel);
 
                 var attachBoneTb = CreateValidatedOtherSuggestionBox(
                     (string?)existing?.Attribute("attachbone") ?? "",
@@ -42783,11 +43230,46 @@ public partial class ProtoEditorWindow : SimpleWindow
                     "Attach Bone",
                     allowCustom: true,
                     suggestionsAlreadyNormalized: true);
-                attachBoneTb.Width = 150;
-                attachBoneTb.MaxWidth = 150;
+                ConfigureUnitField(attachBoneTb, EditorFieldWidthRole.CompactReference);
                 attachBoneTb.Margin = new Thickness(0);
-                Grid.SetColumn(attachBoneTb, 6);
-                rowGrid.Children.Add(attachBoneTb);
+                attachBoneLabel.Margin = new Thickness(0, 4, EditorFormLayout.LabelGap, 4);
+                var boneFields = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsVisible = existing?.Attribute("attachbone") != null,
+                    Children = { attachBoneLabel, attachBoneTb }
+                };
+                var boneHost = new StackPanel { Orientation = Orientation.Horizontal };
+                boneHost.Children.Add(boneFields);
+                if (!_isReadOnly)
+                {
+                    var addBone = new Button
+                    {
+                        Content = "Attach Bone", Classes = { "add-component" },
+                        IsVisible = !boneFields.IsVisible
+                    };
+                    addBone.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        addBone.IsVisible = false;
+                        boneFields.IsVisible = true;
+                        MarkDirty();
+                    };
+                    var removeBone = EditorRemoveButtons.Field();
+                    removeBone.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        attachBoneTb.Text = "";
+                        boneFields.IsVisible = false;
+                        addBone.IsVisible = true;
+                        MarkDirty();
+                    };
+                    boneFields.Children.Add(removeBone);
+                    boneHost.Children.Add(addBone);
+                }
+                Grid.SetColumn(boneHost, 5);
+                rowGrid.Children.Add(boneHost);
 
                 var rowState = new DependentUnitRowState
                 {
@@ -42801,11 +43283,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var deleteButton = new Button
-                    {
-                        Classes = { "remove-button" },
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
+                    var deleteButton = EditorRemoveButtons.Row();
                     deleteButton.Click += async (s, e) =>
                     {
                         var proceed = await CheckStartLocalMod();
@@ -42813,6 +43291,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             _dependentUnitRows.Remove(rowState);
                             rowsHost.Children.Remove(rowGrid);
+                            if (_dependentUnitRows.Count == 0)
+                            {
+                                RemoveOtherSpecificContainer(key);
+                                RenderOtherSpecificAddControls();
+                            }
                             MarkDirty();
                         }
                     };
@@ -42820,6 +43303,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowGrid.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(rowGrid, [0], [1, 2], [3, 4], [5, 6, 7]);
                 if (!_isReadOnly && rowsHost.Children.Count > 0 && rowsHost.Children[^1] is StackPanel)
                     rowsHost.Children.Insert(rowsHost.Children.Count - 1, rowGrid);
                 else
@@ -42828,6 +43312,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             foreach (var existing in unit.Elements("dependentunit"))
                 AddDependentUnitRow(existing);
+
+            if (!_isPopulating && !_isReadOnly && _dependentUnitRows.Count == 0)
+                AddDependentUnitRow();
 
             if (!_isReadOnly)
             {
@@ -42868,7 +43355,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var buttonRow = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 2,
+                    Spacing = EditorFormLayout.CrossGap,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
                 buttonRow.Children.Add(addButton);
@@ -42909,7 +43396,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var existingSpawnType = (string?)existing?.Attribute("type") ?? "";
                 var spawnTypeOptions = ProtoConstants.KnownSpawnTypes
-                    .Concat(string.IsNullOrWhiteSpace(existingSpawnType) ? [] : [existingSpawnType.Trim()])
+                    .Select(token => ProtoConstants.GetEnumCaption(token, ProtoConstants.KnownSpawnTypes))
+                    .Concat(string.IsNullOrWhiteSpace(existingSpawnType) ? [] : [ProtoConstants.GetEnumCaption(existingSpawnType, ProtoConstants.KnownSpawnTypes)])
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 var rowStack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
@@ -42932,6 +43420,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Width = 150,
                     MaxWidth = 150
                 };
+                ConfigureUnitField(typeCb, EditorFieldWidthRole.LongEnum);
                 typeCb.SelectionChanged += async (_, _) => await HandleOtherFieldChangedAsync();
                 Grid.SetColumn(typeCb, 1);
                 row1.Children.Add(typeCb);
@@ -42941,8 +43430,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 row1.Children.Add(protoLabel);
 
                 var valueAcb = CreateValidatedOtherSuggestionBox(existing?.Value?.Trim() ?? "", otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
-                valueAcb.Width = 150;
-                valueAcb.MaxWidth = 150;
+                ConfigureUnitField(valueAcb, EditorFieldWidthRole.CompactReference);
                 valueAcb.Margin = new Thickness(0);
                 Grid.SetColumn(valueAcb, 3);
                 row1.Children.Add(valueAcb);
@@ -42973,6 +43461,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     row1.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(row1, [0, 1], [2, 3], [4, 5, 6]);
                 rowStack.Children.Add(row1);
 
                 var lifespanTb = CreateOtherTextBox((string?)existing?.Attribute("lifespan") ?? "", true);
@@ -42982,12 +43471,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ProtoConstants.GetShadingTypeDisplayName((string?)existing?.Attribute("shadingtype")),
                     KnownInitialShadingTypes,
                     "Shading Type");
-                shadingTypeCb.Width = 150;
-                shadingTypeCb.MaxWidth = 150;
+                ConfigureUnitField(shadingTypeCb, EditorFieldWidthRole.ShortEnum);
                 shadingTypeCb.Margin = new Thickness(0);
                 var waterProtoUnitAcb = CreateValidatedOtherSuggestionBox((string?)existing?.Attribute("waterProtoUnit") ?? "", otherProtoUnitSuggestions, "Water Proto Unit", suggestionsAlreadyNormalized: true);
-                waterProtoUnitAcb.Width = 150;
-                waterProtoUnitAcb.MaxWidth = 150;
+                ConfigureUnitField(waterProtoUnitAcb, EditorFieldWidthRole.CompactReference);
                 waterProtoUnitAcb.Margin = new Thickness(0);
 
                 var skipPlacementCheckCb = CreateFlagCheckBox("Skip Placement Check", existing?.Attribute("skipPlacementCheck") != null || existing?.Attribute("skipplacementcheck") != null);
@@ -43115,6 +43602,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             foreach (var existing in unit.Elements("spawn"))
                 AddSpawnRow(existing);
 
+            if (!_isPopulating && !_isReadOnly && _spawnRows.Count == 0)
+                AddSpawnRow();
+
             if (!_isReadOnly)
             {
                 var addButton = new Button
@@ -43221,6 +43711,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 MinWidth = 180
             };
+            ConfigureUnitField(modeCb, EditorFieldWidthRole.LongEnum);
             Grid.SetColumn(modeCb, 2);
             headerGrid.Children.Add(modeCb);
             _fieldControls["respawntraindata.mode"] = modeCb;
@@ -43254,6 +43745,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 headerGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapGridColumns(headerGrid, [0], [1, 2, 3]);
             stack.Children.Add(headerGrid);
 
             var bodyStack = new StackPanel { Spacing = 6 };
@@ -43318,8 +43810,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     var editor = CreateOtherSuggestionBox("", respawnTypeSuggestions.Where(x => !values.Contains(x)), title);
                     acb = editor;
-                    editor.Width = 150;
-                    editor.MaxWidth = 150;
+                    ConfigureUnitField(editor, EditorFieldWidthRole.ChipSearch);
                     editor.Margin = new Thickness(0);
                     Grid.SetColumn(editor, editorColumn);
                     host.Children.Add(editor);
@@ -43369,6 +43860,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             void RenderModeBody()
             {
+                ForgetResourceRows(key);
+                _resourceRespawnRatesSource = null;
                 bodyStack.Children.Clear();
                 foreach (var fieldKey in new[]
                          {
@@ -43398,8 +43891,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var targetTypeLabel = new TextBlock { Text = "Target Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
                     selfGrid.Children.Add(targetTypeLabel);
                     var targetTypeAcb = CreateValidatedOtherSuggestionBox(respawnTrainData?.Element("targettype")?.Value?.Trim() ?? "", targetSuggestions, "Target Type", suggestionsAlreadyNormalized: true);
-                    targetTypeAcb.Width = 150;
-                    targetTypeAcb.MaxWidth = 150;
+                    ConfigureUnitField(targetTypeAcb, EditorFieldWidthRole.CompactReference);
                     targetTypeAcb.Margin = new Thickness(0);
                     Grid.SetColumn(targetTypeAcb, 1);
                     selfGrid.Children.Add(targetTypeAcb);
@@ -43409,8 +43901,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Grid.SetColumn(trainProtoLabel, 2);
                     selfGrid.Children.Add(trainProtoLabel);
                     var trainProtoAcb = CreateValidatedOtherSuggestionBox(respawnTrainData?.Element("trainproto")?.Value?.Trim() ?? "", protoSuggestions, "Train Proto", suggestionsAlreadyNormalized: true);
-                    trainProtoAcb.Width = 150;
-                    trainProtoAcb.MaxWidth = 150;
+                    ConfigureUnitField(trainProtoAcb, EditorFieldWidthRole.CompactReference);
                     trainProtoAcb.Margin = new Thickness(0);
                     Grid.SetColumn(trainProtoAcb, 3);
                     selfGrid.Children.Add(trainProtoAcb);
@@ -43455,8 +43946,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                         vfxHost.Children.Add(new TextBlock { Text = "Respawn VFX", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
                         var vfxAcb = CreateValidatedOtherSuggestionBox(selfVfxValue, protoSuggestions, "Respawn VFX", suggestionsAlreadyNormalized: true);
-                        vfxAcb.Width = 150;
-                        vfxAcb.MaxWidth = 150;
+                        ConfigureUnitField(vfxAcb, EditorFieldWidthRole.CompactReference);
                         vfxAcb.Margin = new Thickness(0);
                         vfxHost.Children.Add(vfxAcb);
                         _fieldControls["respawntraindata.respawnvfx"] = vfxAcb;
@@ -43489,33 +43979,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 AddRespawnChipEditor(typeEditorsGrid, "Exclude Types", _currentRespawnTrainExcludeTypes ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase), values => _currentRespawnTrainExcludeTypes = values, 2, 3);
                 bodyStack.Children.Add(typeEditorsGrid);
 
-                var ratesGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto, 100, Auto, 100, Auto, 100, Auto, 100"), Margin = new Thickness(0, 2, 0, 2) };
                 var respawnRates = respawnTrainData?.Element("respawnrates");
-                foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-                {
-                    int index = Array.IndexOf(ProtoConstants.KnownResourceTypes, resourceType);
-                    int labelColumn = index * 2;
-                    int valueColumn = labelColumn + 1;
-
-                    var label = new TextBlock
-                    {
-                        Text = resourceType,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(0, 4, 10, 4)
-                    };
-                    Grid.SetColumn(label, labelColumn);
-                    ratesGrid.Children.Add(label);
-
-                    var tb = CreateOtherTextBox(respawnRates?.Element(resourceType.ToLowerInvariant())?.Value?.Trim() ?? "0", true);
-                    Grid.SetColumn(tb, valueColumn);
-                    ratesGrid.Children.Add(tb);
-                    _fieldControls[$"respawntraindata.{resourceType.ToLowerInvariant()}"] = tb;
-                }
-
-                var ratesHost = new StackPanel { Spacing = 4 };
-                ratesHost.Children.Add(new TextBlock { Text = "Respawn Rates", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 2) });
-                ratesHost.Children.Add(ratesGrid);
-                bodyStack.Children.Add(ratesHost);
+                _resourceRespawnRatesSource = respawnRates == null ? null : new XElement(respawnRates);
+                bodyStack.Children.Add(CreateResourceRowsGrid(key, "Respawn Rates", "respawnrates", null, "respawntraindata.",
+                    respawnRates?.Elements() ?? [], value => CreateOtherTextBox(value, true)));
 
                 var optionHost = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(150, 0, 0, 0) };
                 var showLimit = !string.IsNullOrWhiteSpace(respawnTrainData?.Element("respawnlimit")?.Value);
@@ -43570,8 +44037,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     {
                         optionHost.Children.Add(new TextBlock { Text = "Respawn VFX", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
                         var vfxAcb = CreateValidatedOtherSuggestionBox(vfxValue, protoSuggestions, "Respawn VFX", suggestionsAlreadyNormalized: true);
-                        vfxAcb.Width = 150;
-                        vfxAcb.MaxWidth = 150;
+                        ConfigureUnitField(vfxAcb, EditorFieldWidthRole.CompactReference);
                         vfxAcb.Margin = new Thickness(0);
                         optionHost.Children.Add(vfxAcb);
                         _fieldControls["respawntraindata.respawnvfx"] = vfxAcb;
@@ -43689,6 +44155,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SelectedItem = KnownVeterancyRankTypes.FirstOrDefault(x => x.Equals(type ?? "", StringComparison.OrdinalIgnoreCase)) ?? KnownVeterancyRankTypes[0],
                     IsEnabled = !_isReadOnly
                 };
+                ConfigureUnitField(typeCb, EditorFieldWidthRole.LongEnum);
                 typeCb.SelectionChanged += async (s, e) => await HandleOtherFieldChangedAsync();
                 Grid.SetColumn(typeCb, 1);
                 rowGrid.Children.Add(typeCb);
@@ -43726,6 +44193,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowGrid.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(rowGrid, [0, 1], [2, 3]);
                 if (!_isReadOnly && ranksHost.Children.Count > 0 && ranksHost.Children[^1] is Button)
                     ranksHost.Children.Insert(ranksHost.Children.Count - 1, rowGrid);
                 else
@@ -43751,9 +44219,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(rankLabel);
 
                 var rankIdTb = CreateOtherTextBox(rankId ?? "0", true);
-                rankIdTb.Width = 50;
-                rankIdTb.MinWidth = 0;
-                rankIdTb.MaxWidth = 50;
+                ConfigureUnitField(rankIdTb, EditorFieldWidthRole.DenseNumeric);
                 Grid.SetColumn(rankIdTb, 1);
                 rowGrid.Children.Add(rankIdTb);
 
@@ -43766,12 +44232,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var initialModifyTypeDisplay = string.IsNullOrWhiteSpace(knownModifyType)
                     ? originalModifyType
                     : ProtoConstants.GetModifyTypeDisplayName(knownModifyType);
-                var modifyTypeAcb = CreateValidatedOtherSuggestionBox(
+                var modifyTypeAcb = CreateStrictSearchableOtherComboBox(
                     initialModifyTypeDisplay,
                     modifyTypeSuggestions,
                     "Modify Type");
-                modifyTypeAcb.Width = 150;
-                modifyTypeAcb.MaxWidth = 150;
+                ConfigureUnitField(modifyTypeAcb, EditorFieldWidthRole.LongEnum);
                 modifyTypeAcb.Margin = new Thickness(0);
                 Grid.SetColumn(modifyTypeAcb, 3);
                 rowGrid.Children.Add(modifyTypeAcb);
@@ -43785,25 +44250,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(damageTypeLabel, 4);
                 rowGrid.Children.Add(damageTypeLabel);
 
-                var damageTypeAcb = CreateValidatedOtherSuggestionBox(damageType ?? "", ProtoConstants.KnownDamageTypes, "Damage Type");
-                damageTypeAcb.Width = 80;
-                damageTypeAcb.MinWidth = 0;
-                damageTypeAcb.MaxWidth = 80;
+                var damageTypeAcb = CreateStatsSpecificDamageTypeCombo(modifyTypeAcb, originalModifyType, damageType?.Trim() ?? "", damageTypeLabel);
+                ConfigureUnitField(damageTypeAcb, EditorFieldWidthRole.ShortEnum);
                 damageTypeAcb.Margin = new Thickness(0);
                 Grid.SetColumn(damageTypeAcb, 5);
                 rowGrid.Children.Add(damageTypeAcb);
-
-                void RefreshDamageTypeVisibility()
-                {
-                    var visible = ProtoConstants.GetModifyTypeValue(modifyTypeAcb.Text?.Trim() ?? "") is "DamageSpecific" or "ArmorSpecific";
-                    damageTypeLabel.IsVisible = visible;
-                    damageTypeAcb.IsVisible = visible;
-                    if (!visible)
-                        damageTypeAcb.Text = "";
-                }
-
-                modifyTypeAcb.TextChanged += (s, e) => RefreshDamageTypeVisibility();
-                RefreshDamageTypeVisibility();
 
                 var rowState = new VeterancyBonusRowState
                 {
@@ -43828,6 +44279,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                         {
                             _veterancyBonusRows.Remove(rowState);
                             bonusHost.Children.Remove(rowGrid);
+                            if (_veterancyBonusRows.Count == 0 &&
+                                _fieldControls.GetValueOrDefault("veterancybonus.includetypes") is { } picker &&
+                                picker.Classes.Contains("invalid-field"))
+                                EditorValidationNavigation.Clear(this);
                             MarkDirty();
                         }
                     };
@@ -43835,6 +44290,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowGrid.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(rowGrid, [0, 1], [2, 3], [4, 5], [6, 7]);
                 if (!_isReadOnly && bonusHost.Children.Count > 0 && bonusHost.Children[^1] is Button)
                     bonusHost.Children.Insert(bonusHost.Children.Count - 1, rowGrid);
                 else
@@ -43869,96 +44325,24 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
             }
 
-            void AddVeterancyChipEditor(Grid host, string title, HashSet<string> values, int labelColumn, int editorColumn)
-            {
-                var label = new TextBlock
-                {
-                    Text = title,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(labelColumn == 0 ? 0 : 8, 4, 10, 4)
-                };
-                Grid.SetColumn(label, labelColumn);
-                host.Children.Add(label);
-
-                var chips = new WrapPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Width = 320,
-                    HorizontalAlignment = HorizontalAlignment.Left
-                };
-                Grid.SetColumn(chips, editorColumn);
-                Grid.SetRow(chips, 1);
-                host.Children.Add(chips);
-                AutoCompleteBox? picker = null;
-
-                void Refresh()
-                {
-                    if (picker != null)
-                    {
-                        picker.ItemsSource = typeSuggestions
-                            .Where(suggestion => !values.Contains(suggestion))
-                            .ToList();
-                    }
-
-                    chips.Children.Clear();
-                    foreach (var value in values.OrderBy(item => item, StringComparer.OrdinalIgnoreCase))
-                    {
-                        chips.Children.Add(CreateChip(value, async () =>
-                        {
-                            if (!await CheckStartLocalMod()) return;
-                            values.Remove(value);
-                            Refresh();
-                            MarkDirty();
-                        }));
-                    }
-                }
-
-                if (!_isReadOnly)
-                {
-                    picker = CreateOtherSuggestionBox("", typeSuggestions.Where(suggestion => !values.Contains(suggestion)), title);
-                    picker.Width = 150;
-                    picker.MaxWidth = 150;
-                    picker.Margin = new Thickness(0);
-                    Grid.SetColumn(picker, editorColumn);
-                    host.Children.Add(picker);
-                    string? selectedValue = null;
-
-                    async Task AddSelection()
-                    {
-                        var input = picker.Text?.Trim() ?? "";
-                        var match = typeSuggestions.FirstOrDefault(suggestion => suggestion.Equals(input, StringComparison.OrdinalIgnoreCase));
-                        if (string.IsNullOrWhiteSpace(match) && !string.IsNullOrWhiteSpace(selectedValue))
-                            match = typeSuggestions.FirstOrDefault(suggestion => suggestion.Equals(selectedValue, StringComparison.OrdinalIgnoreCase));
-                        if (string.IsNullOrWhiteSpace(match) || values.Contains(match)) return;
-                        if (!await CheckStartLocalMod()) return;
-
-                        values.Add(match);
-                        picker.Text = "";
-                        selectedValue = null;
-                        Refresh();
-                        MarkDirty();
-                    }
-
-                    picker.SelectionChanged += (_, _) =>
-                    {
-                        if (picker.SelectedItem is not string selected) return;
-                        selectedValue = selected;
-                        picker.Text = selected;
-                        Dispatcher.UIThread.Post(() => _ = AddSelection(), DispatcherPriority.Background);
-                    };
-                }
-
-                Refresh();
-            }
-
             var veterancyTypesGrid = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions("150, 320, Auto, 320"),
-                RowDefinitions = new RowDefinitions("Auto, Auto"),
+                ColumnDefinitions = new ColumnDefinitions("*,*"),
+                ColumnSpacing = EditorFormLayout.GroupGap,
                 Margin = new Thickness(0, 2, 0, 2)
             };
-            AddVeterancyChipEditor(veterancyTypesGrid, "Include Types", _currentVeterancyIncludeTypes, 0, 1);
-            AddVeterancyChipEditor(veterancyTypesGrid, "Exclude Types", _currentVeterancyExcludeTypes, 2, 3);
+            var includeTypes = CreateStatsCatalogChipGroup("Include Types", _currentVeterancyIncludeTypes, typeSuggestions,
+                out var includeTypesPicker, valuesChanged: picker =>
+                {
+                    if (_currentVeterancyIncludeTypes.Count > 0 && picker.Classes.Contains("invalid-field"))
+                        EditorValidationNavigation.Clear(this);
+                });
+            if (includeTypesPicker != null)
+                _fieldControls["veterancybonus.includetypes"] = includeTypesPicker;
+            var excludeTypes = CreateStatsCatalogChipGroup("Exclude Types", _currentVeterancyExcludeTypes, typeSuggestions, out _);
+            veterancyTypesGrid.Children.Add(includeTypes);
+            Grid.SetColumn(excludeTypes, 1);
+            veterancyTypesGrid.Children.Add(excludeTypes);
             stack.Children.Add(veterancyTypesGrid);
 
             if (!_isReadOnly)
@@ -44015,7 +44399,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         _veterancyBonusRows.Clear();
                         ranksHost.Children.Clear();
                         bonusHost.Children.Clear();
-                        RemoveOtherSpecificContainer(key);
+                        RemoveOtherSpecificContainer(key, "veterancybonus.includetypes");
                         MarkDirty();
                         RenderOtherSpecificAddControls();
                     }
@@ -44046,9 +44430,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             var rowsHost = new StackPanel { Spacing = 4 };
             stack.Children.Add(rowsHost);
 
-            static bool NeedsDamageType(string? modifyType)
-                => ProtoConstants.GetModifyTypeValue(modifyType ?? "") is "DamageSpecific" or "ArmorSpecific";
-
             void AddOnDamageModifyRow(string? modifyType = null, string? value = null, string? damageType = null)
             {
                 var modifyTypeSuggestions = ProtoConstants.KnownModifyTypes
@@ -44072,12 +44453,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var initialModifyTypeDisplay = string.IsNullOrWhiteSpace(knownModifyType)
                     ? originalModifyType
                     : ProtoConstants.GetModifyTypeDisplayName(knownModifyType);
-                var modifyTypeAcb = CreateValidatedOtherSuggestionBox(
+                var modifyTypeAcb = CreateStrictSearchableOtherComboBox(
                     initialModifyTypeDisplay,
                     modifyTypeSuggestions,
                     "Modify Type");
-                modifyTypeAcb.Width = 180;
-                modifyTypeAcb.MaxWidth = 180;
+                ConfigureUnitField(modifyTypeAcb, EditorFieldWidthRole.LongEnum);
                 modifyTypeAcb.Margin = new Thickness(0);
                 Grid.SetColumn(modifyTypeAcb, 1);
                 rowGrid.Children.Add(modifyTypeAcb);
@@ -44086,9 +44466,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(damageTypeLabel, 2);
                 rowGrid.Children.Add(damageTypeLabel);
 
-                var damageTypeCb = CreateStrictSearchableOtherComboBox(damageType ?? "", ProtoConstants.KnownDamageTypes, "Damage Type");
-                damageTypeCb.Width = 160;
-                damageTypeCb.MaxWidth = 160;
+                var damageTypeCb = CreateStatsSpecificDamageTypeCombo(modifyTypeAcb, originalModifyType, damageType?.Trim() ?? "", damageTypeLabel);
+                ConfigureUnitField(damageTypeCb, EditorFieldWidthRole.ShortEnum);
                 damageTypeCb.Margin = new Thickness(0);
                 Grid.SetColumn(damageTypeCb, 3);
                 rowGrid.Children.Add(damageTypeCb);
@@ -44100,18 +44479,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var valueTb = CreateOtherTextBox(value ?? "0", true, true);
                 Grid.SetColumn(valueTb, 5);
                 rowGrid.Children.Add(valueTb);
-
-                void RefreshDamageTypeVisibility()
-                {
-                    var visible = NeedsDamageType(modifyTypeAcb.Text?.Trim());
-                    damageTypeLabel.IsVisible = visible;
-                    damageTypeCb.IsVisible = visible;
-                    if (!visible)
-                        damageTypeCb.Text = "";
-                }
-
-                modifyTypeAcb.TextChanged += (s, e) => RefreshDamageTypeVisibility();
-                RefreshDamageTypeVisibility();
 
                 var rowState = new OnDamageModifyRowState
                 {
@@ -44147,6 +44514,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowGrid.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(rowGrid, [0, 1], [2, 3], [4, 5, 6]);
                 rowsHost.Children.Add(rowGrid);
             }
 
@@ -44212,105 +44580,34 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void AddResourceMapEditor(string key, string elementName)
         {
-            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
-                return;
-
+            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers)) return;
             var stack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
-            var existingValues = unit.Elements(elementName)
-                .Where(x => !string.IsNullOrWhiteSpace((string?)x.Attribute("resourcetype")))
-                .ToDictionary(x => (string?)x.Attribute("resourcetype") ?? "", x => x.Value?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
-            var existingDropOffMultipliers = elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase)
-                ? unit.Elements(elementName)
-                    .Where(x => !string.IsNullOrWhiteSpace((string?)x.Attribute("resourcetype")))
-                    .ToDictionary(
-                        x => (string?)x.Attribute("resourcetype") ?? "",
-                        x => ((string?)x.Attribute("dropoffmultiplier") ?? (string?)x.Attribute("dropOffMultiplier") ?? "").Trim(),
-                        StringComparer.OrdinalIgnoreCase)
-                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            if (!elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase) &&
-                !elementName.Equals("initialresource", StringComparison.OrdinalIgnoreCase))
-            {
-                stack.Children.Add(new TextBlock
-                {
-                    Text = GetOtherSpecificAttributeLabel(key),
-                    FontWeight = FontWeight.Bold,
-                    Margin = new Thickness(0, 4, 0, 2)
-                });
-            }
-
-            var mainRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 0,
-                Margin = new Thickness(0, 2, 0, 2),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            mainRow.Children.Add(new TextBlock
-            {
-                Text = GetOtherSpecificAttributeLabel(key),
-                Width = 140,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 4, 10, 4)
-            });
-
             var dropOffEditors = new List<(string ResourceType, TextBox Editor)>();
-
-            foreach (var resourceType in ProtoConstants.KnownResourceTypes)
+            if (elementName == "carrycapacity")
             {
-                var resourcePanel = new StackPanel
+                foreach (var resource in ProtoConstants.KnownResourceTypes)
                 {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 8,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 12, 0)
-                };
-                resourcePanel.Children.Add(new TextBlock
-                {
-                    Text = resourceType,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 4, 0, 4)
-                });
-
-                var tb = CreateOtherTextBox(existingValues.TryGetValue(resourceType, out var value) ? value : "0", true);
-                tb.Width = 90;
-                tb.VerticalAlignment = VerticalAlignment.Center;
-                resourcePanel.Children.Add(tb);
-                _fieldControls[$"{elementName}:{resourceType}"] = tb;
-                mainRow.Children.Add(resourcePanel);
-
-                if (elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase))
-                {
-                    var existingMultiplier = existingDropOffMultipliers.TryGetValue(resourceType, out var multiplier) ? multiplier : "";
-                    var dropOffTb = CreateOtherTextBox(existingMultiplier, true);
-                    dropOffTb.Width = 90;
-                    dropOffTb.VerticalAlignment = VerticalAlignment.Center;
-                    _fieldControls[$"{elementName}:dropoffmultiplier:{resourceType}"] = dropOffTb;
-                    dropOffEditors.Add((resourceType, dropOffTb));
+                    var source = unit.Elements(elementName).FirstOrDefault(element => ((string?)element.Attribute("resourcetype"))?.Equals(resource, StringComparison.OrdinalIgnoreCase) == true);
+                    var input = CreateOtherTextBox((string?)source?.Attribute("dropoffmultiplier") ?? (string?)source?.Attribute("dropOffMultiplier") ?? "", true);
+                    _fieldControls[$"carrycapacity:dropoffmultiplier:{resource}"] = input;
+                    dropOffEditors.Add((resource, input));
                 }
             }
+            var mainRow = CreateResourceRowsGrid(key, GetOtherSpecificAttributeLabel(key), elementName, "resourcetype", elementName + ":",
+                unit.Elements(elementName), value => CreateOtherTextBox(value, true));
+            var binding = _resourceRowEditors[elementName];
             Button? deleteResourceMapButton = null;
             if (!_isReadOnly)
             {
-                deleteResourceMapButton = new Button
-                {
-                    Classes = { "remove-button" },
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(2, 0, 0, 0)
-                };
+                deleteResourceMapButton = EditorRemoveButtons.Card(description: "Remove resource section");
                 deleteResourceMapButton.Click += async (_, _) =>
                 {
                     if (!await CheckStartLocalMod()) return;
-                    var fieldKeys = ProtoConstants.KnownResourceTypes.Select(x => $"{elementName}:{x}");
-                    if (elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase))
-                        fieldKeys = fieldKeys.Concat(ProtoConstants.KnownResourceTypes.Select(x => $"{elementName}:dropoffmultiplier:{x}"));
-                    RemoveOtherSpecificContainer(key, fieldKeys.ToArray());
-                    MarkDirty();
-                    RenderOtherSpecificAddControls();
+                    RemoveOtherSpecificContainer(key, elementName == "carrycapacity"
+                        ? ProtoConstants.KnownResourceTypes.Select(resource => $"carrycapacity:dropoffmultiplier:{resource}").ToArray() : []);
+                    MarkDirty(); RenderOtherSpecificAddControls();
                 };
-                if (elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase) ||
-                    elementName.Equals("initialresource", StringComparison.OrdinalIgnoreCase))
-                    mainRow.Children.Add(deleteResourceMapButton);
+                Grid.SetColumn(deleteResourceMapButton, 2); mainRow.Children.Add(deleteResourceMapButton);
             }
             stack.Children.Add(mainRow);
             if (elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase))
@@ -44328,7 +44625,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     dropOffContainer.Children.Clear();
                     if (!dropOffOptionsVisible)
                     {
-                        if (!_isReadOnly)
+                        if (!_isReadOnly && binding.Editor.Rows.Count > 0)
                         {
                             var showButton = new Button
                             {
@@ -44348,10 +44645,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                         return;
                     }
 
-                    var detailsRow = new StackPanel
+                    var detailsRow = new Grid
                     {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 0,
+                        ColumnDefinitions = new ColumnDefinitions("150,*"),
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     detailsRow.Children.Add(new TextBlock
@@ -44362,9 +44658,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Margin = new Thickness(0, 4, 10, 4)
                     });
                     var optionsHost = new WrapPanel { Orientation = Orientation.Horizontal };
+                    Grid.SetColumn(optionsHost, 1);
                     detailsRow.Children.Add(optionsHost);
 
                     foreach (var entry in dropOffEditors
+                                 .Where(item => binding.Editor.Rows.Any(row => row.Resource == item.ResourceType))
                                  .OrderBy(item => string.IsNullOrWhiteSpace(item.Editor.Text) ? 1 : 0))
                     {
                         if (string.IsNullOrWhiteSpace(entry.Editor.Text))
@@ -44406,7 +44704,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                             var removeButton = new Button
                             {
                                 Classes = { "remove-button" },
-                                Margin = new Thickness(2, 4, 0, 4)
+                                Margin = new Thickness(EditorFormLayout.CrossGap, 4, 0, 4)
                             };
                             removeButton.Click += async (_, _) =>
                             {
@@ -44425,14 +44723,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                     dropOffContainer.Children.Add(detailsRow);
                 }
 
+                binding.Editor.ResourceChanged += (previous, current) =>
+                {
+                    if (previous != null)
+                    {
+                        var previousEditor = dropOffEditors.First(entry => entry.ResourceType == previous).Editor;
+                        var factor = previousEditor.Text;
+                        previousEditor.Text = "";
+                        if (current != null) dropOffEditors.First(entry => entry.ResourceType == current).Editor.Text = factor;
+                    }
+                    if (dropOffEditors.All(entry => string.IsNullOrWhiteSpace(entry.Editor.Text))) dropOffOptionsVisible = false;
+                    RenderDropOffMultiplierEditor();
+                };
                 RenderDropOffMultiplierEditor();
                 stack.Children.Add(dropOffContainer);
             }
-
-            if (deleteResourceMapButton != null &&
-                !elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase) &&
-                !elementName.Equals("initialresource", StringComparison.OrdinalIgnoreCase))
-                stack.Children.Add(deleteResourceMapButton);
 
             RegisterOtherSpecificContainer(key, stack);
             otherSpecificContainer.Children.Add(stack);
@@ -44480,6 +44785,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 0, 12, 0)
                 };
+                ConfigureUnitField(fromCb, EditorFieldWidthRole.ShortEnum);
                 fromCb.SelectionChanged += async (s, e) => await HandleOtherFieldChangedAsync();
                 Grid.SetColumn(fromCb, 1);
                 rowGrid.Children.Add(fromCb);
@@ -44502,6 +44808,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0, 0, 12, 0)
                 };
+                ConfigureUnitField(toCb, EditorFieldWidthRole.ShortEnum);
                 toCb.SelectionChanged += async (s, e) => await HandleOtherFieldChangedAsync();
                 Grid.SetColumn(toCb, 3);
                 rowGrid.Children.Add(toCb);
@@ -44549,11 +44856,15 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowGrid.Children.Add(deleteButton);
                 }
 
+                EditorFormLayout.WrapGridColumns(rowGrid, [0, 1], [2, 3], [4, 5, 6]);
                 rowsHost.Children.Add(rowGrid);
             }
 
             foreach (var existing in unit.Elements("resourceconversion"))
                 AddResourceConversionRow(existing);
+
+            if (!_isPopulating && !_isReadOnly && _resourceConversionRows.Count == 0)
+                AddResourceConversionRow();
 
             if (!_isReadOnly)
             {
@@ -44654,6 +44965,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -44676,14 +44988,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ColumnDefinitions = new ColumnDefinitions("150, Auto, Auto, Auto"),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
-            headerGrid.Children.Add(new TextBlock { Text = "Socket", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-
-            var socketLabel = new TextBlock { Text = "Socket Unit Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-            Grid.SetColumn(socketLabel, 1);
-            headerGrid.Children.Add(socketLabel);
+            headerGrid.Children.Add(new TextBlock { Text = "Socket Unit Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
 
             var socketAcb = CreateValidatedOtherSuggestionBox(socketUnitType, socketSuggestions, "Socket Unit Type", suggestionsAlreadyNormalized: true);
-            Grid.SetColumn(socketAcb, 2);
+            Grid.SetColumn(socketAcb, 1);
             headerGrid.Children.Add(socketAcb);
             _fieldControls["socketunittype"] = socketAcb;
 
@@ -44700,10 +45008,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 };
-                Grid.SetColumn(deleteButton, 3);
+                Grid.SetColumn(deleteButton, 2);
                 headerGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(headerGrid, [1, 2]);
             stack.Children.Add(headerGrid);
             var bodyStack = new StackPanel { Spacing = 6 };
             stack.Children.Add(bodyStack);
@@ -44721,6 +45030,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var addButton = new Button
                     {
                         Content = "Add Non Socket Place Proto ID",
+                        Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0),
                         Classes = { "add-component" },
                         HorizontalAlignment = HorizontalAlignment.Left
                     };
@@ -44744,12 +45054,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 2, 0, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                rowGrid.Children.Add(new TextBlock { Text = "", Margin = new Thickness(0, 4, 10, 4) });
                 var nonSocketLabel = new TextBlock { Text = "Non Socket Place Proto ID", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-                Grid.SetColumn(nonSocketLabel, 1);
+                Grid.SetColumn(nonSocketLabel, 0);
                 rowGrid.Children.Add(nonSocketLabel);
                 var nonSocketAcb = CreateValidatedOtherSuggestionBox(nonSocketPlaceProtoId, protoUnitSuggestions, "Non Socket Place Proto ID", suggestionsAlreadyNormalized: true);
-                Grid.SetColumn(nonSocketAcb, 2);
+                Grid.SetColumn(nonSocketAcb, 1);
                 rowGrid.Children.Add(nonSocketAcb);
                 _fieldControls["nonsocketplaceprotoid"] = nonSocketAcb;
 
@@ -44767,10 +45076,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                             RenderBody();
                         }
                     };
-                    Grid.SetColumn(clearButton, 3);
+                    Grid.SetColumn(clearButton, 2);
                     rowGrid.Children.Add(clearButton);
                 }
 
+                EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2]);
                 bodyStack.Children.Add(rowGrid);
             }
 
@@ -44837,11 +45147,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                         Margin = new Thickness(0, 4, 10, 4)
                     });
                 }
-                var acb = CreateOtherSuggestionBox("", unitTypeSuggestions, title);
+                var acb = CreateOtherSuggestionBox("", unitTypeSuggestions, title, EditorFieldWidthRole.ChipSearch);
                 if (useInlineSharedSelectionLayout)
                 {
-                    acb.Width = 150;
-                    acb.MaxWidth = 150;
                     acb.Margin = new Thickness(0);
                 }
                 Grid.SetColumn(acb, useInlineSharedSelectionLayout ? 1 : 0);
@@ -44958,6 +45266,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 rowGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(rowGrid, [1, 2], [3, 4, 5]);
             RegisterOtherSpecificContainer(key, rowGrid);
             otherSpecificContainer.Children.Add(rowGrid);
         }
@@ -45002,6 +45311,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 MinWidth = 180
             };
+            ConfigureUnitField(modeCb, EditorFieldWidthRole.LongEnum);
             Grid.SetColumn(modeCb, 2);
             headerGrid.Children.Add(modeCb);
             _fieldControls["recharge.mode"] = modeCb;
@@ -45049,96 +45359,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 headerGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(headerGrid, [1, 2], [3, 4], [5, 6]);
             stack.Children.Add(headerGrid);
-            var bodyStack = new StackPanel { Spacing = 6 };
+            var bodyStack = new StackPanel { Spacing = 6, Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0) };
             stack.Children.Add(bodyStack);
 
             StackPanel CreateInlineRechargeTypeEditor(string title, HashSet<string> values)
-            {
-                var editorStack = new StackPanel { Spacing = 2 };
-                var selectorRow = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                selectorRow.Children.Add(new TextBlock
-                {
-                    Text = title,
-                    FontWeight = FontWeight.Bold,
-                    VerticalAlignment = VerticalAlignment.Center
-                });
-                editorStack.Children.Add(selectorRow);
-                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-                editorStack.Children.Add(wrap);
-
-                AutoCompleteBox? selector = null;
-                var suggestions = GetAvailableBuildLimitTargets();
-
-                void RefreshDisplay()
-                {
-                    if (selector != null)
-                        selector.ItemsSource = suggestions.Where(value => !values.Contains(value)).ToList();
-                    wrap.Children.Clear();
-                    foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                    {
-                        wrap.Children.Add(CreateChip(value, async () =>
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                values.Remove(value);
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                            }
-                        }));
-                    }
-                }
-
-                if (!_isReadOnly)
-                {
-                    selector = CreateOtherSuggestionBox("", suggestions, title);
-                    selector.Width = 150;
-                    selector.MaxWidth = 150;
-                    selector.Margin = new Thickness(0, 4, 0, 4);
-                    selectorRow.Children.Add(selector);
-
-                    async Task PerformAdd()
-                    {
-                        var input = selector.Text?.Trim() ?? "";
-                        var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                        if (!string.IsNullOrWhiteSpace(match) && values.Add(match))
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                selector.Text = "";
-                                selector.SelectedItem = null;
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                            }
-                            else
-                            {
-                                values.Remove(match);
-                            }
-                        }
-                    }
-
-                    selector.SelectionChanged += async (_, _) =>
-                    {
-                        if (selector.SelectedItem is string selected)
-                        {
-                            selector.Text = selected;
-                            await PerformAdd();
-                        }
-                    };
-                }
-
-                RefreshDisplay();
-                return editorStack;
-            }
+                => CreateStatsCatalogChipGroup(title, values, GetAvailableBuildLimitTargets(), out _);
 
             void RenderBody()
             {
@@ -45149,7 +45376,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!showRechargeTypeFilters)
                 {
-                    if (_isReadOnly)
+                    if (_isReadOnly || selectedMode.Equals("ResourceDropoff", StringComparison.OrdinalIgnoreCase))
                         return;
 
                     var addButton = new Button
@@ -45177,13 +45404,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var filtersGrid = new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("*, *, Auto"),
-                    ColumnSpacing = 16,
-                    Margin = new Thickness(150, 0, 0, 0)
+                    ColumnSpacing = EditorFormLayout.GroupGap
                 };
-                var includeEditor = CreateInlineRechargeTypeEditor("Recharge Include Types", _currentRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                var includeEditor = CreateInlineRechargeTypeEditor("Include Type", _currentRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(includeEditor, 0);
                 filtersGrid.Children.Add(includeEditor);
-                var excludeEditor = CreateInlineRechargeTypeEditor("Recharge Exclude Types", _currentRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                var excludeEditor = CreateInlineRechargeTypeEditor("Exclude Type", _currentRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(excludeEditor, 1);
                 filtersGrid.Children.Add(excludeEditor);
 
@@ -45284,6 +45510,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 IsEnabled = !_isReadOnly,
                 MinWidth = 180
             };
+            ConfigureUnitField(modeCb, EditorFieldWidthRole.LongEnum);
             Grid.SetColumn(modeCb, 2);
             headerGrid.Children.Add(modeCb);
             _fieldControls["auxrecharge.mode"] = modeCb;
@@ -45331,96 +45558,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                 headerGrid.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(headerGrid, [1, 2], [3, 4], [5, 6]);
             stack.Children.Add(headerGrid);
-            var bodyStack = new StackPanel { Spacing = 6 };
+            var bodyStack = new StackPanel { Spacing = 6, Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0) };
             stack.Children.Add(bodyStack);
 
             StackPanel CreateInlineRechargeTypeEditor(string title, HashSet<string> values)
-            {
-                var editorStack = new StackPanel { Spacing = 2 };
-                var selectorRow = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                selectorRow.Children.Add(new TextBlock
-                {
-                    Text = title,
-                    FontWeight = FontWeight.Bold,
-                    VerticalAlignment = VerticalAlignment.Center
-                });
-                editorStack.Children.Add(selectorRow);
-                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
-                editorStack.Children.Add(wrap);
-
-                AutoCompleteBox? selector = null;
-                var suggestions = GetAvailableBuildLimitTargets();
-
-                void RefreshDisplay()
-                {
-                    if (selector != null)
-                        selector.ItemsSource = suggestions.Where(value => !values.Contains(value)).ToList();
-                    wrap.Children.Clear();
-                    foreach (var value in values.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                    {
-                        wrap.Children.Add(CreateChip(value, async () =>
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                values.Remove(value);
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                            }
-                        }));
-                    }
-                }
-
-                if (!_isReadOnly)
-                {
-                    selector = CreateOtherSuggestionBox("", suggestions, title);
-                    selector.Width = 150;
-                    selector.MaxWidth = 150;
-                    selector.Margin = new Thickness(0, 4, 0, 4);
-                    selectorRow.Children.Add(selector);
-
-                    async Task PerformAdd()
-                    {
-                        var input = selector.Text?.Trim() ?? "";
-                        var match = suggestions.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase));
-                        if (!string.IsNullOrWhiteSpace(match) && values.Add(match))
-                        {
-                            var proceed = await CheckStartLocalMod();
-                            if (proceed)
-                            {
-                                selector.Text = "";
-                                selector.SelectedItem = null;
-                                MarkDirty();
-                                RefreshDisplay();
-                                CommitChipAdditionAndRefreshXmlPreview();
-                            }
-                            else
-                            {
-                                values.Remove(match);
-                            }
-                        }
-                    }
-
-                    selector.SelectionChanged += async (_, _) =>
-                    {
-                        if (selector.SelectedItem is string selected)
-                        {
-                            selector.Text = selected;
-                            await PerformAdd();
-                        }
-                    };
-                }
-
-                RefreshDisplay();
-                return editorStack;
-            }
+                => CreateStatsCatalogChipGroup(title, values, GetAvailableBuildLimitTargets(), out _);
 
             void RenderBody()
             {
@@ -45431,7 +45575,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!showRechargeTypeFilters)
                 {
-                    if (_isReadOnly)
+                    if (_isReadOnly || selectedMode.Equals("ResourceDropoff", StringComparison.OrdinalIgnoreCase))
                         return;
 
                     var addButton = new Button
@@ -45459,13 +45603,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var filtersGrid = new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("*, *, Auto"),
-                    ColumnSpacing = 16,
-                    Margin = new Thickness(150, 0, 0, 0)
+                    ColumnSpacing = EditorFormLayout.GroupGap
                 };
-                var includeEditor = CreateInlineRechargeTypeEditor("Aux Recharge Include Types", _currentAuxRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                var includeEditor = CreateInlineRechargeTypeEditor("Include Type", _currentAuxRechargeIncludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(includeEditor, 0);
                 filtersGrid.Children.Add(includeEditor);
-                var excludeEditor = CreateInlineRechargeTypeEditor("Aux Recharge Exclude Types", _currentAuxRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                var excludeEditor = CreateInlineRechargeTypeEditor("Exclude Type", _currentAuxRechargeExcludeTypes ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 Grid.SetColumn(excludeEditor, 1);
                 filtersGrid.Children.Add(excludeEditor);
 
@@ -45600,6 +45743,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 GetKnownMinimapIcons(),
                 "Minimap Icon",
                 allowCustom: true);
+            ConfigureUnitField(iconAcb, EditorFieldWidthRole.AssetPath);
             Grid.SetColumn(iconAcb, 2);
             headerRow.Children.Add(iconAcb);
             _fieldControls["minimapicon"] = iconAcb;
@@ -45621,8 +45765,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 headerRow.Children.Add(deleteButton);
             }
 
+            EditorFormLayout.WrapLabeledGridColumns(headerRow, [1, 2, 3]);
             stack.Children.Add(headerRow);
-            var optionalRows = new StackPanel { Spacing = 2 };
+            var optionalRows = new WrapPanel { Margin = new Thickness(EditorFormLayout.LabelColumnWidth, 0, 0, 0) };
             stack.Children.Add(optionalRows);
 
             var sizeValue = ProtoXmlHandler.GetSimpleField(unit, "minimapsize") ?? "";
@@ -45652,63 +45797,56 @@ public partial class ProtoEditorWindow : SimpleWindow
                     _fieldControls.Remove(fieldKey);
                 sizeTb = redTb = greenTb = blueTb = null;
 
-                if (showSize || showColors)
+                void AddOptionalButton(string text, Action show)
                 {
-                    var detailsRow = new StackPanel
+                    var button = new Button
                     {
-                        Orientation = Orientation.Horizontal,
-                        Margin = new Thickness(150, 0, 0, 0),
-                        HorizontalAlignment = HorizontalAlignment.Left
+                        Content = text, Classes = { "add-component", "inline-action" },
+                        Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap)
                     };
-
-                    void AddLabel(string text, bool addLeadingGap)
-                        => detailsRow.Children.Add(new TextBlock
-                        {
-                            Text = text,
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Margin = new Thickness(addLeadingGap ? 8 : 0, 4, 10, 4)
-                        });
-
-                    if (showSize)
+                    button.Click += async (_, _) =>
                     {
-                        AddLabel("Size", false);
-                        sizeTb = CreateOtherTextBox(sizeValue, true);
-                        detailsRow.Children.Add(sizeTb);
-                        _fieldControls["minimapsize"] = sizeTb;
+                        if (!await CheckStartLocalMod()) return;
+                        show();
+                        RenderOptionalRows();
+                        MarkDirty();
+                    };
+                    optionalRows.Children.Add(button);
+                }
 
-                        if (!_isReadOnly)
+                if (showSize)
+                {
+                    sizeTb = CreateOtherTextBox(sizeValue, true);
+                    _fieldControls["minimapsize"] = sizeTb;
+                    Control sizeField = sizeTb;
+                    if (!_isReadOnly)
+                    {
+                        var removeSize = EditorRemoveButtons.Field();
+                        removeSize.Click += async (_, _) =>
                         {
-                            var removeSize = new Button { Classes = { "remove-button" }, Margin = new Thickness(2, 0, 0, 0) };
-                            removeSize.Click += async (_, _) =>
-                            {
-                                if (!await CheckStartLocalMod()) return;
-                                showSize = false;
-                                sizeValue = "";
-                                RenderOptionalRows();
-                                MarkDirty();
-                            };
-                            detailsRow.Children.Add(removeSize);
-                        }
+                            if (!await CheckStartLocalMod()) return;
+                            showSize = false;
+                            sizeValue = "";
+                            RenderOptionalRows();
+                            MarkDirty();
+                        };
+                        sizeField = EditorFormLayout.WithCross(sizeTb, removeSize);
                     }
+                    optionalRows.Children.Add(EditorFormLayout.LabeledGroup("Size", sizeField));
+                }
+                else if (!_isReadOnly) AddOptionalButton("Size", () => showSize = true);
 
-                    if (showColors)
+                if (showColors)
+                {
+                    void AddColorField(string label, string keyName, string value, Action<TextBox> capture, bool last = false)
                     {
-                        void AddColorField(string labelText, string keyName, string value, Action<TextBox> capture, bool addLeadingGap)
+                        var textBox = CreateOtherTextBox(value, true);
+                        capture(textBox);
+                        _fieldControls[keyName] = textBox;
+                        Control field = textBox;
+                        if (last && !_isReadOnly)
                         {
-                            AddLabel(labelText, addLeadingGap);
-                            var textBox = CreateOtherTextBox(value, true);
-                            capture(textBox);
-                            detailsRow.Children.Add(textBox);
-                            _fieldControls[keyName] = textBox;
-                        }
-
-                        AddColorField("Red", "minimapcolor.red", redValue, textBox => redTb = textBox, showSize);
-                        AddColorField("Green", "minimapcolor.green", greenValue, textBox => greenTb = textBox, true);
-                        AddColorField("Blue", "minimapcolor.blue", blueValue, textBox => blueTb = textBox, true);
-
-                        if (!_isReadOnly)
-                        {
-                            var removeColors = new Button { Classes = { "remove-button" }, Margin = new Thickness(2, 0, 0, 0) };
+                            var removeColors = EditorRemoveButtons.Field();
                             removeColors.Click += async (_, _) =>
                             {
                                 if (!await CheckStartLocalMod()) return;
@@ -45717,33 +45855,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 RenderOptionalRows();
                                 MarkDirty();
                             };
-                            detailsRow.Children.Add(removeColors);
+                            field = EditorFormLayout.WithCross(textBox, removeColors);
                         }
+                        optionalRows.Children.Add(EditorFormLayout.LabeledGroup(label, field));
                     }
-
-                    optionalRows.Children.Add(detailsRow);
+                    AddColorField("Red", "minimapcolor.red", redValue, textBox => redTb = textBox);
+                    AddColorField("Green", "minimapcolor.green", greenValue, textBox => greenTb = textBox);
+                    AddColorField("Blue", "minimapcolor.blue", blueValue, textBox => blueTb = textBox, last: true);
                 }
-
-                if (!_isReadOnly && (!showSize || !showColors))
-                {
-                    var buttons = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(150, 2, 0, 0) };
-                    void AddOptionalButton(string text, Action show)
-                    {
-                        var button = new Button { Content = text, Classes = { "add-component" }, Margin = new Thickness(0, 0, 8, 0) };
-                        button.Click += async (_, _) =>
-                        {
-                            if (!await CheckStartLocalMod()) return;
-                            show();
-                            RenderOptionalRows();
-                            MarkDirty();
-                        };
-                        buttons.Children.Add(button);
-                    }
-
-                    if (!showSize) AddOptionalButton("Size", () => showSize = true);
-                    if (!showColors) AddOptionalButton("Colors", () => showColors = true);
-                    optionalRows.Children.Add(buttons);
-                }
+                else if (!_isReadOnly) AddOptionalButton("Colors", () => showColors = true);
+                AttachProtoUnitStatsNumericBehaviors();
             }
 
             RenderOptionalRows();
@@ -45755,147 +45876,68 @@ public partial class ProtoEditorWindow : SimpleWindow
         void AddReplacementEditor()
         {
             const string key = "replacement";
-            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers))
-                return;
-
+            if (IsOtherSpecificAttributeVisible(key, _otherSpecificAttributeContainers)) return;
             var replacement = unit.Element("replacement");
-            var stack = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 2) };
-
-            var row1 = new Grid
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions($"{EditorFormLayout.LabelColumnWidth},*,Auto"), Margin = new Thickness(0, 2, 0, 2) };
+            grid.Children.Add(new TextBlock { Text = "Replacement", VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 6, EditorFormLayout.LabelGap, 0) });
+            var flow = new WrapPanel();
+            Grid.SetColumn(flow, 1); grid.Children.Add(flow);
+            var type = CreateStrictSearchableOtherComboBox(
+                ProtoConstants.GetEnumCaption((string?)replacement?.Attribute("type"), ProtoConstants.KnownReplacementTypes),
+                ProtoConstants.KnownReplacementTypes.Select(token => ProtoConstants.GetEnumCaption(token, ProtoConstants.KnownReplacementTypes)), "Type");
+            _fieldControls["replacement.type"] = type;
+            flow.Children.Add(EditorFormLayout.LabeledGroup("Type", type));
+            var value = CreateValidatedOtherSuggestionBox(replacement?.Value?.Trim() ?? "", otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
+            ConfigureUnitField(value, EditorFieldWidthRole.Reference);
+            _fieldControls["replacement.value"] = value;
+            flow.Children.Add(EditorFormLayout.LabeledGroup("Value", value));
+            var lifespanHost = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
+            flow.Children.Add(lifespanHost);
+            var lifespan = CreateOtherTextBox((string?)replacement?.Attribute("lifespan") ?? "", true);
+            var showLifespan = !string.IsNullOrWhiteSpace(lifespan.Text);
+            void RenderLifespan()
             {
-                ColumnDefinitions = new ColumnDefinitions("150, Auto, 150, Auto, 300, Auto"),
-                Margin = new Thickness(0, 2, 0, 2),
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            row1.Children.Add(new TextBlock { Text = "Replacement", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-
-            var typeLabel = new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) };
-            Grid.SetColumn(typeLabel, 1);
-            row1.Children.Add(typeLabel);
-
-            var typeCb = CreateStrictSearchableOtherComboBox((string?)replacement?.Attribute("type") ?? "", ProtoConstants.KnownReplacementTypes, "Type");
-            typeCb.Width = 150;
-            typeCb.MaxWidth = 150;
-            typeCb.Margin = new Thickness(0);
-            Grid.SetColumn(typeCb, 2);
-            row1.Children.Add(typeCb);
-            _fieldControls["replacement.type"] = typeCb;
-
-            var valueLabel = new TextBlock { Text = "Value", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 10, 4) };
-            Grid.SetColumn(valueLabel, 3);
-            row1.Children.Add(valueLabel);
-
-            var valueAcb = CreateValidatedOtherSuggestionBox(replacement?.Value?.Trim() ?? "", otherProtoUnitSuggestions, "Proto Unit", suggestionsAlreadyNormalized: true);
-            valueAcb.Width = 300;
-            valueAcb.MaxWidth = 300;
-            valueAcb.Margin = new Thickness(0);
-            Grid.SetColumn(valueAcb, 4);
-            row1.Children.Add(valueAcb);
-            _fieldControls["replacement.value"] = valueAcb;
-
+                lifespanHost.Children.Clear(); _fieldControls.Remove("replacement.lifespan");
+                if (showLifespan)
+                {
+                    lifespanHost.Children.Add(new TextBlock { Text = "Lifespan", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0) });
+                    lifespanHost.Children.Add(lifespan); _fieldControls["replacement.lifespan"] = lifespan;
+                    if (!_isReadOnly)
+                    {
+                        var remove = EditorRemoveButtons.Field();
+                        remove.Click += async (_, _) =>
+                        {
+                            if (!await CheckStartLocalMod()) return;
+                            showLifespan = false; lifespan.Text = ""; RenderLifespan(); MarkDirty();
+                        };
+                        lifespanHost.Children.Add(remove);
+                    }
+                }
+                else if (!_isReadOnly)
+                {
+                    var add = new Button { Content = "Add lifespan", Classes = { "add-component", "inline-action" } };
+                    add.Click += async (_, _) =>
+                    {
+                        if (!await CheckStartLocalMod()) return;
+                        showLifespan = true; RenderLifespan(); MarkDirty();
+                    };
+                    lifespanHost.Children.Add(add);
+                }
+                AttachProtoUnitStatsNumericBehaviors();
+            }
+            RenderLifespan();
             if (!_isReadOnly)
             {
-                var lifespan = (string?)replacement?.Attribute("lifespan") ?? "";
-                StackPanel? row2 = null;
-                TextBox? lifespanTb = null;
-                Button? addLifespanButton = null;
-
-                void ShowLifespanEditor(string initialValue)
+                var remove = EditorRemoveButtons.Card(description: "Remove Replacement");
+                remove.Click += async (_, _) =>
                 {
-                    if (row2 != null)
-                        return;
-
-                    row2 = new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 8,
-                        Margin = new Thickness(150, 0, 0, 0)
-                    };
-                    row2.Children.Add(new TextBlock { Text = "Lifespan", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-                    lifespanTb = CreateOtherTextBox(string.IsNullOrWhiteSpace(initialValue) ? "" : initialValue, true);
-                    lifespanTb.Width = 120;
-                    row2.Children.Add(lifespanTb);
-                    _fieldControls["replacement.lifespan"] = lifespanTb;
-
-                    var removeLifespanButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
-                    removeLifespanButton.Click += async (s, e) =>
-                    {
-                        var proceed = await CheckStartLocalMod();
-                        if (proceed && row2 != null)
-                        {
-                            stack.Children.Remove(row2);
-                            row2 = null;
-                            lifespanTb = null;
-                            _fieldControls.Remove("replacement.lifespan");
-                            addLifespanButton.IsVisible = true;
-                            MarkDirty();
-                        }
-                    };
-                    row2.Children.Add(removeLifespanButton);
-                    stack.Children.Add(row2);
-                    addLifespanButton.IsVisible = false;
-                }
-
-                addLifespanButton = new Button
-                {
-                    Content = "Add lifespan",
-                    Classes = { "add-component" },
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Margin = new Thickness(150, 0, 0, 0),
-                    IsVisible = string.IsNullOrWhiteSpace(lifespan)
+                    if (!await CheckStartLocalMod()) return;
+                    RemoveOtherSpecificContainer(key, "replacement.type", "replacement.value", "replacement.lifespan");
+                    MarkDirty(); RenderOtherSpecificAddControls();
                 };
-                addLifespanButton.Click += async (s, e) =>
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                    {
-                        ShowLifespanEditor(lifespan);
-                        MarkDirty();
-                    }
-                };
-
-                var deleteButton = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
-                deleteButton.Click += async (s, e) =>
-                {
-                    var proceed = await CheckStartLocalMod();
-                    if (proceed)
-                    {
-                        RemoveOtherSpecificContainer(key, "replacement.type", "replacement.value", "replacement.lifespan");
-                        MarkDirty();
-                        RenderOtherSpecificAddControls();
-                    }
-                };
-                Grid.SetColumn(deleteButton, 5);
-                row1.Children.Add(deleteButton);
-
-                stack.Children.Add(row1);
-                if (!string.IsNullOrWhiteSpace(lifespan))
-                    ShowLifespanEditor(lifespan);
-                stack.Children.Add(addLifespanButton);
+                Grid.SetColumn(remove, 2); grid.Children.Add(remove);
             }
-            else
-            {
-                stack.Children.Add(row1);
-                var lifespan = (string?)replacement?.Attribute("lifespan") ?? "";
-                if (!string.IsNullOrWhiteSpace(lifespan))
-                {
-                    var row2 = new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 8,
-                        Margin = new Thickness(150, 0, 0, 0)
-                    };
-                    row2.Children.Add(new TextBlock { Text = "Lifespan", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 10, 4) });
-                    var lifespanTb = CreateOtherTextBox(lifespan, true);
-                    lifespanTb.Width = 120;
-                    row2.Children.Add(lifespanTb);
-                    _fieldControls["replacement.lifespan"] = lifespanTb;
-                    stack.Children.Add(row2);
-                }
-            }
-
-            RegisterOtherSpecificContainer(key, stack);
-            otherSpecificContainer.Children.Add(stack);
+            RegisterOtherSpecificContainer(key, grid); otherSpecificContainer.Children.Add(grid);
         }
 
         void AddOtherSpecificAttributeByKey(string key)
@@ -46057,7 +46099,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 pickerHost.Children.Clear();
                 pickerHost.Children.Add(addButton);
 
-                var pickerRow = new Grid { ColumnDefinitions = new ColumnDefinitions("260"), Margin = new Thickness(0, 4, 0, 0) };
+                var pickerRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto"), Margin = new Thickness(0, 4, 0, 0) };
                 var pickerAcb = new AutoCompleteBox
                 {
                     ItemsSource = remaining,
@@ -46067,7 +46109,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     Margin = new Thickness(0)
                 };
+                ConfigureUnitField(pickerAcb, EditorFieldWidthRole.LongEnum);
                 EnableDropdownAutoComplete(pickerAcb, selectAllOnFirstClick: false);
+                EditorAutoCompleteService.KeepDropDownAnchored(pickerAcb);
                 Grid.SetColumn(pickerAcb, 0);
                 pickerRow.Children.Add(pickerAcb);
                 string? selectedAttributeLabel = null;
@@ -46261,6 +46305,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             costsGrid.Children.Add(tb);
             _costControls[rtype] = tb;
         }
+        EditorFormLayout.WrapGridColumns(costsGrid, [0, 1], [2, 3], [4, 5], [6, 7]);
         _activeEditorPanel.Children.Add(costsGrid);
 
         AddSectionHeader("Armor");
@@ -46308,9 +46353,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             armorGrid.Children.Add(tb);
             _armorControls[atype] = tb;
         }
+        EditorFormLayout.WrapGridColumns(armorGrid, [0, 1], [2, 3], [4, 5]);
         _activeEditorPanel.Children.Add(armorGrid);
 
-        AddSectionHeader("Unit Types");
+        var unitTypesHeader = AddSectionHeader("Unit Types");
         var selectedTypes = new HashSet<string>(ProtoXmlHandler.GetUnitTypeList(unit), StringComparer.OrdinalIgnoreCase);
         var availableUnitTypes = GetKnownUnitTypeNames();
         AutoCompleteBox? unitTypePicker = null;
@@ -46357,6 +46403,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 MaxWidth = 200,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
+            ConfigureUnitField(acbAdd, EditorFieldWidthRole.ChipSearch);
             unitTypePicker = acbAdd;
             EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
             Grid.SetColumn(acbAdd, 0);
@@ -46394,11 +46441,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                     PerformAddType();
                 }
             };
-            _activeEditorPanel.Children.Insert(_activeEditorPanel.Children.IndexOf(typesWrap), addTypeGrid);
+            AddSectionHeaderEditor(unitTypesHeader, addTypeGrid);
             _currentUnitTypes = selectedTypes;
         }
 
-        AddSectionHeader("Flags");
+        var flagsHeader = AddSectionHeader("Flags");
         var selectedFlags = new HashSet<string>(ProtoXmlHandler.GetFlagList(unit), StringComparer.OrdinalIgnoreCase);
         var availableUnitFlags = (_barData != null ? _barData.Flags : Enumerable.Empty<string>())
             .Concat(ProtoConstants.KnownFlags)
@@ -46448,6 +46495,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 MaxWidth = 200,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
+            ConfigureUnitField(acbAdd, EditorFieldWidthRole.ChipSearch);
             unitFlagPicker = acbAdd;
             EnableDropdownAutoComplete(acbAdd, selectAllOnFirstClick: false);
             Grid.SetColumn(acbAdd, 0);
@@ -46483,7 +46531,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     PerformAddFlag();
                 }
             };
-            _activeEditorPanel.Children.Insert(_activeEditorPanel.Children.IndexOf(flagsWrap), addFlagGrid);
+            AddSectionHeaderEditor(flagsHeader, addFlagGrid);
         }
 
         _activeEditorPanel = _abilitiesEditorPanel;
@@ -46545,14 +46593,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(currentValue) && !standardValues.Contains(currentValue, StringComparer.OrdinalIgnoreCase))
                 values = values.Concat([currentValue]);
 
-            return new ComboBox
+            return ProtoUnitCommandFieldFactory.ConfigureField(new ComboBox
             {
                 ItemsSource = values.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 SelectedItem = !string.IsNullOrWhiteSpace(currentValue) ? currentValue : "0",
                 IsEnabled = !_isReadOnly && enabled,
                 Width = 62,
                 HorizontalAlignment = HorizontalAlignment.Left
-            };
+            }, EditorFieldWidthRole.DenseNumeric, TransformEditorBusy);
         }
 
         async Task EnsureTransformStateLoadedAsync(TransformCommandAssignmentState state)
@@ -46628,8 +46676,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(12),
                 CornerRadius = new CornerRadius(6),
-                Width = 810,
-                HorizontalAlignment = HorizontalAlignment.Left
+                HorizontalAlignment = HorizontalAlignment.Stretch
             };
             var content = new StackPanel { Spacing = 8 };
             card.Child = content;
@@ -46638,8 +46685,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var saveDefinitionButton = new Button
             {
                 Content = "Save",
-                Background = Brush.Parse("#163E26"),
-                BorderBrush = Brush.Parse("#A98243"),
+                Classes = { "positive" },
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(8, 0, 0, 0),
                 IsVisible = !_isReadOnly && (state.DefinitionDirty || sourceBelongsToOtherUnit)
@@ -46648,7 +46694,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             var header = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("70,70,248,198,*,Auto,Auto"),
-                Width = 786,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -46674,13 +46719,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (_isReadOnly)
             {
-                var rowValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Row, 62, enabled: false);
+                var rowValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Row, EditorFieldWidthRole.DenseNumeric, enabled: false);
                 rowValue.Margin = new Thickness(0, 0, 8, 0);
                 Grid.SetRow(rowValue, 1);
                 Grid.SetColumn(rowValue, 0);
                 header.Children.Add(rowValue);
 
-                var columnValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Column, 62, enabled: false);
+                var columnValue = ProtoUnitCommandFieldFactory.CreateTextBox(state.Column, EditorFieldWidthRole.DenseNumeric, enabled: false);
                 columnValue.Margin = new Thickness(0, 0, 8, 0);
                 Grid.SetRow(columnValue, 1);
                 Grid.SetColumn(columnValue, 1);
@@ -46721,7 +46766,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             // Inline Transform command identities are owned by the source/target pair.
             // The standalone command editor remains available for legacy/manual identities.
-            var commandNameTextBox = ProtoUnitCommandFieldFactory.CreateTextBox(state.CommandName, 240, enabled: false);
+            var commandNameTextBox = ProtoUnitCommandFieldFactory.CreateTextBox(state.CommandName, EditorFieldWidthRole.Reference, enabled: false);
             Control commandNameEditorControl = commandNameTextBox;
             Grid.SetRow(commandNameEditorControl, 1);
             Grid.SetColumn(commandNameEditorControl, 2);
@@ -46738,6 +46783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     MaxWidth = 190,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
+                ProtoUnitCommandFieldFactory.ConfigureField(typeCombo, EditorFieldWidthRole.LongEnum, TransformEditorBusy);
                 typeCombo.SelectionChanged += (_, _) =>
                 {
                     if (TransformEditorBusy() || typeCombo.SelectedItem as string != "Transform (Multiple)")
@@ -46755,7 +46801,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             else
             {
                 typeEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
-                    state.IsMultiple ? "Transform (Multiple)" : "Transform (Unique)", 190, enabled: false);
+                    state.IsMultiple ? "Transform (Multiple)" : "Transform (Unique)", EditorFieldWidthRole.LongEnum, enabled: false);
             }
             typeEditor.Margin = new Thickness(0, 0, 8, 0);
             Grid.SetRow(typeEditor, 1);
@@ -46770,14 +46816,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var remove = new Button
-                {
-                    Content = "Remove",
-                    Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                    VerticalAlignment = VerticalAlignment.Top,
-                    Margin = new Thickness(8, 0, 0, 0)
-                };
+                var remove = EditorRemoveButtons.Card(new Thickness(8, 0, 0, 0), "Remove transform");
                 remove.Click += async (_, _) =>
                 {
                     if (!await CheckStartLocalMod())
@@ -46857,42 +46896,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Grid.SetColumn(remove, 6);
                 header.Children.Add(remove);
             }
+            EditorFormLayout.WrapHeaderColumns(header, 0, 1, 2, 3);
             content.Children.Add(header);
 
             var details = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions("115,240,Auto,240,*"),
-                ColumnSpacing = 8,
-                HorizontalAlignment = HorizontalAlignment.Left
+                ColumnDefinitions = new ColumnDefinitions("*"),
+                RowDefinitions = new RowDefinitions("Auto,Auto"),
+                HorizontalAlignment = HorizontalAlignment.Stretch
             };
-            for (var rowIndex = 0; rowIndex < 5; rowIndex++)
-                details.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            void AddLabel(string text, int row, int column)
-            {
-                var label = new TextBlock
-                {
-                    Text = text,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 2, 8, 2)
-                };
-                Grid.SetRow(label, row);
-                Grid.SetColumn(label, column);
-                details.Children.Add(label);
-            }
-
-            void AddEditor(Control editor, int row, int column, int span = 1)
-            {
-                editor.Margin = new Thickness(0, 2, 0, 2);
-                Grid.SetRow(editor, row);
-                Grid.SetColumn(editor, column);
-                if (span > 1)
-                    Grid.SetColumnSpan(editor, span);
-                details.Children.Add(editor);
-            }
-
-            AddLabel("Display Name", 0, 0);
-            var displayNameEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("displaynameid", ""), 240, definitionEditorEnabled);
+            var displayNameEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("displaynameid", ""), EditorFieldWidthRole.SingleLineText, definitionEditorEnabled, TransformEditorBusy);
             displayNameEditor.TextChanged += (_, _) =>
             {
                 if (!definitionEditorEnabled || TransformEditorBusy()) return;
@@ -46901,10 +46914,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.StringTexts["displaynameid"] = next;
                 MarkTransformDefinitionDirty(state, saveDefinitionButton);
             };
-            AddEditor(displayNameEditor, 0, 1);
-
-            AddLabel("Icon", 0, 2);
             var iconEditor = new AssetPathEditor { Width = 240, IsEnabled = definitionEditorEnabled };
+            ProtoUnitCommandFieldFactory.ConfigureField(iconEditor, EditorFieldWidthRole.AssetPath, TransformEditorBusy);
             iconEditor.Configure(definition.Values.GetValueOrDefault("icon", ""), context.IconPaths, value =>
             {
                 if (TransformEditorBusy())
@@ -46916,14 +46927,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
                 return Task.CompletedTask;
             });
-            AddEditor(iconEditor, 0, 3);
-
-            AddLabel("Rollover", 1, 0);
-            var rolloverEditor = ProtoUnitCommandFieldFactory.CreateTextBox(state.StringTexts.GetValueOrDefault("rollovertextid", ""), 603, definitionEditorEnabled);
-            rolloverEditor.AcceptsReturn = true;
-            rolloverEditor.TextWrapping = TextWrapping.Wrap;
-            rolloverEditor.MinLines = 1;
-            rolloverEditor.MaxLines = 5;
+            var rolloverEditor = EditorRolloverField.Configure(new TextBox { Text = state.StringTexts.GetValueOrDefault("rollovertextid", ""), IsEnabled = definitionEditorEnabled });
             rolloverEditor.TextChanged += (_, _) =>
             {
                 if (!definitionEditorEnabled || TransformEditorBusy()) return;
@@ -46932,7 +46936,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                 state.StringTexts["rollovertextid"] = next;
                 MarkTransformDefinitionDirty(state, saveDefinitionButton);
             };
-            AddEditor(rolloverEditor, 1, 1, 3);
+            var identityFields = new WrapPanel();
+            foreach (var (label, field) in new (string, Control)[] { ("Display Name", displayNameEditor), ("Icon", iconEditor) })
+            {
+                var group = EditorFormLayout.LabeledGroup(label, field);
+                ((TextBlock)group.Children[0]).Width = 115;
+                identityFields.Children.Add(group);
+            }
+            details.Children.Add(identityFields);
+            var rolloverRow = EditorRolloverField.CreateRow("Rollover", rolloverEditor, labelWidth: 115);
+            Grid.SetRow(rolloverRow, 1); details.Children.Add(rolloverRow);
 
             // The Transform-specific rows are shared with the standalone ProtoUnit Command editor.
             // The inline host keeps ownership of card actions/persistence and locks the source ProtoUnit.
@@ -47030,11 +47043,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var economy = state.AssociatedTechnology;
                 var economyEditable = definitionEditorEnabled && !state.AssociatedTechnologyIsBuiltIn;
-                var durationLabel = new TextBlock { Text = "Duration", VerticalAlignment = VerticalAlignment.Center };
-                Grid.SetColumn(durationLabel, 2);
-                sharedTransformEditor.AssociatedTechRow.Children.Add(durationLabel);
                 var durationEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
-                    EditorNumericFieldStyle.FormatDisplay(economy.ResearchPoints), 100, economyEditable);
+                    EditorNumericFieldStyle.FormatDisplay(economy.ResearchPoints), EditorFieldWidthRole.Numeric, economyEditable, TransformEditorBusy);
                 EditorNumericInputBehavior.AttachRule(durationEditor, ProtoUnitNumericKind.UnsignedFloat);
                 durationEditor.TextChanged += (_, _) =>
                 {
@@ -47044,8 +47054,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     economy.ResearchPoints = value;
                     MarkTransformDefinitionDirty(state, saveDefinitionButton);
                 };
-                Grid.SetColumn(durationEditor, 3);
-                sharedTransformEditor.AssociatedTechRow.Children.Add(durationEditor);
+                sharedTransformEditor.AddAssociatedTechField("Duration", durationEditor);
 
                 var costGrid = new Grid
                 {
@@ -47055,7 +47064,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Margin = new Thickness(0, 2)
                 };
 
-                var costLabel = new TextBlock { Text = "Cost", VerticalAlignment = VerticalAlignment.Center };
+                var costLabel = new TextBlock { Text = "Cost", Width = 115, VerticalAlignment = VerticalAlignment.Center };
                 Grid.SetColumn(costLabel, 0);
                 costGrid.Children.Add(costLabel);
                 for (var resourceIndex = 0; resourceIndex < ProtoConstants.KnownResourceTypes.Length; resourceIndex++)
@@ -47065,7 +47074,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Grid.SetColumn(label, resourceIndex * 2 + 1);
                     costGrid.Children.Add(label);
                     var costEditor = ProtoUnitCommandFieldFactory.CreateTextBox(
-                        EditorNumericFieldStyle.FormatDisplay(economy.Costs.GetValueOrDefault(resource, "0")), 100, economyEditable);
+                        EditorNumericFieldStyle.FormatDisplay(economy.Costs.GetValueOrDefault(resource, "0")), EditorFieldWidthRole.Numeric, economyEditable, TransformEditorBusy);
                     EditorNumericInputBehavior.AttachRule(costEditor, ProtoUnitNumericKind.UnsignedInteger);
                     costEditor.TextChanged += (_, _) =>
                     {
@@ -47078,6 +47087,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     Grid.SetColumn(costEditor, resourceIndex * 2 + 2);
                     costGrid.Children.Add(costEditor);
                 }
+                EditorFormLayout.WrapFlowingGridColumns(costGrid, [0], [1, 2], [3, 4], [5, 6], [7, 8]);
                 content.Children.Add(costGrid);
             }
 
@@ -47151,9 +47161,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 MarkDirty();
                 RenderTransformTabs();
                 RefreshTransformAddArea();
-                _statusMessage.Text = "Transform command saved.";
+                ReportSaveFeedback(EditorSaveOutcome.Saved);
                 await RenderTransformAssignmentAsync(state);
-                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
                 return true;
             }
 
@@ -47269,6 +47278,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Width = 200,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
+            ProtoUnitCommandFieldFactory.ConfigureField(typePicker, EditorFieldWidthRole.LongEnum, TransformEditorBusy);
             Grid.SetColumn(typePicker, 1);
             row.Children.Add(typePicker);
             var cancel = new Button { Content = "Cancel", Padding = new Thickness(8, 4) };
@@ -47353,7 +47363,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var transform = state.TransformDefinition ?? LoadProtoUnitTransformDefinition(state.CommandName);
                 if (transform == null || string.IsNullOrWhiteSpace(transform.From) ||
-                    transform.From.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase))
+                    transform.From.Equals(currentTransformUnitName, StringComparison.OrdinalIgnoreCase) ||
+                    IsPendingTransformSourceRename(state.CommandName, transform.From, currentTransformUnitName))
                     continue;
 
                 activeTransformState = state;
@@ -47361,7 +47372,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 await new Prompt(
                     PromptType.Error,
                     "Transform command",
-                    $"'{state.CommandName}' transforms '{transform.From}', but this ProtoUnit is '{currentTransformUnitName}'. Change the Transform field to '{currentTransformUnitName}' and save the command under a new name before saving the ProtoUnit.").ShowDialog(this);
+                    $"'{state.CommandName}' transforms '{transform.From}', but this ProtoUnit is '{currentTransformUnitName}'. Remove this assignment or choose a Transform command for this unit. You can also discard the Unit changes by switching documents.").ShowDialog(this);
                 return false;
             }
             return true;
@@ -47404,7 +47415,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsEnabled = !_isReadOnly,
             Margin = new Thickness(0, 4, 0, 4)
         };
-        EditorTextFieldStyle.ConfigureSelector(tacticsControl);
+        EditorTextFieldStyle.ConfigureSelector(tacticsControl, EditorFieldWidthRole.AssetPath);
         ConfigureStrictSuggestionAutoComplete(tacticsControl, availableTactics, initialTactics);
 
         Grid.SetColumn(tacticsControl, 1);
@@ -47618,6 +47629,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _selectedProtoActionIndex = action == null ? 0 : Math.Max(0, _protoActionWidgets.IndexOf(action));
             RefreshActionSelector();
         }
+        _revealActionForValidation = action => SelectAction(action, isNavigation: true);
 
         bool CanReorderAction(ProtoActionWidgetState actionState)
             => !_isReadOnly &&
@@ -48251,18 +48263,16 @@ public partial class ProtoEditorWindow : SimpleWindow
         var mainStack = new StackPanel { Spacing = 8 };
         border.Child = mainStack;
 
-        var header = new DockPanel
-        {
-            LastChildFill = false
-        };
-        mainStack.Children.Add(header);
+        var header = new WrapPanel();
+        var actionHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        actionHeader.Children.Add(header);
+        mainStack.Children.Add(actionHeader);
 
         var bodyStack = new StackPanel { Spacing = 8 };
         mainStack.Children.Add(bodyStack);
 
         var nameLabel = new TextBlock { Text = "Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
         DockPanel.SetDock(nameLabel, Dock.Left);
-        header.Children.Add(nameLabel);
 
         var nameAcb = new AutoCompleteBox
         {
@@ -48287,11 +48297,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             VerticalAlignment = VerticalAlignment.Center
         };
         DockPanel.SetDock(nameValidationFrame, Dock.Left);
-        header.Children.Add(nameValidationFrame);
+        nameLabel.Margin = new Thickness(0);
+        nameValidationFrame.Margin = new Thickness(0);
+        header.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = EditorFormLayout.LabelGap,
+            Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
+            VerticalAlignment = VerticalAlignment.Center, Children = { nameLabel, nameValidationFrame }
+        });
 
         var typeLabel = new TextBlock { Text = "Type:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
         DockPanel.SetDock(typeLabel, Dock.Left);
-        header.Children.Add(typeLabel);
 
         var typeAcb = new AutoCompleteBox
         {
@@ -48314,7 +48330,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             VerticalAlignment = VerticalAlignment.Center
         };
         DockPanel.SetDock(typeValidationFrame, Dock.Left);
-        header.Children.Add(typeValidationFrame);
+        typeLabel.Margin = new Thickness(0);
+        typeValidationFrame.Margin = new Thickness(0);
+        header.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = EditorFormLayout.LabelGap,
+            Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
+            VerticalAlignment = VerticalAlignment.Center, Children = { typeLabel, typeValidationFrame }
+        });
 
         var rawActiveValue = ProtoXmlHandler.GetProtoActionSimpleFieldValue(effectiveAction, "active");
         var hasExplicitActiveValue = !string.IsNullOrWhiteSpace(rawActiveValue);
@@ -48327,7 +48350,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             Margin = new Thickness(0, 0, 6, 0)
         };
         DockPanel.SetDock(activeLabel, Dock.Left);
-        header.Children.Add(activeLabel);
 
         var activeCheckBox = new CheckBox
         {
@@ -48337,7 +48359,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             Margin = new Thickness(0, 0, 10, 0)
         };
         DockPanel.SetDock(activeCheckBox, Dock.Left);
-        header.Children.Add(activeCheckBox);
+        activeLabel.Margin = new Thickness(0);
+        activeCheckBox.Margin = new Thickness(0);
+        header.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = EditorFormLayout.LabelGap,
+            Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
+            VerticalAlignment = VerticalAlignment.Center, Children = { activeLabel, activeCheckBox }
+        });
 
         var state = new ProtoActionWidgetState
         {
@@ -48471,13 +48500,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (!_isReadOnly)
         {
-            var btnRemove = new Button
-            {
-                Content = "Remove",
-                Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            var btnRemove = EditorRemoveButtons.Card(description: "Remove action");
+            btnRemove.VerticalAlignment = VerticalAlignment.Top;
             btnRemove.Click += async (s, e) =>
             {
                 var actionName = state.NameAcb.Text?.Trim() ?? state.Model.Name?.Trim() ?? "";
@@ -48520,8 +48544,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 }
             };
             state.RemoveButton = btnRemove;
-            DockPanel.SetDock(btnRemove, Dock.Right);
-            header.Children.Add(btnRemove);
+            Grid.SetColumn(btnRemove, 1);
+            actionHeader.Children.Add(btnRemove);
         }
 
         nameAcb.TextChanged += async (s, e) =>
@@ -48776,16 +48800,19 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var dmgContainer = new WrapPanel { Orientation = Orientation.Horizontal };
         state.DamageRowsContainer = dmgContainer;
-        state.DamageSectionContainer.Children.Add(dmgContainer);
 
         var damageTypeLabel = new TextBlock
         {
             Text = "Type:",
-            Margin = new Thickness(0, 4, 8, 4),
-            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 6, EditorFormLayout.LabelGap, 0),
+            VerticalAlignment = VerticalAlignment.Top,
             IsVisible = false
         };
-        dmgContainer.Children.Add(damageTypeLabel);
+        var damageFlow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        damageFlow.Children.Add(damageTypeLabel);
+        Grid.SetColumn(dmgContainer, 1);
+        damageFlow.Children.Add(dmgContainer);
+        state.DamageSectionContainer.Children.Add(damageFlow);
 
         Button? addDamageButton = null;
         var isRefreshingDamageTypes = false;
@@ -48837,7 +48864,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 addDamageButton = new Button
                 {
                     Content = "Add Damage",
-                    Classes = { "add-component" },
+                    Classes = { "add-component", "inline-action" },
                     Margin = new Thickness(2, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -48968,16 +48995,19 @@ public partial class ProtoEditorWindow : SimpleWindow
                 Orientation = Orientation.Horizontal
             };
             state.DamageBonusRowsContainer = bonusContainer;
-            state.BonusSectionContainer.Children.Add(bonusContainer);
 
             var bonusLabel = new TextBlock
             {
                 Text = "Damage Bonuses:",
-                Margin = new Thickness(0, 4, 10, 6),
-                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 6, EditorFormLayout.LabelGap, 0),
+                VerticalAlignment = VerticalAlignment.Top,
                 IsVisible = false
             };
-            bonusContainer.Children.Add(bonusLabel);
+            var bonusFlow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+            bonusFlow.Children.Add(bonusLabel);
+            Grid.SetColumn(bonusContainer, 1);
+            bonusFlow.Children.Add(bonusContainer);
+            state.BonusSectionContainer.Children.Add(bonusFlow);
 
             Button? btnAddBonus = null;
 
@@ -49007,11 +49037,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     Text = btype,
                     FilterMode = AutoCompleteFilterMode.Contains,
-                    ItemsSource = GetKnownUnitTypeNames()
-                        .Concat(_barData?.UnitNames ?? [])
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(x => x)
-                        .ToList(),
+                    ItemsSource = GetAvailableBuildLimitTargets(),
                     Width = 180,
                     IsEnabled = !_isReadOnly
                 };
@@ -49034,6 +49060,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var valTb = new TextBox { Text = bval, IsEnabled = !_isReadOnly, Width = 80 };
                 AttachProtoActionDecimalBehavior(valTb);
+                ConfigureUnitField(valTb, EditorFieldWidthRole.DamageBonusMultiplier);
+                ConfigureUnitField(typeAcb, EditorFieldWidthRole.Reference);
                 valTb.TextChanged += async (s, e) =>
                 {
                     if (!_isPopulating)
@@ -49044,7 +49072,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 };
                 var valueHost = new Grid
                 {
-                    Width = 80,
+                    Width = EditorFormLayout.DamageBonusMultiplierWidth,
                     HorizontalAlignment = HorizontalAlignment.Left,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -49083,7 +49111,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 if (!_isReadOnly)
                 {
-                    var btnDel = new Button { Classes = { "remove-button" }, VerticalAlignment = VerticalAlignment.Center };
+                    var btnDel = EditorRemoveButtons.Row(description: "Remove damage bonus");
                     btnDel.Click += async (s, e) =>
                     {
                         if (isInheritedBonusType)
@@ -49109,6 +49137,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     rowPanel.Children.Add(btnDel);
                 }
 
+                rowPanel.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
+                EditorFormLayout.UseInlineRowLayout(rowPanel);
                 bonusContainer.Children.Add(rowPanel);
                 RefreshBonusSectionPresentation();
                 EnsureAddBonusButtonAtEnd();
@@ -49126,7 +49156,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 btnAddBonus = new Button
                 {
                     Content = "Add Damage Bonus",
-                    Classes = { "add-component" },
+                    Classes = { "add-component", "inline-action" },
                     Margin = new Thickness(0, 0, 0, 6),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -49192,6 +49222,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
+        FinalizeProtoActionFieldRoles(state);
         RefreshAllProtoActionNameValidation();
         return border;
     }
@@ -49255,7 +49286,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         .Where(tag => _fieldControls.TryGetValue(tag, out var control) && control is TextBox)
                         .ToDictionary(
                             tag => tag,
-                            tag => ((TextBox)_fieldControls[tag]).Text?.Trim() ?? "",
+                            tag => ((TextBox)_fieldControls[tag]).Text ?? "",
                             StringComparer.OrdinalIgnoreCase);
 
                     var oldUnitName = _currentUnitName;
@@ -49263,13 +49294,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     _currentUnitName = newUnitName;
                     RenameOpenDocumentTabs(EditorEntityKind.Units, oldUnitName, newUnitName);
 
-                    var renamedIds = BuildRenamedUnitStringIds(newUnitName, oldStringIds, stringTexts);
+                    var renamedIds = BuildRenamedUnitStringIds(newUnitName, oldStringIds, stringTexts, oldUnitName,
+                        _loadedModStringValues.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
                     _currentStringFieldIds.Clear();
                     foreach (var entry in renamedIds)
                     {
                         _currentStringFieldIds[entry.Key] = entry.Value;
                         ProtoXmlHandler.SetSimpleField(unit, entry.Key, entry.Value);
-                        if (stringTexts.TryGetValue(entry.Key, out var text))
+                        if (stringTexts.TryGetValue(entry.Key, out var text) &&
+                            ((text.Length > 0 && !text.Equals(oldStringIds.GetValueOrDefault(entry.Key), StringComparison.Ordinal)) ||
+                             _loadedModStringValues.ContainsKey(oldStringIds.GetValueOrDefault(entry.Key) ?? "")))
                         {
                             _pendingUnitStringRemovals.Remove(entry.Value);
                             _pendingUnitStringUpdates[entry.Value] = text;
@@ -49635,50 +49669,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             unit.Add(damageShadingElement);
         }
 
-        unit.Elements("killreward").Remove();
-        foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-        {
-            if (_fieldControls.TryGetValue($"killreward:{resourceType}", out var killRewardCtrl) && killRewardCtrl is TextBox killRewardTb)
-            {
-                var killRewardValue = killRewardTb.Text?.Trim() ?? "";
-                if (!string.IsNullOrWhiteSpace(killRewardValue))
-                {
-                    unit.Add(new XElement("killreward",
-                        new XAttribute("resourcetype", resourceType),
-                        killRewardValue));
-                }
-            }
-        }
-
-        unit.Elements("ResourceReturn").Remove();
-        foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-        {
-            if (_fieldControls.TryGetValue($"resourcereturn:{resourceType}", out var resourceReturnCtrl) && resourceReturnCtrl is TextBox resourceReturnTb)
-            {
-                var resourceReturnValue = resourceReturnTb.Text?.Trim() ?? "";
-                if (!string.IsNullOrWhiteSpace(resourceReturnValue))
-                {
-                    unit.Add(new XElement("ResourceReturn",
-                        new XAttribute("resourceType", resourceType),
-                        resourceReturnValue));
-                }
-            }
-        }
-
-        unit.Elements("ResourceReturnRate").Remove();
-        foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-        {
-            if (_fieldControls.TryGetValue($"resourcereturnrate:{resourceType}", out var resourceReturnRateCtrl) && resourceReturnRateCtrl is TextBox resourceReturnRateTb)
-            {
-                var resourceReturnRateValue = resourceReturnRateTb.Text?.Trim() ?? "";
-                if (!string.IsNullOrWhiteSpace(resourceReturnRateValue))
-                {
-                    unit.Add(new XElement("ResourceReturnRate",
-                        new XAttribute("resourceType", resourceType),
-                        resourceReturnRateValue));
-                }
-            }
-        }
+        WriteResourceRows(unit, "killreward", originalUnit);
+        WriteResourceRows(unit, "ResourceReturn", originalUnit);
+        WriteResourceRows(unit, "ResourceReturnRate", originalUnit);
 
         if (_currentFlags != null)
         {
@@ -49690,10 +49683,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                  returnRateOnConstructionCtrl is CheckBox returnRateOnConstructionCb &&
                  returnRateOnConstructionCb.IsChecked == true);
 
-            if (shouldReturnOnConstruction)
-                _currentFlags.Add("ReturnResourcesOnConstruction");
-            else
-                _currentFlags.Remove("ReturnResourcesOnConstruction");
+            if (_fieldControls.ContainsKey("resourcereturn:returnonconstruction") || _fieldControls.ContainsKey("resourcereturnrate:returnonconstruction") ||
+                _removedResourceModules.Contains("resourcereturn") || _removedResourceModules.Contains("resourcereturnrate"))
+            {
+                if (shouldReturnOnConstruction) _currentFlags.Add("ReturnResourcesOnConstruction");
+                else _currentFlags.Remove("ReturnResourcesOnConstruction");
+            }
 
             var shouldDisableDeleteReturn =
                 (_fieldControls.TryGetValue("resourcereturn:noreturnondelete", out var noReturnOnDeleteCtrl) &&
@@ -49703,10 +49698,12 @@ public partial class ProtoEditorWindow : SimpleWindow
                  noReturnRateOnDeleteCtrl is CheckBox noReturnRateOnDeleteCb &&
                  noReturnRateOnDeleteCb.IsChecked == true);
 
-            if (shouldDisableDeleteReturn)
-                _currentFlags.Add("DoNotApplyResourceReturnIfDeleted");
-            else
-                _currentFlags.Remove("DoNotApplyResourceReturnIfDeleted");
+            if (_fieldControls.ContainsKey("resourcereturn:noreturnondelete") || _fieldControls.ContainsKey("resourcereturnrate:noreturnondelete") ||
+                _removedResourceModules.Contains("resourcereturn") || _removedResourceModules.Contains("resourcereturnrate"))
+            {
+                if (shouldDisableDeleteReturn) _currentFlags.Add("DoNotApplyResourceReturnIfDeleted");
+                else _currentFlags.Remove("DoNotApplyResourceReturnIfDeleted");
+            }
 
             if (_fieldControls.TryGetValue("resourcereturnrate:totalcostbased", out var totalCostBasedCtrl) &&
                 totalCostBasedCtrl is CheckBox totalCostBasedCb &&
@@ -49714,7 +49711,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 _currentFlags.Add("ResourceReturnRateTotalCost");
             }
-            else
+            else if (_fieldControls.ContainsKey("resourcereturnrate:totalcostbased") || _removedResourceModules.Contains("resourcereturnrate"))
             {
                 _currentFlags.Remove("ResourceReturnRateTotalCost");
             }
@@ -49775,7 +49772,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         unit.Elements("veterancybonus").Remove();
-        if (_veterancyBonusRows.Count > 0 && _currentVeterancyIncludeTypes != null && _currentVeterancyIncludeTypes.Count > 0)
+        // Incomplete bonus drafts must survive preview/chip capture. Save validates
+        // Include Types separately rather than silently dropping the entire module.
+        if (_veterancyBonusRows.Count > 0)
         {
             var groupedBonusRows = _veterancyBonusRows
                 .Select(row => new
@@ -49819,10 +49818,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 veterancyBonus.Add(rank);
             }
 
-            veterancyBonus.Add(new XElement("includetypes",
-                _currentVeterancyIncludeTypes
-                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                    .Select(x => new XElement("unittype", x))));
+            if (_currentVeterancyIncludeTypes != null && _currentVeterancyIncludeTypes.Count > 0)
+                veterancyBonus.Add(new XElement("includetypes",
+                    _currentVeterancyIncludeTypes
+                        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                        .Select(x => new XElement("unittype", x))));
 
             if (_currentVeterancyExcludeTypes != null && _currentVeterancyExcludeTypes.Count > 0)
             {
@@ -49883,7 +49883,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (string.IsNullOrWhiteSpace(spawnProtoUnit))
                 continue;
 
-            var spawnType = row.TypeCb.SelectedItem as string ?? "";
+            var spawnType = ProtoConstants.GetXmlEnumToken(row.TypeCb.SelectedItem as string, ProtoConstants.KnownSpawnTypes);
             if (string.IsNullOrWhiteSpace(spawnType))
                 continue;
 
@@ -50000,16 +50000,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                             .Select(x => new XElement("unittype", x))));
                 }
 
-                var respawnRates = new XElement("respawnrates");
-                foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-                {
-                    var resourceKey = resourceType.ToLowerInvariant();
-                    var value = _fieldControls.TryGetValue($"respawntraindata.{resourceKey}", out var rateCtrl) && rateCtrl is TextBox rateTb
-                        ? rateTb.Text?.Trim() ?? "0"
-                        : "0";
-                    respawnRates.Add(new XElement(resourceKey, string.IsNullOrWhiteSpace(value) ? "0" : value));
-                }
-                respawnTrainData.Add(respawnRates);
+                if (WriteRespawnResourceRows(originalRespawnTrainData?.Element("respawnrates")) is { } respawnRates)
+                    respawnTrainData.Add(respawnRates);
 
                 var respawnLimit = _fieldControls.TryGetValue("respawntraindata.respawnlimit", out var respawnLimitCtrl) && respawnLimitCtrl is TextBox respawnLimitTb
                     ? respawnLimitTb.Text?.Trim() ?? ""
@@ -50189,29 +50181,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 unit.Add(unitShieldRegenElement);
         }
 
-        void SaveResourceMap(string elementName)
-        {
-            var entries = new List<(string ResourceType, string Value, string DropOffMultiplier)>();
-            foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-            {
-                if (_fieldControls.TryGetValue($"{elementName}:{resourceType}", out var ctrl) && ctrl is TextBox tb)
-                {
-                    var value = tb.Text?.Trim() ?? "";
-                    var multiplier = elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase) &&
-                                     _fieldControls.TryGetValue($"{elementName}:dropoffmultiplier:{resourceType}", out var multiplierCtrl) &&
-                                     multiplierCtrl is TextBox multiplierTb
-                        ? multiplierTb.Text?.Trim() ?? ""
-                        : "";
-                    entries.Add((resourceType, value, multiplier));
-                }
-            }
-            ProtoXmlHandler.SetResourceMapEntries(
-                unit,
-                elementName,
-                entries,
-                omitZeroValues: elementName.Equals("carrycapacity", StringComparison.OrdinalIgnoreCase) ||
-                                elementName.Equals("initialresource", StringComparison.OrdinalIgnoreCase));
-        }
+        void SaveResourceMap(string elementName) => WriteResourceRows(unit, elementName, originalUnit);
 
         SaveResourceMap("carrycapacity");
         SaveResourceMap("initialresource");
@@ -50445,7 +50415,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             var type = _fieldControls.TryGetValue("replacement.type", out var replacementTypeCtrl) && replacementTypeCtrl is StrictSearchableComboBox replacementTypeCb
                 ? replacementTypeCb.Value
                 : "";
-            type = PreserveStrictCommittedValue(type, ProtoConstants.KnownReplacementTypes);
+            type = PreserveStrictCommittedValue(ProtoConstants.GetXmlEnumToken(type, ProtoConstants.KnownReplacementTypes), ProtoConstants.KnownReplacementTypes);
             value = CanonicalizeKnownOrExisting(
                 value,
                 GetAvailableTrainUnitNames(),
@@ -50588,13 +50558,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 ProtoXmlHandler.SetSimpleField(unit, "buildlimit", val);
                 var validBuildLimitTargets = GetAvailableBuildLimitTargets();
-                var normalizedBuildLimitEntries = _buildLimitRows
-                    .Select(row =>
+                var originalDynamicTargets = ProtoXmlHandler.GetDynamicBuildLimitUnitTypes(originalUnit);
+                var normalizedBuildLimitEntries = ReadBuildLimitEntries()
+                    .Select(entry =>
                     {
-                        var input = row.ValueAcb.Text?.Trim() ?? "";
-                        var value = validBuildLimitTargets.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase)) ?? "";
-                        var weight = row.WeightTb?.Text?.Trim() ?? "";
-                        if (row.WeightTb != null)
+                        var input = entry.Value.Trim();
+                        var value = validBuildLimitTargets.FirstOrDefault(x => x.Equals(input, StringComparison.OrdinalIgnoreCase))
+                            ?? (_currentBuildLimitMode == BuildLimitMode.Dynamic && originalDynamicTargets.Contains(input, StringComparer.Ordinal) ? input : "");
+                        var weight = entry.Weight?.Trim() ?? "";
+                        if (_currentBuildLimitMode == BuildLimitMode.Shared)
                         {
                             if (string.IsNullOrWhiteSpace(weight))
                             {
@@ -50798,12 +50770,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             var showRof = attackUsesCombatRanges &&
                           draftCustomValues.GetValueOrDefault("additional.rof") != "1" &&
                           ShouldShowProtoActionHardcodedField(pw, effectiveAction, currentActionType, "rof");
+            // Standalone tactics own the complete source, without Unit inheritance.
+            // Keep a loaded value when its mode hides the control; explicit Remove
+            // already clears the model, so this cannot resurrect a removed field.
             pa.Rof = showRof
                 ? ResolveProtoOverrideValue(
                     pw.Draft.RateOfFire,
                     tacticsAction?.Rof ?? "",
                     pw.Model.Rof)
-                : ResolveProtoOverrideValue(
+                : _protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle ? pw.Model.Rof : ResolveProtoOverrideValue(
                     "",
                     tacticsAction?.Rof ?? "",
                     pw.Model.Rof);
@@ -50815,7 +50790,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     pw.Draft.MaxRange,
                     tacticsAction?.MaxRange ?? "",
                     pw.Model.MaxRange)
-                : ResolveProtoOverrideValue(
+                : _protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle ? pw.Model.MaxRange : ResolveProtoOverrideValue(
                     "",
                     tacticsAction?.MaxRange ?? "",
                     pw.Model.MaxRange);
@@ -51034,6 +51009,13 @@ public partial class ProtoEditorWindow : SimpleWindow
                     : "";
                 var originalProtoValue = ProtoXmlHandler.GetProtoActionSimpleFieldValue(pw.Model, kvp.Key);
                 var protoValue = ResolveProtoOverrideValue(currentValue, tacticsValue, originalProtoValue);
+                // Text controls cannot represent attributes. Keep unchanged attributed
+                // leaves intact, including empty ones. Explicit removal already removes
+                // the element from Model, so it cannot be resurrected here.
+                if (string.Equals(protoValue, originalProtoValue, StringComparison.Ordinal) &&
+                    pa.AdditionalElements.Any(element => !element.HasElements && element.HasAttributes &&
+                        element.Name.LocalName.Equals(kvp.Key, StringComparison.OrdinalIgnoreCase)))
+                    continue;
                 ProtoXmlHandler.SetProtoActionSimpleFieldValue(pa, kvp.Key, protoValue);
             }
 
@@ -51301,9 +51283,51 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         foreach (var rename in actionRenames)
             GameIdentifierReferencePolicy.RenameProtoActionReferences(unit, rename.OldName, rename.NewName);
+        // Preview projection runs for intermediate keystrokes. Do not consume
+        // a binding rename until the actual Unit draft is captured.
+        if (targetUnit == null)
+            RenameCurrentAbilityActionBindings(actionRenames);
 
-        ProtoUnitStatsXmlPreserver.PreserveUnmanagedContent(originalUnit, unit);
+        ProtoUnitStatsXmlPreserver.PreserveUnmanagedContent(originalUnit, unit,
+            _resourceRowEditors.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
         ProtoUnitXmlOrderPolicy.NormalizeForEditor(unit);
+    }
+
+    private void RenameCurrentAbilityActionBindings(IReadOnlyList<ProtoActionRenameOperation> renames)
+    {
+        string Rename(string value) => renames.FirstOrDefault(rename =>
+            rename.UnitName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase) &&
+            rename.OldName.Equals(value, StringComparison.OrdinalIgnoreCase))?.NewName ?? value;
+        foreach (var draft in _abilityDrafts.Values)
+        {
+            draft.BoundMainRechargeAction = Rename(draft.BoundMainRechargeAction);
+            draft.BoundAuxRechargeAction = Rename(draft.BoundAuxRechargeAction);
+        }
+        var wasLoading = _loadingAbilityEditor;
+        _loadingAbilityEditor = true;
+        try
+        {
+            foreach (var prefix in new[] { "recharge", "auxrecharge" })
+            {
+                if (!_fieldControls.TryGetValue($"{prefix}.boundAction", out var control) ||
+                    control is not AutoCompleteBox picker)
+                    continue;
+                var value = Rename(picker.Text ?? "");
+                if (picker.ItemsSource is IEnumerable<string> names)
+                    picker.ItemsSource = names.Select(Rename).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                picker.Text = value;
+            }
+        }
+        finally { _loadingAbilityEditor = wasLoading; }
+    }
+
+    private void AcknowledgeSavedProtoActionNames()
+    {
+        foreach (var state in _protoActionWidgets)
+        {
+            state.Model.Name = state.Draft.Name;
+            state.IsNewCustomAction = false;
+        }
     }
 
     internal static void SyncStackProtoActionReference(XElement unit, string? actionName)
@@ -51479,15 +51503,19 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     private void MarkDirty()
+        => MarkUnitDraftDirty(_currentUnitName);
+
+    private void MarkUnitDraftDirty(string? unitName)
     {
         if (_isPopulating || _suppressEditorChangeTracking) return;
+        _saveFeedback.ClearSuccessOnEdit();
         AttachProtoUnitStatsNumericBehaviors();
         RefreshProtoActionAnimationValidationVisuals();
         if (_isAbilityDefinitionEditorMode) _allowAbilityDefinitionEditorClose = false;
         _showStoredRawXml = false;
         _isDirty = true;
-        if (!_isAbilityDefinitionEditorMode && _protoActionHostAdapter.Context.TracksProtoUnitDraft && !string.IsNullOrWhiteSpace(_currentUnitName))
-            _dirtyUnitNames.Add(_currentUnitName);
+        if (!_isAbilityDefinitionEditorMode && _protoActionHostAdapter.Context.TracksProtoUnitDraft && !string.IsNullOrWhiteSpace(unitName))
+            _dirtyUnitNames.Add(unitName);
         _fileLabel.Text = (_modFilePath ?? "Unsaved Mod") + " *";
         RefreshDocumentTabHeaders();
         ScheduleXmlPreviewRefresh();
@@ -51505,7 +51533,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private string? GetConfiguredUserFolderPath()
     {
-        var config = ProtoEditorSettings.LoadSettings();
+        var config = ReadHostSettings().Config ?? new ProtoEditorConfig();
         if (!string.IsNullOrWhiteSpace(config.UserFolderPath))
         {
             return config.UserFolderPath;
@@ -51564,9 +51592,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             InvalidateModStringEntriesCache();
             RefreshProtoActionMetadata();
 
-            var config = ProtoEditorSettings.LoadSettings();
-            config.LastModFilePath = path;
-            ProtoEditorSettings.SaveSettings(config);
+            RememberLoadedMod(path);
             var warnings = ModXmlDocumentSafety.Validate(doc, ModXmlDocumentKind.ProtoUnits).Warnings;
             if (warnings.Count > 0)
             {
@@ -51661,9 +51687,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _isDirty = false;
             EnsureCurrentModStringFileExists();
 
-            var config = ProtoEditorSettings.LoadSettings();
-            config.LastModFilePath = xmlPath;
-            ProtoEditorSettings.SaveSettings(config);
+            RememberLoadedMod(xmlPath);
             return true;
         }
         catch (Exception ex)
@@ -51729,7 +51753,9 @@ public partial class ProtoEditorWindow : SimpleWindow
     internal static Dictionary<string, string> BuildRenamedUnitStringIds(
         string unitName,
         IReadOnlyDictionary<string, string> oldIds,
-        IReadOnlyDictionary<string, string> fieldTexts)
+        IReadOnlyDictionary<string, string> fieldTexts,
+        string? oldUnitName = null,
+        IReadOnlySet<string>? availableSourceIds = null)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var displayText = fieldTexts.GetValueOrDefault("displaynameid") ?? "";
@@ -51741,9 +51767,24 @@ public partial class ProtoEditorWindow : SimpleWindow
             var oldId = oldIds.GetValueOrDefault(tag) ?? "";
             if (string.IsNullOrWhiteSpace(oldId) && string.IsNullOrWhiteSpace(text))
                 continue;
+            if (oldId.Length > 0 && availableSourceIds != null && !availableSourceIds.Contains(oldId) &&
+                (text.Length == 0 || text.Equals(oldId, StringComparison.Ordinal)))
+            {
+                result[tag] = oldId;
+                continue;
+            }
+            if (!string.IsNullOrWhiteSpace(oldUnitName) && oldId.Length > 0 &&
+                !oldId.Equals(BuildStringIdForUnit(oldUnitName, GetStringSuffixForField(tag)), StringComparison.OrdinalIgnoreCase) &&
+                !(tag.Equals("editornameid", StringComparison.OrdinalIgnoreCase) &&
+                  oldId.Equals(BuildStringIdForUnit(oldUnitName, "NAME"), StringComparison.OrdinalIgnoreCase)))
+            {
+                result[tag] = oldId;
+                continue;
+            }
 
             if (tag.Equals("editornameid", StringComparison.OrdinalIgnoreCase) &&
-                text.Equals(displayText, StringComparison.Ordinal))
+                text.Equals(displayText, StringComparison.Ordinal) &&
+                (oldId.Length == 0 || oldId.Equals(oldIds.GetValueOrDefault("displaynameid"), StringComparison.OrdinalIgnoreCase)))
             {
                 result[tag] = result.GetValueOrDefault("displaynameid") ??
                               BuildStringIdForUnit(unitName, GetStringSuffixForField("displaynameid"));
@@ -51789,27 +51830,31 @@ public partial class ProtoEditorWindow : SimpleWindow
     private Task SaveTechnologyStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
-        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Technologies);
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Technologies,
+            removalsAlreadyChecked: true, updateSession: false);
 
     private Task SaveMajorGodStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
-        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.MajorGods);
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.MajorGods,
+            removalsAlreadyChecked: true, updateSession: false);
 
     private Task SavePowerStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
-        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Powers);
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Powers,
+            removalsAlreadyChecked: true, updateSession: false);
 
     private Task SaveCultureStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals)
-        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Cultures);
+        => SaveResolvedStringValuesAsync(updates, removals, StringTableSection.Cultures,
+            removalsAlreadyChecked: true, updateSession: false);
 
     private Task SaveResolvedStringValuesAsync(
         IReadOnlyDictionary<string, string> updates,
         IReadOnlyCollection<string> removals,
-        StringTableSection section)
+        StringTableSection section, bool removalsAlreadyChecked = false, bool updateSession = true)
     {
         if (updates.Count == 0 && removals.Count == 0)
             return Task.CompletedTask;
@@ -51832,7 +51877,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 exception);
         }
 
-        var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(removals);
+        var safeRemovals = removalsAlreadyChecked ? removals.ToArray() : FilterUnreferencedStringIdsInCurrentMod(removals);
         if (updates.Count == 0 && safeRemovals.Length == 0)
             return Task.CompletedTask;
 
@@ -51844,6 +51889,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return Task.CompletedTask;
 
         AtomicWriteAllBytes(path, encodedSource.Encode(updatedText));
+        if (!updateSession) return Task.CompletedTask;
         _cachedModStringEntriesPath = path;
         _cachedModStringEntries = StringTableParser.Parse(updatedText);
         _loadedModStringsFileState = FileIntegrityTransaction.CaptureState(path);
@@ -52126,12 +52172,13 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var pendingId in _pendingUnitRenameRemovedStringIds)
         {
             _pendingUnitStringRemovals.Add(pendingId);
-            _pendingUnitStringUpdates.Remove(pendingId);
+            if (_modXmlDoc == null || !TechnologyStringIdPolicy.IsReferencedByTechnologies(pendingId, _modXmlDoc.Root?.Elements() ?? []))
+                _pendingUnitStringUpdates.Remove(pendingId);
         }
 
         var displayId = _currentStringFieldIds.GetValueOrDefault("displaynameid");
         var displayText = _fieldControls.TryGetValue("displaynameid", out var displayCtrl) && displayCtrl is TextBox displayTb
-            ? displayTb.Text?.Trim() ?? ""
+            ? displayTb.Text ?? ""
             : "";
         foreach (var tag in StringBackedFieldTags)
         {
@@ -52141,8 +52188,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             var id = _currentStringFieldIds.GetValueOrDefault(tag);
             if (tag.Equals("editornameid", StringComparison.OrdinalIgnoreCase))
             {
-                var editorText = editor.Text?.Trim() ?? "";
-                if (string.Equals(editorText, displayText, StringComparison.Ordinal))
+                var editorText = editor.Text ?? "";
+                if (string.Equals(editorText, displayText, StringComparison.Ordinal) &&
+                    (string.IsNullOrWhiteSpace(id) || string.Equals(id, displayId, StringComparison.OrdinalIgnoreCase)))
                 {
                     id = displayId;
                     _currentStringFieldIds[tag] = displayId ?? "";
@@ -52158,7 +52206,11 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (string.IsNullOrWhiteSpace(id))
                 continue;
             _pendingUnitStringRemovals.Remove(id);
-            _pendingUnitStringUpdates[id] = editor.Text?.Trim() ?? "";
+            var text = editor.Text ?? "";
+            if (!_loadedModStringValues.ContainsKey(id) && text.Equals(id, StringComparison.Ordinal))
+                _pendingUnitStringUpdates.Remove(id);
+            else if (text.Length > 0 || _loadedModStringValues.ContainsKey(id) || _pendingUnitStringUpdates.ContainsKey(id))
+                _pendingUnitStringUpdates[id] = text;
         }
 
         if (_modXmlRoot != null)
@@ -52183,17 +52235,198 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void SavePendingUnitStringDrafts(IReadOnlySet<string> approvedRemovals)
+    private void SavePendingUnitStringDrafts(IReadOnlyDictionary<string, string> updates, IReadOnlySet<string> approvedRemovals,
+        IReadOnlyDictionary<string, string>? abilityUpdates = null)
     {
-        if (_pendingUnitStringUpdates.Count == 0 && _pendingUnitStringRemovals.Count == 0)
+        if (updates.Count == 0 && approvedRemovals.Count == 0)
             return;
-        var entries = LoadCurrentModStringEntries(requireReadable: true);
-        var safeRemovals = FilterUnreferencedStringIdsInCurrentMod(approvedRemovals);
-        foreach (var id in safeRemovals)
-            entries.Remove(id);
-        foreach (var entry in _pendingUnitStringUpdates)
-            entries[entry.Key] = entry.Value;
-        SaveCurrentModStringEntries(entries, StringTableSection.Units);
+        var abilityValues = updates.Where(update => abilityUpdates?.ContainsKey(update.Key) == true)
+            .ToDictionary(update => update.Key, update => update.Value, StringComparer.OrdinalIgnoreCase);
+        var unitValues = updates.Where(update => !abilityValues.ContainsKey(update.Key))
+            .ToDictionary(update => update.Key, update => update.Value, StringComparer.OrdinalIgnoreCase);
+        if (unitValues.Count > 0 || approvedRemovals.Count > 0)
+        {
+            var entries = new Dictionary<string, string>(LoadCurrentModStringEntries(requireReadable: true), StringComparer.OrdinalIgnoreCase);
+            foreach (var id in approvedRemovals) entries.Remove(id);
+            foreach (var entry in unitValues) entries[entry.Key] = entry.Value;
+            SaveCurrentModStringEntries(entries, StringTableSection.Units, updateSession: false);
+        }
+        if (abilityValues.Count > 0)
+            SaveResolvedStringValuesAsync(abilityValues, [], StringTableSection.Abilities,
+                removalsAlreadyChecked: true, updateSession: false).GetAwaiter().GetResult();
+    }
+
+    private static HashSet<string> CollectVerifiedUnitStringIds(XElement unit)
+    {
+        var name = (string?)unit.Attribute("name") ?? "";
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in unit.Elements().Where(field => field.Name.Namespace == XNamespace.None &&
+                     StringBackedFieldTags.Contains(field.Name.LocalName, StringComparer.OrdinalIgnoreCase)))
+        {
+            var id = field.Value.Trim();
+            if (id.Equals(BuildStringIdForUnit(name, GetStringSuffixForField(field.Name.LocalName)), StringComparison.OrdinalIgnoreCase) ||
+                (field.Name.LocalName.Equals("editornameid", StringComparison.OrdinalIgnoreCase) &&
+                 id.Equals(BuildStringIdForUnit(name, "NAME"), StringComparison.OrdinalIgnoreCase))) owned.Add(id);
+        }
+        foreach (var action in unit.Elements().Where(element => element.Name == "protoaction"))
+        {
+            var actionName = action.Element("name")?.Value ?? "";
+            var id = action.Element("displaynameid")?.Value.Trim() ?? "";
+            if (id.Length > 0 && id.Equals(BuildProtoActionDisplayNameStringId(name, actionName), StringComparison.OrdinalIgnoreCase)) owned.Add(id);
+        }
+        return owned;
+    }
+
+    private (OwnedStringLifecyclePlan Plan, OwnedStringSaveInspection Inspection, Dictionary<string, string> Updates,
+        IReadOnlyDictionary<string, FileIntegrityTransaction.FileState> OwnerStates,
+        PreparedAbilityDraftSave? Abilities) PrepareUnitStringCleanup(
+        IReadOnlyDictionary<string, string> existing, GameIdentifierReferenceMigrationPlan migration)
+    {
+        var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        { [Path.GetFullPath(_modFilePath!)] = new XDocument(_modXmlDoc!) };
+        foreach (var path in migration.Paths)
+            if (migration.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = _pendingUnitStringRemovals.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var changes = new List<OwnedStringRename>();
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var updates = new Dictionary<string, string>(_pendingUnitStringUpdates, StringComparer.OrdinalIgnoreCase);
+        foreach (var original in _loadedModXmlBaseline?.Root?.Elements().Where(element => element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)) ?? [])
+        {
+            var name = (string?)original.Attribute("name") ?? "";
+            if (!_dirtyUnitNames.Contains(name) && !_pendingUnitRenames.ContainsKey(name) &&
+                !_dirtyUnitNames.Contains(_pendingUnitRenames.GetValueOrDefault(name) ?? name)) continue;
+            var originalOwned = CollectVerifiedUnitStringIds(original);
+            owned.UnionWith(originalOwned); candidates.UnionWith(originalOwned);
+            var nextName = _pendingUnitRenames.GetValueOrDefault(name) ?? name;
+            var current = ProtoXmlHandler.GetUnitElement(proposed[Path.GetFullPath(_modFilePath!)].Root!, nextName);
+            if (current == null) continue;
+            foreach (var tag in StringBackedFieldTags)
+            {
+                var oldId = ProtoXmlHandler.GetSimpleField(original, tag)?.Trim() ?? "";
+                var newId = ProtoXmlHandler.GetSimpleField(current, tag)?.Trim() ?? "";
+                if (!originalOwned.Contains(oldId) || newId.Length == 0 || oldId.Equals(newId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!CollectVerifiedUnitStringIds(current).Contains(newId)) continue;
+                changes.Add(new OwnedStringRename(name + "/" + tag, oldId, newId));
+                if (updates.TryGetValue(newId, out var text)) values[oldId] = text;
+            }
+            foreach (var action in original.Elements("protoaction"))
+            {
+                var oldActionName = action.Element("name")?.Value ?? "";
+                var nextActionName = _pendingProtoActionRenames.FirstOrDefault(rename =>
+                    rename.UnitName.Equals(nextName, StringComparison.OrdinalIgnoreCase) &&
+                    rename.OldName.Equals(oldActionName, StringComparison.OrdinalIgnoreCase))?.NewName ?? oldActionName;
+                var nextAction = current.Elements("protoaction").FirstOrDefault(element =>
+                    string.Equals(element.Element("name")?.Value, nextActionName, StringComparison.OrdinalIgnoreCase));
+                var oldId = action.Element("displaynameid")?.Value.Trim() ?? "";
+                var newId = nextAction?.Element("displaynameid")?.Value.Trim() ?? "";
+                if (!originalOwned.Contains(oldId) || !CollectVerifiedUnitStringIds(current).Contains(newId) ||
+                    oldId.Equals(newId, StringComparison.OrdinalIgnoreCase)) continue;
+                changes.Add(new OwnedStringRename(name + "/action/" + oldActionName, oldId, newId));
+                if (updates.TryGetValue(newId, out var text)) values[oldId] = text;
+            }
+        }
+        foreach (var unit in proposed[Path.GetFullPath(_modFilePath!)].Root!.Elements().Where(element => element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)))
+            if (_dirtyUnitNames.Contains((string?)unit.Attribute("name") ?? "")) owned.UnionWith(CollectVerifiedUnitStringIds(unit));
+
+        var ownerStates = new Dictionary<string, FileIntegrityTransaction.FileState>(StringComparer.OrdinalIgnoreCase);
+        var affectedCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var bundles = _pendingOwnedTransformBundleDeletions.Values.SelectMany(value => value).DistinctBy(bundle => bundle.CommandName, StringComparer.OrdinalIgnoreCase).ToList();
+        if (bundles.Count > 0 || _pendingUnitRenames.Count > 0)
+        {
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
+            var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")!;
+            var commands = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands);
+            var transforms = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms);
+            var technologies = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies);
+            foreach (var file in new[] { commands, transforms, technologies }) ownerStates[file.Path] = file.LoadedState;
+            var originals = technologies.Document.Root!.Elements().Where(element => element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(element => (string?)element.Attribute("name") ?? "", element => new XElement(element), StringComparer.OrdinalIgnoreCase);
+            var originalCommands = commands.Document.Root!.Elements()
+                .ToDictionary(GetProtoUnitCommandName, element => new XElement(element), StringComparer.OrdinalIgnoreCase);
+            foreach (var bundle in bundles)
+            {
+                affectedCommands.Add(bundle.CommandName);
+                if (originalCommands.TryGetValue(bundle.CommandName, out var command))
+                { var ids = ProtoUnitCommandStringPolicy.CollectOwnedStringIds(command); owned.UnionWith(ids); candidates.UnionWith(ids); }
+                if (originals.TryGetValue(bundle.TechnologyName, out var technology))
+                { var ids = TechnologyStringIdPolicy.CollectOwnedStringIds(technology); owned.UnionWith(ids); candidates.UnionWith(ids); }
+            }
+            TransformCommandBundleLifecycle.Delete(bundles, commands.Document, transforms.Document, technologies.Document);
+            foreach (var rename in _pendingUnitRenames)
+            {
+                var unit = ProtoXmlHandler.GetUnitElement(proposed[Path.GetFullPath(_modFilePath!)].Root!, rename.Value);
+                if (unit == null) continue;
+                foreach (var bundle in TransformCommandBundleLifecycle.RenameUnit(unit, rename.Key, rename.Value,
+                             commands.Document, transforms.Document, technologies.Document))
+                {
+                    affectedCommands.Add(bundle.Old.CommandName);
+                    if (originalCommands.TryGetValue(bundle.Old.CommandName, out var originalCommand))
+                    {
+                        var commandIds = ProtoUnitCommandStringPolicy.CollectOwnedStringIds(originalCommand);
+                        owned.UnionWith(commandIds); candidates.UnionWith(commandIds);
+                        var renamedCommand = commands.Document.Root!.Elements().First(element =>
+                            GetProtoUnitCommandName(element).Equals(bundle.New.CommandName, StringComparison.OrdinalIgnoreCase));
+                        var commandSources = commandIds.Where(id => existing.ContainsKey(id) || updates.ContainsKey(id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        changes.AddRange(ProtoUnitCommandStringPolicy.RenameOwnedStringIds(originalCommand, renamedCommand, bundle.New.CommandName, commandSources));
+                        foreach (var id in commandSources) values[id] = updates.GetValueOrDefault(id) ?? existing[id];
+                    }
+                    if (!originals.TryGetValue(bundle.Old.TechnologyName, out var original)) continue;
+                    var ids = TechnologyStringIdPolicy.CollectOwnedStringIds(original);
+                    owned.UnionWith(ids); candidates.UnionWith(ids);
+                    var renamed = technologies.Document.Root!.Elements().First(element =>
+                        string.Equals((string?)element.Attribute("name"), bundle.New.TechnologyName, StringComparison.OrdinalIgnoreCase));
+                    var available = ids.Where(id => existing.ContainsKey(id) || updates.ContainsKey(id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var renamedIds = TechnologyStringIdPolicy.RenameOwnedStringIds(original, renamed, bundle.New.TechnologyName, available);
+                    changes.AddRange(renamedIds);
+                    foreach (var id in available) values[id] = updates.GetValueOrDefault(id) ?? existing[id];
+                }
+            }
+            foreach (var file in new[] { commands, transforms, technologies }) proposed[file.Path] = file.Document;
+        }
+        var abilities = PreparePendingAbilityDraftSave(existing);
+        if (abilities != null)
+        {
+            foreach (var file in abilities.Documents)
+            {
+                proposed[file.Path] = file.Document;
+                ownerStates[file.Path] = file.LoadedState;
+                var validation = ModXmlDocumentSafety.Validate(file.Document, file.Kind);
+                if (!validation.IsSafeToEdit) throw new InvalidDataException(validation.ToDisplayMessage(file.Path));
+            }
+            ownerStates[AbilityBindingMetadataStore.StoragePath] = abilities.MetadataState;
+            owned.UnionWith(abilities.OriginalOwned);
+            owned.UnionWith(abilities.CurrentOwned);
+            candidates.UnionWith(abilities.OriginalOwned);
+            foreach (var update in abilities.Updates)
+            {
+                if (abilities.CurrentOwned.Contains(update.Key) && !abilities.OriginalOwned.Contains(update.Key) && existing.ContainsKey(update.Key))
+                    throw new InvalidOperationException($"Ability string '{update.Key}' already exists. No files were written.");
+                AddAbilityStringUpdate(updates, update.Key, update.Value);
+            }
+        }
+        var context = abilities == null
+            ? PrepareOwnedStringSaveInspection(candidates.Concat(updates.Keys).Concat(changes.Select(change => change.NewId)), proposed, _modFilePath!)
+            : PrepareAbilityStringInspection(candidates.Concat(updates.Keys).Concat(changes.Select(change => change.NewId)),
+                proposed, _modFilePath!, abilities.AffectedNames, abilities.AffectedNames);
+        if (abilities != null)
+            foreach (var id in abilities.Updates.Keys.Where(abilities.CurrentOwned.Contains))
+                if (context.ReservedIds.Contains(id))
+                    throw new InvalidOperationException($"Ability string '{id}' is claimed by another edit. No files were written.");
+        if (affectedCommands.Count > 0)
+        {
+            EnsureProtoUnitCommandCatalogLoaded(force: true);
+            var reserved = context.ReservedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            reserved.UnionWith(_protoUnitCommandCatalog.Where(entry => !affectedCommands.Contains(entry.Key))
+                .SelectMany(entry => GetProtoUnitCommandStringIds(entry.Value)));
+            context = new OwnedStringSaveInspection(context.References, reserved);
+        }
+        var plan = OwnedStringLifecyclePolicy.Prepare(changes, candidates, owned, existing, values,
+            context.References.ReferencedIds, context.ReservedIds);
+        foreach (var id in updates.Keys.Where(id => candidates.Contains(id) && !context.References.ReferencedIds.Contains(id)).ToList()) updates.Remove(id);
+        foreach (var update in plan.StringUpdates) updates[update.Key] = update.Value;
+        return (plan, context, updates, ownerStates, abilities);
     }
 
     private void TrackPendingUnitRename(string oldName, string newName)
@@ -52203,6 +52436,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             return;
         }
+
+        MoveUnitXmlDraft(oldName, newName);
 
         var originalName = _pendingUnitRenames.FirstOrDefault(entry =>
             entry.Value.Equals(oldName, StringComparison.OrdinalIgnoreCase)).Key;
@@ -52304,7 +52539,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_isReadOnly) return true;
         if (_isPopulating || !allowReadOnlyPrompt) return false;
 
-        var prompt = new Prompt(PromptType.Confirm, "Base Game Unit", "You are editing a base game unit which cannot be changed directly.\n\nWould you like to start a local mod to save these changes?");
+        var prompt = new Prompt(PromptType.Confirm, "Base Game Unit", "You are editing a base game unit which cannot be changed directly.\n\nWould you like to start a local mod to save these changes?", confirmButtonText: "Create local mod", actionRole: PromptActionRole.Positive);
         await prompt.ShowDialog(this);
         if (!prompt.Confirmed)
         {
@@ -52364,7 +52599,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!hasUnitChanges && !hasTechnologyChanges && !hasMajorGodChanges && !hasPowerChanges)
             return true;
 
-        var prompt = new Prompt(PromptType.Confirm, "Unsaved Changes", "You have unsaved changes. Do you want to discard them and continue?");
+        var prompt = new Prompt(PromptType.Confirm, "Unsaved Changes", "You have unsaved changes. Do you want to discard them and continue?", confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
         await prompt.ShowDialog(this);
         return prompt.Confirmed;
     }
@@ -52753,6 +52988,22 @@ public partial class ProtoEditorWindow : SimpleWindow
         var allNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var unitAssociations = new List<XElement>();
 
+        void AddPower(XElement power)
+        {
+            var name = GetAbilityElementName(power);
+            if (string.IsNullOrWhiteSpace(name)) return;
+            // A mod override determines membership too: do not leave an original
+            // Ability selectable when its replacement is now a God Power.
+            if (!PowerCatalog.IsAbilityPower(power))
+            {
+                allNames.Remove(name);
+                _abilityPowerCatalog.Remove(name);
+                return;
+            }
+            allNames.Add(name);
+            _abilityPowerCatalog[name] = new XElement(power);
+        }
+
         void AddAssociation(XElement ability)
         {
             var name = GetAbilityElementName(ability);
@@ -52794,10 +53045,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var doc = XDocument.Load(path, LoadOptions.PreserveWhitespace);
                     foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
                     {
-                        var name = GetAbilityElementName(power);
-                        if (string.IsNullOrWhiteSpace(name)) continue;
-                        allNames.Add(name);
-                        _abilityPowerCatalog[name] = new XElement(power);
+                        AddPower(power);
                     }
                 }
                 catch { }
@@ -52826,10 +53074,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     foreach (var power in doc.Root.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)))
                     {
-                        var name = GetAbilityElementName(power);
-                        if (string.IsNullOrWhiteSpace(name)) continue;
-                        allNames.Add(name);
-                        _abilityPowerCatalog[name] = new XElement(power);
+                        AddPower(power);
                     }
                 }
             }
@@ -52887,10 +53132,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var doc = XDocument.Load(powersModsPath, LoadOptions.PreserveWhitespace);
                 foreach (var power in doc.Root?.Elements().Where(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase)) ?? [])
                 {
-                    var name = GetAbilityElementName(power);
-                    if (string.IsNullOrWhiteSpace(name)) continue;
-                    allNames.Add(name);
-                    _abilityPowerCatalog[name] = new XElement(power);
+                    AddPower(power);
                 }
             }
             catch { }
@@ -52943,25 +53185,20 @@ public partial class ProtoEditorWindow : SimpleWindow
     }
 
     internal static string BuildAbilityStringId(string abilityName, bool rollover)
-    {
-        var normalized = new string(abilityName.Trim().ToUpperInvariant()
-            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
-        while (normalized.Contains("__", StringComparison.Ordinal))
-            normalized = normalized.Replace("__", "_", StringComparison.Ordinal);
-        normalized = normalized.Trim('_');
-        return $"STR_ABILITY_{normalized}{(rollover ? "_LR" : "")}";
-    }
+        => AbilityStringPolicy.BuildId(abilityName, rollover);
 
     private string BuildUniqueAbilityStringId(string abilityName, bool rollover, IReadOnlyDictionary<string, string> stringEntries)
     {
         var baseId = BuildAbilityStringId(abilityName, rollover);
         var reserved = new HashSet<string>(stringEntries.Keys, StringComparer.OrdinalIgnoreCase);
-        foreach (var power in _abilityPowerCatalog.Values)
-        {
-            var tag = rollover ? "rolloverid" : "displaynameid";
-            var id = power.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
-            if (!string.IsNullOrWhiteSpace(id)) reserved.Add(id);
-        }
+        reserved.UnionWith(_abilityPowerCatalog.Values.SelectMany(GetAbilityDefinitionStringIds));
+        reserved.UnionWith(_pendingUnitStringUpdates.Keys);
+        if (_technologyView != null) reserved.UnionWith(_technologyView.PendingStringIds);
+        if (_powerView != null) reserved.UnionWith(_powerView.PendingStringIds);
+        if (_majorGodView != null) reserved.UnionWith(_majorGodView.PendingStringIds);
+        reserved.UnionWith(_abilityDrafts.Values.Concat(_unitAbilityDrafts.Values.SelectMany(drafts => drafts.Values))
+            .SelectMany(draft => draft.PowerValues.Where(pair => AbilityStringPolicy.FieldTags.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+                .Select(pair => pair.Value.Trim())).Where(id => id.Length > 0));
         if (!reserved.Contains(baseId)) return baseId;
 
         var stem = rollover && baseId.EndsWith("_LR", StringComparison.OrdinalIgnoreCase) ? baseId[..^3] : baseId;
@@ -52996,165 +53233,15 @@ public partial class ProtoEditorWindow : SimpleWindow
     internal static void SaveAbilityXmlDocument(XDocument document, string path, Func<string, string>? serializedXmlTransform = null)
         => PreservedXmlFile.SaveAtomic(document, path, serializedXmlTransform);
 
-    private void SaveAbilityDrafts()
-    {
-        if (string.IsNullOrWhiteSpace(_modFilePath) || string.IsNullOrWhiteSpace(_currentUnitName)) return;
 
-        var abilitiesPath = GetCurrentModAbilitiesFilePath("abilities_mods.xml");
-        if (!string.IsNullOrWhiteSpace(abilitiesPath))
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(abilitiesPath)!);
-            var doc = LoadAbilityXmlDocumentForUpdate(abilitiesPath, "abilitiesmods");
-            if (doc.Root == null) doc.Add(new XElement("abilitiesmods"));
-            var root = doc.Root!;
-            root.Name = "abilitiesmods";
-            var existingUnit = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(_currentUnitName, StringComparison.OrdinalIgnoreCase));
-            var replacementAbilities = new List<XElement>();
-            foreach (var draft in _abilityDrafts.Values.Where(d => !string.IsNullOrWhiteSpace(d.Name)))
-            {
-                var source = draft.GeneralSource ?? new XElement("ability", new XText(draft.Name));
-                var children = draft.GeneralValues.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).Select(kv => new XElement(kv.Key, kv.Value))
-                    .Concat(draft.GeneralFlags.Select(flag => new XElement(flag, "1")));
-                var result = ReplaceKnownAbilityChildren(source, AbilityGeneralFlags.Concat(AbilityGeneralValueTags), children);
-                foreach (var text in result.Nodes().OfType<XText>().Where(t => !string.IsNullOrWhiteSpace(t.Value)).ToList()) text.Remove();
-                result.AddFirst(new XText(draft.Name));
-                replacementAbilities.Add(result);
-            }
-            if (existingUnit != null)
-            {
-                ManagedXmlChildren.Replace(existingUnit, "ability", replacementAbilities, GetAbilityElementName);
-                var hasWrapperMetadata = existingUnit.HasAttributes || existingUnit.Elements().Any() ||
-                    existingUnit.Nodes().Any(node => node is XComment or XProcessingInstruction ||
-                                                     node is XText text && !string.IsNullOrWhiteSpace(text.Value));
-                if (!hasWrapperMetadata)
-                    existingUnit.Remove();
-            }
-            else if (replacementAbilities.Count > 0)
-                root.Add(new XElement(_currentUnitName, replacementAbilities));
-            SaveAbilityXmlDocument(doc, abilitiesPath);
-        }
-
-        var modified = _abilityDrafts.Values.Where(d => d.Modified && !d.SharedPowerReference && !string.IsNullOrWhiteSpace(d.Name))
-            .GroupBy(d => d.Name, StringComparer.OrdinalIgnoreCase).Select(g => g.Last()).ToList();
-        if (modified.Count > 0)
-        {
-            var powersPath = GetCurrentModGameplayFilePath("powers_mods.xml");
-            if (!string.IsNullOrWhiteSpace(powersPath))
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(powersPath)!);
-                var doc = LoadAbilityXmlDocumentForUpdate(powersPath, "powersmod");
-                if (doc.Root == null) doc.Add(new XElement("powersmod"));
-                var root = doc.Root!;
-                root.Name = "powersmod";
-                var stringEntries = LoadCurrentModStringEntries(requireReadable: true);
-                var stringsChanged = false;
-                foreach (var draft in modified)
-                {
-                    foreach (var tag in new[] { "displaynameid", "rolloverid" })
-                    {
-                        if (!draft.PowerDisplayTexts.TryGetValue(tag, out var text) || string.IsNullOrWhiteSpace(text))
-                            continue;
-
-                        var id = draft.PowerValues.GetValueOrDefault(tag, "").Trim();
-                        var generatedId = false;
-                        if (string.IsNullOrWhiteSpace(id))
-                        {
-                            id = BuildUniqueAbilityStringId(draft.Name, tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase), stringEntries);
-                            draft.PowerValues[tag] = id;
-                            generatedId = true;
-                        }
-
-                        if (generatedId || draft.ModifiedPowerDisplayTextTags.Contains(tag))
-                        {
-                            stringEntries[id] = text;
-                            stringsChanged = true;
-                        }
-                    }
-
-                    var source = draft.PowerSource ?? new XElement("power", new XAttribute("name", draft.Name));
-                    var children = draft.PowerValues
-                        .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) &&
-                                     !kv.Key.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
-                                     !kv.Key.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) &&
-                                     !kv.Key.Equals("placement", StringComparison.OrdinalIgnoreCase) &&
-                                     !kv.Key.Equals("rangeindicator", StringComparison.OrdinalIgnoreCase))
-                        .Select(kv => new XElement(kv.Key, kv.Value))
-                        .Concat(draft.PlacementTargetTypes.Select(value => new XElement("abstractplacementtargettype", value)))
-                        .Concat(draft.RestrictedPlacementTargetTypes.Select(value => new XElement("explicitlyrestrictedplacementtargettype", value)))
-                        .Concat(draft.PowerFlags.Select(flag => new XElement(flag, "1")))
-                        .ToList();
-                    var placementValue = draft.PowerValues.GetValueOrDefault("placement", "").Trim();
-                    if (!string.IsNullOrWhiteSpace(placementValue))
-                    {
-                        var placementElement = new XElement("placement", placementValue);
-                        foreach (var attribute in GetUnknownPlacementAttributesFromSource(draft))
-                            placementElement.SetAttributeValue(attribute.Name, attribute.Value);
-                        foreach (var attr in draft.PlacementAttributes.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-                        {
-                            var normalized = attr.ToLowerInvariant();
-                            var originalName = draft.PlacementAttributeValues.Keys.FirstOrDefault(key => key.Equals(attr, StringComparison.OrdinalIgnoreCase));
-                            var xmlName = normalized switch
-                            {
-                                "allyorenemynotself" => "allyOrEnemyNotSelf",
-                                "natureonly" => "natureOnly",
-                                "allowdeadtarget" => "allowDeadTarget",
-                                "disallowwatercastradius" => "disallowWaterCastRadius",
-                                "fullybuiltonly" => "fullyBuiltOnly",
-                                _ => originalName ?? normalized
-                            };
-                            var value = draft.PlacementAttributeValues.TryGetValue(attr, out var preservedValue) ? preservedValue : "";
-                            placementElement.SetAttributeValue(xmlName, value);
-                        }
-                        children.Add(placementElement);
-                    }
-                    var rangeIndicatorValue = draft.PowerValues.GetValueOrDefault("rangeindicator", "").Trim();
-                    if (!string.IsNullOrWhiteSpace(rangeIndicatorValue))
-                    {
-                        var rangeIndicatorElement = new XElement("rangeindicator", rangeIndicatorValue);
-                        foreach (var attr in draft.RangeIndicatorAttributes.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
-                            if (!string.IsNullOrWhiteSpace(attr.Value))
-                                rangeIndicatorElement.SetAttributeValue(attr.Key, attr.Value);
-                        children.Add(rangeIndicatorElement);
-                    }
-                    var replacement = ReplaceKnownAbilityChildren(source, AbilityPowerFlags.Concat(AbilityPowerValueTags), children);
-                    replacement.SetAttributeValue("name", draft.Name);
-                    replacement.SetAttributeValue("type", draft.Type);
-                    replacement.Elements().Where(e => e.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) || e.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase)).Remove();
-                    var existing = root.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("power", StringComparison.OrdinalIgnoreCase) && GetAbilityElementName(e).Equals(draft.Name, StringComparison.OrdinalIgnoreCase));
-                    // Use the freshly loaded powers_mods.xml as the preservation source so
-                    // unsupported placement attributes added manually after the UI opened survive.
-                    MergeUnknownPlacementAttributes(existing, replacement);
-                    if (existing != null)
-                    {
-                        XmlTriviaPreserver.Preserve(existing, replacement);
-                        existing.ReplaceWith(replacement);
-                    }
-                    else
-                    {
-                        PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities);
-                    }
-                    _abilityPowerCatalog[draft.Name] = new XElement(replacement);
-                    RegisterAvailableAbilityName(draft.Name);
-                }
-                SaveAbilityXmlDocument(doc, powersPath);
-                if (stringsChanged)
-                    SaveCurrentModStringEntries(stringEntries, StringTableSection.Abilities);
-            }
-        }
-
-        SaveCurrentAbilityBindingMetadata();
-
-        foreach (var draft in _abilityDrafts.Values)
-        {
-            draft.Modified = false;
-            draft.ModifiedPowerDisplayTextTags.Clear();
-        }
-    }
 
     private List<AbilityBindingMetadataRecord> BuildCurrentAbilityBindingMetadataRecords()
+        => BuildAbilityBindingMetadataRecords(_abilityDrafts.Values);
+
+    private static List<AbilityBindingMetadataRecord> BuildAbilityBindingMetadataRecords(IEnumerable<AbilityEditorDraft> drafts)
     {
         var records = new List<AbilityBindingMetadataRecord>();
-        foreach (var draft in _abilityDrafts.Values.Where(draft => !string.IsNullOrWhiteSpace(draft.Name)))
+        foreach (var draft in drafts.Where(draft => !string.IsNullOrWhiteSpace(draft.Name)))
         {
             var usesMain = draft.GeneralFlags.Contains("chargetimeasrof") || draft.GeneralFlags.Contains("bindtochargeaction");
             var usesAux = draft.GeneralFlags.Contains("auxchargetimeasrof") || draft.GeneralFlags.Contains("bindtoauxchargeaction");
@@ -53170,12 +53257,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             });
         }
         return records;
-    }
-
-    private void SaveCurrentAbilityBindingMetadata()
-    {
-        if (string.IsNullOrWhiteSpace(_modFilePath) || string.IsNullOrWhiteSpace(_currentUnitName)) return;
-        AbilityBindingMetadataStore.ReplaceUnit(_modFilePath, _currentUnitName, BuildCurrentAbilityBindingMetadataRecords());
     }
 
     private bool IsAbilityActionFlagProtected(string actionName, string flagTag, AbilityEditorDraft? ignoreDraft = null)
@@ -53309,7 +53390,6 @@ public partial class ProtoEditorWindow : SimpleWindow
         container.Children.Add(card);
 
         var nameRow = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        nameRow.Children.Add(new TextBlock { Text = "Ability Name:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 8, 4) });
         var nameBox = new AutoCompleteBox
         {
             Width = 260,
@@ -53318,14 +53398,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsEnabled = !_isReadOnly,
             PlaceholderText = "Existing or custom ability"
         };
+        ConfigureUnitField(nameBox, EditorFieldWidthRole.SingleLineText);
+        if (_isAbilityDefinitionEditorMode) _abilityDefinitionNameControl = nameBox;
         AttachNoWhitespaceNameBehavior(nameBox);
         EnableDropdownAutoComplete(nameBox, selectAllOnFirstClick: false);
         if (!_isAbilityDefinitionEditorMode)
             _currentAbilityNameEditor = nameBox;
-        nameRow.Children.Add(nameBox);
-        nameRow.Children.Add(new TextBlock { Text = "Type:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 4, 8, 4) });
-        var typeBox = new ComboBox { Width = 140, ItemsSource = new[] { "UnitAction", "GeneralEffect" }, SelectedIndex = 0, IsEnabled = !_isReadOnly };
-        nameRow.Children.Add(typeBox);
+        nameRow.Children.Add(EditorFormLayout.LabeledGroup("Ability Name:", nameBox));
+        var typeBox = ConfigureUnitField(new ComboBox { ItemsSource = new[] { "UnitAction", "GeneralEffect" }, SelectedIndex = 0, IsEnabled = !_isReadOnly }, EditorFieldWidthRole.LongEnum);
+        nameRow.Children.Add(EditorFormLayout.LabeledGroup("Type:", typeBox));
         var rechargeChoiceLabel = new TextBlock
         {
             Text = "Recharge",
@@ -53339,7 +53420,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             SelectedIndex = 0,
             IsEnabled = !_isReadOnly
         };
-        var rechargeChoiceGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) };
+        ConfigureUnitField(rechargeChoice, EditorFieldWidthRole.LongEnum);
+        var rechargeChoiceGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap) };
         rechargeChoiceGroup.Children.Add(rechargeChoiceLabel);
         rechargeChoiceGroup.Children.Add(rechargeChoice);
         nameRow.Children.Add(rechargeChoiceGroup);
@@ -53369,8 +53451,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var createAbilitySaveButton = new Button
         {
             Content = "Save",
-            Background = Brush.Parse("#163E26"),
-            BorderBrush = Brush.Parse("#A98243"),
+            Classes = { "positive" },
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
             IsVisible = false
@@ -53388,14 +53469,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             IsVisible = !_isAbilityDefinitionEditorMode && !_isReadOnly
         };
         ToolTip.SetTip(manageAbilitiesButton, "Manage abilities");
-        var removeAbilityButton = new Button
-        {
-            Content = "Remove",
-            Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-            VerticalAlignment = VerticalAlignment.Center,
-            IsVisible = !_isReadOnly && !_isAbilityDefinitionEditorMode
-        };
+        var removeAbilityButton = EditorRemoveButtons.Card(description: "Remove ability");
+        removeAbilityButton.VerticalAlignment = VerticalAlignment.Top;
+        removeAbilityButton.IsVisible = !_isReadOnly && !_isAbilityDefinitionEditorMode;
         var abilityHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto") };
         Grid.SetColumn(nameRow, 0);
         Grid.SetColumn(createAbilitySaveButton, 1);
@@ -53405,6 +53481,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         abilityHeader.Children.Add(createAbilitySaveButton);
         abilityHeader.Children.Add(manageAbilitiesButton);
         abilityHeader.Children.Add(removeAbilityButton);
+        createAbilitySaveButton.VerticalAlignment = VerticalAlignment.Top;
+        manageAbilitiesButton.VerticalAlignment = VerticalAlignment.Top;
         body.Children.Add(abilityHeader);
         var abilityDetailsHost = new StackPanel { Spacing = 10 };
         body.Children.Add(abilityDetailsHost);
@@ -53437,7 +53515,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var selectedAbilityTargetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var selectedAbilityRestrictedTargetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         WrapPanel? placementTargetsHost = null;
-        WrapPanel? placementFlagsHost = null;
+        DockPanel? placementFlagsHost = null;
         CheckBox? placementAllTarget = null;
         CheckBox? placementEnemyTarget = null;
         CheckBox? placementAllyTarget = null;
@@ -53479,6 +53557,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ItemsSource = GetAvailableTechNames(),
                     IsEnabled = !_isReadOnly
                 };
+                ConfigureUnitField(abilityTechEditor, EditorFieldWidthRole.Reference);
+                EditorAutoCompleteService.KeepDropDownAnchored(abilityTechEditor);
                 EnableDropdownAutoComplete(abilityTechEditor, selectAllOnFirstClick: false);
                 editor = abilityTechEditor;
             }
@@ -53495,7 +53575,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             else
             {
                 var tb = new TextBox { Width = 110, IsEnabled = !_isReadOnly };
-                EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(tb, EditorFieldWidthRole.Numeric);
                 tb.AddHandler(InputElement.TextInputEvent, (_, args) =>
                 {
                     var proposed = (tb.Text ?? "") + args.Text;
@@ -53507,6 +53587,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 editor = tb;
             }
 
+            ConfigureUnitField(editor, tag == "tech" ? EditorFieldWidthRole.Reference : tag == "columnoverride" ? EditorFieldWidthRole.ShortEnum : EditorFieldWidthRole.Numeric);
             host.Children.Add(editor);
 
             var button = new Button
@@ -53528,13 +53609,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             if (!_isReadOnly)
             {
-                var remove = new Button
-                {
-                    Content = "X", Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"), Width = 28, Height = 28,
-                    Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center
-                };
+                var remove = EditorRemoveButtons.Field();
                 remove.Click += async (_, _) =>
                 {
                     var proceed = await CheckStartLocalMod();
@@ -53547,6 +53622,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 host.Children.Add(remove);
             }
 
+            EditorFormLayout.UseInlineRowLayout(host);
             slot.Children.Add(host);
             slot.Children.Add(button);
             attrRow.Children.Add(slot);
@@ -53604,6 +53680,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             Margin = new Thickness(0, 0, 8, 0),
             IsVisible = !_isReadOnly
         };
+        ConfigureUnitField(abilityFlagPicker, EditorFieldWidthRole.ChipSearch);
+        EditorAutoCompleteService.KeepDropDownAnchored(abilityFlagPicker);
         EnableDropdownAutoComplete(abilityFlagPicker, selectAllOnFirstClick: false);
         flagsSection.Children.Add(abilityFlagPicker);
         flagsSection.Children.Add(flagsWrap);
@@ -53664,11 +53742,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 var init = timeElement?.Attribute("init")?.Value ?? typedElement?.Attribute("init")?.Value;
 
                 var lineHost = new StackPanel { Spacing = 5 };
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
-                var modeCb = new ComboBox { Width = 130, ItemsSource = GetRechargeModeDisplayOptions(), SelectedItem = mode, IsEnabled = !_isReadOnly };
+                var row = new WrapPanel { Orientation = Orientation.Horizontal };
+                var modeCb = ConfigureUnitField(new ComboBox { ItemsSource = GetRechargeModeDisplayOptions(), SelectedItem = mode, IsEnabled = !_isReadOnly }, EditorFieldWidthRole.LongEnum);
                 if (modeCb.SelectedItem == null) modeCb.SelectedItem = "Time";
                 var valueTb = new TextBox { Text = value, Width = 90, IsEnabled = !_isReadOnly };
-                EditorNumericFieldStyle.ConfigureNumericTextBox(valueTb);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(valueTb, EditorFieldWidthRole.Numeric);
                 valueTb.AddHandler(InputElement.TextInputEvent, (_, args) =>
                 {
                     var proposed = (valueTb.Text ?? "") + args.Text;
@@ -53677,21 +53755,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                         args.Handled = true;
                 }, RoutingStrategies.Tunnel);
                 var startChargedCb = CreateRechargeStartChargedCheckBox(init);
+                modeCb.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 row.Children.Add(modeCb);
-                row.Children.Add(new TextBlock { Text = "Value", VerticalAlignment = VerticalAlignment.Center });
-                row.Children.Add(valueTb);
+                row.Children.Add(EditorFormLayout.LabeledGroup("Value", valueTb));
+                startChargedCb.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 row.Children.Add(startChargedCb);
 
                 AutoCompleteBox? boundActionPicker = null;
                 var isGeneralEffectAbility = string.Equals(typeBox.SelectedItem as string, "GeneralEffect", StringComparison.OrdinalIgnoreCase);
                 if (isGeneralEffectAbility)
                 {
-                    row.Children.Add(new TextBlock
-                    {
-                        Text = "Bind to unit action",
-                        Margin = new Thickness(12, 0, 0, 0),
-                        VerticalAlignment = VerticalAlignment.Center
-                    });
                     var actionNames = _protoActionWidgets
                         .Select(state => state.NameAcb.Text?.Trim() ?? "")
                         .Concat(ProtoXmlHandler.GetProtoActions(unit).Select(action => action.Name?.Trim() ?? ""))
@@ -53709,8 +53782,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                         FilterMode = AutoCompleteFilterMode.Contains,
                         IsEnabled = !_isReadOnly
                     };
+                    ConfigureUnitField(boundActionPicker, EditorFieldWidthRole.Reference);
+                    EditorAutoCompleteService.KeepDropDownAnchored(boundActionPicker);
                     EnableDropdownAutoComplete(boundActionPicker, selectAllOnFirstClick: false);
-                    row.Children.Add(boundActionPicker);
+                    _fieldControls[$"{prefix}.boundAction"] = boundActionPicker;
+                    row.Children.Add(EditorFormLayout.LabeledGroup("Bind to unit action", boundActionPicker));
                 }
 
                 lineHost.Children.Add(row);
@@ -53768,6 +53844,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                             FilterMode = AutoCompleteFilterMode.Contains,
                             PlaceholderText = "Unit type or proto unit"
                         };
+                        ConfigureUnitField(picker, EditorFieldWidthRole.ChipSearch);
+                        EditorAutoCompleteService.KeepDropDownAnchored(picker);
                         EnableDropdownAutoComplete(picker, selectAllOnFirstClick: false);
                         picker.SelectionChanged += async (_, _) =>
                         {
@@ -53856,6 +53934,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                     boundActionPicker.SelectionChanged += (_, _) =>
                     {
+                        if (_loadingAbilityEditor || _isPopulating) return;
                         if (boundActionPicker.SelectedItem is string selected)
                         {
                             _loadingAbilityEditor = true;
@@ -53889,7 +53968,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var item = new StackPanel { Margin = new Thickness(0, 0, 12, 7), IsVisible = false };
             item.Children.Add(new TextBlock { Text = AbilityFieldLabel(tag), Margin = new Thickness(0, 0, 0, 3) });
-            var fieldRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var fieldRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = EditorFormLayout.LabelGap };
 
             if (tag.Equals("unitaction", StringComparison.OrdinalIgnoreCase))
             {
@@ -53908,6 +53987,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ItemsSource = actionNames,
                     IsEnabled = !_isReadOnly
                 };
+                ConfigureUnitField(abilityUnitActionEditor, EditorFieldWidthRole.Reference);
+                EditorAutoCompleteService.KeepDropDownAnchored(abilityUnitActionEditor);
                 EnableDropdownAutoComplete(abilityUnitActionEditor, selectAllOnFirstClick: false);
                 abilityUnitActionBorder = new Border
                 {
@@ -53937,6 +54018,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     VerticalAlignment = VerticalAlignment.Bottom
                 };
                 abilityIconEditor.CompactPresenter.Background = Brush.Parse(_isReadOnly ? "#202220" : "#0E1110");
+                ConfigureUnitField(abilityIconEditor, EditorFieldWidthRole.AssetPath);
                 fieldRow.Children.Add(abilityIconEditor);
             }
             else if (tag.Equals("placement", StringComparison.OrdinalIgnoreCase))
@@ -53948,15 +54030,17 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly
                 };
 
-                // Placement and Targets share the first row. Placement flags always use a
-                // second row whose label begins directly below the Targets label.
+                // Placement and Targets share the first row. Placement flags start
+                // at the beginning of the following row.
                 var placementRows = new StackPanel { Spacing = 6 };
                 var placementFlow = new WrapPanel
                 {
                     Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Left,
                     VerticalAlignment = VerticalAlignment.Center,
                     MaxWidth = _isAbilityDefinitionEditorMode ? 540 : 900
                 };
+                ConfigureUnitField(abilityPlacementEditor, EditorFieldWidthRole.ShortEnum);
                 placementFlow.Children.Add(abilityPlacementEditor);
 
                 placementTargetsHost = new WrapPanel
@@ -53982,17 +54066,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 placementFlow.Children.Add(placementTargetsHost);
                 placementRows.Children.Add(placementFlow);
 
-                placementFlagsHost = new WrapPanel
+                placementFlagsHost = new DockPanel
                 {
-                    Orientation = Orientation.Horizontal,
+                    LastChildFill = true,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(148, 0, 0, 0),
-                    MaxWidth = _isAbilityDefinitionEditorMode ? 390 : 620
+                    Margin = new Thickness(0),
+                    MaxWidth = double.PositiveInfinity
                 };
-                placementFlagsHost.Children.Add(new TextBlock
+                var placementFlagsInput = new StackPanel { Orientation = Orientation.Horizontal, Spacing = EditorFormLayout.LabelGap };
+                DockPanel.SetDock(placementFlagsInput, Dock.Left);
+                placementFlagsHost.Children.Add(placementFlagsInput);
+                placementFlagsInput.Children.Add(new TextBlock
                 {
                     Text = "Placement flags",
-                    Width = 106,
+                    Margin = new Thickness(0),
                     VerticalAlignment = VerticalAlignment.Center
                 });
                 placementFlagPicker = new AutoCompleteBox
@@ -54002,14 +54090,16 @@ public partial class ProtoEditorWindow : SimpleWindow
                     IsEnabled = !_isReadOnly,
                     IsVisible = !_isReadOnly
                 };
+                ConfigureUnitField(placementFlagPicker, EditorFieldWidthRole.ChipSearch);
+                EditorAutoCompleteService.KeepDropDownAnchored(placementFlagPicker);
                 EnableDropdownAutoComplete(placementFlagPicker, selectAllOnFirstClick: false);
                 placementFlagChips = new WrapPanel
                 {
                     Orientation = Orientation.Horizontal,
                     VerticalAlignment = VerticalAlignment.Center,
-                    MaxWidth = _isAbilityDefinitionEditorMode ? 300 : 360
+                    MaxWidth = double.PositiveInfinity
                 };
-                placementFlagsHost.Children.Add(placementFlagPicker);
+                placementFlagsInput.Children.Add(placementFlagPicker);
                 placementFlagsHost.Children.Add(placementFlagChips);
                 placementRows.Children.Add(placementFlagsHost);
 
@@ -54027,21 +54117,22 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ItemsSource = new[] { "Circle", "Arrow", "Cone" },
                     IsEnabled = !_isReadOnly
                 };
+                ConfigureUnitField(abilityRangeIndicatorEditor, EditorFieldWidthRole.ShortEnum);
                 fieldRow.Children.Add(abilityRangeIndicatorEditor);
                 fieldRow.Children.Add(new TextBlock { Text = "Range", VerticalAlignment = VerticalAlignment.Center });
                 abilityRangeIndicatorRangeEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
                 _abilityRangeIndicatorRangeEditorForValidation = abilityRangeIndicatorRangeEditor;
-                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorRangeEditor);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorRangeEditor, EditorFieldWidthRole.Numeric);
                 fieldRow.Children.Add(abilityRangeIndicatorRangeEditor);
                 abilityRangeIndicatorWidthLabel = new TextBlock { Text = "Width", VerticalAlignment = VerticalAlignment.Center };
                 fieldRow.Children.Add(abilityRangeIndicatorWidthLabel);
                 abilityRangeIndicatorWidthEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
-                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorWidthEditor);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorWidthEditor, EditorFieldWidthRole.Numeric);
                 fieldRow.Children.Add(abilityRangeIndicatorWidthEditor);
                 abilityRangeIndicatorSpeedLabel = new TextBlock { Text = "Speed", VerticalAlignment = VerticalAlignment.Center };
                 fieldRow.Children.Add(abilityRangeIndicatorSpeedLabel);
                 abilityRangeIndicatorSpeedEditor = new TextBox { Width = 80, IsEnabled = !_isReadOnly };
-                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorSpeedEditor);
+                EditorNumericFieldStyle.ConfigureNumericTextBox(abilityRangeIndicatorSpeedEditor, EditorFieldWidthRole.Numeric);
                 fieldRow.Children.Add(abilityRangeIndicatorSpeedEditor);
                 foreach (var numericEditor in new[] { abilityRangeIndicatorRangeEditor!, abilityRangeIndicatorWidthEditor!, abilityRangeIndicatorSpeedEditor! })
                 {
@@ -54065,6 +54156,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     SelectedItem = "Standard",
                     IsEnabled = !_isReadOnly
                 };
+                ConfigureUnitField(abilityCursorTypeEditor, EditorFieldWidthRole.LongEnum);
                 fieldRow.Children.Add(abilityCursorTypeEditor);
             }
             else if (tag.Equals("abstractplacementtargettype", StringComparison.OrdinalIgnoreCase) ||
@@ -54073,17 +54165,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 item.Children.Clear();
                 var acb = new AutoCompleteBox
                 {
-                    Width = tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) ? 260 : 230,
+                    Width = EditorFormLayout.ChipPickerWidth,
+                    MaxWidth = EditorFormLayout.ChipPickerWidth,
+                    Classes = { "compact-chip-picker" },
                     FilterMode = AutoCompleteFilterMode.Contains,
                     IsEnabled = !_isReadOnly,
                     IsVisible = !_isReadOnly
                 };
+                ConfigureUnitField(acb, EditorFieldWidthRole.ChipSearch);
+                EditorAutoCompleteService.KeepDropDownAnchored(acb);
                 EnableDropdownAutoComplete(acb, selectAllOnFirstClick: false);
                 fieldRow.Children.Add(new TextBlock
                 {
                     Text = AbilityFieldLabel(tag),
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 7, 0)
+                    Margin = new Thickness(0)
                 });
                 var chipLeft = tag.Equals("explicitlyrestrictedplacementtargettype", StringComparison.OrdinalIgnoreCase) ? 142 : 82;
                 var chips = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(chipLeft, 3, 0, 0) };
@@ -54096,7 +54192,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 {
                     abilityRestrictedTargetTypeEditor = acb;
                     abilityRestrictedTargetTypeChips = chips;
-                    item.Margin = new Thickness(28, 0, 12, 7);
+                    item.Margin = new Thickness(0, 0, 12, 7);
                 }
                 fieldRow.Children.Add(acb);
                 item.Children.Add(fieldRow);
@@ -54108,19 +54204,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
                 var tb = new TextBox
                 {
-                    Width = tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase) ? 650 :
-                            tag.Equals("displaynameid", StringComparison.OrdinalIgnoreCase) ? 360 : 300,
+                    Width = tag.Equals("displaynameid", StringComparison.OrdinalIgnoreCase) ? 360 : 300,
                     IsEnabled = !_isReadOnly
                 };
                 if (tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase))
                 {
-                    tb.MinHeight = 54;
-                    tb.TextWrapping = TextWrapping.Wrap;
-                    tb.AcceptsReturn = true;
+                    EditorRolloverField.Configure(tb);
                 }
                 if (tag is "activetime" or "radius")
                 {
-                    EditorNumericFieldStyle.ConfigureNumericTextBox(tb);
+                    EditorNumericFieldStyle.ConfigureNumericTextBox(tb, EditorFieldWidthRole.Numeric);
                     tb.AddHandler(InputElement.TextInputEvent, (_, args) =>
                     {
                         var proposed = (tb.Text ?? "") + args.Text;
@@ -54129,6 +54222,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                             args.Handled = true;
                     }, RoutingStrategies.Tunnel);
                 }
+                if (!tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase) && tag is not "activetime" and not "radius")
+                    ConfigureUnitField(tb, EditorFieldWidthRole.SingleLineText);
                 fieldRow.Children.Add(tb);
                 if (tag is "displaynameid" or "rolloverid")
                     powerDisplayTextBoxes[tag] = tb;
@@ -54137,6 +54232,15 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             item.Children.Add(fieldRow);
+            if (tag == "rolloverid")
+            {
+                var rollover = (TextBox)powerDisplayTextBoxes[tag];
+                fieldRow.Children.Remove(rollover);
+                item.Children.Remove(fieldRow);
+                item.Children.Add(rollover);
+                item.HorizontalAlignment = HorizontalAlignment.Stretch;
+                EditorRolloverField.Constrain(rollover);
+            }
             powerValueHosts[tag] = item;
         }
 
@@ -54158,18 +54262,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var tag in AbilityPowerValueTags)
         {
             var capturedTag = tag;
-            var removeButton = new Button
-            {
-                Content = "X",
-                Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                IsVisible = false
-            };
+            var removeButton = EditorRemoveButtons.Field();
+            removeButton.IsVisible = false;
             removeButton.Click += async (_, _) =>
             {
                 var proceed = await CheckStartLocalMod();
@@ -54182,7 +54276,25 @@ public partial class ProtoEditorWindow : SimpleWindow
             powerValueRemoveButtons[capturedTag] = removeButton;
             var valueRow = powerValueHosts[capturedTag].Children.OfType<StackPanel>()
                 .FirstOrDefault(panel => panel.Orientation == Orientation.Horizontal);
-            if (valueRow != null) valueRow.Children.Add(removeButton);
+            if (valueRow != null)
+            {
+                // Range Indicator contains several controls. Preserve spacing
+                // inside that field, but never add it again before its cross.
+                if (valueRow.Children.Count > 1)
+                {
+                    var fields = new StackPanel { Orientation = Orientation.Horizontal, Spacing = valueRow.Spacing };
+                    foreach (var control in valueRow.Children.ToArray())
+                    {
+                        valueRow.Children.Remove(control);
+                        fields.Children.Add(control);
+                    }
+                    valueRow.Children.Add(fields);
+                }
+                var field = valueRow.Children.Single();
+                valueRow.Children.Clear();
+                valueRow.Spacing = 0;
+                valueRow.Children.Add(EditorFormLayout.WithCross(field, removeButton));
+            }
             else powerValueHosts[capturedTag].Children.Add(removeButton);
         }
 
@@ -54226,12 +54338,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (abilityRangeIndicatorSpeedEditor != null) abilityRangeIndicatorSpeedEditor.IsVisible = showSpeed;
         }
 
+        bool CanEditAbilityDescription() => !_isReadOnly &&
+            !(_isAbilityDefinitionEditorMode && _abilityDefinitionEditorReadOnly) &&
+            _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName)?.SharedPowerReference != true;
+
         void RenderPlacementOptions()
         {
             if (placementTargetsHost == null || placementFlagsHost == null) return;
             var isUnitPlacement = string.Equals(abilityPlacementEditor?.SelectedItem as string, "Unit", StringComparison.OrdinalIgnoreCase);
             placementTargetsHost.IsVisible = isUnitPlacement;
-            placementFlagsHost.IsVisible = isUnitPlacement;
+            placementFlagsHost.IsVisible = isUnitPlacement && (CanEditAbilityDescription() || selectedPlacementFlags.Count > 0);
             if (!isUnitPlacement) return;
 
             if (placementFlagPicker != null)
@@ -54265,7 +54381,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         string ReadAbilityPowerValue(string tag)
         {
             if (tag is "displaynameid" or "rolloverid")
-                return powerDisplayTextBoxes[tag].Text?.Trim() ?? "";
+                return powerDisplayTextBoxes[tag].Text ?? "";
             if (tag.Equals("unitaction", StringComparison.OrdinalIgnoreCase))
                 return abilityUnitActionEditor?.Text?.Trim() ?? "";
             if (tag.Equals("icon", StringComparison.OrdinalIgnoreCase))
@@ -54344,6 +54460,13 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void AddDescriptionCoreRow(params string[] tags)
         {
+            if (tags is ["rolloverid"])
+            {
+                var host = powerValueHosts["rolloverid"];
+                host.IsVisible = true;
+                descriptionCore.Children.Add(host);
+                return;
+            }
             var row = new WrapPanel { Orientation = Orientation.Horizontal };
             foreach (var tag in tags)
             {
@@ -54374,6 +54497,9 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         void RenderDescriptionLayout()
         {
+            var canEditDescription = CanEditAbilityDescription();
+            foreach (var picker in new[] { placementFlagPicker, abilityTargetTypeEditor, abilityRestrictedTargetTypeEditor })
+                if (picker != null) picker.IsVisible = canEditDescription;
             // Field hosts are reused when switching abilities or ability types. Detach them
             // from their previous row before rebuilding, otherwise Avalonia can throw because
             // the same control is still parented to a detached row.
@@ -54399,7 +54525,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 AddDescriptionCoreRow("displaynameid", "icon");
                 AddDescriptionCoreRow("rolloverid");
                 AddDescriptionCoreRow("placement");
-                AddDescriptionCoreRow("abstractplacementtargettype", "explicitlyrestrictedplacementtargettype");
+                AddDescriptionCoreRow("abstractplacementtargettype");
+                AddDescriptionCoreRow("explicitlyrestrictedplacementtargettype");
             }
             else
             {
@@ -54414,21 +54541,21 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (hasValue && (isUnitAction || _isReadOnly || _isAbilityDefinitionEditorMode))
                 {
                     host.IsVisible = true;
-                    if (!_isReadOnly && isUnitAction && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
+                    if (canEditDescription && isUnitAction && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
                         removeButton.IsVisible = true;
                     descriptionOptional.Children.Add(host);
                 }
                 else if (isUnitAction && openPowerOptionalTags.Contains(tag))
                 {
                     host.IsVisible = true;
-                    if (!_isReadOnly && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
+                    if (canEditDescription && powerValueRemoveButtons.TryGetValue(tag, out var removeButton))
                         removeButton.IsVisible = true;
                     descriptionOptional.Children.Add(host);
                 }
                 else
                 {
                     host.IsVisible = false;
-                    if (!_isReadOnly && isUnitAction)
+                    if (canEditDescription && isUnitAction)
                     {
                         var button = new Button
                         {
@@ -54845,7 +54972,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     PromptType.Confirm,
                     "Create ability",
                     $"Create a new ability called '{name}'?",
-                    confirmButtonText: "Save");
+                    confirmButtonText: "Create ability", actionRole: PromptActionRole.Positive);
                 await prompt.ShowDialog(this);
                 if (prompt.Confirmed) return true;
 
@@ -55463,9 +55590,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 draft.RangeIndicatorAttributes))
             .ToList();
 
-        var currentMissing = invalid.Any(draft => draft.Name.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase));
-        if (_abilityRangeIndicatorRangeEditorForValidation != null)
-            _abilityRangeIndicatorRangeEditorForValidation.BorderBrush = currentMissing ? Brush.Parse("#d64545") : Brush.Parse("#5a5a5a");
+        var currentDraft = _abilityDrafts.GetValueOrDefault(_currentAbilityEditorName);
+        var currentMissing = invalid.Any(draft => ReferenceEquals(draft, currentDraft) ||
+            draft.Name.Equals(_currentAbilityEditorName, StringComparison.OrdinalIgnoreCase));
 
         if (invalid.Count == 0)
             return true;
@@ -55475,7 +55602,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             invalid.Count == 1
                 ? $"Range Indicator requires a Range value for '{names}'."
                 : $"Range Indicator requires a Range value for these abilities: {names}.");
-        await prompt.ShowDialog(this);
+        await ReportEditorFieldErrorAsync(prompt, currentMissing ? _abilityRangeIndicatorRangeEditorForValidation : null,
+            () => { if (!_isAbilityDefinitionEditorMode) _editorTabs.SelectedIndex = 3; });
         return false;
     }
 
@@ -55522,7 +55650,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                     ? "A Main Recharge value is required."
                     : "An Aux Recharge value is required.";
             var prompt = new Prompt(PromptType.Error, "Recharge value required", missing);
-            await prompt.ShowDialog(this);
+            await ReportEditorFieldErrorAsync(prompt, missingMain ? mainEditor : auxEditor,
+                () => _editorTabs.SelectedIndex = 0);
             return false;
         }
         return true;
@@ -55593,7 +55722,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         await prompt.ShowDialog(this);
         if (!prompt.Confirmed)
         {
-            _statusMessage.Text = "Save cancelled; external ProtoUnit changes were not overwritten.";
+            ReportSaveFeedback(EditorSaveOutcome.Cancelled);
             return false;
         }
 
@@ -55612,6 +55741,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "unit",
                 element => element.Attribute("name")?.Value);
             var conflicts = merge.ReplacedEditorChanges.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Raw buffers are deliberately not applied during navigation, so the
+            // DOM merge cannot see their edits. An accepted external replacement
+            // of the same record must retire its raw dirty marker as well.
+            conflicts.UnionWith(merge.ExternallyChangedNames.Where(name =>
+                _unitXmlDrafts.GetValueOrDefault(name)?.Session.IsDirty == true));
 
             // A rename is one logical edit spanning two names. If either side
             // changed externally, use the complete external version of both.
@@ -55627,6 +55761,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
 
             DiscardPendingUnitChangesForExternalConflicts(conflicts, externalDocument);
+            foreach (var name in conflicts.Concat(merge.ExternallyChangedNames).Distinct(StringComparer.OrdinalIgnoreCase))
+                ForgetUnitXmlDraft(name);
             _modXmlDoc = merge.Document;
             _modXmlRoot = merge.Document.Root;
             _loadedModXmlBaseline = new XDocument(externalDocument);
@@ -55647,9 +55783,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 ClearEditorPanels();
             }
             RefreshDocumentTabHeaders();
-            _statusMessage.Text = conflicts.Count > 0
-                ? $"External ProtoUnits reloaded. {conflicts.Count} conflicting Unit edit(s) were replaced; review, then save again."
-                : "External ProtoUnits reloaded and merged. Review the changes, then save again.";
+            ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
             return false;
         }
         catch (Exception exception)
@@ -55755,7 +55889,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         await prompt.ShowDialog(this);
         if (!prompt.Confirmed)
         {
-            _statusMessage.Text = "Save cancelled; external string changes were not overwritten.";
+            ReportSaveFeedback(EditorSaveOutcome.Cancelled);
             return false;
         }
 
@@ -55790,9 +55924,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             if (!string.IsNullOrWhiteSpace(_currentUnitName) && _modXmlRoot != null)
                 BuildEditorPanel(_currentUnitName, resetScroll: false);
             RefreshDocumentTabHeaders();
-            _statusMessage.Text = replacedLocalChanges.Count > 0
-                ? $"External strings reloaded. {replacedLocalChanges.Count} conflicting Unit string edit(s) were replaced; review, then save again."
-                : "External strings reloaded and merged. Review the values, then save again.";
+            ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
             return false;
         }
         catch (Exception exception)
@@ -55803,6 +55935,62 @@ public partial class ProtoEditorWindow : SimpleWindow
                 "No files were written. " + exception.Message).ShowDialog(this);
             return false;
         }
+    }
+
+    private IReadOnlyList<string> GetPendingDeletedUnitNames()
+    {
+        if (_loadedModXmlBaseline?.Root == null || _modXmlRoot == null)
+            return [];
+        return _loadedModXmlBaseline.Root.Elements("unit")
+            .Select(unit => unit.Attribute("name")?.Value ?? "")
+            .Concat(_dirtyUnitNames)
+            .Where(name => !string.IsNullOrWhiteSpace(name) &&
+                !(_pendingUnitRenames.TryGetValue(name, out var renamed) &&
+                  ProtoXmlHandler.GetUnitElement(_modXmlRoot, renamed) != null) &&
+                ProtoXmlHandler.GetUnitElement(_modXmlRoot, name) == null)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private IReadOnlyList<ModDeletionInspection> PreparePendingUnitDeletionChecks()
+    {
+        var deletedNames = GetPendingDeletedUnitNames();
+        if (deletedNames.Count == 0 || _modXmlDoc == null || _modFilePath == null)
+            return [];
+        var bundles = _pendingOwnedTransformBundleDeletions.Values.SelectMany(value => value)
+            .DistinctBy(bundle => bundle.CommandName, StringComparer.OrdinalIgnoreCase).ToList();
+        return PrepareUnitDeletionChecks(deletedNames, _modXmlDoc, bundles);
+    }
+
+    private IReadOnlyList<ModDeletionInspection> PrepareUnitDeletionChecks(
+        IReadOnlyList<string> deletedNames, XDocument candidateDocument,
+        IReadOnlyList<OwnedTransformCommandBundle> bundles)
+    {
+        var overrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(_modFilePath!)] = new XDocument(candidateDocument)
+        };
+        if (bundles.Count > 0)
+        {
+            var commandPath = GetCurrentModGameplayFilePath("proto_unit_command_mods.xml")!;
+            var transformPath = GetCurrentModGameplayFilePath("unit_transform_mods.xml")!;
+            var technologyPath = GetCurrentModGameplayFilePath("techtree_mods.xml")!;
+            var commands = ModDocumentPersistence.Prepare(commandPath, ModXmlDocumentKind.ProtoUnitCommands).Document;
+            var transforms = ModDocumentPersistence.Prepare(transformPath, ModXmlDocumentKind.UnitTransforms).Document;
+            var technologies = ModDocumentPersistence.Prepare(technologyPath, ModXmlDocumentKind.Technologies).Document;
+            TransformCommandBundleLifecycle.Delete(bundles, commands, transforms, technologies);
+            overrides[Path.GetFullPath(commandPath)] = commands;
+            overrides[Path.GetFullPath(transformPath)] = transforms;
+            overrides[Path.GetFullPath(technologyPath)] = technologies;
+        }
+        var inspections = PrepareStagedDeletionChecks(deletedNames, overrides, GameIdentifierKind.ProtoUnit).ToList();
+        // Owned definitions are removed in the same transaction. Guard their
+        // references too, including changes made after the confirmation opened.
+        inspections.AddRange(PrepareStagedDeletionChecks(
+            bundles.Select(bundle => bundle.CommandName).ToList(), overrides, GameIdentifierKind.ProtoUnitCommand));
+        inspections.AddRange(PrepareStagedDeletionChecks(
+            bundles.Select(bundle => bundle.TechnologyName).Where(name => !string.IsNullOrWhiteSpace(name)).ToList(),
+            overrides, null));
+        return inspections;
     }
 
     private void PreflightPendingUnitSave()
@@ -55889,34 +56077,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
     }
 
-    private void SaveAllPendingAbilityDrafts()
-    {
-        if (_unitAbilityDrafts.Count == 0)
-            return;
 
-        var currentName = _currentUnitName;
-        var currentDrafts = CloneAbilityDrafts(_abilityDrafts);
-        try
-        {
-            foreach (var unitName in _dirtyUnitNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
-            {
-                if (!_unitAbilityDrafts.TryGetValue(unitName, out var drafts))
-                    continue;
-                _currentUnitName = unitName;
-                _abilityDrafts.Clear();
-                foreach (var entry in CloneAbilityDrafts(drafts))
-                    _abilityDrafts[entry.Key] = entry.Value;
-                SaveAbilityDrafts();
-            }
-        }
-        finally
-        {
-            _currentUnitName = currentName;
-            _abilityDrafts.Clear();
-            foreach (var entry in currentDrafts)
-                _abilityDrafts[entry.Key] = entry.Value;
-        }
-    }
 
     private IEnumerable<StatsNumericEditor> EnumerateProtoUnitStatsNumericEditors()
     {
@@ -56028,17 +56189,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             return false;
         }
 
+        var failure = MarkProtoUnitStatsValidationFailure(firstFailure);
         await new Prompt(PromptType.Error, title, message).ShowDialog(this);
-        if (firstFailure != null)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                ScrollEditorControlToTop(firstFailure, 0);
-                firstFailure.Focus();
-            }, DispatcherPriority.Loaded);
-        }
+        if (failure != null) await failure.RevealAsync(revealSection: () => _editorTabs.SelectedIndex = 0);
         return false;
     }
+
+    private EditorValidationNavigation.Failure? MarkProtoUnitStatsValidationFailure(Control? target)
+        => target == null ? null : EditorValidationNavigation.Mark(this, target,
+            ReferenceEquals(target, _fieldControls.GetValueOrDefault("veterancybonus.includetypes"))
+                ? () => _currentVeterancyIncludeTypes?.Count > 0 : null);
 
     private async Task<bool> ValidateProtoUnitStatsBeforeSaveAsync()
     {
@@ -56070,8 +56230,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (failures.Count > 0)
         {
-            var message = "Correct the following ProtoUnit Stats fields before saving:\n\n" +
-                          string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
+            var message = string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
             return await ReportProtoUnitStatsValidationFailureAsync(
                 "Numeric fields",
                 "Invalid ProtoUnit Stats",
@@ -56142,7 +56301,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         Func<string> readValue,
         string originalValue,
         IEnumerable<string> options,
-        bool allowEmpty)
+        bool allowEmpty,
+        Func<IReadOnlyList<string>>? currentOptions = null,
+        Func<string>? currentOriginalValue = null)
     {
         var item = new StatsStrictReferenceEditor(
             label,
@@ -56153,7 +56314,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList(),
-            allowEmpty);
+            allowEmpty, currentOptions, currentOriginalValue);
         _statsStrictReferenceEditors.Add(item);
 
         if (_statsReferenceValidationHandlersAttached.Add(editor))
@@ -56167,8 +56328,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 var result = StrictReferencePolicy.Validate(
                     current.ReadValue(),
-                    current.OriginalValue,
-                    current.Options,
+                    current.CurrentOriginalValue?.Invoke() ?? current.OriginalValue,
+                    current.CurrentOptions?.Invoke() ?? current.Options,
                     current.AllowEmpty,
                     current.Label);
                 if (result.IsValid)
@@ -56208,8 +56369,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             var result = StrictReferencePolicy.Validate(
                 item.ReadValue(),
-                item.OriginalValue,
-                item.Options,
+                item.CurrentOriginalValue?.Invoke() ?? item.OriginalValue,
+                item.CurrentOptions?.Invoke() ?? item.Options,
                 item.AllowEmpty,
                 item.Label);
             if (result.IsValid)
@@ -56247,8 +56408,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return true;
         }
 
-        var message = "Correct the following ProtoUnit Stats references before saving:\n\n" +
-                      string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
+        var message = string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
         return await ReportProtoUnitStatsValidationFailureAsync(
             "References and closed options",
             "Invalid ProtoUnit Stats references",
@@ -56262,6 +56422,12 @@ public partial class ProtoEditorWindow : SimpleWindow
             return true;
 
         var failures = new List<ProtoUnitDuplicateIssue>();
+        if (_currentBuildLimitMode == BuildLimitMode.Dynamic)
+        {
+            foreach (var group in _dynamicBuildLimitTypes.GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+                         .Where(group => group.Count() > 1))
+                failures.Add(new ProtoUnitDuplicateIssue("dynamicbuildlimit", "Dynamic Build Limit targets", group.Key, group.Count()));
+        }
         var duplicateBuildRows = _buildLimitRows
             .Where(row => !string.IsNullOrWhiteSpace(row.ValueAcb.Text))
             .GroupBy(row => row.ValueAcb.Text!.Trim(), StringComparer.OrdinalIgnoreCase)
@@ -56305,7 +56471,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                       "(capitalization differences count as the same value):\n\n" +
                       string.Join("\n", failures.Select(issue =>
                           $"• {issue.Label}: {issue.Value} ({issue.Count} occurrences)"));
-        var firstBuildEditor = duplicateBuildRows.SelectMany(group => group).FirstOrDefault()?.ValueAcb;
+        var firstBuildEditor = _currentBuildLimitMode == BuildLimitMode.Dynamic
+            ? _fieldControls.GetValueOrDefault("dynamicbuildlimitunittypes") as AutoCompleteBox
+            : duplicateBuildRows.SelectMany(group => group).FirstOrDefault()?.ValueAcb;
         return await ReportProtoUnitStatsValidationFailureAsync(
             "Duplicate list values",
             "Duplicate ProtoUnit Stats values",
@@ -56349,9 +56517,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             return true;
 
         var failures = new List<(string Message, TemplatedControl Editor)>();
+        if (_veterancyBonusRows.Count > 0 && (_currentVeterancyIncludeTypes == null || _currentVeterancyIncludeTypes.Count == 0) &&
+            _fieldControls.GetValueOrDefault("veterancybonus.includetypes") is AutoCompleteBox includeTypesPicker)
+        {
+            failures.Add(("Veterancy Bonuses: select at least one Include Type, or remove the bonus rows.", includeTypesPicker));
+        }
         for (var index = 0; index < _veterancyBonusRows.Count; index++)
         {
             var row = _veterancyBonusRows[index];
+            if (string.IsNullOrWhiteSpace(row.ModifyTypeAcb.Text))
+            {
+                var requiredMessage = $"Veterancy Bonus {index + 1}: Modify Type is required, or remove this bonus row.";
+                failures.Add((requiredMessage, row.ModifyTypeAcb));
+            }
             if (!ProtoUnitStatsConditionalPolicy.RequiresDamageType(row.ModifyTypeAcb.Text))
                 continue;
             if (!string.IsNullOrWhiteSpace(row.DamageTypeAcb.Text))
@@ -56406,8 +56584,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (failures.Count == 0)
             return true;
 
-        var messageText = "Correct the following ProtoUnit Stats relationships before saving:\n\n" +
-                          string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
+        var messageText = string.Join("\n", failures.Select(failure => $"• {failure.Message}"));
         return await ReportProtoUnitStatsValidationFailureAsync(
             "Cross-field requirements",
             "Invalid ProtoUnit Stats relationships",
@@ -56466,6 +56643,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ClearStatsValidationError(TextBox editor)
     {
+        editor.Classes.Remove("invalid-field");
         if (_statsValidationOriginalBorders.Remove(editor, out var originalBorder))
         {
             editor.BorderBrush = originalBorder.Brush;
@@ -56476,6 +56654,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ClearProtoUnitStatsValidationState()
     {
+        EditorValidationNavigation.Clear(this);
         foreach (var editor in _statsValidationOriginalBorders.Keys.ToList())
             ClearStatsValidationError(editor);
         foreach (var editor in _statsReferenceValidationOriginalBorders.Keys.ToList())
@@ -56511,7 +56690,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return true;
 
         var unitName = _currentUnitName?.Trim() ?? "Unknown ProtoUnit";
-        var message = BuildProtoUnitStatsValidationReport(unitName, _protoUnitStatsValidationSummary);
+        var message = BuildProtoUnitStatsValidationReport(_protoUnitStatsValidationSummary);
         var prompt = new Prompt(PromptType.Error, $"Invalid ProtoUnit Stats — {unitName}", message)
         {
             Width = 700,
@@ -56519,26 +56698,17 @@ public partial class ProtoEditorWindow : SimpleWindow
             MinWidth = 600,
             MinHeight = 260
         };
+        var firstFailure = _firstProtoUnitStatsValidationFailure;
+        var failure = MarkProtoUnitStatsValidationFailure(firstFailure);
         await prompt.ShowDialog(this);
-        if (_firstProtoUnitStatsValidationFailure != null)
-        {
-            var first = _firstProtoUnitStatsValidationFailure;
-            Dispatcher.UIThread.Post(() =>
-            {
-                ScrollEditorControlToTop(first, 0);
-                first.Focus();
-            }, DispatcherPriority.Loaded);
-        }
+        if (failure != null) await failure.RevealAsync(revealSection: () => _editorTabs.SelectedIndex = 0);
         return false;
     }
 
     internal static string BuildProtoUnitStatsValidationReport(
-        string unitName,
         IEnumerable<string> validationSections)
     {
-        var normalizedName = string.IsNullOrWhiteSpace(unitName) ? "Unknown ProtoUnit" : unitName.Trim();
-        return $"ProtoUnit: {normalizedName}\n\n" +
-               "Correct the following ProtoUnit Stats issues before saving:\n\n" +
+        return "Correct these fields before saving:\n\n" +
                string.Join("\n\n", validationSections);
     }
 
@@ -56553,6 +56723,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         Dictionary<string, List<OwnedTransformCommandBundle>> PendingOwnedTransformBundleDeletions,
         List<ProtoActionRenameOperation> PendingProtoActionRenames,
         HashSet<string> DirtyUnitNames,
+        Dictionary<string, AbilityEditorDraft> AbilityDrafts,
         Dictionary<string, Dictionary<string, AbilityEditorDraft>> UnitAbilityDrafts,
         Dictionary<string, List<XElement>> DuplicatedUnitRechargeFallbacks);
 
@@ -56575,6 +56746,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 StringComparer.OrdinalIgnoreCase),
             _pendingProtoActionRenames.ToList(),
             new HashSet<string>(_dirtyUnitNames, StringComparer.OrdinalIgnoreCase),
+            CloneAbilityDrafts(_abilityDrafts),
             _unitAbilityDrafts.ToDictionary(
                 entry => entry.Key,
                 entry => CloneAbilityDrafts(entry.Value),
@@ -56626,6 +56798,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         foreach (var entry in snapshot.UnitAbilityDrafts)
             _unitAbilityDrafts[entry.Key] = CloneAbilityDrafts(entry.Value);
 
+        _abilityDrafts.Clear();
+        foreach (var entry in CloneAbilityDrafts(snapshot.AbilityDrafts))
+            _abilityDrafts[entry.Key] = entry.Value;
+
         _duplicatedUnitRechargeFallbacks.Clear();
         foreach (var entry in snapshot.DuplicatedUnitRechargeFallbacks)
         {
@@ -56636,8 +56812,17 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     }
 
-    private async Task<bool> CaptureCurrentUnitDraftAsync()
+    private Task<bool> CaptureCurrentUnitDraftAsync()
+        // A temporary validation form must not be captured by navigation while
+        // an awaited asset/animation check is still inspecting another record.
+        => _validatingUnitXml ? Task.FromResult(false) : CaptureCurrentUnitDraftCoreAsync();
+
+    private async Task<bool> CaptureCurrentUnitDraftCoreAsync()
     {
+        // Navigation must reach the ordinary Discard prompt even for invalid XML.
+        // Save explicitly prepares all raw drafts through the same validators.
+        if (!_validatingUnitXml && CurrentUnitXmlDraft?.Session.IsEditing == true)
+            return true;
         if (_isReadOnly || string.IsNullOrWhiteSpace(_currentUnitName) ||
             !_dirtyUnitNames.Contains(_currentUnitName))
         {
@@ -56741,7 +56926,10 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
 
         _isUnitSaveInProgress = true;
+        _unitXmlPreparedForGlobalSave = false;
+        _unitXmlSavedWithNewerEdits = false;
         _saveButton.IsEnabled = false;
+        using var feedback = _saveFeedback.BeginSave();
         try
         {
             // Capture the unit rename/action rename intent before saving other
@@ -56750,18 +56938,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             // than a stale pre-save copy.
             if (_isDirty && !await CaptureCurrentUnitDraftAsync())
                 return;
+            if (!await PrepareUnitXmlForSaveAsync()) return;
+            _unitXmlPreparedForGlobalSave = true;
             if (_isDirty && !await ReloadExternallyChangedUnitFilesAsync())
                 return;
             if (_isDirty)
                 PreflightPendingUnitSave();
-            if (_powerView?.IsDirty == true && !await _powerView.CommitCurrentPowerAsync())
+            if (!await CommitPendingEntityDraftsAsync())
                 return;
 
             if (_isDirty && _majorGodView?.IsDirty == true)
             {
                 if (!await _majorGodView.SaveAsync())
                     return;
-                _powerView?.AcknowledgeStringFileSavedByEditor();
                 RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
             }
 
@@ -56777,10 +56966,18 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             // The editor has one global Save action, so persist pending work from
             // both document kinds instead of silently saving only the visible one.
-            if (_isDirty)
+            // A staged Unit deletion must inspect the latest Power references,
+            // including removals/additions in this same global Save.
+            if (_isDirty && GetPendingDeletedUnitNames().Count > 0 && _powerView?.IsDirty == true)
+            {
+                if (!await _powerView.SaveAsync())
+                    return;
+                RefreshSavedDocumentSnapshots(EditorEntityKind.Powers);
+            }
+            if (_isDirty || HasUnitXmlEditingSession)
             {
                 await SaveCurrentUnitCoreAsync(sender, e);
-                if (_isDirty)
+                if (_isDirty && !_unitXmlSavedWithNewerEdits)
                     return;
                 _powerView?.AcknowledgePowerFileSavedByEditor();
             }
@@ -56788,47 +56985,36 @@ public partial class ProtoEditorWindow : SimpleWindow
             // Major-god documents can themselves reference technologies. Save
             // their pending draft first so a technology rename migrates the
             // latest file instead of an older on-disk version.
-            if (_majorGodView?.IsDirty == true)
+            if (_majorGodView?.IsDirty == true || _majorGodView?.HasXmlEditingSession == true)
             {
                 if (!await _majorGodView.SaveAsync())
                     return;
-                _powerView?.AcknowledgeStringFileSavedByEditor();
                 RefreshSavedDocumentSnapshots(EditorEntityKind.MajorGods);
             }
 
-            if (_technologyView?.IsDirty == true)
+            if (_technologyView?.IsDirty == true || _technologyView?.HasXmlEditingSession == true)
             {
                 if (!await _technologyView.SaveAsync())
                     return;
                 _powerView?.AcknowledgeStringFileSavedByEditor();
                 _cachedTechNames = null;
                 RefreshSavedDocumentSnapshots(EditorEntityKind.Technologies);
-                _statusMessage.Text = "Saved successfully.";
-                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
-                {
-                    if (_statusMessage.Text == "Saved successfully.")
-                        _statusMessage.Text = "";
-                }));
             }
 
-            if (_powerView?.IsDirty == true)
+            if (_powerView?.IsDirty == true || _powerView?.HasXmlEditingSession == true)
             {
                 if (!await _powerView.SaveAsync())
                     return;
                 RefreshSavedDocumentSnapshots(EditorEntityKind.Powers);
-                _statusMessage.Text = "Saved successfully.";
-                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
-                {
-                    if (_statusMessage.Text == "Saved successfully.")
-                        _statusMessage.Text = "";
-                }));
             }
 
             RefreshDocumentTabHeaders();
+            feedback.Complete(HasPendingSaveEdits());
         }
         catch (Exception ex)
         {
             InvalidateModStringEntriesCache();
+            _saveFeedback.Report(EditorSaveOutcome.Failed);
             await new Prompt(PromptType.Error, "Error", $"Failed to save file:\n{ex.Message}").ShowDialog(this);
         }
         finally
@@ -56836,6 +57022,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _abilityMainSavePointerPending = false;
             _saveButton.IsEnabled = true;
             _isUnitSaveInProgress = false;
+            _unitXmlPreparedForGlobalSave = false;
         }
     }
 
@@ -56861,19 +57048,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             if (!await CaptureCurrentUnitDraftAsync())
                 return;
-            if (!await ReloadExternallyChangedUnitFilesAsync())
+            if (!_unitXmlPreparedForGlobalSave && !await PrepareUnitXmlForSaveAsync()) return;
+            // Immediate deletion must fail on stale input, rather than reload
+            // over its temporary candidate and then report an unrelated save.
+            if (_immediateUnitDeletionChecks == null && !await ReloadExternallyChangedUnitFilesAsync())
                 return;
             if (!await ValidatePendingTransformCommandRemovalsAsync())
                 return;
 
+            var stringsStateBeforeRead = _loadedModStringsFileState;
+            var stringsValuesBeforeRead = new Dictionary<string, string>(_loadedModStringValues, StringComparer.OrdinalIgnoreCase);
             var existingStringEntries = LoadCurrentModStringEntries(requireReadable: true);
-            var existingStringRemovalCandidates = GetExistingStringCleanupCandidates(
-                _pendingUnitStringRemovals,
-                existingStringEntries);
-            var approvedStringRemovals = await ReviewOrphanStringsAsync(
-                existingStringRemovalCandidates,
-                "Saving the current Unit changes",
-                this);
 
             var documentBackup = new XDocument(_modXmlDoc);
             var unitNameBackup = _currentUnitName;
@@ -56888,10 +57073,8 @@ public partial class ProtoEditorWindow : SimpleWindow
                 entry => new XElement(entry.Value),
                 StringComparer.OrdinalIgnoreCase);
             var availableAbilityNamesBackup = _availableAbilityNames.ToList();
-            var loadedModStringsFileStateBackup = _loadedModStringsFileState;
-            var loadedModStringValuesBackup = new Dictionary<string, string>(
-                _loadedModStringValues,
-                StringComparer.OrdinalIgnoreCase);
+            var loadedModStringsFileStateBackup = stringsStateBeforeRead;
+            var loadedModStringValuesBackup = stringsValuesBeforeRead;
             GameIdentifierReferenceMigrationPlan? identifierMigration = null;
             FileIntegrityTransaction.FileState? committedModXmlFileState = null;
             try
@@ -56914,7 +57097,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     }
                 }
 
-                var referenceFiles = GetGameIdentifierReferenceFiles();
+                var referenceFiles = DiscoverRenameReferenceFiles(out var discovery);
                 var transactionPaths = new List<string?>
                 {
                     _modFilePath,
@@ -56937,28 +57120,54 @@ public partial class ProtoEditorWindow : SimpleWindow
                         "proto_mods.xml has not been fingerprinted for this editor session. No files were written. Reload the mod before saving.");
                 }
                 AddExpectedState(expectedStates, _modFilePath, _loadedModXmlFileState);
-                AddExpectedState(expectedStates, GetCurrentModStringsPath(), _loadedModStringsFileState);
+                AddExpectedState(expectedStates, GetCurrentModStringsPath(), stringsStateBeforeRead ?? _loadedModStringsFileState);
 
                 // Validate every external rename target before the transaction's
                 // first write. A fresh plan is still built after ability drafts
                 // are persisted so it contains those editor-owned changes too.
+                var oppositeUnitTypeNames = _pendingUnitRenames.Count == 0 && _pendingProtoActionRenames.Count == 0
+                    ? null : GetUnitTypeNamesForMigration();
+                foreach (var rename in _pendingUnitRenames)
+                    GameIdentifierReferenceMigrationPlan.ValidateUnitReferenceIdentity(_modXmlDoc,
+                        GameIdentifierKind.ProtoUnit, rename.Key, rename.Value, oppositeUnitTypeNames, _modFilePath);
                 var migrationPreflight = GameIdentifierReferenceMigrationPlan.Prepare(
                     referenceFiles.Where(file =>
                         !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase)),
                     GameIdentifierKind.ProtoUnit,
                     _pendingUnitRenames,
-                    _pendingProtoActionRenames);
+                    _pendingProtoActionRenames,
+                    oppositeUnitKindNames: oppositeUnitTypeNames, discovery: discovery);
                 transactionPaths.AddRange(migrationPreflight.Paths);
+                _powerView?.ValidateReferenceMigration(migrationPreflight.GetDocument(
+                    GetCurrentModGameplayFilePath(PowerCatalog.ModFileName)));
                 foreach (var state in migrationPreflight.ExpectedStates)
                     expectedStates[state.Key] = state.Value;
+
+                var stringCleanup = PrepareUnitStringCleanup(existingStringEntries, migrationPreflight);
+                new ModStringReferenceInspection([], stringCleanup.OwnerStates).MergeExpectedStatesInto(expectedStates);
+                stringCleanup.Inspection.References.MergeExpectedStatesInto(expectedStates);
+
+                var unitDeletionChecks = PreparePendingUnitDeletionChecks();
+                foreach (var inspection in unitDeletionChecks)
+                    foreach (var state in inspection.ExpectedStates)
+                        if (!expectedStates.ContainsKey(state.Key))
+                            expectedStates[state.Key] = state.Value;
 
                 FileIntegrityTransaction.Execute(
                     transactionPaths,
                     expectedStates,
                     () =>
                     {
-                        var deletedTransformCommandStringIds = SavePendingOwnedTransformBundleDeletions();
-                        SavePendingOwnedTransformBundleUnitRenames();
+                        stringCleanup.Inspection.References.ValidateReadDependencies();
+                        migrationPreflight.ValidateDiscovery();
+                        if (_immediateUnitDeletionChecks != null)
+                            foreach (var inspection in _immediateUnitDeletionChecks)
+                                inspection.ValidateReadDependencies();
+                        foreach (var inspection in unitDeletionChecks)
+                            inspection.ValidateReadDependencies();
+                        SavePendingOwnedTransformBundleDeletions();
+                        SavePendingOwnedTransformBundleUnitRenames(referenceFiles,
+                            stringCleanup.Plan.ReferenceRenames.Select(rename => rename.OldId).ToHashSet(StringComparer.OrdinalIgnoreCase));
                         SavePendingUnitRenames();
                         foreach (var rename in _pendingUnitRenames)
                         {
@@ -56976,20 +57185,23 @@ public partial class ProtoEditorWindow : SimpleWindow
                                 rename.Key,
                                 rename.Value);
                         }
-                        SavePendingUnitStringDrafts(approvedStringRemovals);
-                        SavePendingTransformCommandStringCleanup(deletedTransformCommandStringIds);
+                        SavePendingUnitStringDrafts(stringCleanup.Updates, stringCleanup.Plan.StringRemovals, stringCleanup.Abilities?.Updates);
                         SaveXmlDocumentAtomic(_modXmlDoc, _modFilePath);
-                        SaveAllPendingAbilityDrafts();
+                        SavePreparedAbilityDrafts(stringCleanup.Abilities);
 
+                        // Discovery was checked before the first transaction write. Keep
+                        // using its original files after planned Ability/Transform writes.
                         identifierMigration = GameIdentifierReferenceMigrationPlan.Prepare(
                             referenceFiles.Where(file =>
                                 !file.Path.Equals(_modFilePath, StringComparison.OrdinalIgnoreCase)),
                             GameIdentifierKind.ProtoUnit,
                             _pendingUnitRenames,
-                            _pendingProtoActionRenames);
+                            _pendingProtoActionRenames,
+                            oppositeUnitKindNames: oppositeUnitTypeNames);
                         identifierMigration.Save(SaveXmlDocumentAtomic);
                         committedModXmlFileState = FileIntegrityTransaction.CaptureState(_modFilePath);
                     });
+                AdoptPreparedAbilityDrafts(stringCleanup.Abilities);
             }
             catch
             {
@@ -57023,6 +57235,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             _loadedModXmlFileState = committedModXmlFileState
                 ?? throw new InvalidOperationException("The saved proto_mods.xml fingerprint was not captured.");
             _loadedModXmlBaseline = new XDocument(_modXmlDoc);
+            InvalidateModStringEntriesCache();
+            LoadCurrentModStringEntries(requireReadable: true);
 
             AdoptGameIdentifierReferenceMigration(identifierMigration);
             _protoUnitCommandCatalogLoaded = false;
@@ -57030,6 +57244,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _cachedTechNames = null;
             RefreshTechnologyViewAfterTechTypeChanges();
 
+            var refreshRenamedUnitEditor = _pendingUnitRenames.Count > 0;
             _pendingUnitRenameRemovedStringIds.Clear();
             _pendingUnitStringUpdates.Clear();
             _pendingUnitStringRemovals.Clear();
@@ -57038,14 +57253,16 @@ public partial class ProtoEditorWindow : SimpleWindow
             _pendingProtoActionRenames.Clear();
             _dirtyUnitNames.Clear();
             _unitAbilityDrafts.Clear();
+            AcknowledgeSavedProtoActionNames();
             InvalidateSuggestionCaches();
             if (_currentAbilityNameEditor != null)
                 _currentAbilityNameEditor.ItemsSource = _availableAbilityNames.ToList();
             _isDirty = false;
+            refreshRenamedUnitEditor |= AcknowledgeSavedUnitXml();
             RefreshSavedDocumentSnapshots(EditorEntityKind.Units);
             RefreshDocumentTabHeaders();
             _fileLabel.Text = _modFilePath;
-            _statusMessage.Text = "Saved successfully.";
+            ReportSaveFeedback(_unitXmlSavedWithNewerEdits ? EditorSaveOutcome.NewerEdits : EditorSaveOutcome.Saved);
             if (!string.IsNullOrWhiteSpace(_currentUnitName))
             {
                 _suppressUnitListSelectionChange = true;
@@ -57061,7 +57278,11 @@ public partial class ProtoEditorWindow : SimpleWindow
                     _suppressUnitListSelectionChange = false;
                 }
             }
-            _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.UIThread.Post(() => _statusMessage.Text = ""));
+            // Reload migrated command names and their locked From fields. Keeping
+            // the old assignment widgets would reintroduce them on the next save.
+            if (refreshRenamedUnitEditor && !string.IsNullOrWhiteSpace(_currentUnitName))
+                BuildEditorPanel(_currentUnitName, resetScroll: false);
+            RefreshRetainedSelectorCatalogs();
         }
         finally
         {
@@ -57144,11 +57365,7 @@ public partial class ProtoEditorWindow : SimpleWindow
     {
         var settingsWin = new ProtoSettingsWindow();
         await settingsWin.ShowDialog(this);
-        if (settingsWin.IsSaved)
-        {
-            await LoadProtoDataFromBar();
-            RefreshUnitList();
-        }
+        await ApplySettingsWindowResultAsync(settingsWin);
     }
 
     private void DuplicateAbilityAssignmentsForUnit(string sourceUnitName, string newUnitName)
@@ -57253,7 +57470,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 // Clone the live editor state, not only the last-saved proto_mods.xml node.
                 // Recharge/aux-recharge values live on the ProtoUnit and would otherwise be
                 // missing when the source unit had unsaved editor changes.
-                if (!_isReadOnly)
+                if (!_isReadOnly && _dirtyUnitNames.Contains(_currentUnitName))
                     ApplyCurrentEdits();
 
                 XElement? sourceUnitForTransformBundles = null;
@@ -57321,6 +57538,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     _ => NewCustomUnitKind.Unit
                 };
                 var newUnit = ProtoXmlHandler.AddNewUnit(_modXmlRoot, name);
+                AssignGeneratedStringIds(name);
 
                 switch (selectedKind)
                 {
@@ -57337,11 +57555,11 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                 ProtoXmlHandler.SetCostEntries(newUnit, ProtoConstants.KnownResourceTypes.Select(r => (r, "0")));
                 ProtoXmlHandler.SetArmorEntries(newUnit, ProtoConstants.KnownArmorTypes.Select(a => (a, "0")));
-                AssignGeneratedStringIds(name);
                 InitializeUnitStringValues(name, name, "", "");
             }
 
-            MarkDirty();
+            // The source is still selected here. Only the newly created/copied Unit is dirty.
+            MarkUnitDraftDirty(name);
             InvalidateSuggestionCaches();
             RefreshUnitList();
             _unitTabs.SelectedIndex = 1;
@@ -57359,6 +57577,29 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private async Task DeleteSelectedUnitAsync()
     {
+        if (_isUnitSaveInProgress)
+            return;
+
+        _isUnitSaveInProgress = true;
+        _saveButton.IsEnabled = false;
+        try
+        {
+            await DeleteSelectedUnitCoreAsync();
+        }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Unable to delete Unit",
+                "The Unit was not deleted. " + exception.Message).ShowDialog(this);
+        }
+        finally
+        {
+            _isUnitSaveInProgress = false;
+            _saveButton.IsEnabled = true;
+        }
+    }
+
+    private async Task DeleteSelectedUnitCoreAsync()
+    {
         if (string.IsNullOrEmpty(_currentUnitName))
         {
             var pErr = new Prompt(PromptType.Error, "Select Unit", "Please select a unit to delete.");
@@ -57375,15 +57616,45 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         if (_modXmlDoc == null || string.IsNullOrWhiteSpace(_modFilePath))
             return;
+
+        var originalPath = _modFilePath;
+        var unitName = _currentUnitName;
+        var savedName = _pendingUnitRenames.FirstOrDefault(rename =>
+            rename.Value.Equals(unitName, StringComparison.OrdinalIgnoreCase)).Key ?? unitName;
+        var isSavedUnit = _loadedModXmlBaseline?.Root != null &&
+            ProtoXmlHandler.GetUnitElement(_loadedModXmlBaseline.Root, savedName) != null;
+        if (!isSavedUnit)
+        {
+            var discard = new Prompt(PromptType.Confirm, "Discard new Unit",
+                $"Discard the never-saved Unit '{unitName}'? Other unsaved changes will be kept.",
+                confirmButtonText: "Discard Unit", actionRole: PromptActionRole.Destructive);
+            await discard.ShowDialog(this);
+            if (!discard.Confirmed)
+                return;
+            var draftTab = CreateDocumentTab(true, EditorEntityKind.Units, true, unitName);
+            DiscardUnitDocumentChanges(draftTab);
+            FinishUnitDeletion(unitName);
+            return;
+        }
+
+        if (!await ConfirmPendingChangesBeforeImmediateDeletionAsync())
+            return;
+        // Draft capture and saving can rename the selected Unit and reload XML.
+        if (!string.Equals(_modFilePath, originalPath, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(_currentUnitName) || _modXmlDoc == null || _modXmlRoot == null)
+            return;
+        unitName = _currentUnitName;
+        if (_loadedModXmlBaseline?.Root == null ||
+            ProtoXmlHandler.GetUnitElement(_loadedModXmlBaseline.Root, unitName) == null)
+            throw new InvalidOperationException("The selected Unit changed during saving. Select it again and retry.");
+
         var candidateDocument = new XDocument(_modXmlDoc);
         var candidateUnit = candidateDocument.Root == null
             ? null
-            : ProtoXmlHandler.GetUnitElement(candidateDocument.Root, _currentUnitName);
+            : ProtoXmlHandler.GetUnitElement(candidateDocument.Root, unitName);
+        if (candidateUnit == null)
+            throw new InvalidOperationException("The selected Unit no longer exists.");
         candidateUnit?.Remove();
-        var deletionOverrides = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Path.GetFullPath(_modFilePath)] = candidateDocument
-        };
         IReadOnlyList<OwnedTransformCommandBundle>? ownedTransformBundles;
         try
         {
@@ -57402,36 +57673,69 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         if (ownedTransformBundles == null)
             return;
-        if (!await EnsureIdentifierCanBeDeletedAsync(
-                GameIdentifierKind.ProtoUnit,
-                _currentUnitName,
-                "Unit",
-                deletionOverrides))
+        var confirmationChecks = PrepareUnitDeletionChecks([unitName], candidateDocument, ownedTransformBundles);
+        var linkedDefinitions = ownedTransformBundles.Count == 0 ? "" :
+            "\n\nOwned Transform commands and technologies will also be deleted: " +
+            string.Join(", ", ownedTransformBundles.Select(bundle => bundle.CommandName));
+        var pConfirm = new Prompt(PromptType.Confirm, "Delete Unit",
+            $"Permanently delete '{unitName}' and save the deletion now?" + linkedDefinitions,
+            confirmButtonText: "Delete Unit", actionRole: PromptActionRole.Destructive).FitToContent(
+                ownedTransformBundles.Count > 0 ? 680 : 480,
+                ownedTransformBundles.Count > 0 ? 300 : 190);
+        await pConfirm.ShowDialog(this);
+        if (!pConfirm.Confirmed)
             return;
 
-        var pConfirm = new Prompt(PromptType.Confirm, "Delete Unit", $"Are you sure you want to delete '{_currentUnitName}'?");
-        await pConfirm.ShowDialog(this);
-        if (pConfirm.Confirmed && _modXmlRoot != null)
+        var snapshot = CreateProtoUnitDraftCaptureSnapshot();
+        var wasDirty = _isDirty;
+        var committed = false;
+        try
         {
-            var deletedUnitName = _currentUnitName;
-            var unitToDelete = ProtoXmlHandler.GetUnitElement(_modXmlRoot, deletedUnitName);
-            foreach (var stringId in CollectUnitStringIdsForRemoval(deletedUnitName, unitToDelete))
+            var unitToDelete = ProtoXmlHandler.GetUnitElement(_modXmlRoot, unitName);
+            foreach (var stringId in CollectUnitStringIdsForRemoval(unitName, unitToDelete))
             {
                 _pendingUnitStringUpdates.Remove(stringId);
                 _pendingUnitStringRemovals.Add(stringId);
             }
-            ProtoXmlHandler.DeleteUnit(_modXmlRoot, deletedUnitName);
+            ProtoXmlHandler.DeleteUnit(_modXmlRoot, unitName);
             if (ownedTransformBundles.Count > 0)
-                _pendingOwnedTransformBundleDeletions[deletedUnitName] = ownedTransformBundles.ToList();
-            _dirtyUnitNames.Add(deletedUnitName);
-            _unitAbilityDrafts[deletedUnitName] = new Dictionary<string, AbilityEditorDraft>(StringComparer.OrdinalIgnoreCase);
+                _pendingOwnedTransformBundleDeletions[unitName] = ownedTransformBundles.ToList();
+            _dirtyUnitNames.Add(unitName);
+            _unitAbilityDrafts[unitName] = new Dictionary<string, AbilityEditorDraft>(StringComparer.OrdinalIgnoreCase);
+            // Do not recapture the still-visible controls into the deleted entry.
+            // Tabs, browser and selection remain intact until the commit succeeds.
             _currentUnitName = null;
-            RemoveDeletedDocumentTabs(EditorEntityKind.Units, deletedUnitName);
-            MarkDirty();
-            InvalidateSuggestionCaches();
-            RefreshUnitList();
-            ClearEditorPanels();
+            _isDirty = true;
+            _immediateUnitDeletionChecks = confirmationChecks;
+            await SaveCurrentUnitCoreAsync(this, new RoutedEventArgs());
+            committed = !_isDirty;
         }
+        finally
+        {
+            _immediateUnitDeletionChecks = null;
+            if (!committed)
+            {
+                RestoreProtoUnitDraftCaptureSnapshot(snapshot);
+                _isDirty = wasDirty;
+                RefreshDocumentTabHeaders();
+            }
+        }
+        if (committed)
+        {
+            _powerView?.AcknowledgePowerFileSavedByEditor();
+            FinishUnitDeletion(unitName);
+        }
+    }
+
+    private void FinishUnitDeletion(string unitName)
+    {
+        ForgetUnitXmlDraft(unitName);
+        _currentUnitName = null;
+        RemoveDeletedDocumentTabs(EditorEntityKind.Units, unitName);
+        InvalidateSuggestionCaches();
+        RefreshUnitList();
+        ClearEditorPanels();
+        RefreshDocumentTabHeaders();
     }
 
     protected override async void OnClosing(WindowClosingEventArgs e)
@@ -57469,21 +57773,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
 
         e.Cancel = true;
-        if (_activeEntityKind == EditorEntityKind.Technologies &&
-            _technologyView != null &&
-            !await _technologyView.CommitCurrentTechnologyAsync())
-            return;
-
-        if (_activeEntityKind == EditorEntityKind.MajorGods &&
-            _majorGodView != null &&
-            !await _majorGodView.CommitCurrentMajorGodAsync())
-            return;
-
-        if (_activeEntityKind == EditorEntityKind.Powers &&
-            _powerView != null &&
-            !await _powerView.CommitCurrentPowerAsync())
-            return;
-
+        // The user may quit without making an incomplete draft valid first.
         if (_isDirty || (_technologyView?.IsDirty ?? false) || (_majorGodView?.IsDirty ?? false) || (_powerView?.IsDirty ?? false))
         {
             var proceed = await PromptUnsavedChangesAsync();

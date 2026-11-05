@@ -1,4 +1,5 @@
 using System.Globalization;
+using Avalonia.LogicalTree;
 using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -14,6 +15,31 @@ namespace AoMDivineDataEditor.Windows;
 
 public partial class MajorGodEditorView : UserControl
 {
+    private EditorSaveFeedback _saveFeedback = null!;
+    internal Action<EditorSaveOutcome>? SaveFeedbackReported { get; set; }
+    internal void UseHostStatusFooter(Action<string> reportContext) => _saveFeedback.UseHostFooter(reportContext);
+    private void ReportSaveFeedback(EditorSaveOutcome outcome)
+    {
+        _saveFeedback.Report(outcome);
+        SaveFeedbackReported?.Invoke(outcome);
+    }
+    internal Func<IReadOnlyList<string>, IReadOnlyDictionary<string, XDocument>, IReadOnlyList<ModDeletionInspection>>? PrepareDeletionChecks { get; set; }
+    internal Func<Task>? ImmediateDeletionRequestedAsync { get; set; }
+    internal IEnumerable<string> PendingStringIds => _pendingStringUpdates.Keys;
+    internal bool LastSaveWroteStrings { get; private set; }
+    internal Func<IEnumerable<string>, IReadOnlyDictionary<string, XDocument>, OwnedStringSaveInspection>? PrepareStringCleanup { get; set; }
+    internal IEnumerable<XDocument> CreateStringReferenceDrafts()
+    {
+        if (CreateModifiedDocumentSnapshot() is { } document) yield return document;
+        if (_rawEditorDirty) yield return XDocument.Parse(_rawXmlEditor.Text ?? "", LoadOptions.PreserveWhitespace);
+    }
+    private IReadOnlyList<ModDeletionInspection>? _immediateDeletionChecks;
+    private readonly Dictionary<string, string> _resolvedStringTexts = new(StringComparer.OrdinalIgnoreCase);
+    private int _economicEditorGeneration;
+    private Window? _immediateDeletionOwner;
+    internal bool IsCurrentEntrySaved => _loadedModDocument != null && CurrentMajorGodName != null &&
+        MajorGodCatalog.Find(_loadedModDocument, _pendingRenames.LastOrDefault(rename =>
+            rename.Value.Equals(CurrentMajorGodName, StringComparison.OrdinalIgnoreCase)).Key ?? CurrentMajorGodName) != null;
     private static readonly string[] ResolvedStringTags = ["displaynameid", "rollovernameid", "titleid"];
     private static readonly string[] ImageTags = ["icon", "portrait", "breakoutportrait"];
     private static readonly string[] StartingModes = ["Supremacy", "Deathmatch", "Lightning"];
@@ -28,16 +54,7 @@ public partial class MajorGodEditorView : UserControl
         ("IgnoreAgeRoll", "ignoreageroll")
     ];
     private static readonly (string Label, string Tag)[] SpecialMechanics =
-    [
-        ("Shades", "shades"),
-        ("TerrainCreeps", "terraincreeps"),
-        ("BonusUnitSpawning", "bonusunitspawning"),
-        ("BountyResourceEarning", "bountyresourceearning"),
-        ("TimeShifting", "timeshifting"),
-        ("BuildingChain", "buildingchain"),
-        ("CombatXP", "combatxp"),
-        ("OnCastPowerCostFactor", "oncastpowercostfactor")
-    ];
+        MajorGodCatalog.SpecialMechanicDefinitions;
 
     private readonly Dictionary<string, XElement> _baseEntries;
     private readonly string? _modPath;
@@ -50,12 +67,12 @@ public partial class MajorGodEditorView : UserControl
     private readonly Func<Window, string, Task<bool>>? _ensureCanDeleteAsync;
     private readonly Window? _dialogOwner;
     private readonly IReadOnlyList<string> _cultureNames;
-    private IReadOnlyList<string> _technologyNames;
-    private readonly IReadOnlyList<string> _protoUnitNames;
-    private readonly IReadOnlyList<string> _unitTypeNames;
-    private readonly IReadOnlyList<string> _unitOrTypeNames;
-    private IReadOnlyList<string> _technologyFlagNames;
-    private IReadOnlyList<string> _techTypeNames;
+    private readonly SelectorCatalog _technologyNames;
+    private readonly SelectorCatalog _protoUnitNames;
+    private readonly SelectorCatalog _unitTypeNames;
+    private readonly SelectorCatalog _unitOrTypeNames;
+    private readonly SelectorCatalog _technologyFlagNames;
+    private readonly SelectorCatalog _techTypeNames;
     private readonly IReadOnlyList<string> _terrainCreepNames;
     private readonly IReadOnlyList<string> _iconPaths;
     private readonly IReadOnlyList<string> _minimapBorderValues;
@@ -81,6 +98,7 @@ public partial class MajorGodEditorView : UserControl
     private bool _rawEditorDirty;
     private bool _isXmlPreviewCollapsed;
     private int _populateGeneration;
+    private Task _populationTask = Task.CompletedTask;
     private Action? _refreshBonusUnitSpawningEditor;
     private string? _selectedSpecialMechanicTag;
 
@@ -125,7 +143,10 @@ public partial class MajorGodEditorView : UserControl
         Window? dialogOwner = null)
     {
         InitializeComponent();
+        EditorXmlPreviewPane.Configure(_mainGrid, 0, 1, 2, _xmlPreviewContent, _previewSplitter, _xmlPreviewToggleButton);
+        _saveFeedback = new EditorSaveFeedback(_statusMessage);
         XmlSyntaxEditorService.Configure(_rawXmlEditor);
+        InitializeMajorGodXmlEditing();
         ConfigureFieldControls();
 
         _baseEntries = baseDefinitions.ToDictionary(
@@ -145,40 +166,12 @@ public partial class MajorGodEditorView : UserControl
             .Select(value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        _technologyNames = (technologyNames ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _protoUnitNames = (protoUnitNames ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _unitTypeNames = (unitTypeNames ?? ProtoConstants.KnownUnitTypes)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _unitOrTypeNames = _protoUnitNames.Concat(_unitTypeNames)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _technologyFlagNames = (technologyFlagNames ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _techTypeNames = (techTypeNames ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        _technologyNames = new SelectorCatalog(technologyNames);
+        _protoUnitNames = new SelectorCatalog(protoUnitNames);
+        _unitTypeNames = new SelectorCatalog(unitTypeNames ?? ProtoConstants.KnownUnitTypes);
+        _unitOrTypeNames = new SelectorCatalog(_protoUnitNames.Concat(_unitTypeNames));
+        _technologyFlagNames = new SelectorCatalog(technologyFlagNames);
+        _techTypeNames = new SelectorCatalog(techTypeNames);
         _terrainCreepNames = (terrainCreepNames ?? [])
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim())
@@ -225,18 +218,28 @@ public partial class MajorGodEditorView : UserControl
 
     private void ConfigureFieldControls()
     {
-        EditorTextFieldStyle.ConfigureTextBox(_nameBox);
-        EditorTextFieldStyle.ConfigureTextBox(_displayNameBox);
-        EditorTextFieldStyle.ConfigureTextBox(_rolloverNameBox);
-        EditorTextFieldStyle.ConfigureTextBox(_titleBox);
-        _cultureBox.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
-        EditorTextFieldStyle.ConfigureSelector(_minimapBorderBox);
-        EditorTextFieldStyle.ConfigureSelector(_backgroundScenarioBox);
-        EditorTextFieldStyle.ConfigureSelector(_ageTechBox);
-        EditorTextFieldStyle.ConfigureSelector(_deathmatchTechBox);
-        EditorTextFieldStyle.ConfigureSelector(_teamTechBox);
-        foreach (var technologyBox in new[] { _ageTechBox, _deathmatchTechBox, _teamTechBox })
-            technologyBox.Width = technologyBox.MaxWidth = 200;
+        ConfigureMajorGodField(_nameBox, EditorFieldWidthRole.SingleLineText);
+        ConfigureMajorGodField(_displayNameBox, EditorFieldWidthRole.SingleLineText);
+        EditorRolloverField.Configure(_rolloverNameBox);
+        EditorRolloverField.ConfigureIdentity(_identityLayout,
+            _identityLayout.Children.OfType<StackPanel>().First(), _iconPreviewHost);
+        ConfigureMajorGodField(_titleBox, EditorFieldWidthRole.SingleLineText);
+        foreach (var reference in new Control[] { _cultureBox, _ageTechBox, _deathmatchTechBox, _teamTechBox,
+                     _sharedLightningTechBox, _sharedDeathMatchTechBox, _sharedStoryModeTechBox, _sharedLudicrousModeTechBox })
+            ConfigureMajorGodField(reference, EditorFieldWidthRole.Reference);
+        foreach (var asset in new Control[] { _minimapBorderBox, _backgroundScenarioBox, _iconEditor, _portraitEditor, _breakoutPortraitEditor })
+            ConfigureMajorGodField(asset, EditorFieldWidthRole.AssetPath);
+        foreach (var number in new[] { _defaultPopLimitBox, _defaultRepairFactorBox, _defaultContainedRegenRateBox,
+                     _sharedArchaicDelayBox, _sharedClassicalDelayBox, _sharedHeroicDelayBox, _sharedMythicDelayBox })
+            ConfigureMajorGodField(number, EditorFieldWidthRole.Numeric);
+        ConfigureMajorGodField(_ageBox, EditorFieldWidthRole.LongEnum);
+        ConfigureMajorGodField(_specialMechanicSelector, EditorFieldWidthRole.LongEnum);
+        EditorFormLayout.WrapLabeledGridColumns((Grid)_ageBox.Parent!, [1], [2, 3]);
+        EditorFormLayout.WrapLabeledGridColumns((Grid)_cultureBox.Parent!, [1], [2, 3]);
+        EditorFormLayout.WrapLabeledGridColumns(_teamTechRow, [1, 2]);
+        // Single-character civilisation key: preserve its reviewed 70px text exception.
+        EditorFieldInteraction.Configure(_keyBox, EditorFieldWidthRole.SingleLineText, () => _isPopulating);
+        _keyBox.MinHeight = _keyBox.Height = _keyBox.MaxHeight = EditorFormLayout.FieldHeight;
     }
 
     private IReadOnlyList<string> ExtractBaseValues(string tag)
@@ -266,13 +269,26 @@ public partial class MajorGodEditorView : UserControl
         IEnumerable<string> technologyFlagNames,
         IEnumerable<string> techTypeNames)
     {
-        _technologyNames = NormalizeCatalog(technologyNames);
-        _technologyFlagNames = NormalizeCatalog(technologyFlagNames);
-        _techTypeNames = NormalizeCatalog(techTypeNames);
-        foreach (var technologyBox in new[] { _ageTechBox, _deathmatchTechBox, _teamTechBox })
-            technologyBox.ItemsSource = _technologyNames;
-        if (_currentEntry != null)
-            _ = PopulateStructuredFieldsAsync(_currentEntry);
+        UpdateReferenceCatalogs(_protoUnitNames, _unitTypeNames, technologyNames, technologyFlagNames, techTypeNames);
+    }
+
+    internal void UpdateReferenceCatalogs(IEnumerable<string> units, IEnumerable<string> types,
+        IEnumerable<string> technologies, IEnumerable<string> flags, IEnumerable<string> techTypes)
+    {
+        var populating = _isPopulating;
+        _isPopulating = true;
+        try
+        {
+            var changed = _protoUnitNames.ReplaceWith(units) | _unitTypeNames.ReplaceWith(types) |
+                          _technologyNames.ReplaceWith(technologies) | _technologyFlagNames.ReplaceWith(flags) |
+                          _techTypeNames.ReplaceWith(techTypes);
+            changed |= _unitOrTypeNames.ReplaceWith(_protoUnitNames.Concat(_unitTypeNames));
+            if (!changed) return;
+            foreach (var box in new[] { _ageTechBox, _deathmatchTechBox, _teamTechBox })
+                EditorAutoCompleteService.SetCatalogSuggestions(box, _technologyNames);
+            SelectorCatalogRefresh.Apply(this);
+        }
+        finally { _isPopulating = populating; }
     }
 
     private static IReadOnlyList<string> NormalizeCatalog(IEnumerable<string> values)
@@ -297,6 +313,7 @@ public partial class MajorGodEditorView : UserControl
 
     public void SelectMajorGod(string? name)
     {
+        EditorValidationNavigation.Clear(this);
         if (!IsModifiedMode && _baseSharedData != null &&
             name?.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -312,8 +329,7 @@ public partial class MajorGodEditorView : UserControl
             : IsModifiedMode
                 ? MajorGodCatalog.Find(_modDocument!, name)
                 : _baseEntries.GetValueOrDefault(name);
-        _rawEditorDirty = false;
-        _applyRawXmlButton.IsVisible = false;
+        _rawEditorDirty = CurrentMajorGodXmlDraft?.Session.IsDirty == true;
 
         if (_currentEntry == null)
         {
@@ -321,12 +337,11 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        SetRawXml(_currentEntry.ToString());
-        XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, !IsModifiedMode);
+        SetRawXml(FormatMajorGodPreview(_currentEntry));
         _statusMessage.Text = IsModifiedMode
-            ? "Edit the shared fields or raw <civ> XML, then use Save."
+            ? ""
             : "Original Data.bar entry (read-only).";
-        _ = PopulateStructuredFieldsAsync(_currentEntry);
+        _populationTask = PopulateStructuredFieldsAsync(_currentEntry);
     }
 
     private void ShowSharedData()
@@ -338,8 +353,9 @@ public partial class MajorGodEditorView : UserControl
         _loadedEntryName = null;
         _currentEntry = null;
         _rawEditorDirty = false;
-        _applyRawXmlButton.IsVisible = false;
         _majorGodIdentityRow.IsVisible = false;
+        _majorGodTabs.IsVisible = true;
+        _emptySelectionMessage.IsVisible = false;
         _majorGodPropertiesPanel.IsVisible = false;
         _sharedDataPropertiesPanel.IsVisible = true;
         _startingAttributesTab.IsVisible = false;
@@ -361,13 +377,15 @@ public partial class MajorGodEditorView : UserControl
         _sharedHeroicDelayBox.Text = EditorNumericFieldStyle.FormatDisplay(delays == null ? "" : ReadValue(delays, "heroicage"));
         _sharedMythicDelayBox.Text = EditorNumericFieldStyle.FormatDisplay(delays == null ? "" : ReadValue(delays, "mythicage"));
 
-        SetRawXml(_baseSharedData.ToString());
-        XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, true);
+        SetRawXml(XmlSyntaxEditorService.FormatElementForPreview(_baseSharedData));
         _statusMessage.Text = "Original shared Major God data (read-only).";
+        FinalizeMajorGodPresentation();
     }
 
     private void ShowMajorGodLayout()
     {
+        _majorGodTabs.IsVisible = true;
+        _emptySelectionMessage.IsVisible = false;
         _majorGodIdentityRow.IsVisible = true;
         _majorGodPropertiesPanel.IsVisible = true;
         _sharedDataPropertiesPanel.IsVisible = false;
@@ -411,6 +429,7 @@ public partial class MajorGodEditorView : UserControl
             RefreshIconPreview();
 
             _stringIds.Clear();
+            _resolvedStringTexts.Clear();
             var ids = ResolvedStringTags.ToDictionary(tag => tag, tag => ReadValue(entry, tag), StringComparer.OrdinalIgnoreCase);
             foreach (var pair in ids)
                 _stringIds[pair.Key] = pair.Value;
@@ -431,6 +450,7 @@ public partial class MajorGodEditorView : UserControl
             foreach (var resolution in resolutions)
             {
                 var box = GetResolvedStringBox(resolution.Tag);
+                _resolvedStringTexts[resolution.Tag] = resolution.Text;
                 box.Text = resolution.Text;
                 ToolTip.SetTip(box, null);
             }
@@ -438,7 +458,10 @@ public partial class MajorGodEditorView : UserControl
         finally
         {
             if (generation == _populateGeneration)
+            {
+                FinalizeMajorGodPresentation();
                 _isPopulating = false;
+            }
         }
     }
 
@@ -491,116 +514,137 @@ public partial class MajorGodEditorView : UserControl
             }))));
     }
 
-    public async Task<bool> CommitCurrentMajorGodAsync()
+    public Task<bool> CommitCurrentMajorGodAsync() => CommitMajorGodAsync(validateContent: true);
+
+    internal Task<bool> CaptureCurrentMajorGodDraftAsync() => CommitMajorGodAsync(validateContent: false);
+
+    private async Task<bool> CommitMajorGodAsync(bool validateContent)
     {
         if (!IsModifiedMode || _currentEntry == null)
             return true;
+        // Retain raw text on navigation. Only Save parses/validates it, so
+        // invalid XML cannot prevent reaching the host's discard decision.
+        if (CurrentMajorGodXmlDraft?.Session.IsEditing == true) return true;
 
         try
         {
             var candidate = _currentEntry;
-            var appliedRawXml = _rawEditorDirty;
-            var ownedStringIdsBeforeRawEdit = appliedRawXml
-                ? MajorGodCatalog.CollectOwnedStringIds(_currentEntry)
-                : null;
-            if (appliedRawXml)
+            var hasPendingEdit = IsMajorGodDirty(CurrentMajorGodName ?? MajorGodCatalog.GetName(candidate));
+            var newName = ValidateMajorGodCandidate(candidate, _loadedEntryName, _currentEntry, hasPendingEdit, validateContent);
+            if (!hasPendingEdit)
+                return true;
+            // Validation also runs on focus/navigation. Normalize stored XML
+            // only for a real edit, so an untouched entry stays untouched.
+            if (hasPendingEdit)
             {
-                candidate = XElement.Parse(_rawXmlEditor.Text ?? "", LoadOptions.PreserveWhitespace);
-                if (!candidate.Name.LocalName.Equals(MajorGodCatalog.EntryName, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Raw XML must have a <civ> root element.");
-            }
-            ValidateCandidateStructure(candidate);
-
-            var newName = MajorGodCatalog.GetName(candidate);
-            if (string.IsNullOrWhiteSpace(newName))
-                throw new InvalidDataException("Name cannot be empty.");
-            if (!InternalNamePolicy.IsValidOrUnchangedLegacy(newName, _loadedEntryName))
-                throw new InvalidDataException($"Name can contain only {InternalNamePolicy.AllowedCharactersDescription}.");
-            var duplicate = MajorGodCatalog.Find(_modDocument!, newName);
-            if (duplicate != null && !ReferenceEquals(duplicate, _currentEntry))
-                throw new InvalidDataException($"A modified major god named '{newName}' already exists.");
-            var namespaceCollision = FindMajorGodStringNamespaceCollision(newName, _loadedEntryName);
-            if (namespaceCollision != null)
-            {
-                throw new InvalidDataException(
-                    $"Major God '{newName}' would use the same generated string IDs as '{namespaceCollision.Name}'. Choose another name.");
-            }
-
-            var key = ReadValue(candidate, "key");
-            if (!MajorGodCatalog.IsValidKey(key))
-                throw new InvalidDataException("Key must be exactly one capital letter from A to Z.");
-            var culture = ReadValue(candidate, "culture");
-            if (culture.Length == 0 ||
-                (_cultureNames.Count > 0 && !_cultureNames.Contains(culture, StringComparer.OrdinalIgnoreCase)))
-                throw new InvalidDataException("Culture must be selected from the supported culture list.");
-
-            ValidateSharedFields(candidate);
-            ValidateAssociatedTechs(candidate);
-            ValidateEconomicAttributes(candidate);
-            ValidateSpecialMechanics(candidate);
-            ValidateStartingUnits(candidate);
-            ValidateStartingQueue(candidate);
-            ValidateStartingResources(candidate);
-
-            var statsBefore = ReadValue(candidate, "statsid");
-            MajorGodCatalog.EnsureStatsId(candidate);
-            if (!statsBefore.Equals("SP", StringComparison.Ordinal))
-                MarkCurrentDirty();
-
-            if (appliedRawXml)
-            {
-                _currentEntry.ReplaceWith(candidate);
-                _currentEntry = candidate;
-                ScheduleOwnedStringRemovals(
-                    ownedStringIdsBeforeRawEdit!.Except(MajorGodCatalog.CollectOwnedStringIds(candidate)),
-                    _loadedEntryName ?? newName);
-                PruneUnreferencedPendingStringUpdates(_loadedEntryName ?? newName, candidate);
-                _rawEditorDirty = false;
-                _applyRawXmlButton.IsVisible = false;
-                MarkCurrentDirty();
+                MajorGodCatalog.NormalizeEditorFieldOrder(candidate);
+                var statsBefore = ReadValue(candidate, "statsid");
+                MajorGodCatalog.EnsureStatsId(candidate);
+                if (!statsBefore.Equals("SP", StringComparison.Ordinal))
+                    MarkCurrentDirty();
             }
 
             var oldName = _loadedEntryName;
-            await AdoptNameAndGeneratedStringIdsAsync(newName);
+            var entryBeingRenamed = _currentEntry;
+            var renameGeneration = _populateGeneration;
+            try
+            {
+                if (!await AdoptNameAndGeneratedStringIdsAsync(newName)) return false;
+            }
+            catch
+            {
+                // A failed lookup from a discarded edit must not restore its old name
+                // into the newly selected/restored entry or open an obsolete error dialog.
+                if (!ReferenceEquals(entryBeingRenamed, _currentEntry) || renameGeneration != _populateGeneration ||
+                    !string.Equals(_loadedEntryName, oldName, StringComparison.Ordinal) ||
+                    !MajorGodCatalog.GetName(entryBeingRenamed).Equals(newName, StringComparison.Ordinal)) return false;
+                if (!string.IsNullOrWhiteSpace(oldName))
+                {
+                    MajorGodCatalog.FindDirectChild(_currentEntry!, "name")!.Value = oldName;
+                    var populating = _isPopulating;
+                    _isPopulating = true;
+                    try { _nameBox.Text = oldName; } finally { _isPopulating = populating; }
+                }
+                throw;
+            }
             if (!string.IsNullOrWhiteSpace(oldName) &&
                 !oldName.Equals(newName, StringComparison.OrdinalIgnoreCase))
                 AddOrCollapsePendingRename(oldName, newName);
+            if (oldName != null) MoveMajorGodXmlDraft(oldName, newName);
             CurrentMajorGodName = newName;
             _loadedEntryName = newName;
-            SetRawXml(candidate.ToString());
+            SetRawXml(FormatMajorGodPreview(candidate));
             BrowserStateChanged?.Invoke(this, EventArgs.Empty);
-            if (appliedRawXml)
-                await PopulateStructuredFieldsAsync(candidate);
             return true;
         }
         catch (Exception ex)
         {
+            var failedEntry = _currentEntry;
+            if (failedEntry != null)
+            {
+                EditorValidationBindings.Bind(_nameBox, failedEntry, "name");
+                EditorValidationBindings.Bind(_keyBox, failedEntry, "key");
+                EditorValidationBindings.Bind(_cultureBox, failedEntry, "culture");
+                BindMajorGodValidationFields(failedEntry);
+            }
+            var location = ex.Data[typeof(ValidationSourceLocation)] as ValidationSourceLocation;
+            if (location != null && failedEntry != null &&
+                (location.Record.Equals(MajorGodCatalog.GetName(failedEntry), StringComparison.OrdinalIgnoreCase) ||
+                 location.Record.Equals(_nameBox.Text?.Trim(), StringComparison.OrdinalIgnoreCase)))
+                location = location with { Record = MajorGodCatalog.GetName(failedEntry) };
+            var target = CurrentMajorGodXmlDraft?.Session.IsEditing == true ? null :
+                EditorValidationBindings.Find(this, new LocatedValidationIssue(ex.Message, location));
+            var failure = target == null ? null : EditorValidationNavigation.Mark(this, target);
             if (TopLevel.GetTopLevel(this) is Window owner)
                 await new Prompt(PromptType.Error, "Invalid major god data", ex.Message).ShowDialog(owner);
+            if (failure != null && target != null)
+                await failure.RevealAsync(() => ReferenceEquals(failedEntry, _currentEntry),
+                    () => _majorGodTabs.SelectedIndex = target.GetLogicalAncestors().Contains(_specialMechanicsPanel) ? 2 :
+                        target.GetLogicalAncestors().Contains(_startingAttributesTab) ? 1 : 0);
             _statusMessage.Text = ex.Message;
             return false;
         }
     }
 
-    private async Task AdoptNameAndGeneratedStringIdsAsync(string newName)
+    private async Task<bool> AdoptNameAndGeneratedStringIdsAsync(string newName)
     {
         var oldName = _loadedEntryName;
         if (_currentEntry == null || string.IsNullOrWhiteSpace(oldName) || oldName.Equals(newName, StringComparison.Ordinal))
-            return;
+            return true;
 
-        foreach (var rename in MajorGodCatalog.RenameOwnedResolvedStringIds(_currentEntry, oldName, newName))
+        var entry = _currentEntry;
+        var generation = _populateGeneration;
+        var before = new XElement(_currentEntry);
+        MajorGodCatalog.FindDirectChild(before, "name")!.Value = oldName;
+        var candidate = new XElement(_currentEntry);
+        var changes = MajorGodCatalog.RenameOwnedResolvedStringIds(candidate, oldName, newName);
+        var plan = await PrepareStringRenameAsync(before, candidate, changes, MajorGodCatalog.CollectOwnedStringIds(before), newName, reuseSavedOwner: true);
+        // Focus/navigation commits can still be awaiting string lookup when a draft is
+        // discarded or replaced. Never apply that result to the restored/next God.
+        if (!ReferenceEquals(entry, _currentEntry) || generation != _populateGeneration ||
+            !string.Equals(_loadedEntryName, oldName, StringComparison.Ordinal) ||
+            !MajorGodCatalog.GetName(entry).Equals(newName, StringComparison.Ordinal)) return false;
+        OwnedStringSavePreparation.ApplyLocalFieldChanges(_currentEntry, candidate);
+        ApplyMajorGodStringRenamePlan(_currentEntry, oldName, newName, plan, updateSelectedFields: true);
+        return true;
+    }
+
+    private void ApplyMajorGodStringRenamePlan(XElement entry, string oldName, string newName,
+        OwnedStringLifecyclePlan plan, bool updateSelectedFields)
+    {
+        foreach (var rename in plan.ReferenceRenames)
         {
-            _stringIds[rename.Field] = rename.NewId;
-            var hadPendingText = _pendingStringUpdates.Remove(rename.OldId, out var text);
-            if (!hadPendingText && _resolveStringAsync != null)
-                text = await _resolveStringAsync(rename.OldId);
             _pendingStringRemovals.Remove(rename.NewId);
             _pendingStringRemovalOwners.Remove(rename.NewId);
-            _pendingStringUpdates[rename.NewId] = text ?? "";
+            _pendingStringUpdates[rename.NewId] = plan.StringUpdates[rename.NewId];
+            _pendingStringUpdates.Remove(rename.OldId);
             _pendingStringOwners.Remove(rename.OldId);
             _pendingStringOwners[rename.NewId] = newName;
             ScheduleOwnedStringRemoval(rename.OldId, newName);
         }
+        if (updateSelectedFields)
+            foreach (var tag in ResolvedStringTags)
+                _stringIds[tag] = MajorGodCatalog.FindDirectChild(entry, tag)?.Value.Trim() ?? "";
 
         if (_dirtyNames.Remove(oldName))
             _dirtyNames.Add(newName);
@@ -610,6 +654,36 @@ public partial class MajorGodEditorView : UserControl
         foreach (var id in _pendingStringRemovalOwners.Where(pair =>
                      pair.Value.Equals(oldName, StringComparison.OrdinalIgnoreCase)).Select(pair => pair.Key).ToList())
             _pendingStringRemovalOwners[id] = newName;
+    }
+
+    private async Task<OwnedStringLifecyclePlan> PrepareStringRenameAsync(XElement before, XElement candidate,
+        IReadOnlyList<OwnedStringRename> changes, IReadOnlySet<string> owned, string ownerName,
+        bool reuseSavedOwner = false, string? sourceMajorGodName = null)
+    {
+        var entry = _currentEntry;
+        var generation = _populateGeneration;
+        var entryName = entry == null ? null : MajorGodCatalog.GetName(entry);
+        var existing = OwnedStringSavePreparation.ReadEntries(_modStringsPath);
+        var sourceName = sourceMajorGodName ?? _loadedEntryName;
+        var originalName = _pendingRenames.LastOrDefault(rename => rename.Value.Equals(sourceName, StringComparison.OrdinalIgnoreCase)).Key ?? sourceName;
+        if (reuseSavedOwner && _loadedModDocument != null && ownerName.Equals(originalName, StringComparison.OrdinalIgnoreCase) &&
+            MajorGodCatalog.Find(_loadedModDocument, originalName!) is { } saved)
+            foreach (var id in MajorGodCatalog.CollectOwnedStringIds(saved)) existing.Remove(id);
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in changes.Select(change => change.OldId).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (_pendingStringUpdates.TryGetValue(id, out var pending) && (existing.ContainsKey(id) || !pending.Equals(id, StringComparison.Ordinal))) values[id] = pending;
+            else if (_resolveStringAsync != null && await _resolveStringAsync(id) is { } resolved && !resolved.Equals(id, StringComparison.Ordinal)) values[id] = resolved;
+            else if (existing.TryGetValue(id, out var value)) values[id] = value;
+        }
+        var plan = OwnedStringLifecyclePolicy.Prepare(changes, [], owned, existing, values, owned, new HashSet<string>());
+        OwnedStringSavePreparation.KeepOnlyApprovedRenames(before, candidate, changes, plan);
+        if (!ReferenceEquals(entry, _currentEntry) || generation != _populateGeneration ||
+            (entry != null && !MajorGodCatalog.GetName(entry).Equals(entryName, StringComparison.Ordinal))) return plan;
+        foreach (var id in changes.Select(change => change.OldId).Where(id => !values.ContainsKey(id)))
+            if (_pendingStringUpdates.TryGetValue(id, out var fallback) && fallback.Equals(id, StringComparison.Ordinal))
+            { _pendingStringUpdates.Remove(id); _pendingStringOwners.Remove(id); }
+        return plan;
     }
 
     private MajorGodDefinition? FindMajorGodStringNamespaceCollision(
@@ -725,26 +799,11 @@ public partial class MajorGodEditorView : UserControl
         }
         else
         {
-            entry = MajorGodCatalog.CreatePass1Entry(name, _cultureNames.FirstOrDefault() ?? "Greek");
-            MajorGodCatalog.SetAgeTech(entry, "ArchaicAge", "");
-            MajorGodCatalog.SetAssociatedTech(entry, "deathmatchtech", "");
-            MajorGodCatalog.SetEconomicValue(entry, "buildingefficiency", "0.6");
-            MajorGodCatalog.SetEconomicValue(entry, "extrabuildingefficiency", "0.3");
-            var startingUnits = MajorGodCatalog.AddStartingUnitsGroup(entry, "supremacy");
-            MajorGodCatalog.AddStartingUnit(startingUnits);
-            var startingQueue = MajorGodCatalog.AddStartingQueueGroup(entry, "supremacy");
-            MajorGodCatalog.AddStartingQueueUnit(startingQueue);
-            var startingResources = MajorGodCatalog.AddStartingResourcesGroup(entry, "supremacy");
-            foreach (var resourceType in ProtoConstants.KnownResourceTypes)
-                MajorGodCatalog.AddStartingResource(startingResources, resourceType);
-            _pendingStringUpdates[MajorGodCatalog.BuildStringId(name, "displaynameid")] = name;
-            _pendingStringUpdates[MajorGodCatalog.BuildStringId(name, "rollovernameid")] = "";
-            _pendingStringUpdates[MajorGodCatalog.BuildStringId(name, "titleid")] = "";
-            foreach (var tag in ResolvedStringTags)
-                _pendingStringOwners[MajorGodCatalog.BuildStringId(name, tag)] = name;
+            entry = MajorGodCatalog.CreatePass1Entry(name);
         }
 
         _modDocument.Root.Add(entry);
+        MajorGodCatalog.NormalizeEditorFieldOrder(entry);
         IsModifiedMode = true;
         _dirtyNames.Add(name);
         SetDirty(true);
@@ -752,7 +811,49 @@ public partial class MajorGodEditorView : UserControl
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public async Task DeleteCurrentMajorGodAsync()
+    public Task DeleteCurrentMajorGodAsync()
+        => ImmediateDeletionRequestedAsync?.Invoke() ?? DeleteCurrentMajorGodCoreAsync();
+
+    internal async Task DeleteAndSaveCurrentMajorGodAsync(Window owner)
+    {
+        if (_currentEntry == null || CurrentMajorGodName == null || _modDocument == null || _modPath == null)
+            return;
+        var name = CurrentMajorGodName;
+        var saved = new XElement(_currentEntry);
+        var documentBackup = new XDocument(_modDocument);
+        var candidate = new XDocument(_modDocument);
+        MajorGodCatalog.Find(candidate, name)?.Remove();
+        _immediateDeletionChecks = PrepareDeletionChecks?.Invoke([name],
+            new Dictionary<string, XDocument> { [Path.GetFullPath(_modPath)] = candidate }) ?? [];
+        _immediateDeletionOwner = owner;
+        var removed = false;
+        var committed = false;
+        try
+        {
+            await DeleteCurrentMajorGodCoreAsync();
+            removed = MajorGodCatalog.Find(_modDocument, name) == null;
+            if (!removed) return;
+            committed = await SaveAsync();
+        }
+        finally
+        {
+            _immediateDeletionChecks = null;
+            _immediateDeletionOwner = null;
+            if (removed && !committed)
+            {
+                _modDocument = documentBackup;
+                DiscardMajorGodChanges(name, saved);
+                SelectMajorGod(name);
+            }
+        }
+        if (committed)
+        {
+            ShowEmpty();
+            BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private async Task DeleteCurrentMajorGodCoreAsync()
     {
         if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentMajorGodName))
             return;
@@ -761,13 +862,17 @@ public partial class MajorGodEditorView : UserControl
             rename.Value.Equals(currentName, StringComparison.OrdinalIgnoreCase)).Key;
         if (string.IsNullOrWhiteSpace(referenceName))
             referenceName = currentName;
-        if (_ensureCanDeleteAsync != null && TopLevel.GetTopLevel(this) is Window deletionOwner &&
+        var deletionOwner = _immediateDeletionOwner ?? TopLevel.GetTopLevel(this) as Window;
+        if (_ensureCanDeleteAsync != null && deletionOwner != null &&
             !await _ensureCanDeleteAsync(deletionOwner, referenceName))
             return;
-        if (TopLevel.GetTopLevel(this) is Window owner)
+        if (deletionOwner != null)
         {
-            var prompt = new Prompt(PromptType.Confirm, "Delete major god?", $"Delete '{CurrentMajorGodName}' from major_gods_mods.xml?");
-            await prompt.ShowDialog(owner);
+            var prompt = new Prompt(PromptType.Confirm, "Delete major god?",
+                _immediateDeletionChecks == null ? $"Delete '{CurrentMajorGodName}' from major_gods_mods.xml?" :
+                $"Permanently delete '{CurrentMajorGodName}' and save the deletion now?",
+                confirmButtonText: "Delete major god", actionRole: PromptActionRole.Destructive).FitToContent(520, 200);
+            await prompt.ShowDialog(deletionOwner);
             if (!prompt.Confirmed)
                 return;
         }
@@ -777,10 +882,12 @@ public partial class MajorGodEditorView : UserControl
             rename.Key.Equals(referenceName, StringComparison.OrdinalIgnoreCase) ||
             rename.Value.Equals(currentName, StringComparison.OrdinalIgnoreCase));
         _currentEntry.Remove();
+        ForgetMajorGodXmlDraft(currentName);
         _currentEntry = null;
         CurrentMajorGodName = null;
         _loadedEntryName = null;
         SetDirty(true);
+        if (_immediateDeletionChecks != null) return;
         ShowEmpty();
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -799,6 +906,7 @@ public partial class MajorGodEditorView : UserControl
 
     public bool IsMajorGodDirty(string name)
         => _dirtyNames.Contains(name) ||
+           _majorGodXmlDrafts.GetValueOrDefault(name)?.Session.IsDirty == true ||
            (_modDocument != null && ReferenceEquals(_currentEntry, MajorGodCatalog.Find(_modDocument, name)) && _rawEditorDirty);
 
     public void DiscardMajorGodChanges(string name, XElement? savedElement)
@@ -806,6 +914,10 @@ public partial class MajorGodEditorView : UserControl
         var current = MajorGodCatalog.Find(_modDocument!, name);
         var restored = savedElement == null ? null : new XElement(savedElement);
         var restoredName = restored == null ? "" : MajorGodCatalog.GetName(restored);
+        var isSelected = string.Equals(CurrentMajorGodName, name, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(_loadedEntryName, name, StringComparison.OrdinalIgnoreCase);
+        // The name textbox edits XML before commit adopts the new identity.
+        if (current == null && isSelected) current = _currentEntry;
         _pendingRenames.RemoveAll(rename =>
             rename.Key.Equals(name, StringComparison.OrdinalIgnoreCase) ||
             rename.Value.Equals(name, StringComparison.OrdinalIgnoreCase) ||
@@ -832,35 +944,49 @@ public partial class MajorGodEditorView : UserControl
             _pendingStringRemovalOwners.Remove(id);
             _pendingStringRemovals.Remove(id);
         }
-        _dirtyNames.Remove(name);
-        _rawEditorDirty = false;
-        SetDirty(_dirtyNames.Count > 0 || _pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0);
-        if (string.Equals(CurrentMajorGodName, name, StringComparison.OrdinalIgnoreCase))
+        _dirtyNames.ExceptWith(discardedOwnerNames);
+        foreach (var discarded in discardedOwnerNames) ForgetMajorGodXmlDraft(discarded);
+        if (isSelected)
+        {
+            _rawEditorDirty = false;
             SelectMajorGod(restored == null ? null : MajorGodCatalog.GetName(restored));
+        }
+        SetDirty(_dirtyNames.Count > 0 || _pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0 || _rawEditorDirty);
+        BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task<bool> SaveAsync()
     {
         await _saveGate.WaitAsync();
+        using var feedback = _saveFeedback.BeginSave();
         try
         {
-            return await SaveCoreAsync();
+            var saved = await SaveCoreAsync();
+            if (saved) feedback.Complete(IsDirty);
+            else SaveFeedbackReported?.Invoke(EditorSaveOutcome.Blocked);
+            return saved;
         }
         finally
         {
             _saveGate.Release();
+            feedback.Dispose();
+            if (SaveFeedbackReported != null) _statusMessage.Text = "";
         }
     }
 
     internal XDocument? CreateModifiedDocumentSnapshot()
-        => _modDocument == null ? null : new XDocument(_modDocument);
+        => CreateMajorGodXmlSnapshot();
 
     private async Task<bool> SaveCoreAsync()
     {
+        if (!await PrepareMajorGodXmlForSaveAsync()) return false;
         if (!await CommitCurrentMajorGodAsync())
             return false;
         if (!IsDirty)
+        {
+            AcceptMajorGodXmlSaves(CapturePreparedMajorGodXmlSaves());
             return true;
+        }
         if (_modDocument == null || string.IsNullOrWhiteSpace(_modPath))
         {
             if (TopLevel.GetTopLevel(this) is Window owner)
@@ -868,20 +994,38 @@ public partial class MajorGodEditorView : UserControl
             return false;
         }
 
-        if (!await ReloadExternallyChangedDocumentAsync())
+        if (_immediateDeletionChecks == null && !await ReloadExternallyChangedDocumentAsync())
             return false;
 
         try
         {
+            var xmlSaves = CapturePreparedMajorGodXmlSaves();
+            var rawNames = xmlSaves.Select(saved => saved.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in _dirtyNames.Where(name => !rawNames.Contains(name)))
+                if (MajorGodCatalog.Find(_modDocument, name) is { } edited)
+                    MajorGodCatalog.NormalizeEditorFieldOrder(edited);
             var renamesToSave = _pendingRenames.ToList();
+            ApplyMajorGodOwnerRenames(_modDocument, renamesToSave);
             var referenceMigration = renamesToSave.Count > 0
                 ? _prepareReferenceMigration?.Invoke(renamesToSave)
                 : null;
             var stringUpdates = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
-            var stringRemovals = _pendingStringRemovals
-                .Where(id => !IsStringIdReferencedByAnyMajorGod(id))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var writesStrings = stringUpdates.Count > 0 || stringRemovals.Count > 0;
+            var originalOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in _loadedModDocument?.Root?.Elements(MajorGodCatalog.EntryName) ?? [])
+                if (_dirtyNames.Contains(MajorGodCatalog.GetName(entry)) || MajorGodCatalog.Find(_modDocument, MajorGodCatalog.GetName(entry)) == null ||
+                    renamesToSave.Any(rename => rename.Key.Equals(MajorGodCatalog.GetName(entry), StringComparison.OrdinalIgnoreCase)))
+                    originalOwned.UnionWith(MajorGodCatalog.CollectOwnedStringIds(entry));
+            var currentOwned = (_modDocument.Root?.Elements(MajorGodCatalog.EntryName) ?? [])
+                .Where(entry => _dirtyNames.Contains(MajorGodCatalog.GetName(entry)))
+                .SelectMany(MajorGodCatalog.CollectOwnedStringIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [Path.GetFullPath(_modPath)] = _modDocument };
+            foreach (var path in referenceMigration?.Paths ?? [])
+                if (referenceMigration!.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+            var cleanup = OwnedStringSavePreparation.Prepare(_modPath, _modStringsPath, proposed, originalOwned,
+                currentOwned, stringUpdates, _pendingStringRemovals, PrepareStringCleanup);
+            stringUpdates = new Dictionary<string, string>(cleanup.Updates, StringComparer.OrdinalIgnoreCase);
+            var stringRemovals = cleanup.Plan.StringRemovals;
+            var writesStrings = cleanup.WritesStrings;
             if (writesStrings && (_saveStringsAsync == null || string.IsNullOrWhiteSpace(_modStringsPath)))
                 throw new InvalidOperationException("Major God strings cannot be saved because the active mod string file is unavailable.");
             if (stringUpdates.Count > 0)
@@ -903,6 +1047,13 @@ public partial class MajorGodEditorView : UserControl
                 ModXmlDocumentKind.MajorGods,
                 _modDocument,
                 _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath));
+            expectedStates[Path.GetFullPath(_modPath)] = preparedMajorGods.LoadedState;
+            cleanup.Inspection.MergeExpectedStatesInto(expectedStates);
+            var deletedNames = ModDeletionSafety.FindDeletedNames(
+                (_loadedModDocument?.Root?.Elements().Select(MajorGodCatalog.GetName) ?? []).Concat(_dirtyNames),
+                _modDocument.Root?.Elements().Select(MajorGodCatalog.GetName) ?? [], renamesToSave);
+            var deletionChecks = PrepareDeletionChecks?.Invoke(deletedNames,
+                new Dictionary<string, XDocument> { [Path.GetFullPath(_modPath)] = _modDocument }) ?? [];
             await ModDocumentPersistence.ExecuteAsync(
                 [preparedMajorGods],
                 (writesStrings ? new[] { _modStringsPath } : [])
@@ -910,11 +1061,15 @@ public partial class MajorGodEditorView : UserControl
                 expectedStates,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
+                    referenceMigration?.ValidateDiscovery();
+                    if (_immediateDeletionChecks != null)
+                        foreach (var inspection in _immediateDeletionChecks) inspection.ValidateReadDependencies();
+                    foreach (var inspection in deletionChecks) inspection.ValidateReadDependencies();
                     ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modPath);
                     referenceMigration?.Save((document, path) =>
                         ProtoEditorWindow.SaveAbilityXmlDocument(document, path));
-                    // String persistence also adopts the new string cache. Keep it last so
-                    // an earlier XML/reference failure cannot leave memory ahead of rollback.
+                    // Host caches are adopted by the Saved event after the complete transaction.
                     if (writesStrings)
                         await _saveStringsAsync!(stringUpdates, stringRemovals);
                 });
@@ -933,15 +1088,16 @@ public partial class MajorGodEditorView : UserControl
             _dirtyNames.Clear();
             foreach (var rename in renamesToSave)
                 _pendingRenames.Remove(rename);
-            SetDirty(false);
-            _statusMessage.Text = "Saved major_gods_mods.xml and resolved strings.";
+            AcceptMajorGodXmlSaves(xmlSaves);
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
+            LastSaveWroteStrings = writesStrings;
             Saved?.Invoke(this, EventArgs.Empty);
             return true;
         }
         catch (Exception ex)
         {
-            _statusMessage.Text = "Save failed: " + ex.Message;
-            if (TopLevel.GetTopLevel(this) is Window owner)
+            ReportSaveFeedback(EditorSaveOutcome.Failed);
+            if ((_immediateDeletionOwner ?? TopLevel.GetTopLevel(this)) is Window owner)
                 await new Prompt(PromptType.Error, "Major God save failed", ex.Message).ShowDialog(owner);
             return false;
         }
@@ -1010,7 +1166,7 @@ public partial class MajorGodEditorView : UserControl
         await prompt.ShowDialog(owner);
         if (!prompt.Confirmed)
         {
-            _statusMessage.Text = "Save cancelled; external Major God changes were not overwritten.";
+            ReportSaveFeedback(EditorSaveOutcome.Cancelled);
             return false;
         }
 
@@ -1045,6 +1201,8 @@ public partial class MajorGodEditorView : UserControl
             _modDocument = merge.Document;
             _loadedModDocument = new XDocument(externalDocument);
             _loadedFileState = stateAfterRead;
+            ReloadMajorGodXmlDrafts(merge.ReplacedEditorChanges);
+            ReloadChangedCleanMajorGodXmlDrafts();
             SetDirty(_dirtyNames.Count > 0 || _pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0);
             if (!string.IsNullOrWhiteSpace(selectedName) && MajorGodCatalog.Find(_modDocument, selectedName) != null)
                 SelectMajorGod(selectedName);
@@ -1055,9 +1213,7 @@ public partial class MajorGodEditorView : UserControl
                 ShowEmpty();
             }
             BrowserStateChanged?.Invoke(this, EventArgs.Empty);
-            _statusMessage.Text = merge.ReplacedEditorChanges.Count > 0
-                ? $"External Major Gods reloaded. {merge.ReplacedEditorChanges.Count} conflicting edit(s) were replaced; review, then save again."
-                : "External Major Gods reloaded and merged. Review the changes, then save again.";
+            ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
             return false;
         }
         catch (Exception exception)
@@ -1077,7 +1233,7 @@ public partial class MajorGodEditorView : UserControl
     }
 
     private async void NameBox_LostFocus(object? sender, RoutedEventArgs e)
-        => await CommitCurrentMajorGodAsync();
+        => await CaptureCurrentMajorGodDraftAsync();
 
     private void KeyBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
@@ -1107,7 +1263,24 @@ public partial class MajorGodEditorView : UserControl
     {
         if (!CanEditCurrent() || sender is not TextBox { Tag: string tag } box)
             return;
+        var text = box.Text ?? "";
+        if (_resolvedStringTexts.TryGetValue(tag, out var previousText) &&
+            previousText.Equals(text, StringComparison.Ordinal))
+            return;
+        _resolvedStringTexts[tag] = text;
         var id = _stringIds.GetValueOrDefault(tag) ?? "";
+        if (string.IsNullOrWhiteSpace(box.Text))
+        {
+            var owned = MajorGodCatalog.CollectOwnedStringIds(_currentEntry!);
+            var field = MajorGodCatalog.FindDirectChild(_currentEntry!, tag);
+            if (field != null) XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(field);
+            _stringIds.Remove(tag);
+            if (owned.Contains(id) && !MajorGodCatalog.CollectOwnedStringIds(_currentEntry!).Contains(id))
+                ScheduleOwnedStringRemoval(id, CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!));
+            MarkCurrentDirty();
+            RefreshRawXmlFromCurrent();
+            return;
+        }
         if (string.IsNullOrWhiteSpace(id))
         {
             id = MajorGodCatalog.BuildStringId(MajorGodCatalog.GetName(_currentEntry!), tag);
@@ -1132,7 +1305,20 @@ public partial class MajorGodEditorView : UserControl
     {
         if (!CanEditCurrent() || sender is not AutoCompleteBox { Tag: string tag } box)
             return;
+        var existing = MajorGodCatalog.FindDirectChild(_currentEntry!, tag);
+        var existingValue = tag.Equals("agetech", StringComparison.OrdinalIgnoreCase)
+            ? existing == null ? "" : ReadValue(existing, "tech") : existing?.Value.Trim() ?? "";
+        if (existingValue.Equals((box.Text ?? "").Trim(), StringComparison.Ordinal))
+            return;
 
+        if (string.IsNullOrWhiteSpace(box.Text))
+        {
+            var field = MajorGodCatalog.FindDirectChild(_currentEntry!, tag);
+            if (field != null) XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(field);
+            MarkCurrentDirty();
+            RefreshRawXmlFromCurrent();
+            return;
+        }
         if (tag.Equals("agetech", StringComparison.OrdinalIgnoreCase))
         {
             var ageTech = MajorGodCatalog.FindDirectChild(_currentEntry!, "agetech");
@@ -1185,6 +1371,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void RebuildEconomicEditor()
     {
+        _economicEditorGeneration++;
         var wasPopulating = _isPopulating;
         _isPopulating = true;
         try
@@ -1193,7 +1380,7 @@ public partial class MajorGodEditorView : UserControl
             if (_currentEntry == null)
                 return;
 
-            var efficiencyRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            var efficiencyRow = new WrapPanel();
             efficiencyRow.Children.Add(CreateInlineLabel("Second Builder Efficiency"));
             efficiencyRow.Children.Add(CreateEconomicValueBox("buildingefficiency"));
             efficiencyRow.Children.Add(CreateInlineLabel("Extra Builder Efficiency"));
@@ -1244,7 +1431,7 @@ public partial class MajorGodEditorView : UserControl
                 return;
             }
 
-            var prayerRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            var prayerRow = new WrapPanel();
             prayerRow.Children.Add(CreateInlineLabel("Secondary Prayer Efficiency"));
             prayerRow.Children.Add(CreateInlineLabel("Later Growth"));
             prayerRow.Children.Add(CreateEconomicAttributeBox(secondaryPrayer, "g"));
@@ -1258,19 +1445,26 @@ public partial class MajorGodEditorView : UserControl
         }
         finally
         {
+            FinalizeMajorGodPresentation();
             _isPopulating = wasPopulating;
         }
     }
 
     private TextBox CreateEconomicValueBox(string tag)
     {
-        var box = CreateEconomicNumberBox(ReadValue(_currentEntry!, tag));
+        var entry = _currentEntry!;
+        var generation = _economicEditorGeneration;
+        var box = CreateEconomicNumberBox(ReadValue(entry, tag));
+        EditorValidationBindings.Bind(box, entry, tag);
+        var previousText = box.Text;
         box.TextChanged += (_, _) =>
         {
-            if (!CanEditCurrent()) return;
-            if (MajorGodCatalog.FindDirectChild(_currentEntry!, tag) == null && string.IsNullOrEmpty(box.Text))
+            if (!CanEditCurrent() || !ReferenceEquals(entry, _currentEntry) || generation != _economicEditorGeneration ||
+                string.Equals(previousText, box.Text, StringComparison.Ordinal)) return;
+            previousText = box.Text;
+            if (MajorGodCatalog.FindDirectChild(entry, tag) == null && string.IsNullOrEmpty(box.Text))
                 return;
-            MajorGodCatalog.SetEconomicValue(_currentEntry!, tag, box.Text ?? "");
+            MajorGodCatalog.SetEconomicValue(entry, tag, box.Text ?? "");
             MarkCurrentDirty();
             RefreshRawXmlFromCurrent();
         };
@@ -1279,10 +1473,16 @@ public partial class MajorGodEditorView : UserControl
 
     private TextBox CreateEconomicAttributeBox(XElement element, string attributeName)
     {
+        var entry = _currentEntry;
+        var generation = _economicEditorGeneration;
         var box = CreateEconomicNumberBox(FindAttribute(element, attributeName)?.Value ?? "");
+        EditorValidationBindings.Bind(box, element, "@" + attributeName);
+        var previousText = box.Text;
         box.TextChanged += (_, _) =>
         {
-            if (!CanEditCurrent()) return;
+            if (!CanEditCurrent() || !ReferenceEquals(entry, _currentEntry) || generation != _economicEditorGeneration ||
+                string.Equals(previousText, box.Text, StringComparison.Ordinal)) return;
+            previousText = box.Text;
             SetAttribute(element, attributeName, box.Text ?? "");
             MarkCurrentDirty();
             RefreshRawXmlFromCurrent();
@@ -1292,16 +1492,15 @@ public partial class MajorGodEditorView : UserControl
 
     private TextBox CreateEconomicNumberBox(string value)
     {
-        var box = new TextBox
+        var box = ConfigureMajorGodField(new TextBox
         {
             Text = value,
             Width = 70,
             MaxWidth = 70,
             IsEnabled = IsModifiedMode,
             HorizontalAlignment = HorizontalAlignment.Left
-        };
+        }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
-        box.Width = box.MaxWidth = 70;
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedFloat);
         return box;
     }
@@ -1368,13 +1567,13 @@ public partial class MajorGodEditorView : UserControl
     {
         var element = MajorGodCatalog.FindDirectChild(entry, tag);
         if (element != null)
-            ValidateNonNegativeFloatValue(element.Value, label);
+            ValidationSourceLocation.Validate(element, null, () => ValidateNonNegativeFloatValue(element.Value, label));
     }
 
     private static void ValidateNonNegativeFloatAttribute(XElement element, string attributeName, string label)
     {
         var attribute = FindAttribute(element, attributeName);
-        ValidateNonNegativeFloatValue(attribute?.Value ?? "", label);
+        ValidationSourceLocation.Validate(element, "@" + attributeName, () => ValidateNonNegativeFloatValue(attribute?.Value ?? "", label));
     }
 
     private static void ValidateNonNegativeFloatValue(string raw, string label)
@@ -1496,13 +1695,7 @@ public partial class MajorGodEditorView : UserControl
                         : mechanicIndex > 0
                             ? mechanicElements[mechanicIndex - 1].Name.LocalName
                             : null;
-                    var remove = new Button
-                    {
-                        Classes = { "remove-button" },
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        VerticalAlignment = VerticalAlignment.Top,
-                        Margin = new Thickness(4, 0, 0, 0)
-                    };
+                    var remove = EditorRemoveButtons.Card(description: "Remove special attribute");
                     Grid.SetColumn(remove, 1);
                     remove.Click += (_, _) =>
                     {
@@ -1549,6 +1742,7 @@ public partial class MajorGodEditorView : UserControl
         }
         finally
         {
+            FinalizeMajorGodPresentation();
             _isPopulating = wasPopulating;
         }
     }
@@ -1632,30 +1826,24 @@ public partial class MajorGodEditorView : UserControl
         if (MajorGodCatalog.FindDirectChild(entry, "bonusunitspawning") is { } bonusUnitSpawning)
             ValidateBonusUnitSpawning(bonusUnitSpawning);
         if (MajorGodCatalog.FindDirectChild(entry, "oncastpowercostfactor") is { } onCastPowerCostFactor)
-            ValidateBoundedFloatValue(onCastPowerCostFactor.Value, "Power Cost Reduction Factor on Cast", 0, 1);
+            ValidationSourceLocation.Validate(onCastPowerCostFactor, () => ValidateBoundedFloatValue(onCastPowerCostFactor.Value, "Power Cost Reduction Factor on Cast", 0, 1));
     }
 
     private void BuildShadesEditor(Panel host, XElement shades)
     {
-        var row = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
-            ColumnSpacing = 4
-        };
-        var identityFields = new StackPanel
+        var row = new WrapPanel();
+        var identityFields = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 4,
             VerticalAlignment = VerticalAlignment.Center
         };
         identityFields.Children.Add(CreateInlineLabel("Unit"));
-        identityFields.Children.Add(CreateSpecialProtoUnitBox(GetOrCreateSpecialChild(shades, "protounit")));
+        identityFields.Children.Add(EditorValidationBindings.Bind(CreateSpecialProtoUnitBox(GetOrCreateSpecialChild(shades, "protounit")), shades, "protounit"));
         identityFields.Children.Add(CreateInlineLabel("From"));
 
-        var numericFields = new StackPanel
+        var numericFields = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 4,
             VerticalAlignment = VerticalAlignment.Center
         };
         numericFields.Children.Add(CreateInlineLabel("Probability"));
@@ -1689,14 +1877,15 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox
+            picker = ConfigureMajorGodField(new AutoCompleteBox
             {
                 Width = 50,
                 MaxWidth = 50,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0,
                 HorizontalAlignment = HorizontalAlignment.Left
-            };
+            }, EditorFieldWidthRole.ChipSearch);
+            EditorValidationBindings.Bind(picker, shades, "targetunit", repeated: true);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             identityFields.Children.Add(picker);
         }
@@ -1709,9 +1898,7 @@ public partial class MajorGodEditorView : UserControl
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center
         };
-        Grid.SetColumn(chips, 1);
         row.Children.Add(chips);
-        Grid.SetColumn(numericFields, 2);
         row.Children.Add(numericFields);
 
         void RenderTargets()
@@ -1732,7 +1919,7 @@ public partial class MajorGodEditorView : UserControl
             if (picker != null)
             {
                 var used = targets.Select(target => target.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                picker.ItemsSource = _unitOrTypeNames.Where(name => !used.Contains(name)).ToList();
+                EditorAutoCompleteService.SetCatalogSuggestions(picker, _unitOrTypeNames.Where(name => !used.Contains(name)));
             }
         }
         if (picker != null)
@@ -1777,27 +1964,30 @@ public partial class MajorGodEditorView : UserControl
             BuildTerrainCreepOptionalNumber(coreRow, creep, "strength", "Strength");
             body.Children.Add(coreRow);
 
-            var intervalRow = new StackPanel
+            var intervalRow = CreateBountyWrappingRow();
+            var intervalFields = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 4,
+                Spacing = EditorFormLayout.LabelGap,
+                Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            intervalRow.Children.Add(new TextBlock
+            intervalFields.Children.Add(new TextBlock
             {
                 Text = "Update Interval (s)",
                 VerticalAlignment = VerticalAlignment.Center
             });
-            intervalRow.Children.Add(CreateInlineLabel("Min"));
+            intervalFields.Children.Add(CreateInlineLabel("Min"));
             var minimumInterval = CreateSpecialAttributeNumberBox(
                 creep, "minupdateinterval", "0", ProtoUnitNumericKind.UnsignedFloat);
             minimumInterval.VerticalAlignment = VerticalAlignment.Center;
-            intervalRow.Children.Add(minimumInterval);
-            intervalRow.Children.Add(CreateInlineLabel("Max"));
+            intervalFields.Children.Add(minimumInterval);
+            intervalFields.Children.Add(CreateInlineLabel("Max"));
             var maximumInterval = CreateSpecialAttributeNumberBox(
                 creep, "maxupdateinterval", "0", ProtoUnitNumericKind.UnsignedFloat);
             maximumInterval.VerticalAlignment = VerticalAlignment.Center;
-            intervalRow.Children.Add(maximumInterval);
+            intervalFields.Children.Add(maximumInterval);
+            intervalRow.Children.Add(intervalFields);
             BuildTerrainCreepPlacementOptions(intervalRow, creep);
             body.Children.Add(intervalRow);
 
@@ -1837,25 +2027,19 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        var fields = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-            Margin = new Thickness(0, 0, 4, 4),
-            VerticalAlignment = VerticalAlignment.Top
-        };
-        fields.Children.Add(CreateInlineLabel(label));
-        fields.Children.Add(CreateSpecialAttributeNumberBox(creep, attributeName, "0", ProtoUnitNumericKind.UnsignedFloat));
+        var value = CreateSpecialAttributeNumberBox(creep, attributeName, "0", ProtoUnitNumericKind.UnsignedFloat);
+        var fields = EditorFormLayout.LabeledGroup(label, value);
         if (IsModifiedMode)
         {
-            var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
+            var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) =>
             {
                 if (!CanEditCurrent()) return;
                 RemoveAttribute(creep, attributeName);
                 MarkAndRebuildSpecialMechanics();
             };
-            fields.Children.Add(remove);
+            fields.Children.Remove(value);
+            fields.Children.Add(EditorFormLayout.WithCross(value, remove));
         }
         row.Children.Add(fields);
     }
@@ -1866,14 +2050,14 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox
+            picker = ConfigureMajorGodField(new AutoCompleteBox
             {
                 Width = 50,
                 MaxWidth = 50,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0,
                 Margin = new Thickness(0, 0, 4, 4)
-            };
+            }, EditorFieldWidthRole.ChipSearch);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             row.Children.Add(CreateBonusFieldPair("Flags", picker));
         }
@@ -1936,7 +2120,7 @@ public partial class MajorGodEditorView : UserControl
             if (IsModifiedMode)
             {
                 var add = CreateAddButton("Buildability");
-                add.Margin = new Thickness(0);
+                add.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 add.VerticalAlignment = VerticalAlignment.Center;
                 add.Click += (_, _) =>
                 {
@@ -1953,13 +2137,14 @@ public partial class MajorGodEditorView : UserControl
             var options = MajorGodCatalog.TerrainCreepBuildabilityValues.Append(current)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var combo = new ComboBox
+            var combo = ConfigureMajorGodField(new ComboBox
             {
                 ItemsSource = options,
                 SelectedItem = options.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
                 Width = 160,
                 IsEnabled = IsModifiedMode
-            };
+            }, EditorFieldWidthRole.LongEnum);
+            EditorValidationBindings.Bind(combo, creep, "@buildability");
             combo.SelectionChanged += (_, _) =>
             {
                 if (!CanEditCurrent() || combo.SelectedItem is not string selected) return;
@@ -1967,24 +2152,18 @@ public partial class MajorGodEditorView : UserControl
                 MarkCurrentDirty();
                 RefreshRawXmlFromCurrent();
             };
-            var fields = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 4,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            fields.Children.Add(CreateInlineLabel("Buildability"));
-            fields.Children.Add(combo);
+            var fields = EditorFormLayout.LabeledGroup("Buildability", combo);
             if (IsModifiedMode)
             {
-                var remove = new Button { Classes = { "remove-button" } };
+                var remove = EditorRemoveButtons.Field();
                 remove.Click += (_, _) =>
                 {
                     if (!CanEditCurrent()) return;
                     RemoveAttribute(creep, "buildability");
                     MarkAndRebuildSpecialMechanics();
                 };
-                fields.Children.Add(remove);
+                fields.Children.Remove(combo);
+                fields.Children.Add(EditorFormLayout.WithCross(combo, remove));
             }
             row.Children.Add(fields);
         }
@@ -1995,7 +2174,7 @@ public partial class MajorGodEditorView : UserControl
             if (IsModifiedMode)
             {
                 var add = CreateAddButton("Prevent placement");
-                add.Margin = new Thickness(0);
+                add.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
                 add.VerticalAlignment = VerticalAlignment.Center;
                 add.Click += (_, _) =>
                 {
@@ -2008,24 +2187,19 @@ public partial class MajorGodEditorView : UserControl
         }
         else
         {
-            var fields = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 4,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            fields.Children.Add(CreateInlineLabel("Prevent Placement of"));
-            fields.Children.Add(CreateSpecialAttributeAutoComplete(creep, "preventplacement", _unitOrTypeNames));
+            var selector = CreateSpecialAttributeAutoComplete(creep, "preventplacement", _unitOrTypeNames);
+            var fields = EditorFormLayout.LabeledGroup("Prevent Placement of", selector);
             if (IsModifiedMode)
             {
-                var remove = new Button { Classes = { "remove-button" } };
+                var remove = EditorRemoveButtons.Field();
                 remove.Click += (_, _) =>
                 {
                     if (!CanEditCurrent()) return;
                     RemoveAttribute(creep, "preventplacement");
                     MarkAndRebuildSpecialMechanics();
                 };
-                fields.Children.Add(remove);
+                fields.Children.Remove(selector);
+                fields.Children.Add(EditorFormLayout.WithCross(selector, remove));
             }
             row.Children.Add(fields);
         }
@@ -2037,14 +2211,15 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox
+            picker = ConfigureMajorGodField(new AutoCompleteBox
             {
                 Width = 50,
                 MaxWidth = 50,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0,
                 Margin = new Thickness(0, 0, 4, 4)
-            };
+            }, EditorFieldWidthRole.ChipSearch);
+            EditorValidationBindings.Bind(picker, creep, "protounit", repeated: true);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             row.Children.Add(CreateBonusFieldPair("Generator", picker));
         }
@@ -2074,7 +2249,7 @@ public partial class MajorGodEditorView : UserControl
             if (picker != null)
             {
                 var used = generators.Select(generator => generator.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                picker.ItemsSource = _protoUnitNames.Where(name => !used.Contains(name)).ToList();
+                EditorAutoCompleteService.SetCatalogSuggestions(picker, _protoUnitNames.Where(name => !used.Contains(name)));
             }
         }
 
@@ -2097,14 +2272,14 @@ public partial class MajorGodEditorView : UserControl
 
     private void BuildTimeShiftingEditor(Panel host, XElement timeShifting)
     {
-        var maxRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var maxRow = new WrapPanel();
         maxRow.Children.Add(CreateInlineLabel("Max Concurrent Time Shifts"));
         maxRow.Children.Add(CreateSpecialAttributeNumberBox(timeShifting, "maxconcurrenttimeshifts", "1", ProtoUnitNumericKind.PositiveInteger));
         host.Children.Add(maxRow);
 
         foreach (var unit in timeShifting.Elements().Where(child => child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList())
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            var row = new WrapPanel();
             row.Children.Add(CreateInlineLabel("Unit"));
             row.Children.Add(CreateSpecialProtoUnitBox(unit));
             row.Children.Add(CreateInlineLabel("Cost Ratio"));
@@ -2132,7 +2307,7 @@ public partial class MajorGodEditorView : UserControl
     private void BuildBuildingChainEditor(Panel host, XElement buildingChain)
     {
         var anchor = MajorGodCatalog.FindDirectChild(buildingChain, "anchor") ?? new XElement("anchor");
-        var anchorRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var anchorRow = new WrapPanel();
         anchorRow.Children.Add(CreateInlineLabel("Anchor"));
         Action ensureAnchor = () => EnsureBuildingChainAnchorAttached(buildingChain, anchor);
         anchorRow.Children.Add(CreateSpecialValueAutoComplete(anchor, _unitOrTypeNames, ensureAnchor));
@@ -2150,7 +2325,7 @@ public partial class MajorGodEditorView : UserControl
             foreach (var tier in resourceGeneration.Elements().Where(child =>
                          child.Name.LocalName.Equals("tilerateperminutetier", StringComparison.OrdinalIgnoreCase)).ToList())
             {
-                var tierRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+                var tierRow = new WrapPanel();
                 tierRow.Children.Add(CreateInlineLabel("Rate tile/minute"));
                 tierRow.Children.Add(CreateSpecialElementNumberBox(tier, "0", ProtoUnitNumericKind.UnsignedFloat));
                 tierRow.Children.Add(CreateResourceComboBox(tier, "resource"));
@@ -2189,7 +2364,7 @@ public partial class MajorGodEditorView : UserControl
         foreach (var building in buildingChain.Elements().Where(child =>
                      child.Name.LocalName.Equals("chainablebuilding", StringComparison.OrdinalIgnoreCase)).ToList())
         {
-            var buildingRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            var buildingRow = new WrapPanel();
             buildingRow.Children.Add(CreateInlineLabel("Building"));
             buildingRow.Children.Add(CreateSpecialValueAutoComplete(building, _protoUnitNames));
             buildingRow.Children.Add(CreateInlineLabel("Chain Radius"));
@@ -2239,7 +2414,7 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel(label));
         foreach (var (attribute, sizeLabel) in new[] { ("small", "Small"), ("medium", "Medium"), ("large", "Large") })
         {
@@ -2267,11 +2442,11 @@ public partial class MajorGodEditorView : UserControl
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 4,
+                Height = EditorFormLayout.FieldHeight,
                 Margin = new Thickness(0, 0, 6, 4)
             };
             segment.Children.Add(CreateInlineLabel($"Tier {index + 1}"));
             var tierValue = CreateSpecialElementNumberBox(tier, "0", ProtoUnitNumericKind.UnsignedInteger);
-            tierValue.Width = tierValue.MaxWidth = 70;
             segment.Children.Add(tierValue);
             if (IsModifiedMode)
                 segment.Children.Add(CreateSpecialChildRemoveButton(tier));
@@ -2305,6 +2480,7 @@ public partial class MajorGodEditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0)
         };
+        EditorValidationBindings.Bind(checkBox, bounty, "active");
         checkBox.IsCheckedChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -2392,7 +2568,7 @@ public partial class MajorGodEditorView : UserControl
         });
         if (removeAction != null)
         {
-            var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 2) };
+            var remove = EditorRemoveButtons.Card();
             remove.Click += (_, _) =>
             {
                 if (CanEditCurrent()) removeAction();
@@ -2410,14 +2586,15 @@ public partial class MajorGodEditorView : UserControl
     {
         var row = CreateBountyWrappingRow();
         var committedGoalName = FindAttribute(goal, "name")?.Value ?? "";
-        var name = new TextBox
+        var name = ConfigureMajorGodField(new TextBox
         {
             Text = FindAttribute(goal, "name")?.Value ?? "",
             Width = 150,
             MaxWidth = 150,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.SingleLineText);
+        EditorValidationBindings.Bind(name, goal, "@name");
         name.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -2429,18 +2606,18 @@ public partial class MajorGodEditorView : UserControl
         {
             var newName = name.Text?.Trim() ?? "";
             if (newName.Equals(committedGoalName, StringComparison.Ordinal)) return;
-            await RenameBonusGoalGeneratedStringsAsync(goal, committedGoalName, newName);
-            committedGoalName = newName;
+            if (await RenameBonusGoalGeneratedStringsAsync(goal, committedGoalName, newName)) committedGoalName = newName;
+            else { SetAttribute(goal, "name", committedGoalName); name.Text = committedGoalName; RefreshRawXmlFromCurrent(); }
         };
         row.Children.Add(CreateBonusFieldPair("Name", name));
-        var type = new ComboBox
+        var type = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = new[] { "Damage", "Death", "Resource" },
             SelectedItem = BonusGoalType(goal),
             Width = 100,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         type.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || type.SelectedItem is not string selected) return;
@@ -2490,14 +2667,15 @@ public partial class MajorGodEditorView : UserControl
         var goalType = BonusGoalType(goal);
         var trackingValues = goalType == "Resource" ? new[] { "Single" } : new[] { "Single", "PerPossibleReward" };
         var rawTracking = FindAttribute(goal, "rewardtracking")?.Value ?? "Single";
-        var tracking = new ComboBox
+        var tracking = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = trackingValues,
             SelectedItem = trackingValues.FirstOrDefault(value => value.Equals(rawTracking, StringComparison.OrdinalIgnoreCase)) ?? "Single",
             Width = 150,
             IsEnabled = IsModifiedMode && goalType != "Resource",
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(tracking, goal, "@rewardtracking");
         tracking.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || tracking.SelectedItem is not string selected) return;
@@ -2515,6 +2693,7 @@ public partial class MajorGodEditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 4)
         };
+        EditorValidationBindings.Bind(active, goal, "active");
         active.IsCheckedChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -2592,14 +2771,15 @@ public partial class MajorGodEditorView : UserControl
         };
         var current = FindAttribute(spawn, "type")?.Value ?? values[0];
         var row = CreateBountyWrappingRow();
-        var type = new ComboBox
+        var type = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = values,
             SelectedItem = values.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? current,
             Width = 150,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(type, spawn, "@type");
         type.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || type.SelectedItem is not string selected) return;
@@ -2636,11 +2816,11 @@ public partial class MajorGodEditorView : UserControl
             var contributorModes = BonusGoalType(goal) == "Resource"
                 ? new[] { "Unit", "Unit type", "Resource" }
                 : new[] { "Unit", "Unit type" };
-            var mode = new ComboBox
+            var mode = ConfigureMajorGodField(new ComboBox
             {
                 ItemsSource = contributorModes, SelectedItem = usesResource ? "Resource" : usesUnit ? "Unit" : "Unit type",
                 Width = 115, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4)
-            };
+            }, EditorFieldWidthRole.ShortEnum);
             mode.SelectionChanged += (_, _) =>
             {
                 if (!CanEditCurrent() || mode.SelectedItem is not string selected) return;
@@ -2678,14 +2858,15 @@ public partial class MajorGodEditorView : UserControl
     {
         var raw = FindAttribute(contributor, "resource")?.Value ?? "Food";
         var selected = ProtoConstants.KnownResourceTypes.FirstOrDefault(resource => resource.Equals(raw, StringComparison.OrdinalIgnoreCase)) ?? raw;
-        var box = new ComboBox
+        var box = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = ProtoConstants.KnownResourceTypes,
             SelectedItem = selected,
             Width = 100,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(box, contributor, "@resource");
         box.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || box.SelectedItem is not string resource) return;
@@ -2704,14 +2885,14 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox
+            picker = ConfigureMajorGodField(new AutoCompleteBox
             {
                 Width = 150,
                 MaxWidth = 150,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0,
                 Margin = new Thickness(0, 0, 4, 4)
-            };
+            }, EditorFieldWidthRole.ChipSearch);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
         }
         var chips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -2806,11 +2987,11 @@ public partial class MajorGodEditorView : UserControl
             MarkAndRebuildBonusUnitSpawning();
         } : null);
         var identity = CreateBountyWrappingRow();
-        identity.Children.Add(CreateBonusFieldPair("Display name",
+        identity.Children.Add(CreateBonusFieldPair(EditorDisplayText.DisplayName,
             CreateBonusResolvedStringBox(goal, displayInfo, "displaynameid", "SPAWN_REWARD")));
-        identity.Children.Add(CreateBonusFieldPair("Rollover",
-            CreateBonusResolvedStringBox(goal, displayInfo, "rolloverid", "SPAWN_REWARD_LR", 380)));
         body.Children.Add(identity);
+        body.Children.Add(EditorRolloverField.CreateRow("Rollover",
+            CreateBonusResolvedStringBox(goal, displayInfo, "rolloverid", "SPAWN_REWARD_LR")));
 
         body.Children.Add(CreateSpecialSubheading("Progress"));
         var progress = CreateBountyWrappingRow();
@@ -2838,10 +3019,18 @@ public partial class MajorGodEditorView : UserControl
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag);
         var id = element.Value.Trim();
         var box = new TextBox { Text = _pendingStringUpdates.GetValueOrDefault(id) ?? id, Width = width, MaxWidth = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) };
+        if (tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase))
+            EditorRolloverField.Configure(box);
+        if (tag.Equals("displaynameid", StringComparison.OrdinalIgnoreCase))
+            ConfigureMajorGodField(box, EditorFieldWidthRole.SingleLineText);
+        var lastText = box.Text ?? "";
         var loading = true;
+        EditorValidationBindings.Bind(box, displayInfo, tag);
         box.TextChanged += (_, _) =>
         {
             if (loading || !CanEditCurrent()) return;
+            if (lastText == (box.Text ?? "")) return;
+            lastText = box.Text ?? "";
             if (element.Parent == null)
             {
                 id = BuildBonusGoalStringId(goal, suffix);
@@ -2865,7 +3054,8 @@ public partial class MajorGodEditorView : UserControl
             if (text == null && _resolveStringAsync != null && id.Length > 0)
                 text = await _resolveStringAsync(id);
             loading = true;
-            box.Text = text ?? "";
+            lastText = text ?? "";
+            box.Text = lastText;
             loading = false;
         }
     }
@@ -2898,25 +3088,38 @@ public partial class MajorGodEditorView : UserControl
     private static string BuildBonusGoalStringId(string goalName, string suffix)
         => MajorGodCatalog.BuildBonusGoalStringId(goalName, suffix);
 
-    private async Task RenameBonusGoalGeneratedStringsAsync(XElement goal, string oldName, string newName)
+    private async Task<bool> RenameBonusGoalGeneratedStringsAsync(XElement goal, string oldName, string newName)
     {
-        var displayInfo = MajorGodCatalog.FindDirectChild(goal, "displayinfo");
-        if (displayInfo == null) return;
-        foreach (var rename in MajorGodCatalog.RenameOwnedBonusGoalStringIds(goal, oldName, newName))
+        try
         {
-            var hadPendingText = _pendingStringUpdates.Remove(rename.OldId, out var text);
-            if (!hadPendingText && _resolveStringAsync != null)
-                text = await _resolveStringAsync(rename.OldId);
-            _pendingStringOwners.Remove(rename.OldId);
-            ScheduleOwnedStringRemoval(
-                rename.OldId,
-                CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!));
-            _pendingStringRemovals.Remove(rename.NewId);
-            _pendingStringRemovalOwners.Remove(rename.NewId);
-            _pendingStringUpdates[rename.NewId] = text ?? "";
-            _pendingStringOwners[rename.NewId] = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
+            var before = new XElement(goal); SetAttribute(before, "name", oldName);
+            var candidate = new XElement(goal);
+            var changes = MajorGodCatalog.RenameOwnedBonusGoalStringIds(candidate, oldName, newName);
+            var owner = CurrentMajorGodName ?? MajorGodCatalog.GetName(_currentEntry!);
+            var wrapper = new XElement("civ", new XElement("name", owner), new XElement("bonusunitspawning", before));
+            var plan = await PrepareStringRenameAsync(before, candidate, changes, MajorGodCatalog.CollectOwnedStringIds(wrapper), owner);
+            OwnedStringSavePreparation.ApplyLocalFieldChanges(goal, candidate);
+            foreach (var rename in plan.ReferenceRenames)
+            {
+                _pendingStringUpdates.Remove(rename.OldId);
+                _pendingStringOwners.Remove(rename.OldId);
+                ScheduleOwnedStringRemoval(rename.OldId, owner);
+                _pendingStringRemovals.Remove(rename.NewId);
+                _pendingStringRemovalOwners.Remove(rename.NewId);
+                _pendingStringUpdates[rename.NewId] = plan.StringUpdates[rename.NewId];
+                _pendingStringOwners[rename.NewId] = owner;
+            }
+            MarkAndRebuildBonusUnitSpawning();
+            return true;
         }
-        MarkAndRebuildBonusUnitSpawning();
+        catch (Exception exception)
+        {
+            SetAttribute(goal, "name", oldName);
+            _statusMessage.Text = exception.Message;
+            if (TopLevel.GetTopLevel(this) is Window { IsVisible: true } owner)
+                await new Prompt(PromptType.Error, "Bonus goal rename blocked", exception.Message).ShowDialog(owner);
+            return false;
+        }
     }
 
     private void ScheduleBonusDisplayStringRemoval(XElement goal)
@@ -2946,7 +3149,8 @@ public partial class MajorGodEditorView : UserControl
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag, values[0]);
         var current = values.FirstOrDefault(value => value.Equals(element.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? element.Value.Trim();
-        var box = new ComboBox { ItemsSource = values, SelectedItem = current, Width = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) };
+        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = current, Width = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(box, displayInfo, tag);
         box.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || box.SelectedItem is not string selected) return;
@@ -2962,14 +3166,15 @@ public partial class MajorGodEditorView : UserControl
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, "icon") ?? new XElement("icon");
         var initial = ProtoEditorWindow.NormalizeIconCatalogValue(element.Value, _iconPaths);
-        var editor = new AssetPathEditor
+        var editor = ConfigureMajorGodField(new AssetPathEditor
         {
             Width = 200,
             MinWidth = 200,
             MaxWidth = 200,
             IsEnabled = IsModifiedMode,
             Opacity = IsModifiedMode ? 1.0 : 0.55
-        };
+        }, EditorFieldWidthRole.AssetPath);
+        EditorValidationBindings.Bind(editor, displayInfo, "icon");
         editor.CompactPresenter.Background = Brush.Parse(IsModifiedMode ? "#0E1110" : "#202220");
         editor.Configure(initial, _iconPaths, value =>
         {
@@ -2990,7 +3195,8 @@ public partial class MajorGodEditorView : UserControl
     private TextBox CreateBonusDisplayTextBox(XElement displayInfo, string tag, double width)
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag);
-        var box = new TextBox { Text = element.Value, Width = width, MaxWidth = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) };
+        var box = ConfigureMajorGodField(new TextBox { Text = element.Value, Width = width, MaxWidth = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.AssetPath);
+        EditorValidationBindings.Bind(box, displayInfo, tag);
         box.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -3016,7 +3222,8 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox { Width = 50, MaxWidth = 50, ItemsSource = catalog, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 4, 4) };
+            picker = ConfigureMajorGodField(new AutoCompleteBox { Width = 50, MaxWidth = 50, ItemsSource = catalog, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.ChipSearch);
+            EditorValidationBindings.Bind(picker, goal, tag, repeated: true);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
         }
         var chips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -3048,7 +3255,7 @@ public partial class MajorGodEditorView : UserControl
             if (picker != null)
             {
                 var used = elements.Select(element => element.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                picker.ItemsSource = catalog.Where(value => !used.Contains(value)).ToList();
+                EditorAutoCompleteService.SetCatalogSuggestions(picker, catalog.Where(value => !used.Contains(value)));
             }
         }
         if (picker != null)
@@ -3071,8 +3278,8 @@ public partial class MajorGodEditorView : UserControl
         var pair = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 4,
-            Margin = new Thickness(0, 0, 4, 4),
+            Spacing = EditorFormLayout.LabelGap,
+            Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap),
             VerticalAlignment = VerticalAlignment.Top
         };
         pair.Children.Add(new TextBlock
@@ -3087,6 +3294,7 @@ public partial class MajorGodEditorView : UserControl
     private TextBox CreateBonusElementNumberBox(XElement goal, XElement element, string defaultValue, ProtoUnitNumericKind kind)
     {
         var box = CreateSpecialElementNumberBox(element, defaultValue, kind);
+        EditorValidationBindings.Bind(box, goal, element.Name.LocalName);
         box.Margin = new Thickness(0, 0, 4, 4);
         box.TextChanged += (_, _) => EnsureBonusChildAttached(goal, element);
         return box;
@@ -3138,7 +3346,7 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel(label));
         row.Children.Add(CreateSpecialElementNumberBox(element, "0", kind));
         if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(element));
@@ -3170,7 +3378,7 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("Favor Bounty Reduction"));
         for (var index = 0; index < definitions.Length; index++)
         {
@@ -3210,7 +3418,7 @@ public partial class MajorGodEditorView : UserControl
             host.Children.Add(add);
             return;
         }
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("VFX"));
         row.Children.Add(CreateSpecialValueAutoComplete(vfx, _protoUnitNames));
         if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(vfx));
@@ -3231,14 +3439,15 @@ public partial class MajorGodEditorView : UserControl
         AutoCompleteBox? picker = null;
         if (IsModifiedMode)
         {
-            picker = new AutoCompleteBox
+            picker = ConfigureMajorGodField(new AutoCompleteBox
             {
                 Width = 50,
                 MaxWidth = 50,
                 ItemsSource = catalog,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0
-            };
+            }, EditorFieldWidthRole.ChipSearch);
+            EditorValidationBindings.Bind(picker, bounty, tag, repeated: true);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             row.Children.Add(picker);
         }
@@ -3263,7 +3472,7 @@ public partial class MajorGodEditorView : UserControl
             if (picker != null)
             {
                 var used = chips.Select(chip => chip.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                picker.ItemsSource = catalog.Where(value => !used.Contains(value)).ToList();
+                EditorAutoCompleteService.SetCatalogSuggestions(picker, catalog.Where(value => !used.Contains(value)));
             }
         }
         if (picker != null)
@@ -3311,6 +3520,7 @@ public partial class MajorGodEditorView : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 4)
             };
+            EditorValidationBindings.Bind(multiply, reward, "@multiplybyunitcost");
             multiply.IsCheckedChanged += (_, _) =>
             {
                 if (!CanEditCurrent()) return;
@@ -3321,7 +3531,14 @@ public partial class MajorGodEditorView : UserControl
             };
             row.Children.Add(multiply);
             AddBountyOptionalAttributeSelector(row, reward, "asspawnedunit", "Spawned as", _protoUnitNames);
-            if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(reward));
+            if (IsModifiedMode)
+            {
+                var removeReward = CreateSpecialChildRemoveButton(reward);
+                removeReward.VerticalAlignment = VerticalAlignment.Center;
+                // Match the wrapping field groups' bottom inset when centering.
+                removeReward.Margin = new Thickness(EditorFormLayout.CrossGap, 0, 0, 4);
+                row.Children.Add(removeReward);
+            }
             body.Children.Add(row);
         }
         AddBountyEntryButton(body, bounty, "bountyreward", "Add reward");
@@ -3423,14 +3640,15 @@ public partial class MajorGodEditorView : UserControl
     private void AddBountyConditionAndTarget(Panel row, XElement entry)
     {
         var condition = FindAttribute(entry, "condition")?.Value ?? "Damage";
-        var conditionBox = new ComboBox
+        var conditionBox = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = new[] { "Damage", "Destroy" },
             SelectedItem = condition.Equals("Destroy", StringComparison.OrdinalIgnoreCase) ? "Destroy" : "Damage",
             Width = 106,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(conditionBox, entry, "@condition");
         conditionBox.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || conditionBox.SelectedItem is not string selected) return;
@@ -3445,14 +3663,14 @@ public partial class MajorGodEditorView : UserControl
         row.Children.Add(conditionBox);
 
         var usesProtoUnit = FindAttribute(entry, "protounit") != null;
-        var targetMode = new ComboBox
+        var targetMode = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = new[] { "Unit", "Unit type" },
             SelectedItem = usesProtoUnit ? "Unit" : "Unit type",
             Width = 100,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         targetMode.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || targetMode.SelectedItem is not string selected) return;
@@ -3479,14 +3697,14 @@ public partial class MajorGodEditorView : UserControl
             ? ProtoConstants.KnownResourceTypes.Append("Combat XP").ToList()
             : ProtoConstants.KnownResourceTypes.ToList();
         var selected = resources.FirstOrDefault(resource => resource.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? current;
-        var box = new ComboBox
+        var box = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = resources,
             SelectedItem = selected,
             Width = 105,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 4, 4)
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         box.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || box.SelectedItem is not string resource) return;
@@ -3529,13 +3747,14 @@ public partial class MajorGodEditorView : UserControl
         var pair = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 4,
+            Spacing = 0,
             Margin = new Thickness(0, 0, 4, 4),
-            VerticalAlignment = VerticalAlignment.Top
+            VerticalAlignment = VerticalAlignment.Center
         };
         pair.Children.Add(new TextBlock
         {
             Text = label,
+            Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0),
             VerticalAlignment = VerticalAlignment.Center
         });
         var selector = CreateSpecialAttributeAutoComplete(entry, attributeName, catalog);
@@ -3543,7 +3762,7 @@ public partial class MajorGodEditorView : UserControl
         pair.Children.Add(selector);
         if (IsModifiedMode)
         {
-            var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(0) };
+            var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) =>
             {
                 if (!CanEditCurrent()) return;
@@ -3574,7 +3793,8 @@ public partial class MajorGodEditorView : UserControl
         row.Children.Add(CreateBountyInlineLabel("Relativity"));
         var values = new[] { "Absolute", "BasePercent", "Percent" };
         var selected = values.FirstOrDefault(value => value.Equals(relativity.Value, StringComparison.OrdinalIgnoreCase)) ?? "Absolute";
-        var box = new ComboBox { ItemsSource = values, SelectedItem = selected, Width = 115, IsEnabled = IsModifiedMode };
+        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = selected, Width = 115, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(box, entry, "@relativity");
         box.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || box.SelectedItem is not string value) return;
@@ -3599,9 +3819,9 @@ public partial class MajorGodEditorView : UserControl
     private AutoCompleteBox CreateBountyTechTypeSelector(XElement entry)
     {
         var values = new[] { "All" }.Concat(_techTypeNames.Where(value =>
-            !value.Equals("All", StringComparison.OrdinalIgnoreCase))).ToList();
+            !value.Equals("All", StringComparison.OrdinalIgnoreCase)));
         var raw = FindAttribute(entry, "techtype")?.Value ?? "all";
-        var box = new AutoCompleteBox
+        var box = ConfigureMajorGodField(new AutoCompleteBox
         {
             Text = raw.Equals("all", StringComparison.OrdinalIgnoreCase) ? "All" : raw,
             ItemsSource = values,
@@ -3614,8 +3834,10 @@ public partial class MajorGodEditorView : UserControl
                 Text = item ?? "",
                 FontWeight = string.Equals(item, "All", StringComparison.OrdinalIgnoreCase) ? FontWeight.Bold : FontWeight.Normal
             })
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating);
+        EditorValidationBindings.Bind(box, entry, "@techtype");
+        EditorAutoCompleteService.SetCatalogSuggestions(box, values, preserveOrder: true);
         box.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -3643,7 +3865,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void BuildOnCastPowerCostFactorEditor(Panel host, XElement factor)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("Power Cost Reduction Factor on Cast"));
         row.Children.Add(CreateSpecialElementNumberBox(factor, "0", ProtoUnitNumericKind.ClampZeroToOne));
         host.Children.Add(row);
@@ -3667,7 +3889,7 @@ public partial class MajorGodEditorView : UserControl
         IReadOnlyList<string> items,
         Action? beforeChange = null)
     {
-        var box = new AutoCompleteBox
+        var box = ConfigureMajorGodField(new AutoCompleteBox
         {
             ItemsSource = items,
             Text = element.Value.Trim(),
@@ -3675,11 +3897,13 @@ public partial class MajorGodEditorView : UserControl
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating);
+        EditorValidationBindings.Bind(box, element);
         box.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
+            if (string.Equals(element.Value, box.Text ?? "", StringComparison.Ordinal)) return;
             beforeChange?.Invoke();
             EnsureSpecialChildAttached(element);
             element.Value = box.Text ?? "";
@@ -3695,7 +3919,7 @@ public partial class MajorGodEditorView : UserControl
         IReadOnlyList<string> items,
         Action? beforeChange = null)
     {
-        var box = new AutoCompleteBox
+        var box = ConfigureMajorGodField(new AutoCompleteBox
         {
             ItemsSource = items,
             Text = FindAttribute(element, attributeName)?.Value ?? "",
@@ -3703,11 +3927,13 @@ public partial class MajorGodEditorView : UserControl
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating);
+        EditorValidationBindings.Bind(box, element, "@" + attributeName);
         box.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
+            if (string.Equals(FindAttribute(element, attributeName)?.Value ?? "", box.Text ?? "", StringComparison.Ordinal)) return;
             beforeChange?.Invoke();
             SetAttribute(element, attributeName, box.Text ?? "");
             MarkCurrentDirty();
@@ -3725,13 +3951,14 @@ public partial class MajorGodEditorView : UserControl
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var selected = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase));
-        var box = new ComboBox
+        var box = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = options,
             SelectedItem = selected,
             Width = 90,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(box, element, "@" + attributeName);
         box.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || box.SelectedItem is not string resource) return;
@@ -3751,9 +3978,9 @@ public partial class MajorGodEditorView : UserControl
 
     private TextBox CreateSpecialElementNumberBox(XElement element, string defaultValue, ProtoUnitNumericKind kind)
     {
-        var box = new TextBox { Text = element.Parent == null ? defaultValue : element.Value, Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode };
+        var box = ConfigureMajorGodField(new TextBox { Text = element.Parent == null ? defaultValue : element.Value, Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        EditorValidationBindings.Bind(box, element);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
-        box.Width = box.MaxWidth = 60;
         EditorNumericInputBehavior.AttachRule(box, kind);
         box.TextChanged += (_, _) =>
         {
@@ -3788,7 +4015,7 @@ public partial class MajorGodEditorView : UserControl
 
     private Button CreateSpecialChildRemoveButton(XElement child, Action? refresh = null)
     {
-        var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
+        var remove = EditorRemoveButtons.Field();
         remove.Click += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -3818,19 +4045,19 @@ public partial class MajorGodEditorView : UserControl
     {
         ValidateSingleSpecialProtoUnit(shades, "Shades Unit");
         var targets = shades.Elements().Where(child => child.Name.LocalName.Equals("targetunit", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (targets.Count == 0) throw new InvalidDataException("Shades requires at least one From unit.");
+        if (targets.Count == 0) throw ValidationSourceLocation.Attach(new InvalidDataException("Shades requires at least one From unit."), shades, "targetunit");
         var usedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var target in targets)
         {
-            ValidateUnitOrTypeName(target.Value, "Shades From");
+            ValidationSourceLocation.Validate(target, () => ValidateUnitOrTypeName(target.Value, "Shades From"));
             if (!usedTargets.Add(target.Value.Trim()))
-                throw new InvalidDataException($"Shades From '{target.Value.Trim()}' can only occur once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Shades From '{target.Value.Trim()}' can only occur once."), target);
         }
         ValidateBoundedFloatElement(shades, "chance", "Shades Probability", 0, 1);
         ValidateBoundedFloatElement(shades, "delay", "Shades Delay", 0, double.MaxValue);
         if (MajorGodCatalog.FindDirectChild(shades, "maxqueued") is { } maxQueued &&
             (!int.TryParse(maxQueued.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var max) || max < 1))
-            throw new InvalidDataException("Shades Max Queue must be an integer greater than or equal to one.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException("Shades Max Queue must be an integer greater than or equal to one."), maxQueued);
     }
 
     private void ValidateTerrainCreeps(XElement terrainCreeps)
@@ -3846,7 +4073,7 @@ public partial class MajorGodEditorView : UserControl
             if (creepType.Length == 0 ||
                 (_terrainCreepNames.Count > 0 && !_terrainCreepNames.Contains(creepType, StringComparer.OrdinalIgnoreCase)))
             {
-                throw new InvalidDataException("Terrain Creep must reference an existing terrain creep type.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Terrain Creep must reference an existing terrain creep type."), creep, "@creep");
             }
 
             ValidateNonNegativeFloatAttribute(creep, "maxradius", "Terrain Creep Radius");
@@ -3857,28 +4084,28 @@ public partial class MajorGodEditorView : UserControl
             var minimumInterval = ParseNonNegativeFloatAttribute(creep, "minupdateinterval");
             var maximumInterval = ParseNonNegativeFloatAttribute(creep, "maxupdateinterval");
             if (minimumInterval > maximumInterval)
-                throw new InvalidDataException("Terrain Creep Minimum Update Interval cannot exceed Maximum Update Interval.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Terrain Creep Minimum Update Interval cannot exceed Maximum Update Interval."), creep, "@minupdateinterval");
             if (FindAttribute(creep, "strength") != null)
                 ValidateNonNegativeFloatAttribute(creep, "strength", "Terrain Creep Strength");
 
             if (FindAttribute(creep, "buildability") is { } buildability &&
                 !MajorGodCatalog.TerrainCreepBuildabilityValues.Contains(buildability.Value.Trim(), StringComparer.OrdinalIgnoreCase))
             {
-                throw new InvalidDataException("Terrain Creep Buildability must be a valid buildability mode.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Terrain Creep Buildability must be a valid buildability mode."), creep, "@buildability");
             }
             if (FindAttribute(creep, "preventplacement") is { } preventPlacement)
-                ValidateUnitOrTypeName(preventPlacement.Value, "Terrain Creep Prevent placement");
+                ValidationSourceLocation.Validate(preventPlacement, () => ValidateUnitOrTypeName(preventPlacement.Value, "Terrain Creep Prevent placement"));
 
             var generators = creep.Elements().Where(child =>
                 child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList();
             if (generators.Count == 0)
-                throw new InvalidDataException("Terrain Creep requires at least one Generator.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Terrain Creep requires at least one Generator."), creep, "protounit");
             var usedGenerators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var generator in generators)
             {
-                ValidateProtoUnitName(generator.Value, "Terrain Creep Generator");
+                ValidationSourceLocation.Validate(generator, () => ValidateProtoUnitName(generator.Value, "Terrain Creep Generator"));
                 if (!usedGenerators.Add(generator.Value.Trim()))
-                    throw new InvalidDataException($"Terrain Creep Generator '{generator.Value.Trim()}' can only occur once.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Terrain Creep Generator '{generator.Value.Trim()}' can only occur once."), generator);
             }
         }
     }
@@ -3887,12 +4114,12 @@ public partial class MajorGodEditorView : UserControl
     {
         var maxRaw = FindAttribute(timeShifting, "maxconcurrenttimeshifts")?.Value ?? "";
         if (!int.TryParse(maxRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var max) || max < 1)
-            throw new InvalidDataException("Max Concurrent time shifts must be an integer greater than or equal to one.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException("Max Concurrent time shifts must be an integer greater than or equal to one."), timeShifting, "@maxconcurrenttimeshifts");
         var units = timeShifting.Elements().Where(child => child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList();
         if (units.Count == 0) throw new InvalidDataException("TimeShifting requires at least one Unit.");
         foreach (var unit in units)
         {
-            ValidateProtoUnitName(unit.Value, "TimeShifting Unit");
+            ValidationSourceLocation.Validate(unit, () => ValidateProtoUnitName(unit.Value, "TimeShifting Unit"));
             ValidateNonNegativeFloatAttribute(unit, "costratio", "TimeShifting Cost Ratio");
             ValidateNonNegativeFloatAttribute(unit, "timeratio", "TimeShifting Time Ratio");
         }
@@ -3905,8 +4132,8 @@ public partial class MajorGodEditorView : UserControl
         if (anchors.Count != 1)
             throw new InvalidDataException("BuildingChain Anchor must occur exactly once.");
         var anchor = anchors[0];
-        ValidateUnitOrTypeName(anchor.Value, "BuildingChain Anchor");
-        ValidateProtoUnitName(FindAttribute(anchor, "vfx")?.Value ?? "", "BuildingChain VFX");
+        ValidationSourceLocation.Validate(anchor, () => ValidateUnitOrTypeName(anchor.Value, "BuildingChain Anchor"));
+        ValidationSourceLocation.Validate(anchor, "@vfx", () => ValidateProtoUnitName(FindAttribute(anchor, "vfx")?.Value ?? "", "BuildingChain VFX"));
 
         ValidateBuildingChainVfxGroup(buildingChain, "abundancevfx", "Abundance VFX");
         ValidateBuildingChainVfxGroup(buildingChain, "autobuildvfx", "Auto Build VFX");
@@ -3923,18 +4150,18 @@ public partial class MajorGodEditorView : UserControl
                 throw new InvalidDataException("BuildingChain Resource generation requires at least one rate tier.");
             foreach (var tier in tiers)
             {
-                ValidateNonNegativeFloatValue(tier.Value, "Rate tile/minute");
+                ValidationSourceLocation.Validate(tier, () => ValidateNonNegativeFloatValue(tier.Value, "Rate tile/minute"));
                 ValidateResourceAttribute(tier, "resource", "Resource generation resource");
                 var minimumTiles = FindAttribute(tier, "mintiles")?.Value ?? "";
                 if (!int.TryParse(minimumTiles, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value < 0)
-                    throw new InvalidDataException("When number of tiles > must be an integer greater than or equal to zero.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException("When number of tiles > must be an integer greater than or equal to zero."), tier, "@mintiles");
             }
         }
 
         foreach (var building in buildingChain.Elements().Where(child =>
                      child.Name.LocalName.Equals("chainablebuilding", StringComparison.OrdinalIgnoreCase)))
         {
-            ValidateProtoUnitName(building.Value, "Chainable Building");
+            ValidationSourceLocation.Validate(building, () => ValidateProtoUnitName(building.Value, "Chainable Building"));
             ValidateNonNegativeFloatAttribute(building, "chainradius", "Chain Radius");
             ValidateResourceAttribute(building, "generationresource", "Chainable Building Generates");
         }
@@ -3947,9 +4174,9 @@ public partial class MajorGodEditorView : UserControl
         if (entries.Count > 1)
             throw new InvalidDataException($"BuildingChain {label} can only occur once.");
         if (entries.FirstOrDefault() is not { } group) return;
-        ValidateProtoUnitName(FindAttribute(group, "small")?.Value ?? "", $"{label} Small");
-        ValidateProtoUnitName(FindAttribute(group, "medium")?.Value ?? "", $"{label} Medium");
-        ValidateProtoUnitName(FindAttribute(group, "large")?.Value ?? "", $"{label} Large");
+        ValidationSourceLocation.Validate(group, "@small", () => ValidateProtoUnitName(FindAttribute(group, "small")?.Value ?? "", $"{label} Small"));
+        ValidationSourceLocation.Validate(group, "@medium", () => ValidateProtoUnitName(FindAttribute(group, "medium")?.Value ?? "", $"{label} Medium"));
+        ValidationSourceLocation.Validate(group, "@large", () => ValidateProtoUnitName(FindAttribute(group, "large")?.Value ?? "", $"{label} Large"));
     }
 
     private static void ValidateCombatXp(XElement combatXp)
@@ -3962,9 +4189,9 @@ public partial class MajorGodEditorView : UserControl
         for (var index = 0; index < tiers.Count; index++)
         {
             if (!int.TryParse(tiers[index].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value < 0)
-                throw new InvalidDataException($"CombatXP Tier {index + 1} must be an integer greater than or equal to zero.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"CombatXP Tier {index + 1} must be an integer greater than or equal to zero."), tiers[index]);
             if (previousValue.HasValue && value <= previousValue.Value)
-                throw new InvalidDataException($"CombatXP Tier {index + 1} must be greater than Tier {index}.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"CombatXP Tier {index + 1} must be greater than Tier {index}."), tiers[index]);
             previousValue = value;
         }
     }
@@ -3980,27 +4207,27 @@ public partial class MajorGodEditorView : UserControl
             var label = $"Bonus Unit Spawning {BonusGoalType(goal)} Goal";
             var goalName = FindAttribute(goal, "name")?.Value.Trim() ?? "";
             if (string.IsNullOrWhiteSpace(goalName))
-                throw new InvalidDataException($"{label} requires a Name.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} requires a Name."), goal, "@name");
             if (!usedGoalNames.Add(goalName))
-                throw new InvalidDataException($"Bonus Unit Spawning Goal name '{goalName}' can only occur once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Bonus Unit Spawning Goal name '{goalName}' can only occur once."), goal, "@name");
             var tracking = FindAttribute(goal, "rewardtracking")?.Value ?? "Single";
             if (!new[] { "Single", "PerPossibleReward" }.Contains(tracking, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidDataException($"{label} Tracking must be Single or PerPossibleReward.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Tracking must be Single or PerPossibleReward."), goal, "@rewardtracking");
             if (BonusGoalType(goal) == "Resource" && !tracking.Equals("Single", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Resource Goal Tracking must be Single.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Resource Goal Tracking must be Single."), goal, "@rewardtracking");
             if (MajorGodCatalog.FindDirectChild(goal, "active") is { } active &&
                 !active.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) &&
                 !active.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException($"{label} Active must be true or false.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Active must be true or false."), active);
 
             var amount = MajorGodCatalog.FindDirectChild(goal, "goalamount") ??
-                         throw new InvalidDataException($"{label} requires a Goal Amount.");
+                         throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} requires a Goal Amount."), goal, "goalamount");
             if (!decimal.TryParse(amount.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var amountValue) ||
                 amountValue < 1 || amountValue != decimal.Truncate(amountValue))
-                throw new InvalidDataException($"{label} Goal Amount must be an integer greater than or equal to one.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Goal Amount must be an integer greater than or equal to one."), amount);
             var rewards = goal.Elements().Where(child => child.Name.LocalName.Equals("reward", StringComparison.OrdinalIgnoreCase)).ToList();
             if (rewards.Count == 0)
-                throw new InvalidDataException($"{label} requires at least one Reward.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} requires at least one Reward."), goal, "reward");
             ValidateUniqueBonusChips(goal, "reward", "Reward");
             ValidateUniqueBonusChips(goal, "excludefromreward", "Excluded from reward");
             var excludedTargets = goal.Elements().Where(child => child.Name.LocalName.Equals("excludedtarget", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -4016,21 +4243,21 @@ public partial class MajorGodEditorView : UserControl
 
             foreach (var contributor in goal.Elements().Where(child => child.Name.LocalName.Equals("contributor", StringComparison.OrdinalIgnoreCase)))
             {
-                ValidateNonNegativeFloatValue(contributor.Value, $"{label} Contributor");
+                ValidationSourceLocation.Validate(contributor, () => ValidateNonNegativeFloatValue(contributor.Value, $"{label} Contributor"));
                 var unit = FindAttribute(contributor, "unit");
                 var type = FindAttribute(contributor, "type");
                 var resource = FindAttribute(contributor, "resource");
                 var identityCount = new[] { unit, type, resource }.Count(attribute => attribute != null);
                 if (identityCount != 1)
                     throw new InvalidDataException($"{label} Contributor must have exactly one Unit, Unit type, or Resource.");
-                if (unit != null) ValidateProtoUnitName(unit.Value, $"{label} Contributor Unit");
-                if (type != null) ValidateUnitTypeName(type.Value, $"{label} Contributor Unit type");
+                if (unit != null) ValidationSourceLocation.Validate(unit, () => ValidateProtoUnitName(unit.Value, $"{label} Contributor Unit"));
+                if (type != null) ValidationSourceLocation.Validate(type, () => ValidateUnitTypeName(type.Value, $"{label} Contributor Unit type"));
                 if (resource != null)
                 {
                     if (BonusGoalType(goal) != "Resource")
                         throw new InvalidDataException($"{label} Resource contributors can only be used by Resource goals.");
                     if (!ProtoConstants.KnownResourceTypes.Contains(resource.Value, StringComparer.OrdinalIgnoreCase))
-                        throw new InvalidDataException($"{label} Contributor Resource must be valid.");
+                        throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Contributor Resource must be valid."), contributor, "@resource");
                 }
             }
 
@@ -4039,8 +4266,8 @@ public partial class MajorGodEditorView : UserControl
             {
                 var resource = FindAttribute(cost, "resourcetype")?.Value ?? "";
                 if (!ProtoConstants.KnownResourceTypes.Contains(resource, StringComparer.OrdinalIgnoreCase) || !seenCosts.Add(resource))
-                    throw new InvalidDataException($"{label} Reward Point Cost resources must be valid and unique.");
-                ValidateNonNegativeFloatValue(cost.Value, $"{label} {resource} Reward Point Cost");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Reward Point Cost resources must be valid and unique."), cost, "@resourcetype");
+                ValidationSourceLocation.Validate(cost, () => ValidateNonNegativeFloatValue(cost.Value, $"{label} {resource} Reward Point Cost"));
             }
 
             foreach (var flag in BonusGoalFlags)
@@ -4064,16 +4291,16 @@ public partial class MajorGodEditorView : UserControl
             throw new InvalidDataException($"{label} Display info requires DisplayOnHUD set to true.");
         foreach (var tag in new[] { "displaynameid", "rolloverid", "progresstooltipid", "nextunittooltipid", "notificationmessageid" })
             if (string.IsNullOrWhiteSpace(MajorGodCatalog.FindDirectChild(displayInfo, tag)?.Value))
-                throw new InvalidDataException($"{label} Display info requires {tag}.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Display info requires {tag}."), displayInfo, tag);
         var progressType = MajorGodCatalog.FindDirectChild(displayInfo, "progresstype")?.Value ?? "";
         if (!new[] { "Default", "ShieldBlessing", "SpawnReward" }.Contains(progressType, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} Progress Type must be Default, ShieldBlessing, or SpawnReward.");
-        GodModuleFieldValidation.ValidateCatalogAsset(
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Progress Type must be Default, ShieldBlessing, or SpawnReward."), displayInfo, "progresstype");
+        ValidationSourceLocation.Validate(displayInfo, "icon", () => GodModuleFieldValidation.ValidateCatalogAsset(
             MajorGodCatalog.FindDirectChild(displayInfo, "icon")?.Value ?? "",
             _iconPaths,
-            $"{label} Display info Icon");
+            $"{label} Display info Icon"));
         if (MajorGodCatalog.FindDirectChild(displayInfo, "notificationsound") == null)
-            throw new InvalidDataException($"{label} Display info requires a Notification Sound field.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Display info requires a Notification Sound field."), displayInfo, "notificationsound");
     }
 
     private void ValidateUniqueBonusChips(XElement goal, string tag, string label)
@@ -4081,9 +4308,9 @@ public partial class MajorGodEditorView : UserControl
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var element in goal.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)))
         {
-            ValidateUnitOrTypeName(element.Value, label);
+            ValidationSourceLocation.Validate(element, () => ValidateUnitOrTypeName(element.Value, label));
             if (!used.Add(element.Value.Trim()))
-                throw new InvalidDataException($"{label} '{element.Value.Trim()}' can only occur once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} '{element.Value.Trim()}' can only occur once."), element);
         }
     }
 
@@ -4097,10 +4324,10 @@ public partial class MajorGodEditorView : UserControl
             _ => new[] { "DamageTarget", "DamageDealer", "FromBuilding" }
         };
         if (!allowed.Contains(type, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} Spawn Location is not valid for its goal type.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Spawn Location is not valid for its goal type."), spawn, "@type");
         if (!type.Equals("FromBuilding", StringComparison.OrdinalIgnoreCase)) return;
-        ValidateUnitOrTypeName(FindAttribute(spawn, "landbuilding")?.Value ?? "", $"{label} Spawn Location Land");
-        ValidateUnitOrTypeName(FindAttribute(spawn, "waterbuilding")?.Value ?? "", $"{label} Spawn Location Water");
+        ValidationSourceLocation.Validate(spawn, "@landbuilding", () => ValidateUnitOrTypeName(FindAttribute(spawn, "landbuilding")?.Value ?? "", $"{label} Spawn Location Land"));
+        ValidationSourceLocation.Validate(spawn, "@waterbuilding", () => ValidateUnitOrTypeName(FindAttribute(spawn, "waterbuilding")?.Value ?? "", $"{label} Spawn Location Water"));
     }
 
     private void ValidateBountyResourceEarning(XElement bounty)
@@ -4108,12 +4335,12 @@ public partial class MajorGodEditorView : UserControl
         if (MajorGodCatalog.FindDirectChild(bounty, "active") is { } active &&
             !active.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) &&
             !active.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Bounty Resource Earning Active must be true or false.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException("Bounty Resource Earning Active must be true or false."), active);
 
         if (MajorGodCatalog.FindDirectChild(bounty, "bountydamagegoal") is { } damageGoal)
-            ValidateNonNegativeFloatValue(damageGoal.Value, "Bounty Damage Goal");
+            ValidationSourceLocation.Validate(damageGoal, () => ValidateNonNegativeFloatValue(damageGoal.Value, "Bounty Damage Goal"));
         if (MajorGodCatalog.FindDirectChild(bounty, "vfx") is { } vfx)
-            ValidateProtoUnitName(vfx.Value, "Bounty VFX");
+            ValidationSourceLocation.Validate(vfx, () => ValidateProtoUnitName(vfx.Value, "Bounty VFX"));
 
         var reduction = new[] { "bountyreductionstart", "bountyreductionend", "bountyreductionstrength" }
             .Select(tag => MajorGodCatalog.FindDirectChild(bounty, tag)).ToList();
@@ -4121,13 +4348,13 @@ public partial class MajorGodEditorView : UserControl
         {
             if (reduction.Any(element => element == null))
                 throw new InvalidDataException("Favor Bounty Reduction requires Start at, End at, and Factor.");
-            ValidateNonNegativeIntegerLike(reduction[0]!.Value, "Favor Bounty Reduction Start at");
-            ValidateNonNegativeIntegerLike(reduction[1]!.Value, "Favor Bounty Reduction End at");
-            ValidateNonNegativeFloatValue(reduction[2]!.Value, "Favor Bounty Reduction Factor");
+            ValidationSourceLocation.Validate(reduction[0]!, () => ValidateNonNegativeIntegerLike(reduction[0]!.Value, "Favor Bounty Reduction Start at"));
+            ValidationSourceLocation.Validate(reduction[1]!, () => ValidateNonNegativeIntegerLike(reduction[1]!.Value, "Favor Bounty Reduction End at"));
+            ValidationSourceLocation.Validate(reduction[2]!, () => ValidateNonNegativeFloatValue(reduction[2]!.Value, "Favor Bounty Reduction Factor"));
             var reductionStart = decimal.Parse(reduction[0]!.Value, NumberStyles.Number, CultureInfo.InvariantCulture);
             var reductionEnd = decimal.Parse(reduction[1]!.Value, NumberStyles.Number, CultureInfo.InvariantCulture);
             if (reductionStart > reductionEnd)
-                throw new InvalidDataException("Favor Bounty Reduction Start at cannot exceed End at.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Favor Bounty Reduction Start at cannot exceed End at."), reduction[0]!);
         }
 
         ValidateUniqueBountyChips(bounty, "excludedtarget", "Excluded target", ValidateUnitOrTypeName);
@@ -4137,30 +4364,30 @@ public partial class MajorGodEditorView : UserControl
                      child.Name.LocalName.Equals("bountyreward", StringComparison.OrdinalIgnoreCase)))
         {
             ValidateBountyConditionAndTarget(reward, "Reward");
-            ValidateNonNegativeFloatValue(reward.Value, "Reward amount");
+            ValidationSourceLocation.Validate(reward, () => ValidateNonNegativeFloatValue(reward.Value, "Reward amount"));
             ValidateBountyResource(reward, "Reward");
             if (FindAttribute(reward, "multiplybyunitcost") is { } multiply &&
                 !multiply.Value.Equals("true", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Multiply by Unit Cost must be true when present.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Multiply by Unit Cost must be true when present."), reward, "@multiplybyunitcost");
             if (FindAttribute(reward, "asspawnedunit") is { } spawned)
-                ValidateProtoUnitName(spawned.Value, "Spawned as");
+                ValidationSourceLocation.Validate(spawned, () => ValidateProtoUnitName(spawned.Value, "Spawned as"));
         }
 
         foreach (var multiplier in bounty.Elements().Where(child =>
                      child.Name.LocalName.Equals("bountytargetmultiplier", StringComparison.OrdinalIgnoreCase)))
         {
             var condition = ValidateBountyConditionAndTarget(multiplier, "Target Multiplier");
-            ValidateNonNegativeFloatValue(multiplier.Value, "Target Multiplier");
+            ValidationSourceLocation.Validate(multiplier, () => ValidateNonNegativeFloatValue(multiplier.Value, "Target Multiplier"));
             ValidateBountyResource(multiplier, "Target Multiplier");
             if (FindAttribute(multiplier, "attackertype") is { } attacker)
             {
                 if (!condition.Equals("Destroy", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("If Attacker is can only be used for Destroy target multipliers.");
-                ValidateUnitOrTypeName(attacker.Value, "Target Multiplier If Attacker is");
+                ValidationSourceLocation.Validate(attacker, () => ValidateUnitOrTypeName(attacker.Value, "Target Multiplier If Attacker is"));
             }
             if (FindAttribute(multiplier, "relativity") is { } relativity &&
                 !new[] { "absolute", "basepercent", "percent" }.Contains(relativity.Value, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidDataException("Target Multiplier Relativity must be Absolute, BasePercent, or Percent.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Target Multiplier Relativity must be Absolute, BasePercent, or Percent."), multiplier, "@relativity");
         }
 
         foreach (var tag in new[] { "researchreward", "researchcostmultiplier" })
@@ -4170,8 +4397,8 @@ public partial class MajorGodEditorView : UserControl
                 : "Research Cost Multiplier";
             foreach (var entry in bounty.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)))
             {
-                ValidateTechType(FindAttribute(entry, "techtype")?.Value ?? "", label);
-                ValidateNonNegativeFloatValue(entry.Value, label);
+                ValidationSourceLocation.Validate(entry, "@techtype", () => ValidateTechType(FindAttribute(entry, "techtype")?.Value ?? "", label));
+                ValidationSourceLocation.Validate(entry, () => ValidateNonNegativeFloatValue(entry.Value, label));
                 ValidateBountyResource(entry, label);
                 if (tag.Equals("researchcostmultiplier", StringComparison.OrdinalIgnoreCase) &&
                     FindAttribute(entry, "combatxp") != null)
@@ -4190,9 +4417,9 @@ public partial class MajorGodEditorView : UserControl
         foreach (var element in bounty.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)))
         {
             var value = element.Value.Trim();
-            validateValue(value, label);
+            ValidationSourceLocation.Validate(element, () => validateValue(value, label));
             if (!used.Add(value))
-                throw new InvalidDataException($"{label} '{value}' can only occur once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} '{value}' can only occur once."), element);
         }
     }
 
@@ -4200,13 +4427,13 @@ public partial class MajorGodEditorView : UserControl
     {
         var condition = FindAttribute(entry, "condition")?.Value ?? "";
         if (!new[] { "Damage", "Destroy" }.Contains(condition, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} Type must be Damage or Destroy.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} Type must be Damage or Destroy."), entry, "@condition");
         var protoUnit = FindAttribute(entry, "protounit");
         var unitType = FindAttribute(entry, "unittype");
         if ((protoUnit == null) == (unitType == null))
             throw new InvalidDataException($"{label} must select either Unit or Unit type.");
-        if (protoUnit != null) ValidateProtoUnitName(protoUnit.Value, $"{label} Unit");
-        else ValidateUnitTypeName(unitType!.Value, $"{label} Unit type");
+        if (protoUnit != null) ValidationSourceLocation.Validate(protoUnit, () => ValidateProtoUnitName(protoUnit.Value, $"{label} Unit"));
+        else ValidationSourceLocation.Validate(unitType!, () => ValidateUnitTypeName(unitType!.Value, $"{label} Unit type"));
         return condition;
     }
 
@@ -4217,7 +4444,7 @@ public partial class MajorGodEditorView : UserControl
         if ((combatXp == null) == (resource == null))
             throw new InvalidDataException($"{label} must grant one resource or Combat XP.");
         if (resource != null && !ProtoConstants.KnownResourceTypes.Contains(resource.Value, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} must grant a valid resource.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} must grant a valid resource."), entry, "@resourcetype");
     }
 
     private static void ValidateNonNegativeIntegerLike(string raw, string label)
@@ -4267,14 +4494,16 @@ public partial class MajorGodEditorView : UserControl
     {
         var resource = FindAttribute(element, attributeName)?.Value.Trim() ?? "";
         if (!ProtoConstants.KnownResourceTypes.Contains(resource, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} must reference a valid resource.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} must reference a valid resource."), element, "@" + attributeName);
     }
 
     private void ValidateSingleSpecialProtoUnit(XElement parent, string label)
     {
         var units = parent.Elements().Where(child => child.Name.LocalName.Equals("protounit", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (units.Count != 1) throw new InvalidDataException($"{label} must occur exactly once.");
-        ValidateProtoUnitName(units[0].Value, label);
+        if (units.Count == 0) throw ValidationSourceLocation.Attach(new InvalidDataException($"{label}: select a Unit, or remove the incomplete section before saving."), parent, "protounit");
+        if (units.Count > 1) throw new InvalidDataException($"{label}: only one Unit is allowed; remove the duplicate <protounit> entries in Edit XML.");
+        try { ValidationSourceLocation.Validate(units[0], () => ValidateProtoUnitName(units[0].Value, label)); }
+        catch (InvalidDataException exception) { throw ValidationSourceLocation.Attach(exception, units[0]); }
     }
 
     private void ValidateProtoUnitName(string raw, string label)
@@ -4288,7 +4517,8 @@ public partial class MajorGodEditorView : UserControl
     private static void ValidateBoundedFloatElement(XElement parent, string tag, string label, double minimum, double maximum)
     {
         var raw = MajorGodCatalog.FindDirectChild(parent, tag)?.Value ?? "";
-        ValidateBoundedFloatValue(raw, label, minimum, maximum);
+        try { ValidateBoundedFloatValue(raw, label, minimum, maximum); }
+        catch (InvalidDataException exception) { throw ValidationSourceLocation.Attach(exception, parent, tag); }
     }
 
     private static void ValidateBoundedFloatValue(string raw, string label, double minimum, double maximum)
@@ -4310,21 +4540,24 @@ public partial class MajorGodEditorView : UserControl
 
     private void ValidateAssociatedTechs(XElement entry)
     {
-        var ageTech = MajorGodCatalog.FindDirectChild(entry, "agetech")
-            ?? throw new InvalidDataException("Age Tech is required.");
-        var age = ageTech.Attributes().FirstOrDefault(attribute =>
-            attribute.Name.LocalName.Equals("age", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
-        if (!MajorGodCatalog.AgeValues.Contains(age, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidDataException("Age Tech must use an age from ArchaicAge through WonderAge.");
+        var ageTech = MajorGodCatalog.FindDirectChild(entry, "agetech");
+        if (ageTech != null)
+        {
+            var age = ageTech.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals("age", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
+            if (!MajorGodCatalog.AgeValues.Contains(age, StringComparer.OrdinalIgnoreCase))
+                throw ValidationSourceLocation.Attach(new InvalidDataException("Age Tech must use an age from ArchaicAge through WonderAge."), ageTech, "@age");
 
-        var ageTechnologies = ageTech.Elements().Where(element =>
-            element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (ageTechnologies.Count != 1)
-            throw new InvalidDataException("Age Tech requires exactly one Tech field.");
-        ValidateTechnology(ageTechnologies[0].Value.Trim(), "Age Tech");
-        ValidateTechnology(ReadValue(entry, "deathmatchtech"), "Deathmatch Tech");
+            var ageTechnologies = ageTech.Elements().Where(element =>
+                element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (ageTechnologies.Count != 1)
+                throw new InvalidDataException("Age Tech requires exactly one Tech field.");
+            ValidationSourceLocation.Validate(ageTechnologies[0], () => ValidateTechnology(ageTechnologies[0].Value.Trim(), "Age Tech"));
+        }
+        if (MajorGodCatalog.FindDirectChild(entry, "deathmatchtech") is { } deathmatchTech)
+            ValidationSourceLocation.Validate(deathmatchTech, () => ValidateTechnology(deathmatchTech.Value.Trim(), "Deathmatch Tech"));
         if (MajorGodCatalog.FindDirectChild(entry, "teamtech") is { } teamTech)
-            ValidateTechnology(teamTech.Value.Trim(), "Team Tech");
+            ValidationSourceLocation.Validate(teamTech, () => ValidateTechnology(teamTech.Value.Trim(), "Team Tech"));
     }
 
     private void ValidateTechnology(string technology, string fieldLabel)
@@ -4359,6 +4592,7 @@ public partial class MajorGodEditorView : UserControl
         }
         finally
         {
+            FinalizeMajorGodPresentation();
             _isPopulating = wasPopulating;
         }
     }
@@ -4366,17 +4600,18 @@ public partial class MajorGodEditorView : UserControl
     private Control CreateStartingUnitsGroupEditor(XElement group)
     {
         var container = new StackPanel { Spacing = 4 };
-        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var modeRow = new WrapPanel();
         var mode = GetStartingUnitsMode(group);
         var modeOptions = GetAvailableStartingModes("startingunits", group);
-        var modeBox = new ComboBox
+        var modeBox = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
             IsEnabled = IsModifiedMode,
             HorizontalAlignment = HorizontalAlignment.Left
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(modeBox, group, "@mode");
         modeBox.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || modeBox.SelectedItem is not string selectedMode)
@@ -4430,14 +4665,14 @@ public partial class MajorGodEditorView : UserControl
             };
             container.Children.Add(addUnit);
         }
-        return container;
+        return CreateStartingGroupCard(container);
     }
 
     private Control CreateStartingUnitRow(XElement group, XElement unit)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("Unit"));
-        var unitBox = new AutoCompleteBox
+        var unitBox = ConfigureMajorGodField(new AutoCompleteBox
         {
             ItemsSource = _protoUnitNames,
             Text = unit.Value.Trim(),
@@ -4445,8 +4680,9 @@ public partial class MajorGodEditorView : UserControl
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(unitBox, () => _isPopulating);
+        EditorValidationBindings.Bind(unitBox, unit);
         unitBox.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4529,15 +4765,15 @@ public partial class MajorGodEditorView : UserControl
         string defaultValue,
         ProtoUnitNumericKind numericKind)
     {
-        var box = new TextBox
+        var box = ConfigureMajorGodField(new TextBox
         {
             Text = FindAttribute(unit, attributeName)?.Value ?? defaultValue,
             Width = 55,
             MaxWidth = 55,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
-        box.Width = box.MaxWidth = 55;
+        EditorValidationBindings.Bind(box, unit, "@" + attributeName);
         EditorNumericInputBehavior.AttachRule(box, numericKind);
         box.TextChanged += (_, _) =>
         {
@@ -4608,6 +4844,7 @@ public partial class MajorGodEditorView : UserControl
         }
         finally
         {
+            FinalizeMajorGodPresentation();
             _isPopulating = wasPopulating;
         }
     }
@@ -4615,16 +4852,17 @@ public partial class MajorGodEditorView : UserControl
     private Control CreateStartingQueueGroupEditor(XElement group)
     {
         var container = new StackPanel { Spacing = 4 };
-        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var modeRow = new WrapPanel();
         var mode = GetStartingUnitsMode(group);
         var modeOptions = GetAvailableStartingModes("startingqueue", group);
-        var modeBox = new ComboBox
+        var modeBox = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(modeBox, group, "@mode");
         modeBox.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || modeBox.SelectedItem is not string selectedMode) return;
@@ -4674,14 +4912,14 @@ public partial class MajorGodEditorView : UserControl
             };
             container.Children.Add(addUnit);
         }
-        return container;
+        return CreateStartingGroupCard(container);
     }
 
     private Control CreateStartingQueueUnitRow(XElement group, XElement unit)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("Unit"));
-        var unitBox = new AutoCompleteBox
+        var unitBox = ConfigureMajorGodField(new AutoCompleteBox
         {
             ItemsSource = _protoUnitNames,
             Text = unit.Value.Trim(),
@@ -4689,8 +4927,9 @@ public partial class MajorGodEditorView : UserControl
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(unitBox, () => _isPopulating);
+        EditorValidationBindings.Bind(unitBox, unit);
         unitBox.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4711,6 +4950,7 @@ public partial class MajorGodEditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
+        EditorValidationBindings.Bind(autoTrain, unit, "@autotrain");
         autoTrain.IsCheckedChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4728,6 +4968,7 @@ public partial class MajorGodEditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
+        EditorValidationBindings.Bind(prequeue, unit, "@prequeue");
         prequeue.IsCheckedChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4828,9 +5069,9 @@ public partial class MajorGodEditorView : UserControl
         {
             var mode = GetStartingUnitsMode(group);
             if (!StartingModes.Contains(mode, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidDataException($"Starting Queue mode '{mode}' is not valid.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Queue mode '{mode}' is not valid."), group, "@mode");
             if (!usedModes.Add(mode))
-                throw new InvalidDataException($"Starting Queue mode '{mode}' can only be used once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Queue mode '{mode}' can only be used once."), group, "@mode");
             var units = group.Elements().Where(element =>
                 element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)).ToList();
             if (units.Count == 0)
@@ -4840,21 +5081,21 @@ public partial class MajorGodEditorView : UserControl
                 var unitName = unit.Value.Trim();
                 if (unitName.Length == 0 ||
                     (_protoUnitNames.Count > 0 && !_protoUnitNames.Contains(unitName, StringComparer.OrdinalIgnoreCase)))
-                    throw new InvalidDataException($"{mode} Starting Queue must reference an existing ProtoUnit.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"{mode} Starting Queue must reference an existing ProtoUnit."), unit);
                 var count = FindAttribute(unit, "count");
                 if (count != null &&
                     (!int.TryParse(count.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var countValue) || countValue <= 0))
-                    throw new InvalidDataException($"Starting Queue Unit '{unitName}' Count must be an integer greater than zero.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Queue Unit '{unitName}' Count must be an integer greater than zero."), unit, "@count");
                 var autoTrain = FindAttribute(unit, "autotrain");
                 var preQueue = FindAttribute(unit, "prequeue");
                 ValidateTrueFlagAttribute(autoTrain, $"Starting Queue Unit '{unitName}' Auto Train");
                 ValidateTrueFlagAttribute(preQueue, $"Starting Queue Unit '{unitName}' Prequeue");
                 if (count != null && (autoTrain != null || preQueue != null))
-                    throw new InvalidDataException($"Starting Queue Unit '{unitName}' cannot use Count with Auto Train or Prequeue.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Queue Unit '{unitName}' cannot use Count with Auto Train or Prequeue."), unit, "@count");
                 if (FindAttribute(unit, "delay") is { } delay &&
                     (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) ||
                      !double.IsFinite(delayValue) || delayValue <= 0))
-                    throw new InvalidDataException($"Starting Queue Unit '{unitName}' Delay must be greater than zero.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Queue Unit '{unitName}' Delay must be greater than zero."), unit, "@delay");
             }
         }
     }
@@ -4883,23 +5124,25 @@ public partial class MajorGodEditorView : UserControl
         }
         finally
         {
+            FinalizeMajorGodPresentation();
             _isPopulating = wasPopulating;
         }
     }
 
     private Control CreateStartingResourcesGroupEditor(XElement group)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var row = new WrapPanel();
         var mode = GetStartingUnitsMode(group);
         var modeOptions = GetAvailableStartingModes("startingresources", group);
-        var modeBox = new ComboBox
+        var modeBox = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
             IsEnabled = IsModifiedMode,
             HorizontalAlignment = HorizontalAlignment.Left
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(modeBox, group, "@mode");
         modeBox.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || modeBox.SelectedItem is not string selectedMode) return;
@@ -4953,7 +5196,7 @@ public partial class MajorGodEditorView : UserControl
             };
             row.Children.Add(removeGroup);
         }
-        return row;
+        return CreateStartingGroupCard(row);
     }
 
     private Control CreateStartingResourceSegment(XElement group, XElement resource)
@@ -4967,13 +5210,13 @@ public partial class MajorGodEditorView : UserControl
         var resourceOptions = ProtoConstants.KnownResourceTypes
             .Where(type => !usedByOtherRows.Contains(type) || type.Equals(currentType, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        var resourceBox = new ComboBox
+        var resourceBox = ConfigureMajorGodField(new ComboBox
         {
             ItemsSource = resourceOptions,
             SelectedItem = currentType,
             Width = 90,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         resourceBox.SelectionChanged += (_, _) =>
         {
             if (!CanEditCurrent() || resourceBox.SelectedItem is not string selectedType) return;
@@ -4983,9 +5226,9 @@ public partial class MajorGodEditorView : UserControl
             RebuildStartingResourcesEditor();
         };
         segment.Children.Add(resourceBox);
-        var amount = new TextBox { Text = resource.Value.Trim(), Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode };
+        var amount = ConfigureMajorGodField(new TextBox { Text = resource.Value.Trim(), Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        EditorValidationBindings.Bind(amount, resource);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
-        amount.Width = amount.MaxWidth = 60;
         EditorNumericInputBehavior.AttachRule(amount, ProtoUnitNumericKind.UnsignedFloat);
         amount.TextChanged += (_, _) =>
         {
@@ -5036,9 +5279,9 @@ public partial class MajorGodEditorView : UserControl
         {
             var mode = GetStartingUnitsMode(group);
             if (!StartingModes.Contains(mode, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidDataException($"Starting Resources mode '{mode}' is not valid.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Resources mode '{mode}' is not valid."), group, "@mode");
             if (!usedModes.Add(mode))
-                throw new InvalidDataException($"Starting Resources mode '{mode}' can only be used once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Resources mode '{mode}' can only be used once."), group, "@mode");
 
             var usedResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var resources = group.Elements().Where(element =>
@@ -5053,7 +5296,7 @@ public partial class MajorGodEditorView : UserControl
                     throw new InvalidDataException($"{mode} Starting Resources contains '{resourceType}' more than once.");
                 if (!double.TryParse(resource.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount) ||
                     !double.IsFinite(amount) || amount < 0)
-                    throw new InvalidDataException($"{mode} Starting Resource '{resourceType}' Amount must be zero or greater.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"{mode} Starting Resource '{resourceType}' Amount must be zero or greater."), resource);
             }
         }
     }
@@ -5066,9 +5309,9 @@ public partial class MajorGodEditorView : UserControl
         {
             var mode = GetStartingUnitsMode(group);
             if (!StartingModes.Contains(mode, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidDataException($"Starting Units mode '{mode}' is not valid.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Units mode '{mode}' is not valid."), group, "@mode");
             if (!usedModes.Add(mode))
-                throw new InvalidDataException($"Starting Units mode '{mode}' can only be used once.");
+                throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Units mode '{mode}' can only be used once."), group, "@mode");
 
             var units = group.Elements().Where(element =>
                 element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -5080,19 +5323,19 @@ public partial class MajorGodEditorView : UserControl
                 var unitName = unit.Value.Trim();
                 if (unitName.Length == 0 ||
                     (_protoUnitNames.Count > 0 && !_protoUnitNames.Contains(unitName, StringComparer.OrdinalIgnoreCase)))
-                    throw new InvalidDataException($"{mode} Starting Units must reference an existing ProtoUnit.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"{mode} Starting Units must reference an existing ProtoUnit."), unit);
                 if (!int.TryParse(FindAttribute(unit, "count")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) || count <= 0)
-                    throw new InvalidDataException($"Starting Unit '{unitName}' Count must be an integer greater than zero.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Unit '{unitName}' Count must be an integer greater than zero."), unit, "@count");
                 foreach (var axis in new[] { "x", "y", "z" })
                 {
                     if (!double.TryParse(FindAttribute(unit, axis)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var offset) ||
                         !double.IsFinite(offset))
-                        throw new InvalidDataException($"Starting Unit '{unitName}' Offset {axis.ToUpperInvariant()} must be a number.");
+                        throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Unit '{unitName}' Offset {axis.ToUpperInvariant()} must be a number."), unit, "@" + axis);
                 }
                 if (FindAttribute(unit, "delay") is { } delay &&
                     (!double.TryParse(delay.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var delayValue) ||
                      !double.IsFinite(delayValue) || delayValue <= 0))
-                    throw new InvalidDataException($"Starting Unit '{unitName}' Delay must be greater than zero.");
+                    throw ValidationSourceLocation.Attach(new InvalidDataException($"Starting Unit '{unitName}' Delay must be greater than zero."), unit, "@delay");
             }
         }
     }
@@ -5106,7 +5349,7 @@ public partial class MajorGodEditorView : UserControl
     private static void ValidateTrueFlagAttribute(XAttribute? attribute, string label)
     {
         if (attribute != null && !attribute.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"{label} must be true when present.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException($"{label} must be true when present."), attribute!.Parent!, "@" + attribute.Name.LocalName);
     }
 
     private static XAttribute? FindAttribute(XElement element, string name)
@@ -5123,58 +5366,23 @@ public partial class MajorGodEditorView : UserControl
     private static void RemoveAttribute(XElement element, string name)
         => FindAttribute(element, name)?.Remove();
 
-    private async void ApplyRawXml_Click(object? sender, RoutedEventArgs e)
-    {
-        var applied = await CommitCurrentMajorGodAsync();
-        if (applied && _currentEntry != null)
-        {
-            await PopulateStructuredFieldsAsync(_currentEntry);
-            _statusMessage.Text = "Raw XML applied.";
-        }
-    }
-
-    private void RawXmlEditor_TextChanged(object? sender, EventArgs e)
-    {
-        if (_isPopulating || !IsModifiedMode || _currentEntry == null)
-            return;
-        _rawEditorDirty = true;
-        _applyRawXmlButton.IsVisible = true;
-        MarkCurrentDirty();
-    }
-
     private void XmlPreviewToggle_Click(object? sender, RoutedEventArgs e)
     {
         _isXmlPreviewCollapsed = !_isXmlPreviewCollapsed;
-        _xmlPreviewContent.IsVisible = !_isXmlPreviewCollapsed;
-        _previewSplitter.IsVisible = !_isXmlPreviewCollapsed;
-        if (_isXmlPreviewCollapsed)
-        {
-            _mainGrid.ColumnDefinitions[1].Width = new GridLength(0);
-            _mainGrid.ColumnDefinitions[2].MinWidth = 28;
-            _mainGrid.ColumnDefinitions[2].Width = new GridLength(28, GridUnitType.Pixel);
-        }
-        else
-        {
-            _mainGrid.ColumnDefinitions[0].Width = new GridLength(4, GridUnitType.Star);
-            _mainGrid.ColumnDefinitions[1].Width = new GridLength(5, GridUnitType.Pixel);
-            _mainGrid.ColumnDefinitions[2].MinWidth = 250;
-            _mainGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-        }
-
-        _xmlPreviewToggleButton.Content = _isXmlPreviewCollapsed ? "◀" : "▶";
-        ToolTip.SetTip(
-            _xmlPreviewToggleButton,
-            _isXmlPreviewCollapsed ? "Restore XML Preview" : "Collapse XML Preview");
+        EditorXmlPreviewPane.SetCollapsed(_mainGrid, _isXmlPreviewCollapsed);
     }
 
     private bool CanEditCurrent()
-        => !_isPopulating && IsModifiedMode && _currentEntry != null;
+        => !_isPopulating && IsModifiedMode && _currentEntry != null &&
+           CurrentMajorGodXmlDraft?.Session.IsEditing != true;
 
     private void SetEntryValue(string tag, string value)
     {
         if (_currentEntry == null) return;
+        if (ReadValue(_currentEntry, tag).Equals(value.Trim(), StringComparison.Ordinal)) return;
         MajorGodCatalog.EnsureStatsId(_currentEntry);
         MajorGodCatalog.SetPass1Value(_currentEntry, tag, value);
+        MajorGodCatalog.RemoveEmptyOptionalFields(_currentEntry);
         MarkCurrentDirty();
         RefreshRawXmlFromCurrent();
     }
@@ -5182,6 +5390,13 @@ public partial class MajorGodEditorView : UserControl
     private void MarkCurrentDirty()
     {
         var name = _loadedEntryName ?? CurrentMajorGodName ?? (_currentEntry == null ? "" : MajorGodCatalog.GetName(_currentEntry));
+        // Routed control events can arrive after population finishes. Reapplying
+        // an unchanged value must not manufacture a draft or clear real drafts.
+        if (!_rawEditorDirty && !_dirtyNames.Contains(name) && _currentEntry != null && _loadedModDocument != null &&
+            !_pendingStringOwners.Values.Contains(name, StringComparer.OrdinalIgnoreCase) &&
+            !_pendingStringRemovalOwners.Values.Contains(name, StringComparer.OrdinalIgnoreCase) &&
+            XNode.DeepEquals(_currentEntry, MajorGodCatalog.Find(_loadedModDocument, name)))
+            return;
         if (!string.IsNullOrWhiteSpace(name))
             _dirtyNames.Add(name);
         SetDirty(true);
@@ -5189,18 +5404,25 @@ public partial class MajorGodEditorView : UserControl
 
     private void RefreshRawXmlFromCurrent()
     {
+        FinalizeMajorGodPresentation();
         if (_currentEntry == null) return;
-        SetRawXml(_currentEntry.ToString());
-        _rawEditorDirty = false;
-        _applyRawXmlButton.IsVisible = false;
+        var preview = new XElement(_currentEntry);
+        var saved = _loadedModDocument == null ? null : MajorGodCatalog.Find(_loadedModDocument, MajorGodCatalog.GetName(_currentEntry));
+        var protectedContent = EditorXmlOrderPolicy.HasProtectedContent(_currentEntry);
+        if (IsModifiedMode && CurrentMajorGodXmlDraft?.Session.IsEditing != true && !protectedContent &&
+            (_dirtyNames.Contains(MajorGodCatalog.GetName(_currentEntry)) || !XNode.DeepEquals(_currentEntry, saved)))
+            MajorGodCatalog.NormalizeEditorFieldOrder(preview);
+        SetRawXml(protectedContent ? preview.ToString(SaveOptions.DisableFormatting) : FormatMajorGodPreview(preview));
     }
 
     private void SetRawXml(string text)
     {
-        _isPopulating = true;
-        try { _rawXmlEditor.Text = XmlSyntaxEditorService.PreparePreviewText(text); }
-        finally { _isPopulating = false; }
+        BindMajorGodXmlPreview(text);
     }
+
+    private static string FormatMajorGodPreview(XElement entry)
+        => EditorXmlOrderPolicy.HasProtectedContent(entry) ? entry.ToString(SaveOptions.DisableFormatting)
+            : XmlSyntaxEditorService.FormatElementForPreview(entry);
 
     private static string ReadValue(XElement entry, string tag)
         => MajorGodCatalog.FindDirectChild(entry, tag)?.Value.Trim() ?? "";
@@ -5214,6 +5436,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void SetDirty(bool value)
     {
+        if (value) _saveFeedback.ClearSuccessOnEdit();
         if (IsDirty == value)
             return;
         IsDirty = value;
@@ -5260,10 +5483,11 @@ public partial class MajorGodEditorView : UserControl
             _portraitEditor.Configure("", _iconPaths, null);
             _breakoutPortraitEditor.Configure("", _iconPaths, null);
             SetEditorsEnabled(false);
-            _rawXmlEditor.Text = "";
-            XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, true);
-            _applyRawXmlButton.IsVisible = false;
-            _statusMessage.Text = "Select a major god from the list.";
+            _majorGodXmlController.Bind(null, false);
+            _majorGodIdentityRow.IsVisible = false;
+            _majorGodTabs.IsVisible = false;
+            _emptySelectionMessage.IsVisible = true;
+            _statusMessage.Text = "";
             _rawEditorDirty = false;
             _stringIds.Clear();
             _ = _iconPreview.ShowAsync(null);

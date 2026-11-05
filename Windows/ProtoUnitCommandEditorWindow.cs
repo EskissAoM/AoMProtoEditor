@@ -28,7 +28,7 @@ internal sealed class ProtoUnitCommandEditorContext
     public int ProtoUnitUsageCount { get; init; }
 }
 
-internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
+internal sealed partial class ProtoUnitCommandEditorWindow : SimpleWindow
 {
     private ProtoUnitCommandDefinition _definition;
     private readonly bool _readOnly;
@@ -37,9 +37,10 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     private readonly Dictionary<string, Control> _valueEditors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _repeatables = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _flags = new(StringComparer.OrdinalIgnoreCase);
-    private readonly TextBox _nameBox;
+    private TextBox _nameBox = null!;
     private readonly TextEditor _xmlPreview;
     private readonly TextBlock _statusText;
+    private readonly EditorSaveFeedback _saveFeedback;
     private readonly Dictionary<string, string> _stringTexts = new(StringComparer.OrdinalIgnoreCase);
     private bool _refreshingPreview;
     private bool _allowClose;
@@ -149,8 +150,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             {
                 Content = "Save",
                 MinWidth = 90,
-                Background = Brush.Parse("#163E26"),
-                BorderBrush = Brush.Parse("#A98243")
+                Classes = { "positive" }
             };
             saveButton.Click += async (_, _) => await SaveAsync();
             toolbarButtons.Children.Add(saveButton);
@@ -169,6 +169,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             Margin = new Thickness(0, 4)
         };
         var statusBorder = new Border { Height = 28, Child = _statusText };
+        _saveFeedback = new EditorSaveFeedback(_statusText);
+        _saveFeedback.Register(this);
+        AddHandler(InputElement.TextInputEvent, (_, _) => _saveFeedback.ClearSuccessOnEdit(), RoutingStrategies.Tunnel);
         DockPanel.SetDock(statusBorder, Dock.Bottom);
         shell.Children.Add(statusBorder);
 
@@ -182,6 +185,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         shell.Children.Add(root);
 
         var scrollPanel = new StackPanel { Spacing = 8 };
+        _structuredForm = scrollPanel;
         var commandCard = new Border
         {
             Background = Brush.Parse("#0E1110"),
@@ -200,56 +204,11 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         };
         root.Children.Add(scroll);
 
-        _commandMode = DetectCommandMode();
+        BuildStructuredForm();
         _openedCommandMode = _commandMode;
         _openedTransformFrom = _transformDefinition?.From?.Trim() ?? string.Empty;
-        var nameRow = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("115,240,Auto,240,*"),
-            ColumnSpacing = 8,
-            Margin = new Thickness(0, 0, 0, 4)
-        };
-        nameRow.Children.Add(new TextBlock { Text = "Command Name", VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold });
-        _nameBox = new TextBox { Text = definition.Name, IsEnabled = !readOnly, Width = 240, MaxWidth = 240, HorizontalAlignment = HorizontalAlignment.Left };
-        ApplyAbilityEditorFieldAppearance(_nameBox);
-        ApplyReadOnlyAppearance(_nameBox);
-        _nameBox.TextChanged += (_, _) => RefreshPreview();
-        Grid.SetColumn(_nameBox, 1);
-        nameRow.Children.Add(_nameBox);
-
-        var typeLabel = new TextBlock { Text = "Type", VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(typeLabel, 2);
-        nameRow.Children.Add(typeLabel);
-        _commandModeBox = new ComboBox
-        {
-            ItemsSource = new[] { "Free", "Transform (Unique)", "Transform (Multiple)", "Spawn" },
-            SelectedItem = GetCommandModeDisplayName(_commandMode),
-            Width = 240,
-            MaxWidth = 240,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            IsEnabled = !_readOnly && !_identityLockedByUsage
-        };
-        ApplyReadOnlyAppearance(_commandModeBox);
-        _commandModeBox.SelectionChanged += (_, _) => OnCommandModeChanged();
-        Grid.SetColumn(_commandModeBox, 3);
-        nameRow.Children.Add(_commandModeBox);
-        scrollPanel.Children.Add(nameRow);
-
-        BuildDisplaySection(scrollPanel);
-        BuildCommandSection(scrollPanel);
         if (IsTransformMode && _savedTransformElement == null)
             _savedTransformElement = CaptureTransformDefinition(definition.Name).ToElement();
-
-        var hasShared = ProtoUnitCommandDefinition.RepeatableFieldTags.Any(tag => _definition.RepeatableValues.TryGetValue(tag, out var values) && values.Any(v => !string.IsNullOrWhiteSpace(v)));
-        if (!_readOnly || hasShared)
-        {
-            AddHeader(scrollPanel, "Shared / Prequeue Commands");
-            AddRepeatableRow(scrollPanel, "sharedcommand", "Shared Command");
-            AddRepeatableRow(scrollPanel, "removecommandprequeueonprequeue", "Remove prequeued");
-        }
-
-        if (!_readOnly || _flags.Count > 0)
-            AddFlagsEditor(scrollPanel);
 
         var splitter = new GridSplitter
         {
@@ -269,12 +228,17 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             RowDefinitions = new RowDefinitions("Auto,*"),
             Margin = new Thickness(12, 12, 12, 12)
         };
-        previewPanel.Children.Add(new TextBlock
+        var previewHeader = new DockPanel();
+        _editXmlButton = new Button { Content = "Edit XML", HorizontalAlignment = HorizontalAlignment.Right };
+        DockPanel.SetDock(_editXmlButton, Dock.Right);
+        previewHeader.Children.Add(_editXmlButton);
+        previewHeader.Children.Add(new TextBlock
         {
             Text = "XML Preview",
             FontWeight = FontWeight.Bold,
             Margin = new Thickness(28, 0, 0, 8)
         });
+        previewPanel.Children.Add(previewHeader);
         _xmlPreview = new TextEditor
         {
             IsReadOnly = true,
@@ -335,6 +299,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         root.Children.Add(previewHost);
 
         Content = shell;
+        _xmlController = new XmlEditController(_xmlPreview, _editXmlButton, _structuredForm, () => _saveFeedback.ClearSuccessOnEdit());
+        _xmlController.BeforeEditAsync = BeginCommandXmlEditingAsync;
+        Closed += (_, _) => { _xmlClosed = true; _xmlSession?.Reset(""); _xmlController.Dispose(); };
         RefreshPreview();
     }
 
@@ -365,12 +332,15 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     private CommandEditorMode _commandMode;
 
     private CommandEditorMode DetectCommandMode()
+        => DetectCommandMode(_definition);
+
+    private static CommandEditorMode DetectCommandMode(ProtoUnitCommandDefinition definition)
     {
-        if (_definition.Flags.Contains("spawncommand"))
+        if (definition.Flags.Contains("spawncommand"))
             return CommandEditorMode.Spawn;
-        if (_definition.Flags.Contains("transform"))
+        if (definition.Flags.Contains("transform"))
             return CommandEditorMode.TransformMultiple;
-        if (_definition.Flags.Contains("transformselected") || _definition.Flags.Contains("transformvillager"))
+        if (definition.Flags.Contains("transformselected") || definition.Flags.Contains("transformvillager"))
             return CommandEditorMode.TransformUnique;
         return CommandEditorMode.Free;
     }
@@ -409,8 +379,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             ColumnSpacing = 8,
             Margin = new Thickness(0, 8, 0, 0)
         };
-        AddInlineValueEditor(topRow, "displaynameid", 0, 1, alwaysShowForCustom: true, width: 240);
-        AddInlineValueEditor(topRow, "icon", 2, 3, alwaysShowForCustom: true, width: 240);
+        AddInlineValueEditor(topRow, "displaynameid", 0, 1, alwaysShowForCustom: true);
+        AddInlineValueEditor(topRow, "icon", 2, 3, alwaysShowForCustom: true);
+        WrapCommandGrid(topRow, [0, 1], [2, 3]);
         if (topRow.Children.Count > 0)
             panel.Children.Add(topRow);
 
@@ -551,7 +522,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         {
             "associatedtech" or "forbidtech" => _context.TechNames,
             "trainableunitreq" or "protounit" => _context.ProtoUnitNames,
-            "prereqcommand" => _context.CommandNames,
+            "prereqcommand" => CurrentCommandNames,
             "associatedpower" => _context.PowerNames,
             _ => null
         };
@@ -730,27 +701,21 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("115,240,Auto,*"), ColumnSpacing = 8, Margin = new Thickness(0, 2) };
         row.Children.Add(new TextBlock { Text = Labels.GetValueOrDefault(tag, tag), VerticalAlignment = VerticalAlignment.Center });
         var editor = CreateValueEditor(tag);
-        if (!tag.Equals("rollovertextid", StringComparison.OrdinalIgnoreCase))
-        {
-            editor.Width = 240;
-            editor.MaxWidth = 240;
-        }
         _valueEditors[tag] = editor;
         Grid.SetColumn(editor, 1);
         row.Children.Add(editor);
-        var remove = new Button
-        {
-            Content = "×",
-            Width = 28,
-            Height = 28,
-            Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-            Padding = new Thickness(0),
-            Margin = new Thickness(2, 0, 0, 0)
-        };
+        var remove = EditorRemoveButtons.Field();
         remove.Click += (_, _) => removeAction(tag, row);
         Grid.SetColumn(remove, 2);
         row.Children.Add(remove);
+        if (editor is TextBox rollover && EditorRolloverField.IsLong(rollover))
+        {
+            row.Children.Clear();
+            var bounded = EditorRolloverField.CreateRow(Labels.GetValueOrDefault(tag, tag), rollover, remove, 115);
+            row.ColumnDefinitions = new ColumnDefinitions("*");
+            Grid.SetColumn(bounded, 0); row.Children.Add(bounded);
+        }
+        else WrapCommandGrid(row, [0, 1, 2]);
         return row;
     }
 
@@ -803,10 +768,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             return;
         }
 
-        var row = new StackPanel
+        var row = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
             Margin = new Thickness(0, 2)
         };
         panel.Children.Add(row);
@@ -844,22 +808,11 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 host.Children.Add(label);
 
                 var editor = CreateValueEditor(tag);
-                editor.Width = 240;
-                editor.MaxWidth = 240;
                 _valueEditors[tag] = editor;
                 Grid.SetColumn(editor, 1);
                 host.Children.Add(editor);
 
-                var remove = new Button
-                {
-                    Content = "×",
-                    Width = 28,
-                    Height = 28,
-                    Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(2, 0, 0, 0)
-                };
+                var remove = EditorRemoveButtons.Field();
                 remove.Click += (_, _) =>
                 {
                     _valueEditors.Remove(tag);
@@ -870,6 +823,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 };
                 Grid.SetColumn(remove, 2);
                 host.Children.Add(remove);
+                WrapCommandGrid(host, [0, 1, 2]);
             }
 
             add.Click += (_, _) =>
@@ -890,83 +844,47 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     {
         var firstVisible = !_readOnly || HasValue(firstTag);
         var secondVisible = (!_readOnly && !secondOptional) || HasValue(secondTag);
-        if (!firstVisible && !secondVisible)
-            return;
-
-        var row = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("115,240,Auto,240,Auto"),
-            ColumnSpacing = 8,
-            Margin = new Thickness(0, 2)
-        };
-        if (firstVisible)
-            AddInlineValueEditor(row, firstTag, 0, 1, alwaysShowForCustom: true, width: 240);
+        if (!firstVisible && !secondVisible) return;
+        var row = new WrapPanel { Margin = new Thickness(0, 2) };
+        if (firstVisible) row.Children.Add(CreateCommandFieldGroup(firstTag, leading: true));
         panel.Children.Add(row);
-
         if (_readOnly || !secondOptional)
         {
-            if (secondVisible)
-                AddInlineValueEditor(row, secondTag, 2, 3, alwaysShowForCustom: !secondOptional, width: 240);
+            if (secondVisible) row.Children.Add(CreateCommandFieldGroup(secondTag));
             return;
         }
 
+        // The optional host owns its children. Wrapping never changes the scope
+        // removed by this callback or makes it depend on Grid column ancestry.
+        var host = new StackPanel();
+        row.Children.Add(host);
         var add = new Button
         {
             Content = secondTag.Equals("associatedpower", StringComparison.OrdinalIgnoreCase)
-                ? "Associated Power"
-                : $"Add {Labels.GetValueOrDefault(secondTag, secondTag)}",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(8, 4),
-            Classes = { "add-component" },
-            VerticalAlignment = VerticalAlignment.Center
+                ? "Associated Power" : $"Add {Labels.GetValueOrDefault(secondTag, secondTag)}",
+            Classes = { "add-component" }, HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(8, 4)
         };
-        Grid.SetColumn(add, 2);
-        Grid.SetColumnSpan(add, 3);
-        row.Children.Add(add);
-
         void RemoveSecondField()
         {
             _valueEditors.Remove(secondTag);
             _definition.Values.Remove(secondTag);
-            foreach (var child in row.Children.Where(child => Grid.GetColumn(child) >= 2).ToList())
-                row.Children.Remove(child);
-            row.Children.Add(add);
+            host.Children.Clear(); host.Children.Add(add);
             RefreshPreview();
         }
-
         void AddSecondField()
         {
-            if (_valueEditors.ContainsKey(secondTag))
-                return;
-
-            row.Children.Remove(add);
-            AddInlineValueEditor(row, secondTag, 2, 3, alwaysShowForCustom: true, width: 240);
-            var remove = new Button
-            {
-                Content = "×",
-                Width = 28,
-                Height = 28,
-                Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-                Padding = new Thickness(0),
-                Margin = new Thickness(2, 0, 0, 0)
-            };
+            if (_valueEditors.ContainsKey(secondTag)) return;
+            var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) => RemoveSecondField();
-            Grid.SetColumn(remove, 4);
-            row.Children.Add(remove);
+            host.Children.Clear(); host.Children.Add(CreateCommandFieldGroup(secondTag, cross: remove));
         }
-
-        add.Click += (_, _) =>
-        {
-            AddSecondField();
-            RefreshPreview();
-        };
-
-        if (HasValue(secondTag))
-            AddSecondField();
+        add.Click += (_, _) => { AddSecondField(); RefreshPreview(); };
+        if (HasValue(secondTag)) AddSecondField();
+        else host.Children.Add(add);
     }
 
-    private void AddInlineValueEditor(Grid row, string tag, int labelColumn, int editorColumn, bool alwaysShowForCustom, double width = 240)
+    private void AddInlineValueEditor(Grid row, string tag, int labelColumn, int editorColumn, bool alwaysShowForCustom)
     {
         if (_readOnly && !HasValue(tag))
             return;
@@ -977,11 +895,6 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         Grid.SetColumn(label, labelColumn);
         row.Children.Add(label);
         var editor = CreateValueEditor(tag);
-        if (editor is TextBox or AutoCompleteBox or ComboBox or AssetPathEditor)
-        {
-            editor.Width = Math.Min(EditorTextFieldStyle.StandardWidth, width);
-            editor.MaxWidth = Math.Min(EditorTextFieldStyle.StandardWidth, width);
-        }
         _valueEditors[tag] = editor;
         Grid.SetColumn(editor, editorColumn);
         row.Children.Add(editor);
@@ -994,7 +907,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     {
         "associatedtech" or "forbidtech" => _context.TechNames,
         "trainableunitreq" or "protounit" or "costprotounit" => _context.ProtoUnitNames,
-        "prereqcommand" => _context.CommandNames,
+        "prereqcommand" => CurrentCommandNames,
         "associatedpower" => _context.PowerNames,
         "actionforactiveicon" => _context.ActionNames,
         "age" => new[] { "ArchaicAge", "ClassicalAge", "HeroicAge", "MythicAge", "WonderAge" },
@@ -1006,14 +919,16 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("115,240,*"), ColumnSpacing = 8, Margin = new Thickness(0,2) };
         row.Children.Add(new TextBlock { Text = Labels.GetValueOrDefault(tag, tag), VerticalAlignment = VerticalAlignment.Center });
         var editor = CreateValueEditor(tag);
-        if (!tag.Equals("rollovertextid", StringComparison.OrdinalIgnoreCase))
-        {
-            editor.Width = 240;
-            editor.MaxWidth = 240;
-        }
         _valueEditors[tag] = editor;
         Grid.SetColumn(editor, 1);
         row.Children.Add(editor);
+        if (editor is TextBox rollover && EditorRolloverField.IsLong(rollover))
+        {
+            row.Children.Clear();
+            var bounded = EditorRolloverField.CreateRow(Labels.GetValueOrDefault(tag, tag), rollover, labelWidth: 115);
+            row.ColumnDefinitions = new ColumnDefinitions("*"); row.Children.Add(bounded);
+        }
+        else WrapCommandGrid(row, [0, 1]);
         if (insertBefore != null && panel.Children.IndexOf(insertBefore) is var index && index >= 0)
             panel.Children.Insert(index, row);
         else
@@ -1085,14 +1000,6 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             {
                 var tb = new TextBox { Text = value, IsEnabled = !_readOnly };
                 EditorTextFieldStyle.ConfigureTextBox(tb);
-                if (tag.Equals("rollovertextid", StringComparison.OrdinalIgnoreCase))
-                {
-                    tb.Width = 580;
-                    tb.MaxWidth = 580;
-                    tb.MinHeight = 54;
-                    tb.TextWrapping = TextWrapping.Wrap;
-                    tb.AcceptsReturn = true;
-                }
                 ApplyAbilityEditorFieldAppearance(tb);
                 ApplyReadOnlyAppearance(tb);
                 editor = tb;
@@ -1120,7 +1027,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 RefreshPreview();
             };
         }
-        return editor;
+        return ConfigureCommandField(editor, tag);
     }
 
     private AutoCompleteBox CreateValidatedAutoComplete(string value, IEnumerable<string> source)
@@ -1131,7 +1038,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = !_readOnly
         };
-        EditorTextFieldStyle.ConfigureSelector(acb);
+        ProtoUnitCommandFieldFactory.ConfigureField(acb, EditorFieldWidthRole.Reference, () => _refreshingPreview);
         ApplyAbilityEditorFieldAppearance(acb);
         ApplyReadOnlyAppearance(acb);
         EditorAutoCompleteService.ConfigureStrict(
@@ -1169,9 +1076,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 var value = _repeatables[tag][rowIndex];
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("115,240,Auto"), ColumnSpacing = 8 };
                 row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-                var acb = CreateValidatedAutoComplete(value, _context.CommandNames);
-                acb.Width = 240;
-                acb.MaxWidth = 240;
+                var acb = CreateValidatedAutoComplete(value, CurrentCommandNames);
                 acb.IsEnabled = !_readOnly;
                 ApplyReadOnlyAppearance(acb);
                 acb.TextChanged += (_,_) =>
@@ -1182,8 +1087,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 Grid.SetColumn(acb,1); row.Children.Add(acb);
                 if (!_readOnly)
                 {
-                    var remove = new Button { Content = "×", Width = 28, Height = 28, Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"), Padding = new Thickness(0), Margin = new Thickness(2, 0, 0, 0) };
+                    var remove = EditorRemoveButtons.Row();
                     remove.Click += (_,_) =>
                     {
                         if (rowIndex < _repeatables[tag].Count) _repeatables[tag].RemoveAt(rowIndex);
@@ -1192,6 +1096,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                     };
                     Grid.SetColumn(remove,2); row.Children.Add(remove);
                 }
+                WrapCommandGrid(row, [0, 1, 2]);
                 holder.Children.Add(row);
             }
             if (!_readOnly)
@@ -1238,6 +1143,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     private string GetEditorValue(string tag) => _valueEditors.TryGetValue(tag, out var control) ? control switch
     {
         AssetPathEditor pathEditor => pathEditor.FullValue.Trim(),
+        TextBox tb when StringBackedTags.Contains(tag) && !_rawStringReferenceTags.Contains(tag) => tb.Text ?? "",
         TextBox tb => tb.Text?.Trim() ?? "",
         AutoCompleteBox acb => acb.Text?.Trim() ?? "",
         ComboBox cb => cb.SelectedItem?.ToString()?.Trim() ?? "",
@@ -1250,6 +1156,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         // raise TextChanged/SelectionChanged while an AutoCompleteBox is still committing its
         // selection; mutating shared state from those events caused the command editor crashes.
         var captured = ProtoUnitCommandDefinition.FromElement(_definition.ToElement());
+        captured.PreserveSourceStructure = _definition.PreserveSourceStructure;
         captured.Name = _nameBox.Text?.Trim() ?? "";
 
         foreach (var tag in ProtoUnitCommandDefinition.ValueFieldTags)
@@ -1270,7 +1177,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         };
         foreach (var tag in new[] { "command", "secondarycommand", "associatedtech", "associatedpower", "forbidtech", "protounit", "amount", "age", "trainableunitreq", "prereqcommand" })
         {
-            if (!allowedModeFields.Contains(tag))
+            if (!allowedModeFields.Contains(tag) && (!_definition.PreserveSourceStructure || _commandMode != DetectCommandMode(_definition)))
                 captured.Values.Remove(tag);
         }
 
@@ -1280,6 +1187,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         captured.Flags.Clear();
         foreach (var flag in _flags)
             captured.Flags.Add(flag);
+
+        if (_definition.PreserveSourceStructure && _commandMode == DetectCommandMode(_definition)) return captured;
 
         captured.Flags.Remove("spawncommand");
         if (_commandMode == CommandEditorMode.Spawn)
@@ -1303,8 +1212,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
 
     private void RefreshPreview()
     {
-        if (_refreshingPreview)
+        if (_refreshingPreview || _xmlClosed || _xmlSession?.IsEditing == true)
             return;
+        _saveFeedback.ClearSuccessOnEdit();
         _refreshingPreview = true;
         try
         {
@@ -1312,6 +1222,8 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             var preview = captured.ToElement();
             foreach (var tag in StringBackedTags)
             {
+                if (_definition.PreserveSourceStructure && (GetEditorValue(tag) == _savedStringTexts.GetValueOrDefault(tag, "") ||
+                    _rawStringReferenceTags.Contains(tag) && GetEditorValue(tag) == captured.Values.GetValueOrDefault(tag, ""))) continue;
                 preview.Elements().Where(element => element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).Remove();
                 var text = GetEditorValue(tag);
                 if (string.IsNullOrWhiteSpace(text))
@@ -1322,7 +1234,11 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                     : BuildPreviewStringId(captured.Name, tag);
                 preview.Add(new XElement(tag, id));
             }
-            _xmlPreview.Text = XmlSyntaxEditorService.PreparePreviewText(FormatPreviewXml(preview));
+            var previewText = _definition.PreserveSourceStructure ? CommandXmlPreview(preview)
+                : XmlSyntaxEditorService.PreparePreviewText(FormatPreviewXml(preview));
+            _xmlSession ??= new XmlEditSession(previewText, !_readOnly);
+            _xmlSession.RefreshFromModel(previewText);
+            _xmlController?.Bind(_xmlSession, !_readOnly);
         }
         catch { }
         finally
@@ -1353,7 +1269,9 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
     }
 
     private IReadOnlyDictionary<string, string> CaptureStringTexts()
-        => StringBackedTags.ToDictionary(tag => tag, GetEditorValue, StringComparer.OrdinalIgnoreCase);
+        => StringBackedTags.Where(tag => !_rawStringReferenceTags.Contains(tag) ||
+                GetEditorValue(tag) != _definition.Values.GetValueOrDefault(tag, ""))
+            .ToDictionary(tag => tag, GetEditorValue, StringComparer.OrdinalIgnoreCase);
 
     private static void SetValidationBorder(Control? control, bool invalid)
     {
@@ -1423,25 +1341,61 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         _sharedFlagsEditor?.Refresh();
     }
 
+    private async Task ReportCommandFieldErrorAsync(string title, string message, Control? target)
+    {
+        var failure = target is { IsEffectivelyEnabled: true }
+            ? EditorValidationNavigation.Mark(this, target) : null;
+        await new Prompt(PromptType.Error, title, message).ShowDialog(this);
+        if (failure != null) await failure.RevealAsync();
+    }
+
     private async Task SaveAsync()
     {
-        var captured = Capture();
+        if (_readOnly || _xmlSaving || _xmlClosed) return;
+        _xmlSaving = true;
+        try { await SaveCoreAsync(); }
+        catch (Exception exception)
+        {
+            if (_xmlClosed) return;
+            _saveFeedback.Report(EditorSaveOutcome.Failed);
+            await new Prompt(PromptType.Error, "Unable to save command", exception.Message).ShowDialog(this);
+        }
+        finally { _xmlSaving = false; }
+    }
+
+    private async Task SaveCoreAsync()
+    {
+        using var feedback = _saveFeedback.BeginSave();
+        var raw = _xmlSession?.CaptureForSave();
+        ProtoUnitCommandDefinition captured;
+        try { captured = raw == null ? Capture() : ParseCommandXml(raw.Text); }
+        catch (Exception exception)
+        {
+            await new Prompt(PromptType.Error, "Invalid Command XML", exception.Message).ShowDialog(this);
+            return;
+        }
+        if (raw != null && !_xmlSession!.IsDirty && !HasStructuredChanges())
+        {
+            _xmlSession.AcceptSaved(raw, raw.Text);
+            feedback.Complete();
+            return;
+        }
+        var candidateMode = raw == null ? _commandMode : DetectCommandMode(captured);
+        var isTransformMode = candidateMode is CommandEditorMode.TransformUnique or CommandEditorMode.TransformMultiple;
         if (string.IsNullOrWhiteSpace(captured.Name))
         {
-            await new Prompt(PromptType.Error, "Missing name", "A ProtoUnit command must have an internal name.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Missing name", "A ProtoUnit command must have an internal name.", raw == null ? _nameBox : null);
             return;
         }
         if (!InternalNamePolicy.IsValidOrUnchangedLegacy(captured.Name, _savedName))
         {
-            await new Prompt(
-                PromptType.Error,
-                "Invalid command name",
-                "Command names can contain only letters, digits, '_' and '-'.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Invalid command name",
+                "Command names can contain only letters, digits, '_' and '-'.", raw == null ? _nameBox : null);
             return;
         }
         if (_identityLockedByUsage)
         {
-            if (_commandMode != _openedCommandMode)
+            if (candidateMode != _openedCommandMode)
             {
                 await new Prompt(
                     PromptType.Error,
@@ -1450,7 +1404,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 return;
             }
 
-            if (IsTransformMode)
+            if (isTransformMode)
             {
                 var currentFrom = CaptureTransformDefinition(captured.Name).From?.Trim() ?? string.Empty;
                 if (!currentFrom.Equals(_openedTransformFrom, StringComparison.OrdinalIgnoreCase))
@@ -1464,7 +1418,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             }
         }
         var associatedTech = captured.Values.GetValueOrDefault("associatedtech", "");
-        if (IsTransformMode)
+        if (isTransformMode)
         {
             var transformForValidation = CaptureTransformDefinition(captured.Name);
             if (_transformDefinition != null)
@@ -1473,18 +1427,19 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
                 _transformDefinition.To = transformForValidation.To;
                 _transformDefinition.Tech = transformForValidation.Tech;
             }
-            var validation = _sharedTransformEditor?.ValidateRequired()
+            var validation = (raw == null ? _sharedTransformEditor?.ValidateRequired() : null)
                              ?? ProtoUnitCommandTransformRules.ValidateRequired(transformForValidation, captured.Values, _context.ProtoUnitNames, _context.TechNames);
             if (!validation.IsValid)
             {
-                await new Prompt(
-                    PromptType.Error,
-                    "Incomplete Transform",
-                    "Transform, To, Prereq Tech and Associated Tech are required and must use existing entries.").ShowDialog(this);
+                var target = !validation.FromValid ? _sharedTransformEditor?.FromEditor :
+                    !validation.ToValid ? _sharedTransformEditor?.ToEditor :
+                    !validation.PrereqTechValid ? _sharedTransformEditor?.PrereqTechEditor : _sharedTransformEditor?.AssociatedTechEditor;
+                await ReportCommandFieldErrorAsync("Incomplete Transform",
+                    "Transform, To, Prereq Tech and Associated Tech are required and must use existing entries.", raw == null ? target : null);
                 return;
             }
         }
-        else if (_commandMode == CommandEditorMode.Spawn)
+        else if (candidateMode == CommandEditorMode.Spawn)
         {
             var protoUnit = captured.Values.GetValueOrDefault("protounit", "");
             var amount = captured.Values.GetValueOrDefault("amount", "");
@@ -1494,19 +1449,15 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
             var associatedTechValid = !string.IsNullOrWhiteSpace(associatedTech) &&
                                       _context.TechNames.Contains(associatedTech, StringComparer.OrdinalIgnoreCase);
 
-            if (_valueEditors.TryGetValue("protounit", out var protoUnitControl))
-                SetValidationBorder(protoUnitControl, !protoUnitValid);
-            if (_valueEditors.TryGetValue("amount", out var amountControl))
-                SetValidationBorder(amountControl, !amountValid);
-            if (_valueEditors.TryGetValue("associatedtech", out var associatedTechControl))
-                SetValidationBorder(associatedTechControl, !associatedTechValid);
+            var protoUnitControl = _valueEditors.GetValueOrDefault("protounit");
+            var amountControl = _valueEditors.GetValueOrDefault("amount");
+            var associatedTechControl = _valueEditors.GetValueOrDefault("associatedtech");
 
             if (!protoUnitValid || !amountValid || !associatedTechValid)
             {
-                await new Prompt(
-                    PromptType.Error,
-                    "Incomplete Spawn",
-                    "Proto Unit, Amount and Associated Tech are required and must use valid values.").ShowDialog(this);
+                var target = !protoUnitValid ? protoUnitControl : !amountValid ? amountControl : associatedTechControl;
+                await ReportCommandFieldErrorAsync("Incomplete Spawn",
+                    "Proto Unit, Amount and Associated Tech are required and must use valid values.", raw == null ? target : null);
                 return;
             }
         }
@@ -1514,8 +1465,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         {
             if (!string.IsNullOrWhiteSpace(associatedTech) && !_context.TechNames.Contains(associatedTech, StringComparer.OrdinalIgnoreCase))
             {
-                MarkAssociatedTechInvalid();
-                await new Prompt(PromptType.Error, "Invalid Associated Tech", $"'{associatedTech}' is not an existing technology.").ShowDialog(this);
+                await ReportCommandFieldErrorAsync("Invalid Associated Tech", $"'{associatedTech}' is not an existing technology.", raw == null ? _valueEditors.GetValueOrDefault("associatedtech") : null);
                 return;
             }
             ClearAssociatedTechValidation();
@@ -1523,64 +1473,80 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         var forbidTech = captured.Values.GetValueOrDefault("forbidtech", "");
         if (!string.IsNullOrWhiteSpace(forbidTech) && !_context.TechNames.Contains(forbidTech, StringComparer.OrdinalIgnoreCase))
         {
-            await new Prompt(PromptType.Error, "Invalid Forbid Tech", $"'{forbidTech}' is not an existing technology.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Invalid Forbid Tech", $"'{forbidTech}' is not an existing technology.", raw == null ? _valueEditors.GetValueOrDefault("forbidtech") : null);
             return;
         }
         var trainableUnit = captured.Values.GetValueOrDefault("trainableunitreq", "");
         if (!string.IsNullOrWhiteSpace(trainableUnit) && !_context.ProtoUnitNames.Contains(trainableUnit, StringComparer.OrdinalIgnoreCase))
         {
-            await new Prompt(PromptType.Error, "Invalid Trainable Unit", $"'{trainableUnit}' is not an existing ProtoUnit.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Invalid Trainable Unit", $"'{trainableUnit}' is not an existing ProtoUnit.", raw == null ? _valueEditors.GetValueOrDefault("trainableunitreq") : null);
             return;
         }
         var prereqCommand = captured.Values.GetValueOrDefault("prereqcommand", "");
-        if (!string.IsNullOrWhiteSpace(prereqCommand) && !_context.CommandNames.Contains(prereqCommand, StringComparer.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(prereqCommand) && !CurrentCommandNames.Contains(prereqCommand, StringComparer.OrdinalIgnoreCase))
         {
-            await new Prompt(PromptType.Error, "Invalid Prereq Command", $"'{prereqCommand}' is not an existing ProtoUnit command.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Invalid Prereq Command", $"'{prereqCommand}' is not an existing ProtoUnit command.", raw == null ? _valueEditors.GetValueOrDefault("prereqcommand") : null);
             return;
         }
         var associatedPower = captured.Values.GetValueOrDefault("associatedpower", "");
         if (!string.IsNullOrWhiteSpace(associatedPower) && !_context.PowerNames.Contains(associatedPower, StringComparer.OrdinalIgnoreCase))
         {
-            await new Prompt(PromptType.Error, "Invalid Associated Power", $"'{associatedPower}' is not an existing power.").ShowDialog(this);
+            await ReportCommandFieldErrorAsync("Invalid Associated Power", $"'{associatedPower}' is not an existing power.", raw == null ? _valueEditors.GetValueOrDefault("associatedpower") : null);
             return;
         }
 
         ProtoUnitTransformDefinition? capturedTransform = null;
-        if (IsTransformMode)
+        if (isTransformMode)
         {
             capturedTransform = CaptureTransformDefinition(captured.Name);
             if (!string.IsNullOrWhiteSpace(capturedTransform.RevertOthersTo) && !_context.ProtoUnitNames.Contains(capturedTransform.RevertOthersTo, StringComparer.OrdinalIgnoreCase))
             {
-                await new Prompt(PromptType.Error, "Invalid Revert others to", $"'{capturedTransform.RevertOthersTo}' is not a valid ProtoUnit name.").ShowDialog(this);
+                await ReportCommandFieldErrorAsync("Invalid Revert others to", $"'{capturedTransform.RevertOthersTo}' is not a valid ProtoUnit name.", raw == null ? _sharedTransformEditor?.RevertOthersEditor : null);
                 return;
             }
         }
 
         if (captured.Flags.Contains("commandpassesunitid") && !captured.Values.GetValueOrDefault("command", "").Contains("%d", StringComparison.Ordinal))
         {
-            var prompt = new Prompt(PromptType.Confirm, "CommandPassesUnitID", "CommandPassesUnitID is enabled but Command does not contain %d. Save anyway?", confirmButtonText: "Save");
+            var prompt = new Prompt(PromptType.Confirm, "CommandPassesUnitID", "CommandPassesUnitID is enabled but Command does not contain %d. Save anyway?", confirmButtonText: "Save", actionRole: PromptActionRole.Positive);
             await prompt.ShowDialog(this);
             if (!prompt.Confirmed) return;
         }
-        if (await _save(captured, CaptureStringTexts(), capturedTransform))
+        var submittedStrings = raw == null ? CaptureStringTexts() : CaptureRawCommandStringTexts(captured);
+        var submittedIds = StringBackedTags.ToDictionary(tag => tag, tag => captured.Values.GetValueOrDefault(tag, ""));
+        if (await _save(captured, submittedStrings, capturedTransform))
         {
+            if (_xmlClosed) return;
+            if (!_savedName.Equals(captured.Name, StringComparison.OrdinalIgnoreCase)) _commandNameMigrations[_savedName] = captured.Name;
+            RememberCommandStringMigrations(submittedIds, captured);
             _definition = captured;
-            foreach (var pair in CaptureStringTexts())
+            foreach (var pair in submittedStrings)
                 _stringTexts[pair.Key] = pair.Value;
             _savedName = captured.Name;
             _savedElement = captured.ToElement();
             _transformDefinition = capturedTransform?.Clone();
             _savedTransformElement = capturedTransform?.ToElement();
+            if (raw != null)
+            {
+                AdoptCommandXml(captured, submittedStrings);
+                _xmlSession!.AcceptSaved(raw, CommandXmlPreview(captured.ToElement()));
+            }
             _savedStringTexts = CaptureStringTexts().ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
             RefreshPreview();
             Title = $"Edit ProtoUnit Command - {captured.Name}";
-            _statusText.Text = "Command saved.";
+            _saveFeedback.Report(EditorSaveOutcome.Saved);
+            feedback.Complete(HasUnsavedChanges());
         }
     }
     private bool HasUnsavedChanges()
     {
         if (_readOnly)
             return false;
+        return _xmlSession?.IsDirty == true || HasStructuredChanges();
+    }
+
+    private bool HasStructuredChanges()
+    {
 
         try
         {
@@ -1622,7 +1588,7 @@ internal sealed class ProtoUnitCommandEditorWindow : SimpleWindow
         _closePromptOpen = true;
         try
         {
-            var prompt = new Prompt(PromptType.Confirm, "Discard command changes?", "You have unsaved command changes. Close this window without saving them?");
+            var prompt = new Prompt(PromptType.Confirm, "Discard command changes?", "You have unsaved command changes. Close this window without saving them?", confirmButtonText: "Discard changes", actionRole: PromptActionRole.Destructive);
             await prompt.ShowDialog(this);
             if (!prompt.Confirmed)
                 return;

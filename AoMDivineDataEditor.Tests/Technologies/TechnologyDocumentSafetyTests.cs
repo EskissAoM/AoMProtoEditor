@@ -6,6 +6,37 @@ namespace AoMDivineDataEditor.Tests;
 
 public sealed class TechnologyDocumentSafetyTests
 {
+    [Theory]
+    [InlineData("<effects><effect type='RandomTech'><Tech>ExistingTech</Tech><Tech>OtherTech</Tech></effect></effects>")]
+    [InlineData("<effect type='RandomTech'><Tech>ExistingTech</Tech></effect>")]
+    [InlineData("<EFFECTS><EFFECT TYPE='randomtech'><tech>ExistingTech</tech></EFFECT></EFFECTS>")]
+    public void RandomTechReferencesAreAllowedWithoutChangingXml(string content)
+    {
+        var document = XDocument.Parse($"<techtreemods><tech name='CustomTech'>{content}</tech></techtreemods>", LoadOptions.PreserveWhitespace);
+        var before = document.ToString(SaveOptions.DisableFormatting);
+
+        var result = TechnologyDocumentSafety.ValidateModDocument(document);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Equal(before, document.ToString(SaveOptions.DisableFormatting));
+    }
+
+    [Theory]
+    [InlineData("<effects><effect type='RandomTech'><Tech name='Nested'>ExistingTech</Tech></effect></effects>")]
+    [InlineData("<effects><effect type='RandomTech'><Tech><effects /></Tech></effect></effects>")]
+    [InlineData("<effects><effect type='Data'><Tech>ExistingTech</Tech></effect></effects>")]
+    [InlineData("<effects><effect type='RandomTech'><group><Tech>ExistingTech</Tech></group></effect></effects>")]
+    [InlineData("<group><effect type='RandomTech'><Tech>ExistingTech</Tech></effect></group>")]
+    public void RandomTechExceptionDoesNotAllowMisplacedDefinitionsOrReferences(string content)
+    {
+        var document = XDocument.Parse($"<techtreemods><tech name='CustomTech'>{content}</tech></techtreemods>");
+
+        var result = TechnologyDocumentSafety.ValidateModDocument(document);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("outside the root technology list", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ValidDocumentAllowsUnknownImportedXmlWithoutChangingIt()
     {

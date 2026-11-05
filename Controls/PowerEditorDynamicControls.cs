@@ -29,21 +29,30 @@ public static class PowerEditorDynamicControls
         => new() { Content = label, Tag = tag, Classes = { "add-component" } };
 
     public static Button CreateRemoveButton(object? tag = null)
-        => new() { Tag = tag, Classes = { "remove-button" } };
+    {
+        var button = EditorRemoveButtons.Field();
+        button.Tag = tag;
+        return button;
+    }
 
     public static StackPanel CreateLabeledSegment(string label, Control control)
     {
-        var segment = new StackPanel { Orientation = Orientation.Horizontal };
+        var segment = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap)
+        };
         if (!string.IsNullOrWhiteSpace(label))
         {
             segment.Children.Add(new TextBlock
             {
                 Text = label,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 6, 4)
+                Margin = new Thickness(0)
             });
         }
         segment.Children.Add(control);
+        EditorFormLayout.UseInlineRowLayout(segment);
         return segment;
     }
 
@@ -56,22 +65,22 @@ public static class PowerEditorDynamicControls
         Action<string> commit,
         string tag,
         ScrollViewer ownerScroll,
-        double width = 200)
+        EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
     {
-        var options = values.Where(value => !string.IsNullOrWhiteSpace(value))
-            .Append(current).Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var box = new AutoCompleteBox
         {
-            Width = width,
-            MaxWidth = width,
+            MinHeight = EditorFormLayout.FieldHeight,
+            Height = EditorFormLayout.FieldHeight,
+            MaxHeight = EditorFormLayout.FieldHeight,
             FilterMode = AutoCompleteFilterMode.Contains,
             MinimumPrefixLength = 0,
             IsEnabled = isEnabled,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = tag
         };
-        EditorAutoCompleteService.ConfigureStrict(box, options, current, isBusy,
+        EditorFormLayout.ApplyWidth(box, role);
+        EditorFieldInteraction.Configure(box, role, isBusy);
+        EditorAutoCompleteService.ConfigureStrict(box, values, current, isBusy,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
             {
@@ -79,6 +88,7 @@ public static class PowerEditorDynamicControls
                 commit(value);
             });
         box.Text = current;
+        EditorAutoCompleteService.KeepDropDownAnchored(box);
         EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, ownerScroll);
         return box;
     }

@@ -9,11 +9,12 @@
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="4*"/>
       <ColumnDefinition Width="5"/>
-      <ColumnDefinition Width="1*" MinWidth="250"/>
+      <ColumnDefinition Width="1*" MinWidth="28"/>
     </Grid.ColumnDefinitions>
 
     <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
+        <Grid x:Name="_majorGodStructuredForm" Grid.RowSpan="2" RowDefinitions="Auto,*">
         <Grid x:Name="_majorGodIdentityRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Major God :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
           <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
@@ -21,6 +22,10 @@
                    TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
         </Grid>
 
+        <TextBlock Grid.Row="1" x:Name="_emptySelectionMessage"
+                   Text="Select a major god from the list."
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   IsVisible="False"/>
         <TabControl Grid.Row="1" x:Name="_majorGodTabs" SelectedIndex="0">
           <TabItem x:Name="_propertiesTab" Classes="editorTab" Header="Properties">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -44,7 +49,7 @@
                 <Grid ColumnDefinitions="150,*">
                   <TextBlock Text="Rollover" VerticalAlignment="Top" Margin="0,10,6,4"/>
                   <TextBox Grid.Column="1" x:Name="_rolloverNameBox" Margin="0,4,8,4"
-                           MinHeight="96" AcceptsReturn="True" TextWrapping="Wrap"
+                           AcceptsReturn="True" TextWrapping="Wrap"
                            ScrollViewer.VerticalScrollBarVisibility="Auto"
                            TextChanged="ResolvedStringBox_TextChanged" Tag="rollovernameid"/>
                 </Grid>
@@ -128,7 +133,7 @@
                 <StackPanel x:Name="_sharedDataPropertiesPanel" Spacing="10" IsVisible="False">
                   <TextBlock Text="──── Default data ────" FontWeight="Bold" FontSize="14"
                              Foreground="#C59A52" Margin="0,15,0,5"/>
-                  <StackPanel Orientation="Horizontal" Spacing="4">
+                  <WrapPanel Orientation="Horizontal">
                     <TextBlock Text="Population limit" VerticalAlignment="Center" Margin="4,0,0,0"/>
                     <TextBox x:Name="_defaultPopLimitBox" Width="80" MaxWidth="80" IsEnabled="False"/>
                     <TextBlock Text="Repair Factor" VerticalAlignment="Center" Margin="12,0,0,0"/>
@@ -137,26 +142,26 @@
                       <TextBlock Text="Contained Regen Rate" VerticalAlignment="Center" Margin="12,0,0,0"/>
                       <TextBox x:Name="_defaultContainedRegenRateBox" Width="80" MaxWidth="80" IsEnabled="False"/>
                     </StackPanel>
-                  </StackPanel>
+                  </WrapPanel>
 
                   <TextBlock Text="──── Default Techs ────" FontWeight="Bold" FontSize="14"
                              Foreground="#C59A52" Margin="0,15,0,5"/>
-                  <StackPanel Orientation="Horizontal" Spacing="4">
+                  <WrapPanel Orientation="Horizontal">
                     <TextBlock Text="Lightning" VerticalAlignment="Center" Margin="4,0,0,0"/>
                     <TextBox x:Name="_sharedLightningTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
                     <TextBlock Text="Death Match" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     <TextBox x:Name="_sharedDeathMatchTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
-                  </StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="4">
+                  </WrapPanel>
+                  <WrapPanel Orientation="Horizontal">
                     <TextBlock Text="Story Mode" VerticalAlignment="Center" Margin="4,0,0,0"/>
                     <TextBox x:Name="_sharedStoryModeTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
                     <TextBlock Text="Ludicrous Mode" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     <TextBox x:Name="_sharedLudicrousModeTechBox" Width="180" MaxWidth="180" IsEnabled="False"/>
-                  </StackPanel>
+                  </WrapPanel>
 
                   <TextBlock Text="──── Death Match Power Grant Delay ────" FontWeight="Bold" FontSize="14"
                              Foreground="#C59A52" Margin="0,15,0,5"/>
-                  <StackPanel Orientation="Horizontal" Spacing="4">
+                  <WrapPanel Orientation="Horizontal">
                     <TextBlock Text="Archaic" VerticalAlignment="Center" Margin="4,0,0,0"/>
                     <TextBox x:Name="_sharedArchaicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
                     <TextBlock Text="Classical" VerticalAlignment="Center" Margin="12,0,0,0"/>
@@ -165,7 +170,7 @@
                     <TextBox x:Name="_sharedHeroicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
                     <TextBlock Text="Mythic" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     <TextBox x:Name="_sharedMythicDelayBox" Width="70" MaxWidth="70" IsEnabled="False"/>
-                  </StackPanel>
+                  </WrapPanel>
                 </StackPanel>
               </StackPanel>
             </ScrollViewer>
@@ -218,6 +223,7 @@
             </ScrollViewer>
           </TabItem>
         </TabControl>
+        </Grid>
         <TextBlock Grid.Row="2" x:Name="_statusMessage"
                    Foreground="{DynamicResource MainGoldBrush}" FontWeight="SemiBold"
                    Margin="0,6,0,0" HorizontalAlignment="Center"/>
@@ -232,8 +238,8 @@
         <Grid x:Name="_xmlPreviewContent" RowDefinitions="Auto,*" Margin="12">
           <Grid ColumnDefinitions="*,Auto" Margin="28,0,0,8">
             <TextBlock Classes="XmlHeader" Text="XML Preview" VerticalAlignment="Center"/>
-            <Button Grid.Column="1" x:Name="_applyRawXmlButton" Classes="positive" Content="Apply"
-                    Padding="12,4" IsVisible="False" Click="ApplyRawXml_Click"/>
+            <Button Grid.Column="1" x:Name="_editXmlButton" Content="Edit XML"
+                    Padding="12,4" IsVisible="False"/>
           </Grid>
           <avaloniaEdit:TextEditor Grid.Row="1" x:Name="_rawXmlEditor"
                                    FontFamily="Consolas" FontSize="12"
@@ -241,8 +247,7 @@
                                    Foreground="{DynamicResource PrimaryTextBrush}"
                                    BorderBrush="{DynamicResource NormalBorderBrush}"
                                    HorizontalScrollBarVisibility="Auto"
-                                   VerticalScrollBarVisibility="Auto"
-                                   TextChanged="RawXmlEditor_TextChanged"/>
+                                   VerticalScrollBarVisibility="Auto"/>
         </Grid>
         <Button x:Name="_xmlPreviewToggleButton" Content="&#x25B6;"
                 Width="20" Height="24" MinWidth="20" MinHeight="24"

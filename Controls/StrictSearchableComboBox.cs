@@ -10,7 +10,8 @@ namespace AoMDivineDataEditor.Controls;
 /// </summary>
 public sealed class StrictSearchableComboBox : ComboBox
 {
-    private readonly IReadOnlyList<string> _options;
+    private IReadOnlyList<string> _options;
+    private readonly IEnumerable<string> _catalogSource;
     private bool _updating;
     private string _committedValue = "";
     private int _filterVersion;
@@ -24,6 +25,7 @@ public sealed class StrictSearchableComboBox : ComboBox
         string? initialValue = null,
         bool preserveUnknownInitialValue = false)
     {
+        _catalogSource = options;
         _options = options
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -55,6 +57,33 @@ public sealed class StrictSearchableComboBox : ComboBox
     }
 
     public IReadOnlyList<string> Options => _options;
+
+    internal void RefreshCatalogOptions(bool clearInvalidValue = false)
+    {
+        var updated = _catalogSource.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+        if (_options.SequenceEqual(updated, StringComparer.Ordinal) && !clearInvalidValue) return;
+        var text = Text;
+        var selected = SelectedItem as string;
+        _updating = true;
+        try
+        {
+            _filterVersion++;
+            _options = updated;
+            if (clearInvalidValue && FindMatch(text?.Trim() ?? "") == null)
+            {
+                text = "";
+                selected = null;
+                _committedValue = "";
+            }
+            if (clearInvalidValue && FindMatch(_committedValue) == null)
+                _committedValue = FindMatch(text?.Trim() ?? "") ?? "";
+            ItemsSource = _options;
+            SelectedItem = selected == null ? null : FindMatch(selected);
+            Text = text;
+        }
+        finally { _updating = false; }
+    }
 
     /// <summary>
     /// Returns the canonical option matching the current text, or an empty string

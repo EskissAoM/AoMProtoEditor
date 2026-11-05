@@ -1,3 +1,18 @@
 bin/
 obj/
 publish/
+
+# Historical audit reports kept locally, outside Git commits.
+/docs/archive/2026-editor-audit/
+
+# Generated test runs, logs, temporary fixtures and isolated build outputs.
+/AoMDivineDataEditor.Tests/TestResults/
+
+# Generated audit exports (historical copies live in the local archive).
+/F10_F3_CHECKPOINT10_SOURCE_INVENTORY.csv
+/F10_F5_ACCEPTANCE_FILTERS.txt
+/OTHER_EDITORS_XML_ORDER_AUDIT_EVIDENCE.json
+/OTHER_EDITORS_XML_ORDER_COMPLETION_EVIDENCE.json
+/REFERENCE_COVERAGE_D_POWER_MAPS.csv
+/UNIT_XML_ORDER_AUDIT_EVIDENCE.json
+/UNIT_XML_ORDER_COMPLETION_EVIDENCE.json

@@ -200,7 +200,8 @@ internal sealed class PowerEditingSession
         foreach (var id in _stringRemovalOwners.Where(pair => names.Contains(pair.Value))
                      .Select(pair => pair.Key).ToList())
             CancelStringRemoval(id);
-        RawEditorDirty = false;
+        if ((SelectedName != null && names.Contains(SelectedName)) ||
+            (LoadedEntryName != null && names.Contains(LoadedEntryName))) RawEditorDirty = false;
     }
 
     public KeyValuePair<string, string> FindConflictingRename(IEnumerable<string> conflictingNames)

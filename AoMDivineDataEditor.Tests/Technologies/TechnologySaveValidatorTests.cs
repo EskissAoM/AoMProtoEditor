@@ -45,6 +45,29 @@ public sealed class TechnologySaveValidatorTests
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
     }
 
+    [Theory]
+    [InlineData("ExistingTech", true)]
+    [InlineData("MissingTech", false)]
+    public void RandomTechSaveValidationPreservesReferenceChecks(string choice, bool expectedValid)
+    {
+        var document = XDocument.Parse($"""
+            <techtreemods><tech name="CustomTech"><effects>
+              <effect type="RandomTech" select="1" status="active"><Tech>{choice}</Tech></effect>
+            </effects></tech></techtreemods>
+            """);
+        var catalogs = Catalogs with { KnownStructuredEffectTypes = ["RandomTech"] };
+        var before = document.ToString(SaveOptions.DisableFormatting);
+
+        var result = TechnologySaveValidator.Validate(document, catalogs);
+
+        Assert.Equal(expectedValid, result.IsValid);
+        Assert.DoesNotContain(result.Errors, error => error.Contains("outside the root technology list", StringComparison.Ordinal));
+        if (!expectedValid)
+            Assert.Contains(result.Errors, error => error.Contains(choice, StringComparison.Ordinal));
+        Assert.Equal(before, document.ToString(SaveOptions.DisableFormatting));
+        Assert.Equal(expectedValid, TechnologySaveValidator.Validate(XDocument.Parse(before), catalogs).IsValid);
+    }
+
     [Fact]
     public void MissingSelectorsInvalidReferencesAndInvalidNumbersAreReportedTogether()
     {

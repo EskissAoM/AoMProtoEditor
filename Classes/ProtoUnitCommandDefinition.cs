@@ -53,6 +53,7 @@ public sealed class ProtoUnitCommandDefinition
     public HashSet<string> Flags { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> ExistingFlagText { get; } = new(StringComparer.OrdinalIgnoreCase);
     public XElement SourceElement { get; private set; } = new("protounitcommand");
+    internal bool PreserveSourceStructure { get; set; }
 
     public static ProtoUnitCommandDefinition FromElement(XElement element)
     {
@@ -87,7 +88,24 @@ public sealed class ProtoUnitCommandDefinition
         return result;
     }
 
+    internal void AdoptSavedElement(XElement element)
+    {
+        var saved = FromElement(element);
+        SourceElement = saved.SourceElement;
+        Name = saved.Name;
+        Values.Clear();
+        foreach (var pair in saved.Values) Values[pair.Key] = pair.Value;
+        RepeatableValues.Clear();
+        foreach (var pair in saved.RepeatableValues) RepeatableValues[pair.Key] = pair.Value;
+        Flags.Clear(); Flags.UnionWith(saved.Flags);
+        ExistingFlagText.Clear();
+        foreach (var pair in saved.ExistingFlagText) ExistingFlagText[pair.Key] = pair.Value;
+    }
+
     public XElement ToElement()
+        => PreserveSourceStructure ? ToPreservedElement() : ToProjectedElement();
+
+    private XElement ToProjectedElement()
     {
         var result = new XElement(SourceElement);
         foreach (var child in result.Elements().Where(e => KnownChildTags.Contains(e.Name.LocalName)).ToList())
@@ -115,6 +133,31 @@ public sealed class ProtoUnitCommandDefinition
                 ? new XElement(tag, text)
                 : new XElement(tag, new XText(string.Empty));
             result.Add(node);
+        }
+        return result;
+    }
+
+    private XElement ToPreservedElement()
+    {
+        // Raw XML is authoritative. Only patch fields actually changed by the
+        // owner (for example reconciled string IDs), retaining their attributes,
+        // comments, empty elements and positions in the submitted source.
+        var projection = ToProjectedElement();
+        var baseline = FromElement(SourceElement).ToElement();
+        var result = new XElement(SourceElement);
+        foreach (var tag in KnownChildTags)
+        {
+            var desired = projection.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
+            var original = baseline.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (original.Select(child => child.Value).SequenceEqual(desired.Select(child => child.Value))) continue;
+            var existing = result.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
+            for (var i = 0; i < desired.Count; i++)
+            {
+                if (i < existing.Count) XmlTriviaPreserver.SetText(existing[i], desired[i].Value);
+                else if (existing.Count > 0) { var added = new XElement(desired[i]); existing[^1].AddAfterSelf(added); existing.Add(added); }
+                else { var added = new XElement(desired[i]); result.Add(added); existing.Add(added); }
+            }
+            foreach (var surplus in existing.Skip(desired.Count)) surplus.Remove();
         }
         return result;
     }

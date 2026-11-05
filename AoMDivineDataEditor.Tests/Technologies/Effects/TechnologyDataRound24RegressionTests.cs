@@ -44,7 +44,9 @@ public sealed class TechnologyDataRound24RegressionTests
         var code = ReadTechnologyEditor();
 
         Assert.Contains("AddResourceByKbStatDataEffectEditor", code, StringComparison.Ordinal);
-        Assert.Contains("CreateLabeledEffectSegment(\"Resource\", CreateResourceCombo(effect, \"resource\"), leftSpacing: 8));\n        AddDataRelativityAndAmountEditors(effect, row);", code.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        var editor = ProjectSource.ExtractMethod(code, "private void AddResourceByKbStatDataEffectEditor");
+        Assert.Contains("CreateLabeledEffectSegment(\"Resource\", CreateResourceCombo(effect, \"resource\"))", editor, StringComparison.Ordinal);
+        Assert.Contains("AddDataRelativityAndAmountEditors(effect, row)", editor, StringComparison.Ordinal);
         Assert.Contains("var currentUsesResource = KbStatsUsingResourceParameter.Contains(currentStat)", code, StringComparison.Ordinal);
         Assert.Contains("KbStatNames,", code, StringComparison.Ordinal);
         Assert.Contains("CreateResourceCombo(effect, \"kbparamresource\")", code, StringComparison.Ordinal);

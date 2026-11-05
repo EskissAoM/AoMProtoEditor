@@ -1,5 +1,6 @@
 using System.Xml.Linq;
 using System.Globalization;
+using Avalonia.LogicalTree;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -14,9 +15,30 @@ namespace AoMDivineDataEditor.Windows;
 
 public partial class PowerEditorView : UserControl
 {
-    private static readonly string[] StringBackedTags =
-        ["displaynameid", "rolloverid", "activepowerrolloverid", "exclusiveerrormsgid",
-            "notificationformatid", "selfnotificationformatid"];
+    private EditorSaveFeedback _saveFeedback = null!;
+    internal Action<EditorSaveOutcome>? SaveFeedbackReported { get; set; }
+    internal void UseHostStatusFooter(Action<string> reportContext) => _saveFeedback.UseHostFooter(reportContext);
+    private void ReportSaveFeedback(EditorSaveOutcome outcome)
+    {
+        _saveFeedback.Report(outcome);
+        SaveFeedbackReported?.Invoke(outcome);
+    }
+    internal Func<IReadOnlyList<string>, IReadOnlyDictionary<string, XDocument>, IReadOnlyList<ModDeletionInspection>>? PrepareDeletionChecks { get; set; }
+    internal Func<Task>? ImmediateDeletionRequestedAsync { get; set; }
+    internal IEnumerable<string> PendingStringIds => _session.CreateCommitSnapshot().StringUpdates.Keys;
+    internal bool LastSaveWroteStrings { get; private set; }
+    internal Func<IEnumerable<string>, IReadOnlyDictionary<string, XDocument>, OwnedStringSaveInspection>? PrepareStringCleanup { get; set; }
+    internal IEnumerable<XDocument> CreateStringReferenceDrafts()
+    {
+        if (CreateModifiedDocumentSnapshot() is { } document) yield return document;
+        if (_rawEditorDirty) yield return XDocument.Parse(_rawXmlEditor.Text ?? "", LoadOptions.PreserveWhitespace);
+    }
+    private IReadOnlyList<ModDeletionInspection>? _immediateDeletionChecks;
+    internal bool IsCurrentEntrySaved => _loadedModDocument != null && CurrentPowerName != null &&
+        PowerCatalog.Find(_loadedModDocument, _session.ReferenceNameForDeletion(CurrentPowerName)) != null;
+    internal XDocument? CreateModifiedDocumentSnapshot()
+        => CreatePowerXmlSnapshot();
+    private static readonly string[] StringBackedTags = PowerCatalog.OwnedStringTags;
     private static readonly string[] OptionalStringTags =
         ["activepowerrolloverid", "exclusiveerrormsgid", "notificationformatid", "selfnotificationformatid"];
     private static readonly string[] PlacementModes = ["Full", "Overlap", "InRange", "Unit", "Skip"];
@@ -38,13 +60,7 @@ public partial class PowerEditorView : UserControl
     private static readonly string[] StandardAges =
         ["ArchaicAge", "ClassicalAge", "HeroicAge", "MythicAge", "WonderAge"];
     private static readonly (string Label, string XmlName)[] SwapFlags =
-    [
-        ("UnitTarget", "unittarget"), ("Global", "global"), ("SwapEnemyOnly", "swapenemyonly"),
-        ("SwapSelfOnly", "swapselfonly"), ("PerformWalkingWoodsSwap", "performwalkingwoodsswap"),
-        ("ConvertUnitsToGodPowerPlayer", "convertunitstogodpowerplayer"), ("Mutate", "mutate"),
-        ("ForceFullHP", "forcefullhp"), ("PlayBirthAfterMutate", "playbirthaftermutate"),
-        ("FindBestPosition", "findbestposition")
-    ];
+        PowerXmlFieldOrder.SwapFlagDefinitions;
     private static readonly (string Label, string XmlName)[] TempUnitFlags =
     [
         ("Permanent", "permanent"), ("Norandomrotate", "norandomrotate"),
@@ -106,7 +122,7 @@ public partial class PowerEditorView : UserControl
     private readonly List<(AutoCompleteBox Target, AutoCompleteBox Drift, XElement Element)> _fimbulSnowDriftFields = [];
     private readonly List<(ComboBox Resource, TextBox Multiplier, XElement Element)> _cageResourceMultiplierFields = [];
     private readonly List<(TextBox Box, SwitchingStringBinding Binding)> _switchingStringFields = [];
-    private readonly Dictionary<TextBox, string> _programmaticStringBoxValues = [];
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextBox, string> _programmaticStringBoxValues = new();
     private readonly WrapPanel _tempestOptionalFlow = new() { Orientation = Orientation.Horizontal };
     private readonly Dictionary<string, Button> _removeOtherAttributeButtons = new(StringComparer.OrdinalIgnoreCase);
 
@@ -122,7 +138,7 @@ public partial class PowerEditorView : UserControl
     {
         public required XElement Element { get; init; }
         public required ComboBox Mode { get; init; }
-        public required StackPanel Host { get; init; }
+        public required Panel Host { get; init; }
     }
 
     private sealed class SwitchingStringBinding
@@ -187,6 +203,16 @@ public partial class PowerEditorView : UserControl
     private IReadOnlyList<string> _terrainCreepNames => _catalogs.TerrainCreepNames;
     private IReadOnlyList<string> _protoActionNames => _catalogs.ProtoActionNames;
     private IReadOnlyList<string> _techNames => _catalogs.TechnologyNames;
+    internal void UpdateReferenceCatalogs(PowerEditorCatalogs catalogs)
+    {
+        var wasPopulating = _isPopulating;
+        _isPopulating = true;
+        try
+        {
+            if (_catalogs.RefreshEntitiesFrom(catalogs)) SelectorCatalogRefresh.Apply(this);
+        }
+        finally { _isPopulating = wasPopulating; }
+    }
     private IReadOnlyList<string> _animationNames => _catalogs.AnimationNames;
     private IReadOnlyList<string> _boneNames => _catalogs.BoneNames;
     private IReadOnlyList<string> _tacticNames => _catalogs.TacticNames;
@@ -253,7 +279,10 @@ public partial class PowerEditorView : UserControl
     {
         ArgumentNullException.ThrowIfNull(composition);
         InitializeComponent();
+        EditorXmlPreviewPane.Configure(_mainGrid, 0, 1, 2, _xmlPreviewContent, _previewSplitter, _xmlPreviewToggleButton);
+        _saveFeedback = new EditorSaveFeedback(_statusMessage);
         XmlSyntaxEditorService.Configure(_rawXmlEditor);
+        InitializePowerXmlEditing();
         _baseEntries = composition.BaseDefinitions
             .GroupBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => new XElement(group.First().SourceElement), StringComparer.OrdinalIgnoreCase);
@@ -265,11 +294,15 @@ public partial class PowerEditorView : UserControl
         _iconPreviewHost.Child = _iconPreview;
         EditorTextFieldStyle.ConfigureTextBox(_nameBox);
         EditorTextFieldStyle.ConfigureTextBox(_displayNameBox);
-        EditorTextFieldStyle.ConfigureTextBox(_rolloverBox);
-        EditorTextFieldStyle.ConfigureTextBox(_activeRolloverBox);
+        EditorRolloverField.Configure(_rolloverBox);
+        EditorRolloverField.Configure(_activeRolloverBox);
+        EditorRolloverField.Configure(_switchingTimerRolloverBox);
+        EditorRolloverField.Configure(_castMessageBox);
+        EditorRolloverField.Configure(_castSelfMessageBox);
+        var identityLayout = (Grid)_iconPreviewHost.Parent!;
+        EditorRolloverField.ConfigureIdentity(identityLayout,
+            identityLayout.Children.OfType<StackPanel>().First(), _iconPreviewHost);
         EditorTextFieldStyle.ConfigureTextBox(_exclusiveMessageBox);
-        EditorTextFieldStyle.ConfigureTextBox(_castMessageBox);
-        EditorTextFieldStyle.ConfigureTextBox(_castSelfMessageBox);
         foreach (var box in new[]
                  { _orderHintBox, _activeTimeBox, _buildUpBox, _shutDownBox, _shutDownFadeBox,
                      _costBox, _repeatCostBox,
@@ -388,11 +421,12 @@ public partial class PowerEditorView : UserControl
                 SpecificNumber_TextChanged(_greatHuntFoodRatioBox, new TextChangedEventArgs(TextBox.TextChangedEvent));
         };
         EditorAutoCompleteService.ConfigureStrict(_powerTypeBox, PowerTypes, "", () => _isPopulating,
-            preserveUnknownInitialValue: false, allowEmpty: false, preserveSuggestionOrder: true,
+            preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true, preserveSuggestionOrder: true,
             selectAllOnFirstClick: false, valueCommitted: CommitPowerType);
         EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(_powerTypeBox, _specificScroll);
         EditorAutoCompleteService.EnableDropdown(_otherSpecificAttributePicker, () => _isPopulating,
             selectAllOnFirstClick: false);
+        EditorDisplayText.ConfigureCaptionPicker(_otherSpecificAttributePicker);
         EditorAutoCompleteService.EnableDropdown(_cracksSoundBox, () => _isPopulating,
             selectAllOnFirstClick: false);
         EditorAutoCompleteService.EnableDropdown(_humanDeathSoundBox, () => _isPopulating,
@@ -877,15 +911,24 @@ public partial class PowerEditorView : UserControl
                 "Ally Damage Ratio" or "Reset Ability Charge for" or "Plays battle Music")
                 row.ColumnDefinitions[1].Width = GridLength.Auto;
             row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            var remove = PowerEditorDynamicControls.CreateRemoveButton();
+            var remove = name switch
+            {
+                "Notification" => _removeNotificationsButton,
+                "Minimap Notification" => _removeMinimapNotificationsButton,
+                "Active Power Visibility" => _removeActiveVisibilityButton,
+                _ => PowerEditorDynamicControls.CreateRemoveButton()
+            };
+            if (remove.Parent is Panel previousHost) previousHost.Children.Remove(remove);
+            if (name == "Notification") remove.Click -= RemoveNotifications_Click;
+            if (name == "Minimap Notification") remove.Click -= RemoveMinimapNotifications_Click;
+            if (name == "Active Power Visibility") remove.Click -= RemoveActiveVisibility_Click;
             remove.Margin = new Thickness(2, 0, 0, 0);
             Grid.SetColumn(remove, 2);
             remove.Click += (_, _) => RemoveOtherAttribute(name);
             row.Children.Add(remove);
             _removeOtherAttributeButtons[name] = remove;
         }
-        _revealUnitBox.ItemsSource = _protoUnitNames.Concat(["Revealer"])
-            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_revealUnitBox, _protoUnitNames.Concat(["Revealer"]));
         _resetAbilityChargeBox.ItemsSource = _unitOrTypeNames;
         foreach (var box in new[] { _revealUnitBox, _lightingBox, _resetAbilityChargeBox })
         {
@@ -933,6 +976,7 @@ public partial class PowerEditorView : UserControl
         }
         if (!string.IsNullOrWhiteSpace(_modStringsPath))
             _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath);
+        ConfigureFixedPowerFieldPresentation();
         ShowEmpty();
     }
 
@@ -959,6 +1003,7 @@ public partial class PowerEditorView : UserControl
 
     public void SelectPower(string? name)
     {
+        EditorValidationNavigation.Clear(this);
         if (_commandGate.CurrentCount == 0 && !_allowSelectionDuringCommand)
             return;
         var entry = string.IsNullOrWhiteSpace(name)
@@ -967,7 +1012,7 @@ public partial class PowerEditorView : UserControl
                 ? PowerCatalog.Find(_modDocument!, name)
                 : _baseEntries.GetValueOrDefault(name);
         _session.Select(name, entry);
-        _applyRawXmlButton.IsVisible = false;
+        _rawEditorDirty = CurrentPowerXmlDraft?.Session.IsDirty == true;
 
         if (_currentEntry == null)
         {
@@ -977,11 +1022,10 @@ public partial class PowerEditorView : UserControl
         }
 
         SetRawXml(PowerCatalog.FormatPreview(_currentEntry));
-        XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, !IsModifiedMode);
         var generation = ++_populateGeneration;
         _populationTask = PopulatePropertiesSafelyAsync(_currentEntry, generation);
         _statusMessage.Text = IsModifiedMode
-            ? "Edit Properties or the raw <power> XML, then use Save."
+            ? ""
             : "Original .godpowers entry from Data.bar (read-only).";
     }
 
@@ -1229,6 +1273,7 @@ public partial class PowerEditorView : UserControl
                 // SelectPower remains synchronously editable. The settling window is still awaited
                 // by SelectPowerAsync so audits observe queued initialization events; handlers must
                 // therefore be idempotent when the formatted UI value is equivalent to the XML.
+                FinalizePowerPresentation();
                 _isPopulating = false;
                 await Task.Delay(25);
                 await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
@@ -1238,30 +1283,30 @@ public partial class PowerEditorView : UserControl
     }
 
     private bool CanEditProperties(XElement entry)
-        => !_isPopulating && !_rawEditorDirty && IsModifiedMode && ReferenceEquals(entry, _currentEntry);
+        => !_isPopulating && CurrentPowerXmlDraft?.Session.IsEditing != true &&
+           !_rawEditorDirty && IsModifiedMode && ReferenceEquals(entry, _currentEntry);
 
     private (string Name, Grid Row, string[] Tags)[] OtherAttributeSpecs() =>
     [
-        ("Range Indicator", _rangeIndicatorRow, ["rangeindicator", "rangeindicatorcustomdecal"]),
-        ("Range Indicator Proto", _rangeIndicatorProtoRow, ["rangeindicatorprotoid"]),
-        ("Radius", _radiusRow, ["radius", "global"]),
-        ("Power Player Relation", _powerPlayerRelationRow, ["powerplayerrelation"]),
-        ("Attack target", _attackTargetRow, ["abstractattacktargettype", "explicitlyrestrictedattacktargettype"]),
-        ("Notification", _notificationsSection,
-            ["notificationformatid", "selfnotificationformatid", "messagealertplayerrelation", "displayalerts"]),
-        ("Minimap Notification", _minimapNotificationsSection, ["minimapeventtime"]),
-        ("Active Power Visibility", _activeVisibilitySection, ["activelistvisibility", "hideonactivegplist"]),
-        ("Camera Shake", _cameraShakeRow, ["camerashake"]),
-        ("Terrain Rumbling", _terrainRumblingRow, ["terrainrumbling"]),
-        ("Sound set", _soundSetsSection, ["soundset"]),
-        ("DualPowerMinDistance", _dualPowerMinDistanceRow, ["dualpowermindistance"]),
-        ("Power Blocker", _powerBlockerRow, ["powerblocker"]),
-        ("Reveal LOS", _revealLosRow, ["reveallos"]),
-        ("Lighting", _lightingRow, ["lighting"]),
-        ("Accuracy", _accuracyRow, ["accuracy"]),
-        ("Ally Damage Ratio", _allyDamageRatioRow, ["allydamageratio"]),
-        ("Reset Ability Charge for", _resetAbilityChargeRow, ["abstractpowerresetsabilitychargetype"]),
-        ("Plays battle Music", _playsBattleMusicRow, ["playsbattlemusic"])
+        ("Range Indicator", _rangeIndicatorRow, PowerXmlFieldOrder.GetGroupTags("Range Indicator")),
+        ("Range Indicator Proto", _rangeIndicatorProtoRow, PowerXmlFieldOrder.GetGroupTags("Range Indicator Proto")),
+        ("Radius", _radiusRow, PowerXmlFieldOrder.GetGroupTags("Radius")),
+        ("Power Player Relation", _powerPlayerRelationRow, PowerXmlFieldOrder.GetGroupTags("Power Player Relation")),
+        ("Attack target", _attackTargetRow, PowerXmlFieldOrder.GetGroupTags("Attack target")),
+        ("Notification", _notificationsSection, PowerXmlFieldOrder.GetGroupTags("Notification")),
+        ("Minimap Notification", _minimapNotificationsSection, PowerXmlFieldOrder.GetGroupTags("Minimap Notification")),
+        ("Active Power Visibility", _activeVisibilitySection, PowerXmlFieldOrder.GetGroupTags("Active Power Visibility")),
+        ("Camera Shake", _cameraShakeRow, PowerXmlFieldOrder.GetGroupTags("Camera Shake")),
+        ("Terrain Rumbling", _terrainRumblingRow, PowerXmlFieldOrder.GetGroupTags("Terrain Rumbling")),
+        ("Sound set", _soundSetsSection, PowerXmlFieldOrder.GetGroupTags("Sound set")),
+        ("DualPowerMinDistance", _dualPowerMinDistanceRow, PowerXmlFieldOrder.GetGroupTags("DualPowerMinDistance")),
+        ("Power Blocker", _powerBlockerRow, PowerXmlFieldOrder.GetGroupTags("Power Blocker")),
+        ("Reveal LOS", _revealLosRow, PowerXmlFieldOrder.GetGroupTags("Reveal LOS")),
+        ("Lighting", _lightingRow, PowerXmlFieldOrder.GetGroupTags("Lighting")),
+        ("Accuracy", _accuracyRow, PowerXmlFieldOrder.GetGroupTags("Accuracy")),
+        ("Ally Damage Ratio", _allyDamageRatioRow, PowerXmlFieldOrder.GetGroupTags("Ally Damage Ratio")),
+        ("Reset Ability Charge for", _resetAbilityChargeRow, PowerXmlFieldOrder.GetGroupTags("Reset Ability Charge for")),
+        ("Plays battle Music", _playsBattleMusicRow, PowerXmlFieldOrder.GetGroupTags("Plays battle Music"))
     ];
 
     private static bool HasOtherAttribute(XElement entry, string[] tags)
@@ -1273,294 +1318,214 @@ public partial class PowerEditorView : UserControl
 
     private (string Name, Grid Row, string[] Tags)[] SpecificAttributeSpecs() =>
     [
-        ("Cracks Sound", _cracksSoundRow, ["cracksoundset", "crackintervalmin", "crackintervalmax"]),
-        ("Time Factor", _timeFactorRow, ["timefactor"]),
-        ("Stun lenght", _shockwaveTopRow, ["stunlength"]),
-        ("Shockwave VFX", _shockwaveTopRow, ["shockwavevfx"]),
-        ("Throw properties", _throwPropertiesRow,
-            ["minthrowdistance", "maxthrowdistance", "minthrowheight", "maxthrowheight",
-             "minthrowvelocity", "maxthrowvelocity", "throwsizelimit", "excludefromthrow"]),
-        ("Tree Unit", _gaiaTreeTopRow, ["treeproto"]),
-        ("Tree amount", _gaiaTreeTopRow, ["totalnumberoftrees"]),
-        ("Tree Spawn Interval", _gaiaSpawnRow, ["treespawnintervalmin", "treespawnintervalmax"]),
-        ("Tree Effect VFX", _gaiaSpawnRow, ["treeeffectproto"]),
-        ("Growth radius", _growthRadiusRow, ["growthradiusstart", "growthradiusincreaserate"]),
-        ("Effect VFX", _effectVfxRow, ["effectproto"]),
-        ("Damage Percent on Conversion", _damagePercentConversionRow, ["percentdamageonconvert"]),
-        ("VFX Proto", _vfxProtoRow, ["vfxproto"]),
-        ("Effect time", _effectTimeRow, ["uniteffecttimeseconds", "sharedeffecttimeseconds"]),
-        ("Spider properties", _spiderPropertiesRow,
-            ["spiderproto", "spidereggproto", "spiderdoorproto", "spiderwarnproto",
-             "spiderattackrange", "spiderspawnoffset"]),
-        ("Number to create", _spiderCountRow, ["numbertocreate"]),
-        ("Separation Distance", _spiderCountRow, ["separationdistance"]),
-        ("Hatch properties", _hatchPropertiesRow,
-            ["hatchtime", "hatchintervalmin", "hatchintervalmax"]),
-        ("Warn time", _spiderTimingRow, ["warntime"]),
-        ("Initial Delay", _spiderTimingRow, ["initialdelay"]),
-        ("Human Death Sound", _humanDeathSoundRow, ["humandeathsoundset"]),
-        ("Unit Effect Time", _spiderTimingRow, ["uniteffecttime"]),
-        ("Vortex properties", _vortexPropertiesRow,
-            ["vortexlandingproto", "vortexstartproto", "vortexstartlinkedproto",
-             "vortexfinishlinkedproto"]),
-        ("Drop Interval", _vortexDropRow, ["dropintervalmin", "dropintervalmax"]),
-        ("Max Retry", _vortexDropRow, ["maxretryseconds"]),
-        ("Max Unit Height", _maxUnitHeightRow, ["maxunitheight"]),
-        ("Lift Sound", _vortexSoundsRow, ["liftsoundset"]),
-        ("Land Sound", _vortexSoundsRow, ["landsoundset"]),
-        ("Spawn Proto", _tartarianSpawnRow, ["spawnproto"]),
-        ("Max Spawn Amount", _tartarianSpawnRow, ["maxnumspawns"]),
-        ("Revealer Unit", _tartarianRevealerRow, ["revealerproto"]),
-        ("Tartarian Gate", _tartarianGateRow,
-            ["tartariangateproto", "gatebirthproto", "gateflameproto", "sinkholetime",
-             "sinkholeshakestrength"]),
-        ("Rumble Time", _rumbleTimeRow, ["rumbletime"]),
-        ("First Spawn delay", _tartarianSpawnTimingRow, ["spawntimedelay"]),
-        ("Spawn interval", _tartarianSpawnTimingRow, ["spawnintervalmin", "spawnintervalmax"]),
-        ("Implode Protos", _implodeProtosRow, ["sphereproto", "shockwaveproto", "vfxpulleffectproto"]),
-        ("Implode Sounds", _implodeSoundsRow,
-            ["implodestartsoundset", "implodeexplodesoundset", "implodeexplosionwindupsoundset", "implodehitsoundset"]),
-        ("Pull properties", _implodePullRow,
-            ["pullradius", "unitescaperadius", "pullstrengthincrement", "maximumpullstrength",
-             "pullstrengthoverkillincrement", "pullstrengthadjustfactor", "unitacceleration"]),
-        ("Explosion", _implodeExplosionRow,
-            ["explosionwinduplength", "exploderadius", "poweraccumulationincrement",
-             "maximumaccumulatedpower", "explosiondelay", "shockwavevelocity"]),
-        ("Sphere properties", _implodeSpherePropertiesRow,
-            ["spherescalemultiplier", "spheretargetheight", "sphereheightadjustfactor",
-             "spheremovementdelay", "unitfloatadjustfactor"]),
-        ("Implode Damage interval", _implodeDamageIntervalRow, ["damageintervalseconds"]),
-        ("Shear", _implodeShearRow, ["baseshearincrement", "shearmultiplier", "baseshearmax"]),
-        ("Implode delay", _implodeDelayRow,
-            ["unitimplodetimedelaymin", "unitimplodetimedelaymax", "unitimplodeendtimedelaymin",
-             "unitimplodeendtimedelaymax"]),
-        ("Implode Timing", _implodeTimingRow,
-            ["mintimeinstagestarting", "mintimeinstagepullingunits", "mintimeinstageexploding"]),
-        ("Orbit Radius Squared", _implodeOrbitRadiusRow,
-            ["innerorbitradiussquared", "middleorbitradiussquared", "outerorbitradiussquared"]),
-        ("Angular Acceleration", _implodeAngularRow,
-            ["innerorbitangularacceleration", "middleorbitangularacceleration", "outerorbitangularacceleration"]),
-        ("Implode Camera Shake", _implodeCameraShakeRow,
-            ["initialrumblecamerashakeduration", "initialrumblecamerashakestrength",
-             "unitdeathcamerashakeduration", "unitdeathcamerashakestrength",
-             "explosioncamerashakeduration", "explosioncamerashakestrength"]),
-        ("Farm Proto", _pSeedsFarmRow, ["farmproto"]),
-        ("Number to Transform", _pSeedsFarmRow, ["numbertotransform"]),
-        ("Farm VFX", _pSeedsVfxRow, ["pseedsfarmvfx", "pseedsfarmtargetvfx"]),
-        ("Stealth Level", _stealthLevelRow, ["stealthlevel"]),
-        ("Earth Wall", _earthWallRow, ["wallproto", "wallsegmentcount"]),
-        ("Damage Tiers", _damageTiersRow, ["damagetiers"]),
-        ("Vanish VFX", _stealthVfxRow, ["vanishvfx", "vanishunitvfx", "reappearunitvfx"]),
-        ("Rooted enemy VFX", _forestVfxRow, ["rootedenemyvfx"]),
-        ("Tree Area VFX", _forestVfxRow, ["treeareavfx"]),
-        ("Tree VFX", _forestVfxRow, ["treevfx"]),
-        ("Stay Time", _forestTimingRow, ["staytime"]),
-        ("Root duration", _forestTimingRow, ["rootedtime"]),
-        ("Root damage", _rootDamageRow, ["rooteddamage"]),
-        ("Slow Heal Multiplier", _slowHealMultiplierRow, ["slowhealmultiplier"]),
-        ("Create Unit", _tempUnitCreateRow, ["createunit"]),
-        ("Age Specific Create Unit", _freyrsGiftCreateRow, ["createagespecificunit"]),
-        ("Attach Unit", _tempUnitAttachRow, ["attachproto"]),
-        ("Age Adjustment", _tempUnitAgeRow, ["ageadjustment"]),
-        ("Create placement", _tempUnitPlacementRow,
-            ["smoothrotation", "forceplacement", "forceuseplacementorientation"]),
-        ("Vibrant Generation", _vibrantGenerationRow, ["generateinterval", "treeproto", "treevfx"]),
-        ("Rotate Speed", _vibrantRotateRow, ["minrotatespeed", "maxrotatespeed"]),
-        ("Growth", _vibrantGrowthRow, ["mingrowspeed", "maxgrowspeed"]),
-        ("Scale", _vibrantScaleRow, ["minscale", "maxscale"]),
-        ("Heal speed", _slowHealMultiplierRow, ["healspeed"]),
-        ("Scan interval", _slowHealMultiplierRow, ["scaninterval"]),
-        ("Heal VFX", _restorationVfxRow, ["healvfx", "areavfx"]),
-        ("Terrain Creep", _droughtTerrainCreepRow, ["terraincreep"]),
-        ("Land VFX", _droughtVfxRow, ["landprotounit"]),
-        ("Wave Unit", _droughtVfxRow, ["waveprotounit"]),
-        ("Initial Damage", _droughtInitialDamageRow, ["initialdamage"]),
-        ("Burn Time", _droughtBurnTimeRow, ["burntime"]),
-        ("Flood Wave", _greatFloodWaveRow, ["waveprotounit", "wavecount", "waveradius", "spacingdistance"]),
-        ("Velocity", _greatFloodVelocityRow, ["initialvelocity", "finalvelocity", "ramptime"]),
-        ("Attack Action", _greatFloodAttackRow, ["initialattackname"]),
-        ("Attack Interval", _greatFloodAttackRow, ["attackinterval"]),
-        ("Damage Cap", _greatFloodDamageCapRow, ["damagecap"]),
-        ("Portal", _shiftingSandsPortalRow, ["inportalprotounit", "outportalprotounit"]),
-        ("Portal timing", _shiftingSandsTimingRow, ["unitfadetime", "outportalspawntime", "scaninterval"]),
-        ("Placement Radius", _shiftingSandsPlacementRadiusRow, ["placementradius"]),
-        ("Swarm Unit", _locustSwarmRow, ["swarmprotounit", "swarmcount", "swarmradius"]),
-        ("Swarm Way Points", _locustWayPointsRow, ["swarmwaypoints", "swarmwaypointoffset"]),
-        ("Damage Interval", _locustDamageIntervalRow, ["damageinterval"]),
-        ("Strike Unit", _boltUnitsRow, ["strikeproto"]),
-        ("Bolt VFX", _boltUnitsRow, ["sparksvfxproto", "scorchvfxproto"]),
-        ("Strike Position", _boltStrikePositionRow, ["strikeheight", "strikeminoffset", "strikemaxoffset"]),
-        ("Pestilence Penalty", _pestilencePenaltyRow, ["rofpercentpenalty", "trainratepenalty", "rescaninterval"]),
-        ("Pestilence VFX", _pestilenceVfxRow, ["smallvfxproto", "largevfxproto"]),
-        ("Armor", _bronzeArmorRow, ["armor"]),
-        ("Teleport Portal", _teleportPortalRow, ["inportal", "outportal"]),
-        ("Max food duplicated", _greatHuntMaxFoodRow, ["maxfood"]),
-        ("Great Hunt extras", _greatHuntExtrasRow, ["spawnproto", "spawnfoodratio", "vfxproto"])
-        ,("Spy Indicator", _spyIndicatorRow, ["spyprotounit"])
-        ,("Stampede", _stampedeRow, ["stampede"])
-        ,("Stampede Full length", _stampedeFullLengthRow, ["fulllength"])
-        ,("Swap", _swapEntriesRow, ["abstracttype"])
-        ,("Swap Min/Max", _swapMinMaxRow, ["convertusingminmax"])
-        ,("Swap Options", _swapOptionalRow, ["swapdelay", "overallchance", "vfxproto"])
-        ,("Swap Flags", _swapFlagsRow, SwapFlags.Select(flag => flag.XmlName).ToArray())
-        ,("Curse Resources", _curseResourcesRow, ["maxresources", "resourceconvertratio"])
-        ,("Curse Swap", _curseSwapRow, ["swapdelay", "vfxproto"])
-        ,("Gust", _gustMainRow, ["gustproto", "gustlength", "gustspeed", "gustminspeedfactor", "gustmaxspeedfactor"])
-        ,("Gust Timing", _gustTimingRow, ["blowtime", "gusttime"])
-        ,("Gust Damage", _gustDamageRow, ["damagingproto", "damagingprotoaction"])
-        ,("Throw Max Size", _gustThrowSizeRow, ["throwsizelimit"])
-        ,("Divine Attack", _divineAttackRow, ["attackproto", "attackaction", "attackdelay"])
-        ,("Divine Damage", _divineDamageRow, ["damagewidth", "damagedepth", "decalproto"])
-        ,("Camera Shake Delay", _divineCameraDelayRow, ["camerashakedelay"])
-        ,("Lure Unit", _lureUnitRow, ["lureproto"])
-        ,("Attract Type", _lureAttractTypeRow, ["attracttype"])
-        ,("Attraction", _lureAttractionRow,
-            ["minrange", "maxrange", "attractrate", "variance", "attractiondistancetocountagainstcap"])
-        ,("Lure Spawn", _lureSpawnRow, ["spawnproto", "spawnvfx"])
-        ,("Lure Age info", _lureAgeInfoRow, ["ageinfo"])
-        ,("Undermine Attack", _undermineAttackRow,
-            ["attackproto", "damageradius", "attackintervalseconds"])
-        ,("Undermine Targets", _undermineTargetRow, ["attacktarget"])
-        ,("Deform Depth", _undermineDeformRow, ["deformdepth"])
-        ,("Forest Fire Units", _forestFireUnitsRow, ["attackproto", "embersproto", "vfxproto"])
-        ,("Forest Fire Burn", _forestFireBurnRow, ["burnlength", "burnfadelength", "emberlifespan"])
-        ,("Forest Fire Search", _forestFireSearchRow,
-            ["treedestructionseconds", "treesearchradius", "damagesearchradius"])
-        ,("Tempest Strike", _tempestStrikeRow, ["strikeproto"])
-        ,("Strike Interval", _tempestStrikeIntervalRow, ["sloweststriketime", "fasteststriketime"])
-        ,("Tempest Strike Position", _tempestStrikePositionRow,
-            ["strikeheight", "strikeminoffset", "strikemaxoffset"])
-        ,("Tempest Soundset", _tempestSoundRow, ["strikesoundset"])
-        ,("Tempest Attack", _tempestAttackRow, ["areaattackaction", "radialtargeting"])
-        ,("Large Strike", _tempestLargeStrikeRow,
-            ["largestrikeproto", "largestrikeintervaltiming", "largestrikeavoidswater", "largestrikeavoidsbuildings",
-             "largestrikeavoidslandimpassable", "largestrikesoundset"])
-        ,("Tempest VFX", _tempestVfxRow,
-            ["effectproto", "groundvfxproto", "groundimpactvfxproto", "icesheetvfxproto"])
-        ,("Tempest Clouds", _tempestCloudsRow,
-            ["cloudbuildupstarttime", "cloudbuildupendtime", "cloudfadeoutstarttime", "cloudfadeoutendtime"])
-        ,("Tempest Drift", _tempestDriftRow, ["slowestdrifttime", "fastestdrifttime"])
-        ,("Tree Bend", _tempestTreeBendRow,
-            ["treebendminstrength", "treebendmaxstrength", "treebendminperiod", "treebendmaxperiod",
-             "treebendminamplitude", "treebendmaxamplitude", "treebendangleoffset", "treebendingduration",
-             "treebendstrengthmin", "treebendstrengthmax", "treebendperiodmin", "treebendperiodmax"])
-        ,("Lightning VFX", _lightningVfxRow,
-            ["sparksvfxproto", "groundsparksvfxproto", "scorchvfxproto", "rainvfxproto", "cloudvfxproto"])
-        ,("Lightning Rain", _lightningRainRow,
-            ["rainbuildupstarttime", "rainbuildupendtime", "rainfadeoutstarttime", "rainfadeoutendtime"])
-        ,("Earthquake Attack", _earthquakeAttackRow,
-            ["attackproto", "attackinterval", "attacktreeaccuracy"])
-        ,("Earthquake Zone Radius", _earthquakeRadiusRow,
-            ["epicenterzoneradius", "middlezoneradius", "outerzoneradius"])
-        ,("Earthquake Zone Damage Ratio", _earthquakeDamageRatioRow,
-            ["epicenterzonedamageratio", "middlezonedamageratio", "outerzonedamageratio"])
-        ,("Earthquake Dust VFX", _earthquakeDustVfxRow,
-            ["dustsmallvfxproto", "dustmediumvfxproto", "dustlargevfxproto"])
-        ,("Thunder Burst", _thunderBurstMainRow,
-            ["amount", "delay", "radiusincreasestep", "stunduration"])
-        ,("Thunder Burst VFX", _thunderBurstVfxRow,
-            ["startingvfx", "chargingvfx", "burstvfx"])
-        ,("Typhoon Dragon", _typhoonDragonRow,
-            ["dragonprotounit", "dragonspawndelayseconds", "dragonattackinterval"])
-        ,("Typhoon", _typhoonMainRow,
-            ["typhoonprotounit", "typhoonspawndelayseconds", "typhoonattackdelayseconds",
-                "typhoonattackinterval", "typhoonradiusstart", "typhoonradiusend",
-                "typhoonradiusexpansionseconds", "rainprotounit"])
-        ,("Frost Freeze", _frostFreezeRow,
-            ["freezeexpansiontime", "freezetransitiontime", "freezeholdtime",
-                "fasteststriketime", "sloweststriketime", "armoramount"])
-        ,("Frost VFX", _frostVfxRow, ["stormprotounit", "snowdriftprotounit"])
-        ,("Frost Drift", _frostDriftRow, ["slowestdrifttime", "fastestdrifttime"])
-        ,("Wither Wave", _witherMainRow, ["waveprotounit", "waveduration", "vfxinterval"])
-        ,("Wither Kill Unit Type", _witherKillTypesRow, ["killunittype"])
-        ,("Wither Damage", _witherDamageRow, ["damagepercentofmaxhp"])
-        ,("Wither Creep Generators", _witherCreepGeneratorsRow, ["creepgenerators"])
-        ,("Arcadian Placement", _arcadianPlacementRow, ["terrainplacementcheck"])
-        ,("Arcadian Spawn", _arcadianSpawnRow,
-            ["damagereceiverproto", "spawnproto", "blockerradius", "vfxproto"])
-        ,("Arcadian VFX Grass", _arcadianGrassRow, ["vfxgrass"])
-        ,("Underworld Eidolon", _underworldEidolonRow,
-            ["eidolonmin", "maxeidoloncount", "eidolonstep", "eidolontype",
-             "eidolonmaxhpmultiplier", "eidolonmaxspeedmultiplier"])
-        ,("Underworld Spawn", _underworldSpawnRow, ["eidolonspawnradius", "eidolonspawnduration"])
-        ,("Underworld VFX", _underworldVfxRow,
-            ["vfxproto", "vfxeidolonspawnproto", "vfxforunitswithoutbirthanims", "vfxcurseproto"])
-        ,("Underworld Lighting", _underworldLightingRow,
-            ["lightset", "lightsetbuilduptime", "lightsetduration", "lightsetshutdowntime"])
-        ,("Underworld Tech Effect", _underworldTechEffectRow,
-            ["durationtecheffect", "onlyapplydurationtecheffectiftechactive"])
-        ,("Underworld Sudden Death", _underworldSuddenDeathRow, ["suddendeathhpmultiplier"])
-        ,("Power Clone Slot", _powerCloneSlotRow, ["powerslot"])
-        ,("Power Clone VFX", _powerCloneVfxRow, ["placementvfx"])
-        ,("Duplicate Replacement", _powerCloneReplacementRow, ["duplicatetargetreplacement"])
-        ,("Fimbul Wolf", _fimbulWolfRow,
-            ["wolfproto", "wolfcountsoftcap", "wolfcounthardcap", "wolfvfx"])
-        ,("Fimbul Main Pack", _fimbulMainPackRow,
-            ["packsize", "mainpacktargettype", "packspawnradius", "numextramainpackspawns"])
-        ,("Fimbul Secondary Pack", _fimbulSecondaryPackRow,
-            ["minipacksize", "minipacktargettype", "minpacktargetspawnradius", "maxpacktargetspawnradius"])
-        ,("Fimbul Wander", _fimbulWanderRow, ["packwanderdistance", "maxpackwanderdistance"])
-        ,("Fimbul Target system", _fimbulTargetSystemRow,
-            ["packscaninterval", "spawntargetevalradius", "packattacksearchradius"])
-        ,("Fimbul Snow Drift", _fimbulSnowDriftRow, ["snowdrift"])
-        ,("Fimbul Strike Time", _fimbulSoundStrikeRow,
-            ["sloweststriketime", "fasteststriketime"])
-        ,("Caged Unit", _cageMainRow, ["targetfloatheight", "killcagedafterend"])
-        ,("Cage Kill Similar", _cageKillSimilarRow,
-            ["killsimilartargetsinradius", "similarunittypes", "resourcevaluecap",
-             "resourcevaluemultiplier"])
-        ,("Cage VFX", _cageVfxRow,
-            ["vfxarea", "vfxmaintarget", "vfxmaintargetbone", "vfxmaintargetimpact",
-             "vfxmarkanim", "vfxmarkanimbone", "vfxadditionalimpact"])
-        ,("Cage Soundset", _cageSoundRow, ["additionalimpactsoundset"])
-        ,("Rain", _rainMainRow, ["rainspotproto", "sfx", "smallrainspotproto", "smallsfx"])
-        ,("Rain Effects", _rainEffectsRow, ["effect"])
-        ,("Effect In Area", _effectInAreaMainRow, ["repeatdelay", "areavfx"])
-        ,("Effect In Area On Hit", _effectInAreaOnHitRow, ["onhiteffect"])
-        ,("Switching Type", _switchingTypeRow, ["tiertype", "interval"])
-        ,("Switching Progress", _switchingProgressRow,
-            ["progresstype", "hidewheelview", "timerrolloverid", "skipfirstnotification"])
-        ,("Switching VFX Attach", _switchingVfxAttachRow, ["modelattachproto"])
-        ,("Switching Effects", _switchingEffectsRow, ["effects"])
-        ,("New Moon Research", _newMoonResearchRow, ["maxfreeresearches", "freeresearchrate"])
-        ,("New Moon VFX", _modifyVfxRow, ["modelattachment", "modelattachmentbone"])
-        ,("Unit Modify VFX", _modifyVfxRow, ["vfxproto", "vfxattachbone", "birthvfx"])
-        ,("Unit Modify", _unitModifyRow, ["unitmodify", "killoneffectend"])
-        ,("Fox Charm Affected Number", _foxCharmAffectedNumberRow, ["ageadjustment"])
-        ,("Fox Charm VFX", _foxCharmVfxRow, ["unitvfx", "targetunitvfx", "areavfx"])
-        ,("CeaseFire VFX", _ceaseFireVfxRow, ["vfxproto", "attachvfxto"])
-        ,("Prosperity VFX", _prosperityVfxRow, ["largesfxprotoid", "smallsfxprotoid"])
-        ,("Prosperity Types", _prosperityTypesRow, ["abstracttype"])
-        ,("Power Effects", _sharedEffectsRow, ["effect"])
-        ,("Earth Monster Unit", _earthMonsterUnitRow,
-            ["earthmonsterprotounit", "strikeaction", "crushaction"])
-        ,("Earth Monster Strike", _earthMonsterStrikeRow,
-            ["numberofadditionalstrikes", "secondsbetweenstrikes", "strikeunitlimit",
-             "minimumgroupsize", "groupsearchradius", "previousstrikeavoidanceradius"])
-        ,("Earth Monster Regurgitate", _earthMonsterRegurgitateRow,
-            ["regurgitatetime", "regurgitateunitstime", "regurgitateheight",
-             "regurgitateanim", "regurgitateanimtime"])
-        ,("Earth Monster Chomp", _earthMonsterChompRow,
-            ["chompthrowswallowtimer", "chompthrowheight"])
-        ,("Earth Monster Swallow", _earthMonsterSwallowRow, ["swallowplayerrelation"])
-        ,("Earth Monster Throw Radius", _earthMonsterThrowRadiusRow,
-            ["throwupwardsradius", "throwoutwardsradius"])
-        ,("Earth Monster Land Impact", _earthMonsterLandImpactRow, ["landimpactprotounit"])
-        ,("Earth Monster Soundset", _earthMonsterSoundsRow,
-            ["emergesoundset", "chompsoundset", "regurgitatesoundset"])
-        ,("Meteor Unit", _meteorUnitRow, ["meteorprotounit"])
-        ,("Meteor Strikes", _meteorStrikesRow,
-            ["numberofstrikes", "numberofprioritystrikes", "minimumgroupsize", "groupsearchradius",
-             "uselargestgroupbelowminsize", "secondaryaccuracy"])
-        ,("Meteor Splash VFX", _meteorSplashRow, ["landimpactprotounit", "watersplashprotounit"])
-        ,("Meteor Soundset", _meteorSoundsRow,
-            ["firstapproachsound", "firststrikesoundset", "strikesoundset", "approachsound"])
-        ,("Tornado Unit", _tornadoMainRow,
-            ["tornadoprotounit", "damageinterval", "greaterdamageradius", "numberofwaypoints", "spiralsize"])
-        ,("Tornado Funnel", _tornadoFunnelRow,
-            ["funnelradius", "funnelheight", "excludefrompullingintofunnel"])
-        ,("Debris Velocity", _tornadoDebrisRow,
-            ["debrisxzvelocity", "debrisyvelocity", "debrisangularvelocity"])
+        ("Cracks Sound", _cracksSoundRow, PowerXmlFieldOrder.GetGroupTags("Cracks Sound")),
+        ("Time Factor", _timeFactorRow, PowerXmlFieldOrder.GetGroupTags("Time Factor")),
+        ("Stun lenght", _shockwaveTopRow, PowerXmlFieldOrder.GetGroupTags("Stun lenght")),
+        ("Shockwave VFX", _shockwaveTopRow, PowerXmlFieldOrder.GetGroupTags("Shockwave VFX")),
+        ("Throw properties", _throwPropertiesRow, PowerXmlFieldOrder.GetGroupTags("Throw properties")),
+        ("Tree Unit", _gaiaTreeTopRow, PowerXmlFieldOrder.GetGroupTags("Tree Unit")),
+        ("Tree amount", _gaiaTreeTopRow, PowerXmlFieldOrder.GetGroupTags("Tree amount")),
+        ("Tree Spawn Interval", _gaiaSpawnRow, PowerXmlFieldOrder.GetGroupTags("Tree Spawn Interval")),
+        ("Tree Effect VFX", _gaiaSpawnRow, PowerXmlFieldOrder.GetGroupTags("Tree Effect VFX")),
+        ("Growth radius", _growthRadiusRow, PowerXmlFieldOrder.GetGroupTags("Growth radius")),
+        ("Effect VFX", _effectVfxRow, PowerXmlFieldOrder.GetGroupTags("Effect VFX")),
+        ("Damage Percent on Conversion", _damagePercentConversionRow, PowerXmlFieldOrder.GetGroupTags("Damage Percent on Conversion")),
+        ("VFX Proto", _vfxProtoRow, PowerXmlFieldOrder.GetGroupTags("VFX Proto")),
+        ("Effect time", _effectTimeRow, PowerXmlFieldOrder.GetGroupTags("Effect time")),
+        ("Spider properties", _spiderPropertiesRow, PowerXmlFieldOrder.GetGroupTags("Spider properties")),
+        ("Number to create", _spiderCountRow, PowerXmlFieldOrder.GetGroupTags("Number to create")),
+        ("Separation Distance", _spiderCountRow, PowerXmlFieldOrder.GetGroupTags("Separation Distance")),
+        ("Hatch properties", _hatchPropertiesRow, PowerXmlFieldOrder.GetGroupTags("Hatch properties")),
+        ("Warn time", _spiderTimingRow, PowerXmlFieldOrder.GetGroupTags("Warn time")),
+        ("Initial Delay", _spiderTimingRow, PowerXmlFieldOrder.GetGroupTags("Initial Delay")),
+        ("Human Death Sound", _humanDeathSoundRow, PowerXmlFieldOrder.GetGroupTags("Human Death Sound")),
+        ("Unit Effect Time", _spiderTimingRow, PowerXmlFieldOrder.GetGroupTags("Unit Effect Time")),
+        ("Vortex properties", _vortexPropertiesRow, PowerXmlFieldOrder.GetGroupTags("Vortex properties")),
+        ("Drop Interval", _vortexDropRow, PowerXmlFieldOrder.GetGroupTags("Drop Interval")),
+        ("Max Retry", _vortexDropRow, PowerXmlFieldOrder.GetGroupTags("Max Retry")),
+        ("Max Unit Height", _maxUnitHeightRow, PowerXmlFieldOrder.GetGroupTags("Max Unit Height")),
+        ("Lift Sound", _vortexSoundsRow, PowerXmlFieldOrder.GetGroupTags("Lift Sound")),
+        ("Land Sound", _vortexSoundsRow, PowerXmlFieldOrder.GetGroupTags("Land Sound")),
+        ("Spawn Proto", _tartarianSpawnRow, PowerXmlFieldOrder.GetGroupTags("Spawn Proto")),
+        ("Max Spawn Amount", _tartarianSpawnRow, PowerXmlFieldOrder.GetGroupTags("Max Spawn Amount")),
+        ("Revealer Unit", _tartarianRevealerRow, PowerXmlFieldOrder.GetGroupTags("Revealer Unit")),
+        ("Tartarian Gate", _tartarianGateRow, PowerXmlFieldOrder.GetGroupTags("Tartarian Gate")),
+        ("Rumble Time", _rumbleTimeRow, PowerXmlFieldOrder.GetGroupTags("Rumble Time")),
+        ("First Spawn delay", _tartarianSpawnTimingRow, PowerXmlFieldOrder.GetGroupTags("First Spawn delay")),
+        ("Spawn interval", _tartarianSpawnTimingRow, PowerXmlFieldOrder.GetGroupTags("Spawn interval")),
+        ("Implode Protos", _implodeProtosRow, PowerXmlFieldOrder.GetGroupTags("Implode Protos")),
+        ("Implode Sounds", _implodeSoundsRow, PowerXmlFieldOrder.GetGroupTags("Implode Sounds")),
+        ("Pull properties", _implodePullRow, PowerXmlFieldOrder.GetGroupTags("Pull properties")),
+        ("Explosion", _implodeExplosionRow, PowerXmlFieldOrder.GetGroupTags("Explosion")),
+        ("Sphere properties", _implodeSpherePropertiesRow, PowerXmlFieldOrder.GetGroupTags("Sphere properties")),
+        ("Implode Damage interval", _implodeDamageIntervalRow, PowerXmlFieldOrder.GetGroupTags("Implode Damage interval")),
+        ("Shear", _implodeShearRow, PowerXmlFieldOrder.GetGroupTags("Shear")),
+        ("Implode delay", _implodeDelayRow, PowerXmlFieldOrder.GetGroupTags("Implode delay")),
+        ("Implode Timing", _implodeTimingRow, PowerXmlFieldOrder.GetGroupTags("Implode Timing")),
+        ("Orbit Radius Squared", _implodeOrbitRadiusRow, PowerXmlFieldOrder.GetGroupTags("Orbit Radius Squared")),
+        ("Angular Acceleration", _implodeAngularRow, PowerXmlFieldOrder.GetGroupTags("Angular Acceleration")),
+        ("Implode Camera Shake", _implodeCameraShakeRow, PowerXmlFieldOrder.GetGroupTags("Implode Camera Shake")),
+        ("Farm Proto", _pSeedsFarmRow, PowerXmlFieldOrder.GetGroupTags("Farm Proto")),
+        ("Number to Transform", _pSeedsFarmRow, PowerXmlFieldOrder.GetGroupTags("Number to Transform")),
+        ("Farm VFX", _pSeedsVfxRow, PowerXmlFieldOrder.GetGroupTags("Farm VFX")),
+        ("Stealth Level", _stealthLevelRow, PowerXmlFieldOrder.GetGroupTags("Stealth Level")),
+        ("Earth Wall", _earthWallRow, PowerXmlFieldOrder.GetGroupTags("Earth Wall")),
+        ("Damage Tiers", _damageTiersRow, PowerXmlFieldOrder.GetGroupTags("Damage Tiers")),
+        ("Vanish VFX", _stealthVfxRow, PowerXmlFieldOrder.GetGroupTags("Vanish VFX")),
+        ("Rooted enemy VFX", _forestVfxRow, PowerXmlFieldOrder.GetGroupTags("Rooted enemy VFX")),
+        ("Tree Area VFX", _forestVfxRow, PowerXmlFieldOrder.GetGroupTags("Tree Area VFX")),
+        ("Tree VFX", _forestVfxRow, PowerXmlFieldOrder.GetGroupTags("Tree VFX")),
+        ("Stay Time", _forestTimingRow, PowerXmlFieldOrder.GetGroupTags("Stay Time")),
+        ("Root duration", _forestTimingRow, PowerXmlFieldOrder.GetGroupTags("Root duration")),
+        ("Root damage", _rootDamageRow, PowerXmlFieldOrder.GetGroupTags("Root damage")),
+        ("Slow Heal Multiplier", _slowHealMultiplierRow, PowerXmlFieldOrder.GetGroupTags("Slow Heal Multiplier")),
+        ("Create Unit", _tempUnitCreateRow, PowerXmlFieldOrder.GetGroupTags("Create Unit")),
+        ("Age Specific Create Unit", _freyrsGiftCreateRow, PowerXmlFieldOrder.GetGroupTags("Age Specific Create Unit")),
+        ("Attach Unit", _tempUnitAttachRow, PowerXmlFieldOrder.GetGroupTags("Attach Unit")),
+        ("Age Adjustment", _tempUnitAgeRow, PowerXmlFieldOrder.GetGroupTags("Age Adjustment")),
+        ("Create placement", _tempUnitPlacementRow, PowerXmlFieldOrder.GetGroupTags("Create placement")),
+        ("Vibrant Generation", _vibrantGenerationRow, PowerXmlFieldOrder.GetGroupTags("Vibrant Generation")),
+        ("Rotate Speed", _vibrantRotateRow, PowerXmlFieldOrder.GetGroupTags("Rotate Speed")),
+        ("Growth", _vibrantGrowthRow, PowerXmlFieldOrder.GetGroupTags("Growth")),
+        ("Scale", _vibrantScaleRow, PowerXmlFieldOrder.GetGroupTags("Scale")),
+        ("Heal speed", _slowHealMultiplierRow, PowerXmlFieldOrder.GetGroupTags("Heal speed")),
+        ("Scan interval", _slowHealMultiplierRow, PowerXmlFieldOrder.GetGroupTags("Scan interval")),
+        ("Heal VFX", _restorationVfxRow, PowerXmlFieldOrder.GetGroupTags("Heal VFX")),
+        ("Terrain Creep", _droughtTerrainCreepRow, PowerXmlFieldOrder.GetGroupTags("Terrain Creep")),
+        ("Land VFX", _droughtVfxRow, PowerXmlFieldOrder.GetGroupTags("Land VFX")),
+        ("Wave Unit", _droughtVfxRow, PowerXmlFieldOrder.GetGroupTags("Wave Unit")),
+        ("Initial Damage", _droughtInitialDamageRow, PowerXmlFieldOrder.GetGroupTags("Initial Damage")),
+        ("Burn Time", _droughtBurnTimeRow, PowerXmlFieldOrder.GetGroupTags("Burn Time")),
+        ("Flood Wave", _greatFloodWaveRow, PowerXmlFieldOrder.GetGroupTags("Flood Wave")),
+        ("Velocity", _greatFloodVelocityRow, PowerXmlFieldOrder.GetGroupTags("Velocity")),
+        ("Attack Action", _greatFloodAttackRow, PowerXmlFieldOrder.GetGroupTags("Attack Action")),
+        ("Attack Interval", _greatFloodAttackRow, PowerXmlFieldOrder.GetGroupTags("Attack Interval")),
+        ("Damage Cap", _greatFloodDamageCapRow, PowerXmlFieldOrder.GetGroupTags("Damage Cap")),
+        ("Portal", _shiftingSandsPortalRow, PowerXmlFieldOrder.GetGroupTags("Portal")),
+        ("Portal timing", _shiftingSandsTimingRow, PowerXmlFieldOrder.GetGroupTags("Portal timing")),
+        ("Placement Radius", _shiftingSandsPlacementRadiusRow, PowerXmlFieldOrder.GetGroupTags("Placement Radius")),
+        ("Swarm Unit", _locustSwarmRow, PowerXmlFieldOrder.GetGroupTags("Swarm Unit")),
+        ("Swarm Way Points", _locustWayPointsRow, PowerXmlFieldOrder.GetGroupTags("Swarm Way Points")),
+        ("Damage Interval", _locustDamageIntervalRow, PowerXmlFieldOrder.GetGroupTags("Damage Interval")),
+        ("Strike Unit", _boltUnitsRow, PowerXmlFieldOrder.GetGroupTags("Strike Unit")),
+        ("Bolt VFX", _boltUnitsRow, PowerXmlFieldOrder.GetGroupTags("Bolt VFX")),
+        ("Strike Position", _boltStrikePositionRow, PowerXmlFieldOrder.GetGroupTags("Strike Position")),
+        ("Pestilence Penalty", _pestilencePenaltyRow, PowerXmlFieldOrder.GetGroupTags("Pestilence Penalty")),
+        ("Pestilence VFX", _pestilenceVfxRow, PowerXmlFieldOrder.GetGroupTags("Pestilence VFX")),
+        ("Armor", _bronzeArmorRow, PowerXmlFieldOrder.GetGroupTags("Armor")),
+        ("Teleport Portal", _teleportPortalRow, PowerXmlFieldOrder.GetGroupTags("Teleport Portal")),
+        ("Max food duplicated", _greatHuntMaxFoodRow, PowerXmlFieldOrder.GetGroupTags("Max food duplicated")),
+        ("Great Hunt extras", _greatHuntExtrasRow, PowerXmlFieldOrder.GetGroupTags("Great Hunt extras"))
+        ,("Spy Indicator", _spyIndicatorRow, PowerXmlFieldOrder.GetGroupTags("Spy Indicator"))
+        ,("Stampede", _stampedeRow, PowerXmlFieldOrder.GetGroupTags("Stampede"))
+        ,("Stampede Full length", _stampedeFullLengthRow, PowerXmlFieldOrder.GetGroupTags("Stampede Full length"))
+        ,("Swap", _swapEntriesRow, PowerXmlFieldOrder.GetGroupTags("Swap"))
+        ,("Swap Min/Max", _swapMinMaxRow, PowerXmlFieldOrder.GetGroupTags("Swap Min/Max"))
+        ,("Swap Options", _swapOptionalRow, PowerXmlFieldOrder.GetGroupTags("Swap Options"))
+        ,("Swap Flags", _swapFlagsRow, PowerXmlFieldOrder.GetGroupTags("Swap Flags"))
+        ,("Curse Resources", _curseResourcesRow, PowerXmlFieldOrder.GetGroupTags("Curse Resources"))
+        ,("Curse Swap", _curseSwapRow, PowerXmlFieldOrder.GetGroupTags("Curse Swap"))
+        ,("Gust", _gustMainRow, PowerXmlFieldOrder.GetGroupTags("Gust"))
+        ,("Gust Timing", _gustTimingRow, PowerXmlFieldOrder.GetGroupTags("Gust Timing"))
+        ,("Gust Damage", _gustDamageRow, PowerXmlFieldOrder.GetGroupTags("Gust Damage"))
+        ,("Throw Max Size", _gustThrowSizeRow, PowerXmlFieldOrder.GetGroupTags("Throw Max Size"))
+        ,("Divine Attack", _divineAttackRow, PowerXmlFieldOrder.GetGroupTags("Divine Attack"))
+        ,("Divine Damage", _divineDamageRow, PowerXmlFieldOrder.GetGroupTags("Divine Damage"))
+        ,("Camera Shake Delay", _divineCameraDelayRow, PowerXmlFieldOrder.GetGroupTags("Camera Shake Delay"))
+        ,("Lure Unit", _lureUnitRow, PowerXmlFieldOrder.GetGroupTags("Lure Unit"))
+        ,("Attract Type", _lureAttractTypeRow, PowerXmlFieldOrder.GetGroupTags("Attract Type"))
+        ,("Attraction", _lureAttractionRow, PowerXmlFieldOrder.GetGroupTags("Attraction"))
+        ,("Lure Spawn", _lureSpawnRow, PowerXmlFieldOrder.GetGroupTags("Lure Spawn"))
+        ,("Lure Age info", _lureAgeInfoRow, PowerXmlFieldOrder.GetGroupTags("Lure Age info"))
+        ,("Undermine Attack", _undermineAttackRow, PowerXmlFieldOrder.GetGroupTags("Undermine Attack"))
+        ,("Undermine Targets", _undermineTargetRow, PowerXmlFieldOrder.GetGroupTags("Undermine Targets"))
+        ,("Deform Depth", _undermineDeformRow, PowerXmlFieldOrder.GetGroupTags("Deform Depth"))
+        ,("Forest Fire Units", _forestFireUnitsRow, PowerXmlFieldOrder.GetGroupTags("Forest Fire Units"))
+        ,("Forest Fire Burn", _forestFireBurnRow, PowerXmlFieldOrder.GetGroupTags("Forest Fire Burn"))
+        ,("Forest Fire Search", _forestFireSearchRow, PowerXmlFieldOrder.GetGroupTags("Forest Fire Search"))
+        ,("Tempest Strike", _tempestStrikeRow, PowerXmlFieldOrder.GetGroupTags("Tempest Strike"))
+        ,("Strike Interval", _tempestStrikeIntervalRow, PowerXmlFieldOrder.GetGroupTags("Strike Interval"))
+        ,("Tempest Strike Position", _tempestStrikePositionRow, PowerXmlFieldOrder.GetGroupTags("Tempest Strike Position"))
+        ,("Tempest Soundset", _tempestSoundRow, PowerXmlFieldOrder.GetGroupTags("Tempest Soundset"))
+        ,("Tempest Attack", _tempestAttackRow, PowerXmlFieldOrder.GetGroupTags("Tempest Attack"))
+        ,("Large Strike", _tempestLargeStrikeRow, PowerXmlFieldOrder.GetGroupTags("Large Strike"))
+        ,("Tempest VFX", _tempestVfxRow, PowerXmlFieldOrder.GetGroupTags("Tempest VFX"))
+        ,("Tempest Clouds", _tempestCloudsRow, PowerXmlFieldOrder.GetGroupTags("Tempest Clouds"))
+        ,("Tempest Drift", _tempestDriftRow, PowerXmlFieldOrder.GetGroupTags("Tempest Drift"))
+        ,("Tree Bend", _tempestTreeBendRow, PowerXmlFieldOrder.GetGroupTags("Tree Bend"))
+        ,("Lightning VFX", _lightningVfxRow, PowerXmlFieldOrder.GetGroupTags("Lightning VFX"))
+        ,("Lightning Rain", _lightningRainRow, PowerXmlFieldOrder.GetGroupTags("Lightning Rain"))
+        ,("Earthquake Attack", _earthquakeAttackRow, PowerXmlFieldOrder.GetGroupTags("Earthquake Attack"))
+        ,("Earthquake Zone Radius", _earthquakeRadiusRow, PowerXmlFieldOrder.GetGroupTags("Earthquake Zone Radius"))
+        ,("Earthquake Zone Damage Ratio", _earthquakeDamageRatioRow, PowerXmlFieldOrder.GetGroupTags("Earthquake Zone Damage Ratio"))
+        ,("Earthquake Dust VFX", _earthquakeDustVfxRow, PowerXmlFieldOrder.GetGroupTags("Earthquake Dust VFX"))
+        ,("Thunder Burst", _thunderBurstMainRow, PowerXmlFieldOrder.GetGroupTags("Thunder Burst"))
+        ,("Thunder Burst VFX", _thunderBurstVfxRow, PowerXmlFieldOrder.GetGroupTags("Thunder Burst VFX"))
+        ,("Typhoon Dragon", _typhoonDragonRow, PowerXmlFieldOrder.GetGroupTags("Typhoon Dragon"))
+        ,("Typhoon", _typhoonMainRow, PowerXmlFieldOrder.GetGroupTags("Typhoon"))
+        ,("Frost Freeze", _frostFreezeRow, PowerXmlFieldOrder.GetGroupTags("Frost Freeze"))
+        ,("Frost VFX", _frostVfxRow, PowerXmlFieldOrder.GetGroupTags("Frost VFX"))
+        ,("Frost Drift", _frostDriftRow, PowerXmlFieldOrder.GetGroupTags("Frost Drift"))
+        ,("Wither Wave", _witherMainRow, PowerXmlFieldOrder.GetGroupTags("Wither Wave"))
+        ,("Wither Kill Unit Type", _witherKillTypesRow, PowerXmlFieldOrder.GetGroupTags("Wither Kill Unit Type"))
+        ,("Wither Damage", _witherDamageRow, PowerXmlFieldOrder.GetGroupTags("Wither Damage"))
+        ,("Wither Creep Generators", _witherCreepGeneratorsRow, PowerXmlFieldOrder.GetGroupTags("Wither Creep Generators"))
+        ,("Arcadian Placement", _arcadianPlacementRow, PowerXmlFieldOrder.GetGroupTags("Arcadian Placement"))
+        ,("Arcadian Spawn", _arcadianSpawnRow, PowerXmlFieldOrder.GetGroupTags("Arcadian Spawn"))
+        ,("Arcadian VFX Grass", _arcadianGrassRow, PowerXmlFieldOrder.GetGroupTags("Arcadian VFX Grass"))
+        ,("Underworld Eidolon", _underworldEidolonRow, PowerXmlFieldOrder.GetGroupTags("Underworld Eidolon"))
+        ,("Underworld Spawn", _underworldSpawnRow, PowerXmlFieldOrder.GetGroupTags("Underworld Spawn"))
+        ,("Underworld VFX", _underworldVfxRow, PowerXmlFieldOrder.GetGroupTags("Underworld VFX"))
+        ,("Underworld Lighting", _underworldLightingRow, PowerXmlFieldOrder.GetGroupTags("Underworld Lighting"))
+        ,("Underworld Tech Effect", _underworldTechEffectRow, PowerXmlFieldOrder.GetGroupTags("Underworld Tech Effect"))
+        ,("Underworld Sudden Death", _underworldSuddenDeathRow, PowerXmlFieldOrder.GetGroupTags("Underworld Sudden Death"))
+        ,("Power Clone Slot", _powerCloneSlotRow, PowerXmlFieldOrder.GetGroupTags("Power Clone Slot"))
+        ,("Power Clone VFX", _powerCloneVfxRow, PowerXmlFieldOrder.GetGroupTags("Power Clone VFX"))
+        ,("Duplicate Replacement", _powerCloneReplacementRow, PowerXmlFieldOrder.GetGroupTags("Duplicate Replacement"))
+        ,("Fimbul Wolf", _fimbulWolfRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Wolf"))
+        ,("Fimbul Main Pack", _fimbulMainPackRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Main Pack"))
+        ,("Fimbul Secondary Pack", _fimbulSecondaryPackRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Secondary Pack"))
+        ,("Fimbul Wander", _fimbulWanderRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Wander"))
+        ,("Fimbul Target system", _fimbulTargetSystemRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Target system"))
+        ,("Fimbul Snow Drift", _fimbulSnowDriftRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Snow Drift"))
+        ,("Fimbul Strike Time", _fimbulSoundStrikeRow, PowerXmlFieldOrder.GetGroupTags("Fimbul Strike Time"))
+        ,("Caged Unit", _cageMainRow, PowerXmlFieldOrder.GetGroupTags("Caged Unit"))
+        ,("Cage Kill Similar", _cageKillSimilarRow, PowerXmlFieldOrder.GetGroupTags("Cage Kill Similar"))
+        ,("Cage VFX", _cageVfxRow, PowerXmlFieldOrder.GetGroupTags("Cage VFX"))
+        ,("Cage Soundset", _cageSoundRow, PowerXmlFieldOrder.GetGroupTags("Cage Soundset"))
+        ,("Rain", _rainMainRow, PowerXmlFieldOrder.GetGroupTags("Rain"))
+        ,("Rain Effects", _rainEffectsRow, PowerXmlFieldOrder.GetGroupTags("Rain Effects"))
+        ,("Effect In Area", _effectInAreaMainRow, PowerXmlFieldOrder.GetGroupTags("Effect In Area"))
+        ,("Effect In Area On Hit", _effectInAreaOnHitRow, PowerXmlFieldOrder.GetGroupTags("Effect In Area On Hit"))
+        ,("Switching Type", _switchingTypeRow, PowerXmlFieldOrder.GetGroupTags("Switching Type"))
+        ,("Switching Progress", _switchingProgressRow, PowerXmlFieldOrder.GetGroupTags("Switching Progress"))
+        ,("Switching VFX Attach", _switchingVfxAttachRow, PowerXmlFieldOrder.GetGroupTags("Switching VFX Attach"))
+        ,("Switching Effects", _switchingEffectsRow, PowerXmlFieldOrder.GetGroupTags("Switching Effects"))
+        ,("New Moon Research", _newMoonResearchRow, PowerXmlFieldOrder.GetGroupTags("New Moon Research"))
+        ,("New Moon VFX", _modifyVfxRow, PowerXmlFieldOrder.GetGroupTags("New Moon VFX"))
+        ,("Unit Modify VFX", _modifyVfxRow, PowerXmlFieldOrder.GetGroupTags("Unit Modify VFX"))
+        ,("Unit Modify", _unitModifyRow, PowerXmlFieldOrder.GetGroupTags("Unit Modify"))
+        ,("Fox Charm Affected Number", _foxCharmAffectedNumberRow, PowerXmlFieldOrder.GetGroupTags("Fox Charm Affected Number"))
+        ,("Fox Charm VFX", _foxCharmVfxRow, PowerXmlFieldOrder.GetGroupTags("Fox Charm VFX"))
+        ,("CeaseFire VFX", _ceaseFireVfxRow, PowerXmlFieldOrder.GetGroupTags("CeaseFire VFX"))
+        ,("Prosperity VFX", _prosperityVfxRow, PowerXmlFieldOrder.GetGroupTags("Prosperity VFX"))
+        ,("Prosperity Types", _prosperityTypesRow, PowerXmlFieldOrder.GetGroupTags("Prosperity Types"))
+        ,("Power Effects", _sharedEffectsRow, PowerXmlFieldOrder.GetGroupTags("Power Effects"))
+        ,("Earth Monster Unit", _earthMonsterUnitRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Unit"))
+        ,("Earth Monster Strike", _earthMonsterStrikeRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Strike"))
+        ,("Earth Monster Regurgitate", _earthMonsterRegurgitateRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Regurgitate"))
+        ,("Earth Monster Chomp", _earthMonsterChompRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Chomp"))
+        ,("Earth Monster Swallow", _earthMonsterSwallowRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Swallow"))
+        ,("Earth Monster Throw Radius", _earthMonsterThrowRadiusRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Throw Radius"))
+        ,("Earth Monster Land Impact", _earthMonsterLandImpactRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Land Impact"))
+        ,("Earth Monster Soundset", _earthMonsterSoundsRow, PowerXmlFieldOrder.GetGroupTags("Earth Monster Soundset"))
+        ,("Meteor Unit", _meteorUnitRow, PowerXmlFieldOrder.GetGroupTags("Meteor Unit"))
+        ,("Meteor Strikes", _meteorStrikesRow, PowerXmlFieldOrder.GetGroupTags("Meteor Strikes"))
+        ,("Meteor Splash VFX", _meteorSplashRow, PowerXmlFieldOrder.GetGroupTags("Meteor Splash VFX"))
+        ,("Meteor Soundset", _meteorSoundsRow, PowerXmlFieldOrder.GetGroupTags("Meteor Soundset"))
+        ,("Tornado Unit", _tornadoMainRow, PowerXmlFieldOrder.GetGroupTags("Tornado Unit"))
+        ,("Tornado Funnel", _tornadoFunnelRow, PowerXmlFieldOrder.GetGroupTags("Tornado Funnel"))
+        ,("Debris Velocity", _tornadoDebrisRow, PowerXmlFieldOrder.GetGroupTags("Debris Velocity"))
     ];
 
     private static bool IsDefaultSpecificAttribute(string? powerType, string name)
@@ -2303,12 +2268,12 @@ public partial class PowerEditorView : UserControl
                 Text = "Age", VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
             });
-            var ageBox = new ComboBox
+            var ageBox = ConfigurePowerFieldPresentation(new ComboBox
             {
                 Width = 150, ItemsSource = ageOptions, IsEnabled = IsModifiedMode,
                 SelectedItem = ageOptions.FirstOrDefault(age => age.Equals(currentAge,
                     StringComparison.OrdinalIgnoreCase)), Margin = new Thickness(0, 0, 14, 0)
-            };
+            }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(ageBox);
             row.Children.Add(new TextBlock
             {
@@ -2316,11 +2281,11 @@ public partial class PowerEditorView : UserControl
                 Margin = new Thickness(0, 0, 6, 0)
             });
             var affectedNumber = FindAttribute(adjustment, "affectedNumber");
-            var numberBox = new TextBox
+            var numberBox = ConfigurePowerFieldPresentation(new TextBox
             {
                 Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(affectedNumber?.Value),
                 IsEnabled = IsModifiedMode
-            };
+            }, EditorFieldWidthRole.Numeric);
             EditorNumericInputBehavior.AttachRule(numberBox, ProtoUnitNumericKind.SignedInteger);
             row.Children.Add(numberBox);
             if (IsModifiedMode)
@@ -2332,6 +2297,8 @@ public partial class PowerEditorView : UserControl
                     RefreshRawXmlFromCurrent();
                 }));
 
+            EditorValidationBindings.BindXml(ageBox, adjustment);
+
             ageBox.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string age ||
@@ -2341,6 +2308,7 @@ public partial class PowerEditorView : UserControl
                 RefreshRawXmlFromCurrent();
                 RefreshAfterSelectorEvent(adjustment, () => RefreshFoxCharmFields(entry));
             };
+            EditorValidationBindings.Bind(numberBox, adjustment, "@affectedNumber");
             numberBox.TextChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode ||
@@ -2439,7 +2407,8 @@ public partial class PowerEditorView : UserControl
             element.Name.LocalName.Equals("wolfproto", StringComparison.OrdinalIgnoreCase)).ToList();
         var selectedWolves = wolves.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _fimbulWolfPicker.ItemsSource = _protoUnitNames.Where(value => !selectedWolves.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_fimbulWolfPicker, _protoUnitNames.Where(value => !selectedWolves.Contains(value)),
+            isVisible: () => IsModifiedMode && selectedWolves.Count < _protoUnitNames.Count);
         _fimbulWolfPicker.SelectedItem = null;
         _fimbulWolfPicker.Text = "";
         _fimbulWolfPicker.IsVisible = IsModifiedMode && selectedWolves.Count < _protoUnitNames.Count;
@@ -2571,7 +2540,7 @@ public partial class PowerEditorView : UserControl
         if (!IsModifiedMode && string.IsNullOrWhiteSpace(targetValue) &&
             string.IsNullOrWhiteSpace(driftValue))
             return;
-        var row = new StackPanel
+        var row = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(0, 0, 14, 4)
@@ -2581,11 +2550,11 @@ public partial class PowerEditorView : UserControl
             Text = "Target", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
         };
         row.Children.Add(targetLabel);
-        var target = new AutoCompleteBox
+        var target = ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Width = 200, MaxWidth = 200, FilterMode = AutoCompleteFilterMode.Contains,
             MinimumPrefixLength = 0, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 0)
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(target, _unitOrTypeNames,
             targetValue, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
@@ -2603,11 +2572,11 @@ public partial class PowerEditorView : UserControl
             Text = "Drift", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
         };
         row.Children.Add(driftLabel);
-        var drift = new AutoCompleteBox
+        var drift = ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Width = 200, MaxWidth = 200, FilterMode = AutoCompleteFilterMode.Contains,
             MinimumPrefixLength = 0, IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(drift, _protoUnitNames, element.Value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
@@ -2672,7 +2641,8 @@ public partial class PowerEditorView : UserControl
             .ToList() ?? [];
         var selectedTypes = similarTypes.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _cageSimilarTypePicker.ItemsSource = _unitTypeNames.Where(value => !selectedTypes.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_cageSimilarTypePicker, _unitTypeNames.Where(value => !selectedTypes.Contains(value)),
+            isVisible: () => IsModifiedMode && selectedTypes.Count < _unitTypeNames.Count);
         _cageSimilarTypePicker.SelectedItem = null;
         _cageSimilarTypePicker.Text = "";
         _cageSimilarTypePicker.IsVisible = IsModifiedMode && _cageKillSimilarOpen &&
@@ -2841,20 +2811,21 @@ public partial class PowerEditorView : UserControl
                 ProtoConstants.KnownResourceTypes.Where(value =>
                     value.Equals(current, StringComparison.OrdinalIgnoreCase) || !used.Contains(value)),
                 current);
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 14, 4) };
-            var resource = new ComboBox
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 8) };
+            var resource = ConfigurePowerFieldPresentation(new ComboBox
             {
                 Width = 120, IsEnabled = IsModifiedMode,
                 ItemsSource = resourceOptions,
                 SelectedItem = resourceOptions.FirstOrDefault(value =>
                     value.Equals(current, StringComparison.OrdinalIgnoreCase))
-            };
-            var multiplier = new TextBox
+            }, EditorFieldWidthRole.ShortEnum);
+            var multiplier = ConfigurePowerFieldPresentation(new TextBox
             {
                 Text = EditorNumericFieldStyle.FormatDisplay(element.Value),
                 IsEnabled = IsModifiedMode, Margin = new Thickness(6, 0, 0, 0)
-            };
+            }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(multiplier);
+            EditorValidationBindings.Bind(resource, element, "@resourcetype");
             resource.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || resource.SelectedItem is not string selected) return;
@@ -2864,6 +2835,7 @@ public partial class PowerEditorView : UserControl
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 RefreshAfterSelectorEvent(element, () => RefreshCageResourceMultipliers(entry));
             };
+            EditorValidationBindings.BindXml(multiplier, element);
             multiplier.TextChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode ||
@@ -2886,10 +2858,14 @@ public partial class PowerEditorView : UserControl
                 row.Children.Add(remove);
             }
             _cageResourceMultiplierFields.Add((resource, multiplier, element));
+            EditorFormLayout.UseInlineRowLayout(row);
             _cageResourceMultiplierRows.Children.Add(row);
         }
         _addCageResourceMultiplierButton.IsVisible = IsModifiedMode && _cageKillSimilarOpen &&
             ProtoConstants.KnownResourceTypes.Any(resource => !used.Contains(resource));
+        if (_addCageResourceMultiplierButton.Parent is Panel oldParent) oldParent.Children.Remove(_addCageResourceMultiplierButton);
+        _addCageResourceMultiplierButton.Margin = new Thickness(0, 0, 12, 8);
+        _cageResourceMultiplierRows.Children.Add(_addCageResourceMultiplierButton);
     }
 
     private void AddCageResourceMultiplier_Click(object? sender, RoutedEventArgs e)
@@ -3006,7 +2982,8 @@ public partial class PowerEditorView : UserControl
             element.Name.LocalName.Equals("abstracttype", StringComparison.OrdinalIgnoreCase)).ToList();
         var selected = elements.Select(element => element.Value.Trim()).Where(value => value.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _prosperityTypePicker.ItemsSource = _unitOrTypeNames.Where(value => !selected.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_prosperityTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)),
+            isVisible: () => IsModifiedMode && selected.Count < _unitOrTypeNames.Count);
         _prosperityTypePicker.SelectedItem = null;
         _prosperityTypePicker.Text = "";
         _prosperityTypePicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
@@ -3071,12 +3048,14 @@ public partial class PowerEditorView : UserControl
             if (!containFailure)
             {
                 refresh();
+                FinalizePowerPresentation();
                 return;
             }
 
             try
             {
                 refresh();
+                FinalizePowerPresentation();
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
@@ -3175,13 +3154,13 @@ public partial class PowerEditorView : UserControl
     {
         var typeValue = effect.Attribute("type")?.Value.Trim() ?? "";
         var supported = EffectInAreaFamilyController.IsSupportedOnHitType(typeValue);
-        var typeBox = new AutoCompleteBox
+        var typeBox = ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Text = typeValue,
             Width = 170,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        };
+        }, EditorFieldWidthRole.LongEnum);
         var activeCheck = new CheckBox
         {
             IsChecked = effect.Attribute("active")?.Value.Trim() is not ("0" or "false"),
@@ -3191,7 +3170,8 @@ public partial class PowerEditorView : UserControl
         var card = new OnHitEffectEditor(typeBox, activeCheck, !IsModifiedMode, supported,
             showActiveField: false);
         _effectInAreaOnHitRows.Children.Add(card);
-        if (_invalidEffectTypes.Contains(effect)) typeBox.Classes.Add("invalid-field");
+        if (_invalidEffectTypes.Contains(effect) && string.IsNullOrWhiteSpace(typeValue)) typeBox.Classes.Add("invalid-field");
+        EditorValidationBindings.Bind(typeBox, effect, "@type");
 
         EditorAutoCompleteService.ConfigureStrict(typeBox, ProtoConstants.KnownOnHitEffectTypes,
             typeValue, () => _isPopulating, preserveUnknownInitialValue: true,
@@ -3312,8 +3292,9 @@ public partial class PowerEditorView : UserControl
         };
         if (catalog != null)
         {
-            var box = new AutoCompleteBox { Width = 180, Text = current, IsEnabled = IsModifiedMode,
-                FilterMode = AutoCompleteFilterMode.Contains };
+            var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 180, Text = current, IsEnabled = IsModifiedMode,
+                FilterMode = AutoCompleteFilterMode.Contains }, PowerOnHitCatalogRole(name));
+            EditorValidationBindings.Bind(box, effect, "@" + name);
             EditorAutoCompleteService.ConfigureStrict(box, catalog, current, () => _isPopulating,
                 preserveUnknownInitialValue: true, allowEmpty: true, selectAllOnFirstClick: false,
                 valueCommitted: value => CommitEffectInAreaOnHitAttribute(effect, name, value));
@@ -3322,8 +3303,9 @@ public partial class PowerEditorView : UserControl
         }
         else
         {
-            var box = new TextBox { Width = 100, Text = EditorNumericFieldStyle.FormatDisplay(current),
-                IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new TextBox { Width = 100, Text = EditorNumericFieldStyle.FormatDisplay(current),
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+            EditorValidationBindings.Bind(box, effect, "@" + name);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             box.TextChanged += (_, _) => CommitEffectInAreaOnHitAttribute(effect, name, box.Text ?? "");
             group.Children.Add(box);
@@ -3357,13 +3339,13 @@ public partial class PowerEditorView : UserControl
         section.Children.Add(rows);
         foreach (var damage in damages)
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4,
-                Margin = new Thickness(0, 0, 8, 4) };
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 8, 4) };
             var currentDamageType = damage.Attribute("type")?.Value;
             var damageTypeOptions = OptionsIncludingCurrent(ProtoConstants.KnownDamageTypes, currentDamageType);
-            var type = new ComboBox { Width = 110, ItemsSource = damageTypeOptions,
+            var type = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageTypeOptions,
                 SelectedItem = damageTypeOptions.FirstOrDefault(value => value.Equals(
-                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.Bind(type, damage, "@type");
             type.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || type.SelectedItem is not string value) return;
@@ -3371,9 +3353,10 @@ public partial class PowerEditorView : UserControl
                         StringComparison.OrdinalIgnoreCase) == true) return;
                 damage.SetAttributeValue("type", value); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
-            var amount = new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(damage.Value),
-                IsEnabled = IsModifiedMode };
+            var amount = ConfigurePowerFieldPresentation(new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(damage.Value),
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
+            EditorValidationBindings.BindXml(amount, damage);
             amount.TextChanged += (_, _) =>
             {
                 if (_isPopulating || _currentEntry == null || !CanEditProperties(_currentEntry)) return;
@@ -3480,9 +3463,10 @@ public partial class PowerEditorView : UserControl
     {
         var row = new WrapPanel { Margin = new Thickness(0, 0, 12, 4) };
         var typeValue = modify.Attribute("type")?.Value.Trim() ?? "";
-        var type = new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
-            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains };
+        var type = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
+            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
         var displayTypes = ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName).ToList();
+        EditorValidationBindings.Bind(type, modify, "@type");
         EditorAutoCompleteService.ConfigureStrict(type, displayTypes, type.Text ?? "", () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: false, deferSelectionCommit: true,
             selectAllOnFirstClick: false,
@@ -3501,10 +3485,10 @@ public partial class PowerEditorView : UserControl
 
         var currentApply = modify.Attribute("applytype")?.Value ?? "Multiply";
         var applyOptions = OptionsIncludingCurrent(["Multiply", "Add", "Set"], currentApply);
-        var apply = new ComboBox { Width = 110, ItemsSource = applyOptions,
+        var apply = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = applyOptions,
             SelectedItem = applyOptions.First(value => value.Equals(
                 currentApply, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode,
-            Tag = "applytype" };
+            Tag = "applytype" }, EditorFieldWidthRole.ShortEnum);
         apply.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || apply.SelectedItem is not string value) return;
@@ -3522,10 +3506,11 @@ public partial class PowerEditorView : UserControl
                 ? ProtoConstants.KnownArmorTypes : ProtoConstants.KnownDamageTypes;
             var currentDamageType = modify.Attribute("dmgtype")?.Value;
             var damageOptions = OptionsIncludingCurrent(damageTypes, currentDamageType);
-            var damage = new ComboBox { Width = 110, ItemsSource = damageOptions,
+            var damage = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageOptions,
                 SelectedItem = damageOptions.FirstOrDefault(value => value.Equals(
                     currentDamageType, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode };
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.Bind(damage, modify, "@dmgtype");
             damage.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || damage.SelectedItem is not string value) return;
@@ -3535,9 +3520,10 @@ public partial class PowerEditorView : UserControl
             };
             row.Children.Add(CreateEffectInAreaLabeledGroup("Damage Type", damage));
         }
-        var amount = new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(modify.Value),
-            IsEnabled = IsModifiedMode };
+        var amount = ConfigurePowerFieldPresentation(new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(modify.Value),
+            IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
+        EditorValidationBindings.BindXml(amount, modify);
         amount.TextChanged += (_, _) =>
         {
             if (_isPopulating) return;
@@ -3550,6 +3536,7 @@ public partial class PowerEditorView : UserControl
         row.Children.Add(CreateEffectInAreaLabeledGroup("Value", amount));
         var stack = new CheckBox { Content = "Stack", IsChecked = modify.Attribute("stack") != null,
             IsEnabled = IsModifiedMode, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        EditorValidationBindings.Bind(stack, modify, "@stack");
         stack.IsCheckedChanged += (_, _) =>
         {
             if (_isPopulating || (modify.Attribute("stack") != null) == (stack.IsChecked == true)) return;
@@ -3575,9 +3562,10 @@ public partial class PowerEditorView : UserControl
     {
         var row = new WrapPanel { Margin = new Thickness(0, 0, 12, 4) };
         var typeValue = ramp.Attribute("type")?.Value.Trim() ?? "";
-        var type = new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
-            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains };
+        var type = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
+            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
         var displayTypes = ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName).ToList();
+        EditorValidationBindings.Bind(type, ramp, "@type");
         EditorAutoCompleteService.ConfigureStrict(type, displayTypes, type.Text ?? "", () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: false, deferSelectionCommit: true,
             selectAllOnFirstClick: false,
@@ -3598,9 +3586,10 @@ public partial class PowerEditorView : UserControl
                 ? ProtoConstants.KnownArmorTypes : ProtoConstants.KnownDamageTypes;
             var currentDamageType = ramp.Attribute("dmgtype")?.Value;
             var damageOptions = OptionsIncludingCurrent(damageTypes, currentDamageType);
-            var damage = new ComboBox { Width = 110, ItemsSource = damageOptions,
+            var damage = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageOptions,
                 SelectedItem = damageOptions.FirstOrDefault(value => value.Equals(
-                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.Bind(damage, ramp, "@dmgtype");
             damage.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || damage.SelectedItem is not string value) return;
@@ -3612,9 +3601,10 @@ public partial class PowerEditorView : UserControl
         }
         foreach (var (label, attribute) in new[] { ("Init Value", "init"), ("Final Value", "final") })
         {
-            var box = new TextBox { Width = 80,
-                Text = EditorNumericFieldStyle.FormatDisplay(ramp.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new TextBox { Width = 80,
+                Text = EditorNumericFieldStyle.FormatDisplay(ramp.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+            EditorValidationBindings.Bind(box, ramp, "@" + attribute);
             box.TextChanged += (_, _) =>
             {
                 if (_isPopulating) return;
@@ -3665,7 +3655,7 @@ public partial class PowerEditorView : UserControl
         pickerRow.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         if (IsModifiedMode)
         {
-            var picker = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains };
+            var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.ChipSearch);
             var selected = targets.Select(target => target.Attribute(attributeName)!.Value)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             EditorAutoCompleteService.ConfigureStrict(picker,
@@ -3680,6 +3670,7 @@ public partial class PowerEditorView : UserControl
                     effect.Add(new XElement("target", new XAttribute(attributeName, value.Trim())));
                     RefreshEffectInAreaFields(_currentEntry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 });
+            EditorValidationBindings.Bind(picker, effect, "target/@" + attributeName, repeated: true);
             EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(picker, _specificScroll);
             pickerRow.Children.Add(picker);
         }
@@ -3750,7 +3741,7 @@ public partial class PowerEditorView : UserControl
         _switchingVfxAttachLabel.IsVisible = _switchingVfxAttachOpen;
         _switchingVfxAttachFields.IsVisible = _switchingVfxAttachOpen;
         _removeSwitchingVfxAttachButton.IsVisible = IsModifiedMode;
-        _switchingVfxAttachPicker.ItemsSource = _unitOrTypeNames.Where(value => !selected.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_switchingVfxAttachPicker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
         _switchingVfxAttachPicker.SelectedItem = null;
         _switchingVfxAttachPicker.Text = "";
         _switchingVfxAttachPicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
@@ -3807,27 +3798,31 @@ public partial class PowerEditorView : UserControl
         AddSwitchingIconField(header, container);
         content.Children.Add(header);
 
-        var rollover = new WrapPanel();
+        var rollover = new StackPanel();
         AddSwitchingResolvedField(rollover, container, "Rollover", "rolloverid",
             SwitchingStringId(CurrentPowerName!, "LR", index), multiline: true);
+        var extraTooltips = new WrapPanel();
         var extras = PowerCatalog.FindField(container, "extratooltips");
         if (extras != null)
             foreach (var field in extras.Elements().Where(element =>
                          element.Name.LocalName.Equals("string", StringComparison.OrdinalIgnoreCase)).ToList())
-                AddSwitchingExtraTooltipField(rollover, extras, field, tooltipIndex++);
+                AddSwitchingExtraTooltipField(extraTooltips, extras, field, tooltipIndex++);
         if (IsModifiedMode)
         {
             var addExtra = PowerEditorDynamicControls.CreateOptionalButton("Extra Tooltips", container);
             addExtra.Margin = new Thickness(0, 0, 8, 4);
             addExtra.Click += AddSwitchingExtraTooltip_Click;
-            rollover.Children.Add(addExtra);
+            extraTooltips.Children.Add(addExtra);
         }
+        rollover.Children.Add(extraTooltips);
         content.Children.Add(rollover);
 
-        var notification = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        var notification = new StackPanel();
         AddSwitchingResolvedField(notification, container, "Notification Message", "notificationmessageid",
             SwitchingStringId(CurrentPowerName!, "NOTIF", index), multiline: true);
-        AddSwitchingSoundField(notification, container);
+        var notificationSound = new WrapPanel();
+        AddSwitchingSoundField(notificationSound, container);
+        notification.Children.Add(notificationSound);
         content.Children.Add(notification);
 
         if (tierType.Equals("TotalResources", StringComparison.OrdinalIgnoreCase) ||
@@ -3870,7 +3865,7 @@ public partial class PowerEditorView : UserControl
         _switchingEffectContainers.Children.Add(border);
     }
 
-    private void AddSwitchingResolvedField(WrapPanel row, XElement owner, string label, string tag,
+    private void AddSwitchingResolvedField(Panel row, XElement owner, string label, string tag,
         string expectedId, bool multiline = false, double width = 240)
     {
         var field = PowerCatalog.FindField(owner, tag);
@@ -3882,15 +3877,15 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 4) };
         if (multiline)
         {
-            box.MinHeight = 32;
-            box.AcceptsReturn = true;
-            box.TextWrapping = TextWrapping.Wrap;
-            ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
+            EditorRolloverField.Configure(box);
         }
-        EditorTextFieldStyle.ConfigureTextBox(box);
-        box.Width = width;
-        box.TextChanged += SwitchingStringBox_TextChanged;
-        _switchingStringFields.Add((box, binding));
+        if (!multiline) ConfigurePowerFieldPresentation(box, EditorFieldWidthRole.SingleLineText);
+        RegisterSwitchingStringField(box, binding);
+        if (multiline)
+        {
+            row.Children.Add(EditorRolloverField.CreateRow(label, box));
+            return;
+        }
         var segment = RainLabeledSegment(label, box);
         segment.VerticalAlignment = VerticalAlignment.Center;
         row.Children.Add(segment);
@@ -3902,12 +3897,12 @@ public partial class PowerEditorView : UserControl
         if (field == null && !IsModifiedMode) return;
         var current = IconCatalog.ToResourceRelativePath(field?.Value.Trim() ?? "");
         current = ProtoEditorWindow.NormalizeIconCatalogValue(current, _iconPaths);
-        var editor = new AssetPathEditor
+        var editor = ConfigurePowerFieldPresentation(new AssetPathEditor
         {
             Width = 240,
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 8, 4)
-        };
+        }, EditorFieldWidthRole.AssetPath);
         editor.Configure(current, _iconPaths.Append(current), value =>
         {
             if (field?.Value.Equals(value, StringComparison.OrdinalIgnoreCase) == true)
@@ -3934,7 +3929,7 @@ public partial class PowerEditorView : UserControl
             if (field == null) field = PowerCatalog.SetField(owner, "notificationsound", value);
             else XmlTriviaPreserver.SetText(field, value);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-        }, "notificationsound", width: 220);
+        }, "notificationsound", role: EditorFieldWidthRole.AssetPath);
         var segment = RainLabeledSegment("Sound", box);
         segment.VerticalAlignment = VerticalAlignment.Center;
         row.Children.Add(segment);
@@ -3948,10 +3943,11 @@ public partial class PowerEditorView : UserControl
             var field = PowerCatalog.FindField(owner, "resourcetierreq");
             var current = field?.Attribute("type")?.Value.Trim() ?? ProtoConstants.KnownResourceTypes[0];
             var resourceOptions = OptionsIncludingCurrent(ProtoConstants.KnownResourceTypes, current);
-            var resource = new ComboBox { Width = 130, ItemsSource = resourceOptions,
+            var resource = ConfigurePowerFieldPresentation(new ComboBox { Width = 130, ItemsSource = resourceOptions,
                 SelectedItem = resourceOptions.First(value =>
                     value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 4) };
+                IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.Bind(resource, owner, "resourcetierreq/@type");
             resource.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || resource.SelectedItem is not string value) return;
@@ -3975,9 +3971,10 @@ public partial class PowerEditorView : UserControl
 
     private TextBox CreateSwitchingIntegerBox(XElement owner, string tag, XElement? field)
     {
-        var box = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(field?.Value),
-            IsEnabled = IsModifiedMode, Tag = field, Margin = new Thickness(0, 0, 8, 4) };
+        var box = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(field?.Value),
+            IsEnabled = IsModifiedMode, Tag = field, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+        EditorValidationBindings.Bind(box, owner, tag);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
         box.TextChanged += (_, _) =>
         {
@@ -3998,8 +3995,8 @@ public partial class PowerEditorView : UserControl
         var box = new TextBox { Width = 220, Tag = binding, Text = PendingOrId(field.Value.Trim()),
             IsEnabled = IsModifiedMode };
         EditorTextFieldStyle.ConfigureTextBox(box);
-        box.TextChanged += SwitchingStringBox_TextChanged;
-        _switchingStringFields.Add((box, binding));
+        ConfigurePowerFieldPresentation(box, EditorFieldWidthRole.ShortRollover);
+        RegisterSwitchingStringField(box, binding);
         var group = new StackPanel
         {
             Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
@@ -4019,6 +4016,13 @@ public partial class PowerEditorView : UserControl
             group.Children.Add(remove);
         }
         row.Children.Add(group);
+    }
+
+    private void RegisterSwitchingStringField(TextBox box, SwitchingStringBinding binding)
+    {
+        _programmaticStringBoxValues.AddOrUpdate(box, box.Text ?? "");
+        box.TextChanged += SwitchingStringBox_TextChanged;
+        _switchingStringFields.Add((box, binding));
     }
 
     private void SwitchingStringBox_TextChanged(object? sender, TextChangedEventArgs e)
@@ -4170,7 +4174,7 @@ public partial class PowerEditorView : UserControl
         if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
         var name = CurrentPowerName!;
         var type = _switchingTierTypeBox.SelectedItem as string ?? "Time";
-        var creation = SwitchingEffectsFamilyController.AddEffectContainer(_currentEntry, name, type);
+        var creation = SwitchingEffectsFamilyController.AddEffectContainer(_currentEntry, name, type, ReservedSwitchingStringIds());
         foreach (var id in creation.StringIds)
         {
             _session.SetPendingString(id, "", name);
@@ -4183,7 +4187,7 @@ public partial class PowerEditorView : UserControl
         if (_currentEntry == null || !CanEditProperties(_currentEntry) ||
             sender is not Button { Tag: XElement container }) return;
         var field = SwitchingEffectsFamilyController.AddExtraTooltip(
-            _currentEntry, container, CurrentPowerName!);
+            _currentEntry, container, CurrentPowerName!, ReservedSwitchingStringIds());
         var id = field.Value.Trim();
         _session.SetPendingString(id, "", CurrentPowerName!);
         RefreshSwitchingFields(_currentEntry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -4260,13 +4264,30 @@ public partial class PowerEditorView : UserControl
         string? newOwnerName = null)
     {
         var oldId = field.Value.Trim();
-        if (!IsOwnedSwitchingStringId(ownerName, oldId) ||
+        if (!IsOwnedSwitchingStringId(ownerName, oldId) || _currentEntry == null ||
+            !PowerCatalog.CollectOwnedStringIds(_currentEntry).Contains(oldId) ||
             oldId.Equals(newId, StringComparison.OrdinalIgnoreCase)) return;
+        if (_currentEntry.Descendants().Count(element => !element.HasElements &&
+                element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase)) > 1) return;
+        Dictionary<string, string> existing;
+        try { existing = OwnedStringSavePreparation.ReadEntries(_modStringsPath); }
+        catch (Exception exception)
+        {
+            _statusMessage.Text = "String IDs were kept because the string file could not be read safely: " + exception.Message;
+            return;
+        }
+        // Keep stable IDs when renumbering would reuse another key, including a removed tier's shared key.
+        if (existing.ContainsKey(newId) || ReservedSwitchingStringIds().Contains(newId, StringComparer.OrdinalIgnoreCase)) return;
         var textValue = await ResolveStringTextAsync(oldId);
+        if (!existing.ContainsKey(oldId) && textValue.Equals(oldId, StringComparison.Ordinal)) return;
         XmlTriviaPreserver.SetText(field, newId);
         _session.SetPendingString(newId, textValue, newOwnerName ?? ownerName);
         ScheduleStringRemoval(oldId, ownerName);
     }
+
+    private IEnumerable<string> ReservedSwitchingStringIds()
+        => (_loadedModDocument?.Descendants().Where(element => !element.HasElements).Select(element => element.Value.Trim()) ?? [])
+            .Concat(_session.CreateCommitSnapshot().StringUpdates.Keys);
 
     private async Task RenameSwitchingPowerStringsAsync(XElement entry, string oldName, string newName)
     {
@@ -4446,12 +4467,12 @@ public partial class PowerEditorView : UserControl
         var applyOptions = new[] { "Add", "Multiply", "Set" }.Append(applyValue)
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var apply = new ComboBox
+        var apply = ConfigurePowerFieldPresentation(new ComboBox
         {
             Width = 130, ItemsSource = applyOptions, SelectedItem = applyOptions.FirstOrDefault(value =>
                 value.Equals(applyValue, StringComparison.OrdinalIgnoreCase)),
             IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "apply"
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         apply.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || apply.SelectedItem is not string value) return;
@@ -4484,19 +4505,22 @@ public partial class PowerEditorView : UserControl
             {
                 if (_currentEntry != null) RefreshUnitModifyFields(_currentEntry);
             });
-        }, "modifytype");
+        }, "modifytype", role: EditorFieldWidthRole.LongEnum);
         fields.Children.Add(RainLabeledSegment("Modify Type", modifyType));
+        EditorValidationBindings.Bind(modifyType, modify);
 
         if (hasSpecificDamageType)
             fields.Children.Add(RainLabeledSegment("Damage Type",
                 CreateUnitModifyDamageTypeEditor(modify, modifyValue)));
 
-        var amount = new TextBox
+        var amount = ConfigurePowerFieldPresentation(new TextBox
         {
             Text = EditorNumericFieldStyle.FormatDisplay(UnitModifyAttribute(modify, "amount")?.Value),
             IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "amount"
-        };
+        }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
+        EditorValidationBindings.Bind(amount, modify, "@amount");
+        EditorValidationBindings.Bind(apply, modify, "@apply");
         amount.PropertyChanged += (_, args) =>
         {
             if (args.Property != TextBox.TextProperty || !IsModifiedMode) return;
@@ -4562,12 +4586,13 @@ public partial class PowerEditorView : UserControl
         var current = UnitModifyAttribute(modify, "damagetype")?.Value.Trim() ?? "Hack";
         var options = catalog.Append(current).Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var combo = new ComboBox
+        var combo = ConfigurePowerFieldPresentation(new ComboBox
         {
             Width = 120, ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
             IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "damagetype"
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(combo, modify, "@damagetype");
         combo.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string value) return;
@@ -4601,12 +4626,13 @@ public partial class PowerEditorView : UserControl
         });
         var ages = StandardAges.Append(ageAttribute.Value.Trim()).Where(value => value.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var age = new ComboBox
+        var age = ConfigurePowerFieldPresentation(new ComboBox
         {
             Width = 150, ItemsSource = ages, SelectedItem = ages.FirstOrDefault(value =>
                 value.Equals(ageAttribute.Value.Trim(), StringComparison.OrdinalIgnoreCase)),
             IsEnabled = IsModifiedMode, Tag = "age"
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(age, modify, "@age");
         age.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string value) return;
@@ -4669,7 +4695,7 @@ public partial class PowerEditorView : UserControl
                 {
                     if (_currentEntry != null) RefreshUnitModifyFields(_currentEntry);
                 });
-            }, "excludetypes", width: 50);
+            }, "excludetypes", role: EditorFieldWidthRole.ChipSearch);
             picker.Margin = new Thickness(0, 0, 4, 4);
             group.Children.Add(picker);
         }
@@ -4776,8 +4802,9 @@ public partial class PowerEditorView : UserControl
             PowerEffectFamilyController.ChangeType(effect, typeValue, selected);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             RefreshAfterSelectorEvent(effect, RefreshCurrentEffectRows);
-        }, "type", width: 210);
-        if (_invalidEffectTypes.Contains(effect)) type.Classes.Add("invalid-field");
+        }, "type", role: EditorFieldWidthRole.LongEnum);
+        if (_invalidEffectTypes.Contains(effect) && string.IsNullOrWhiteSpace(typeValue)) type.Classes.Add("invalid-field");
+        EditorValidationBindings.Bind(type, effect, "@type");
         headerFields.Children.Add(RainLabeledSegment("Type", type));
         AddRainHeaderNotNatureCheckBox(effect, headerFields, typeValue);
         AddRainPresenceCheckBox(effect, headerFields, "No Revert", "norevert");
@@ -4817,6 +4844,7 @@ public partial class PowerEditorView : UserControl
                 current.Value = value;
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             }, "target");
+            BindPowerEffectTarget(target, effect, "Tech");
             details.Children.Add(RainLabeledSegment("Tech", target));
         }
         else if (typeValue.Equals("Cost", StringComparison.OrdinalIgnoreCase))
@@ -4825,11 +4853,11 @@ public partial class PowerEditorView : UserControl
         }
         else if (RainEffectUsesPlayerTarget(typeValue))
         {
-            details.Children.Add(RainLabeledSegment("Player", new TextBox
+            details.Children.Add(RainLabeledSegment("Player", ConfigurePowerFieldPresentation(new TextBox
             {
                 Width = 200, Text = "Player", IsEnabled = false,
                 Margin = new Thickness(0, 0, 14, 4), Tag = "target"
-            }));
+            }, EditorFieldWidthRole.Reference)));
         }
         else
         {
@@ -4839,6 +4867,7 @@ public partial class PowerEditorView : UserControl
                 current.Value = value;
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             }, "target");
+            BindPowerEffectTarget(target, effect, "ProtoUnit");
             details.Children.Add(RainLabeledSegment("Unit", target));
         }
 
@@ -4849,7 +4878,7 @@ public partial class PowerEditorView : UserControl
         {
             var currentRelativity = RainAttribute(effect, "relativity")?.Value.Trim() ?? "BasePercent";
             var relativityDisplays = RainRelativityDisplaysForType(typeValue, currentRelativity);
-            var relativity = new ComboBox
+            var relativity = ConfigurePowerFieldPresentation(new ComboBox
             {
                 ItemsSource = relativityDisplays,
                 SelectedItem = relativityDisplays.Contains(RainRelativityToDisplay(currentRelativity),
@@ -4860,7 +4889,8 @@ public partial class PowerEditorView : UserControl
                 IsEnabled = IsModifiedMode,
                 Margin = new Thickness(0, 0, 14, 4),
                 Tag = "relativity"
-            };
+            }, EditorFieldWidthRole.LongEnum);
+            EditorValidationBindings.Bind(relativity, effect, "@relativity");
             relativity.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || relativity.SelectedItem is not string selected) return;
@@ -4893,6 +4923,7 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(8, 0, 8, 4),
             Tag = attributeName
         };
+        EditorValidationBindings.Bind(checkBox, effect, "@" + attributeName);
         checkBox.IsCheckedChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode) return;
@@ -4947,7 +4978,7 @@ public partial class PowerEditorView : UserControl
             attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value ?? "ProtoUnit";
         var unitMode = currentType.Equals("ProtoUnit", StringComparison.OrdinalIgnoreCase);
         var allTechs = currentType.Equals("TechAll", StringComparison.OrdinalIgnoreCase);
-        var kind = new ComboBox
+        var kind = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = new[] { "Unit", "Tech" },
             SelectedItem = unitMode ? "Unit" : "Tech",
@@ -4955,7 +4986,7 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 8, 4),
             Tag = "targetKind"
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         kind.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || kind.SelectedItem is not string selected) return;
@@ -4976,6 +5007,7 @@ public partial class PowerEditorView : UserControl
             current.Value = type == "TechAll" ? "" : value;
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         }, "target");
+        BindPowerEffectTarget(selector, effect, "ProtoUnit", "Tech", "TechAll");
         row.Children.Add(RainLabeledSegment(unitMode ? "Unit" : "Tech", selector));
     }
 
@@ -4993,15 +5025,16 @@ public partial class PowerEditorView : UserControl
 
     private TextBox CreateRainFloatAttributeBox(XElement effect, string attribute)
     {
-        var box = new TextBox
+        var box = ConfigurePowerFieldPresentation(new TextBox
         {
             Width = 90,
             Text = EditorNumericFieldStyle.FormatDisplay(RainAttribute(effect, attribute)?.Value),
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
-        };
+        }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+        EditorValidationBindings.Bind(box, effect, "@" + attribute);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.SignedFloat);
         box.TextChanged += (_, _) =>
         {
@@ -5161,7 +5194,7 @@ public partial class PowerEditorView : UserControl
 
     private void AddRainEnableDisableState(XElement effect, Panel row)
     {
-        var state = new ComboBox
+        var state = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = new[] { "Enable", "Disable" },
             SelectedItem = RainAttribute(effect, "amount")?.Value.Trim() == "0" ? "Disable" : "Enable",
@@ -5169,7 +5202,7 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = "state"
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         state.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || state.SelectedItem is not string selected) return;
@@ -5194,7 +5227,7 @@ public partial class PowerEditorView : UserControl
         var current = RainAttribute(effect, "unittype")?.Value.Trim() ?? "";
         var resourceMode = ProtoConstants.KnownResourceTypes.Contains(current,
             StringComparer.OrdinalIgnoreCase);
-        var kind = new ComboBox
+        var kind = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = new[] { "Unit", "Resource" },
             SelectedItem = resourceMode ? "Resource" : "Unit",
@@ -5202,7 +5235,7 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 8, 4),
             Tag = "forKind"
-        };
+        }, EditorFieldWidthRole.ShortEnum);
         kind.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || kind.SelectedItem is not string selected) return;
@@ -5225,7 +5258,7 @@ public partial class PowerEditorView : UserControl
         AddRainActionField(effect, row, allowAll: true);
         AddRainStrictAttribute(effect, row, "Source Unit", "srcproto", _protoUnitNames);
         AddRainStrictAttribute(effect, row, "Source Action", "srcaction", _protoActionNames);
-        AddRainStrictAttribute(effect, row, "Effect", "effecttype", ProtoConstants.KnownOnHitEffectTypes);
+        AddRainStrictAttribute(effect, row, "Effect", "effecttype", ProtoConstants.KnownOnHitEffectTypes, EditorFieldWidthRole.LongEnum);
     }
 
     private void AddRainActionField(XElement effect, Panel row, bool allowAll,
@@ -5252,7 +5285,8 @@ public partial class PowerEditorView : UserControl
                 SetRainAttribute(effect, "action", value, refresh: false);
             }
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-        }, "action", width: 165);
+        }, "action", role: EditorFieldWidthRole.CompactReference);
+        EditorValidationBindings.Bind(selector, effect, "@action");
         row.Children.Add(RainLabeledSegment("Action", selector));
     }
 
@@ -5277,6 +5311,7 @@ public partial class PowerEditorView : UserControl
 
         var selector = CreateRainStrictSelector(values, currentAttribute.Value.Trim(),
             value => SetRainAttribute(effect, attribute, value, preserveEmpty: true), attribute);
+        EditorValidationBindings.Bind(selector, effect, "@" + attribute);
         selector.Margin = new Thickness(0, 0, 2, 4);
         var segment = RainLabeledSegment(fieldLabel, selector);
         if (IsModifiedMode)
@@ -5296,10 +5331,11 @@ public partial class PowerEditorView : UserControl
     }
 
     private void AddRainStrictAttribute(XElement effect, Panel row, string label, string attribute,
-        IEnumerable<string> values)
+        IEnumerable<string> values, EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
     {
         var selector = CreateRainStrictSelector(values, RainAttribute(effect, attribute)?.Value.Trim() ?? "",
-            value => SetRainAttribute(effect, attribute, value), attribute);
+            value => SetRainAttribute(effect, attribute, value), attribute, role);
+        EditorValidationBindings.Bind(selector, effect, "@" + attribute);
         row.Children.Add(RainLabeledSegment(label, selector));
     }
 
@@ -5310,7 +5346,7 @@ public partial class PowerEditorView : UserControl
         var candidates = preserveCurrent ? values.Append(current) : values;
         var options = candidates.Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var combo = new ComboBox
+        var combo = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
@@ -5318,7 +5354,8 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(combo, effect, "@" + attribute);
         combo.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
@@ -5333,7 +5370,7 @@ public partial class PowerEditorView : UserControl
         var current = RainAttribute(effect, attribute)?.Value.Trim() ?? "All";
         var options = values.Append(current).Where(value => !string.IsNullOrWhiteSpace(value))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var combo = new ComboBox
+        var combo = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value =>
@@ -5342,7 +5379,8 @@ public partial class PowerEditorView : UserControl
             IsEnabled = IsModifiedMode,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
-        };
+        }, EditorFieldWidthRole.ShortEnum);
+        EditorValidationBindings.Bind(combo, effect, "@" + attribute);
         combo.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
@@ -5361,12 +5399,13 @@ public partial class PowerEditorView : UserControl
             { "BuyFactor", "SellFactor", "BuyDelta", "SellDelta", "BuyFactorSpecific", "SellFactorSpecific" };
         var current = RainAttribute(effect, "component")?.Value.Trim() ?? "BuyFactor";
         var componentOptions = OptionsIncludingCurrent(components, current);
-        var combo = new ComboBox
+        var combo = ConfigurePowerFieldPresentation(new ComboBox
         {
             ItemsSource = componentOptions,
             SelectedItem = componentOptions.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
             Width = 150, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "component"
-        };
+        }, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(combo, effect, "@component");
         combo.SelectionChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
@@ -5393,7 +5432,7 @@ public partial class PowerEditorView : UserControl
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             if (includeDamageType)
                 RefreshAfterSelectorEvent(effect, RefreshCurrentEffectRows);
-        }, "effecttype");
+        }, "effecttype", role: EditorFieldWidthRole.LongEnum);
         row.Children.Add(RainLabeledSegment("Effect", selector));
         if (includeDamageType && (effectType.Equals("DamageOverTime", StringComparison.OrdinalIgnoreCase) ||
                                   RainAttribute(effect, "dmgtype") != null))
@@ -5412,6 +5451,7 @@ public partial class PowerEditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Tag = "addToTactics"
         };
+        EditorValidationBindings.Bind(check, effect, "@addToTactics");
         check.IsCheckedChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode) return;
@@ -5452,10 +5492,10 @@ public partial class PowerEditorView : UserControl
     }
 
     private AutoCompleteBox CreateRainStrictSelector(IEnumerable<string> values, string current,
-        Action<string> commit, string tag, double width = 200)
+        Action<string> commit, string tag, EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
         => PowerEditorDynamicControls.CreateStrictSelector(
             values, current, IsModifiedMode, () => _isPopulating, () => IsModifiedMode,
-            commit, tag, _specificScroll, width);
+            commit, tag, _specificScroll, role);
 
     private static StackPanel RainLabeledSegment(string label, Control control)
         => PowerEditorDynamicControls.CreateLabeledSegment(label, control);
@@ -5619,13 +5659,13 @@ public partial class PowerEditorView : UserControl
 
     private void BuildDamageTierRow(XElement tier)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Segment number", VerticalAlignment = VerticalAlignment.Center });
-        var segment = new TextBox { Text = tier.Attribute("mindestroyed")?.Value ?? "" };
+        var segment = ConfigurePowerFieldPresentation(new TextBox { Text = tier.Attribute("mindestroyed")?.Value ?? "" }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(segment);
         row.Children.Add(segment);
         row.Children.Add(new TextBlock { Text = "HP Loss Multiplier", VerticalAlignment = VerticalAlignment.Center });
-        var reduction = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(tier.Value) };
+        var reduction = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(tier.Value) }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(reduction);
         row.Children.Add(reduction);
         var remove = PowerEditorDynamicControls.CreateRemoveButton();
@@ -5685,10 +5725,10 @@ public partial class PowerEditorView : UserControl
 
     private void BuildRootDamageRow(XElement damage)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Unit Type", VerticalAlignment = VerticalAlignment.Center });
-        var type = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0 };
+        var type = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0 }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(type, _unitOrTypeNames, damage.Value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: false, selectAllOnFirstClick: false,
             valueCommitted: value =>
@@ -5704,8 +5744,9 @@ public partial class PowerEditorView : UserControl
         type.Text = savedType;
         row.Children.Add(type);
         row.Children.Add(new TextBlock { Text = "Damage", VerticalAlignment = VerticalAlignment.Center });
-        var amount = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(damage.Attribute("damage")?.Value) };
+        var amount = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(damage.Attribute("damage")?.Value) }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
+        EditorValidationBindings.Bind(amount, damage, "@damage");
         amount.TextChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode ||
@@ -5755,6 +5796,7 @@ public partial class PowerEditorView : UserControl
             {
                 swap.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             });
+            EditorValidationBindings.Bind(target, swap);
             target.Margin = new Thickness(0, 0, 14, 4);
             row.Children.Add(target);
             row.Children.Add(new TextBlock { Text = "To", VerticalAlignment = VerticalAlignment.Center,
@@ -5764,6 +5806,7 @@ public partial class PowerEditorView : UserControl
                 {
                     swap.SetAttributeValue("swapto", value); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 });
+            EditorValidationBindings.Bind(destination, swap, "@swapto");
             destination.Margin = new Thickness(0, 0, 8, 4);
             row.Children.Add(destination);
             if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
@@ -5804,8 +5847,8 @@ public partial class PowerEditorView : UserControl
     {
         var items = choices.ToList();
         var committedValue = value.Trim();
-        var box = new AutoCompleteBox { Width = 200, MaxWidth = 200,
-            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, MaxWidth = 200,
+            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(box, items, value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: committed =>
@@ -5843,8 +5886,9 @@ public partial class PowerEditorView : UserControl
                 }));
             else
             {
-                var box = new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value),
-                    IsEnabled = IsModifiedMode };
+                var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value),
+                    IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                EditorValidationBindings.Bind(box, element);
                 EditorNumericFieldStyle.ConfigureNumericTextBox(box);
                 box.PropertyChanged += (_, change) =>
                 {
@@ -5926,7 +5970,7 @@ public partial class PowerEditorView : UserControl
             element.Name.LocalName.Equals("attracttype", StringComparison.OrdinalIgnoreCase)).ToList();
         var selected = attractTypes.Select(element => element.Value.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _lureAttractTypePicker.ItemsSource = _unitOrTypeNames.Where(value => !selected.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_lureAttractTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
         _lureAttractTypePicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
         _lureAttractTypePicker.SelectedItem = null;
         _lureAttractTypePicker.Text = "";
@@ -5999,12 +6043,12 @@ public partial class PowerEditorView : UserControl
             if (selectedAgeOption.Length > 0 &&
                 !options.Contains(selectedAgeOption, StringComparer.OrdinalIgnoreCase))
                 options.Add(selectedAgeOption);
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, };
             row.Children.Add(new TextBlock { Text = "Age", VerticalAlignment = VerticalAlignment.Center });
-            var ageBox = new ComboBox { Width = 140, ItemsSource = options,
+            var ageBox = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(selectedAgeOption,
                     StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode };
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(ageBox);
             row.Children.Add(new TextBlock { Text = "Max Food", VerticalAlignment = VerticalAlignment.Center });
             var maxFood = CreateLureAgeIntegerBox(element.Attribute("maxfood")?.Value);
@@ -6012,6 +6056,7 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(new TextBlock { Text = "Spawn Amount", VerticalAlignment = VerticalAlignment.Center });
             var spawnAmount = CreateLureAgeIntegerBox(element.Attribute("numspawns")?.Value);
             row.Children.Add(spawnAmount);
+            EditorValidationBindings.BindXml(ageBox, element);
             ageBox.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string selectedAge) return;
@@ -6046,7 +6091,7 @@ public partial class PowerEditorView : UserControl
 
     private TextBox CreateLureAgeIntegerBox(string? value)
     {
-        var box = new TextBox { Width = 90, Text = value ?? "", IsEnabled = IsModifiedMode };
+        var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = value ?? "", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
         return box;
@@ -6087,10 +6132,9 @@ public partial class PowerEditorView : UserControl
         foreach (var element in entry.Elements().Where(item =>
                      item.Name.LocalName.Equals("attacktarget", StringComparison.OrdinalIgnoreCase)).ToList())
         {
-            var row = new StackPanel
+            var row = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 6,
                 Margin = new Thickness(0, 0, 14, 4)
             };
             var target = CreateStrictSpecificBox(_unitOrTypeNames, element.Value.Trim(), value =>
@@ -6100,6 +6144,7 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(target);
             var instantKill = new CheckBox { Content = "Instant kill", IsEnabled = IsModifiedMode,
                 IsChecked = element.Attribute("instantkill") != null, VerticalAlignment = VerticalAlignment.Center };
+            EditorValidationBindings.Bind(instantKill, element, "@instantkill");
             instantKill.IsCheckedChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode) return;
@@ -6544,8 +6589,8 @@ public partial class PowerEditorView : UserControl
         _witherKillTypeChips.Children.Clear();
         var selected = killTypes.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _witherKillTypePicker.ItemsSource = _unitOrTypeNames
-            .Where(value => !selected.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(_witherKillTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)),
+            isVisible: () => IsModifiedMode && killOpen && selected.Count < _unitOrTypeNames.Count);
         _witherKillTypePicker.SelectedItem = null;
         _witherKillTypePicker.Text = "";
         _witherKillTypePicker.IsVisible = IsModifiedMode && killOpen && selected.Count < _unitOrTypeNames.Count;
@@ -6698,13 +6743,13 @@ public partial class PowerEditorView : UserControl
             });
             group.Children.Add(proto);
             group.Children.Add(new TextBlock { Text = "r", VerticalAlignment = VerticalAlignment.Center });
-            var radius = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("r")?.Value),
-                IsEnabled = IsModifiedMode };
+            var radius = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("r")?.Value),
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(radius);
             group.Children.Add(radius);
             group.Children.Add(new TextBlock { Text = "theta", VerticalAlignment = VerticalAlignment.Center });
-            var theta = new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("theta")?.Value),
-                IsEnabled = IsModifiedMode };
+            var theta = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("theta")?.Value),
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(theta);
             group.Children.Add(theta);
             void CommitAttribute(TextBox box, string attribute)
@@ -7031,8 +7076,8 @@ public partial class PowerEditorView : UserControl
         {
             var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 14, 4) };
-            var box = new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(time.Value),
-                IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(time.Value),
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             box.PropertyChanged += (_, change) =>
             {
@@ -7299,7 +7344,7 @@ public partial class PowerEditorView : UserControl
         remove.IsVisible = IsModifiedMode && open;
         var selected = elements.Select(element => element.Value.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        picker.ItemsSource = _unitOrTypeNames.Where(value => !selected.Contains(value)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(picker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
         picker.IsVisible = IsModifiedMode && open && selected.Count < _unitOrTypeNames.Count;
         picker.SelectedItem = null; picker.Text = "";
         chips.Children.Clear();
@@ -7407,11 +7452,11 @@ public partial class PowerEditorView : UserControl
         var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var subjectRow = new WrapPanel();
         var hasSelection = _tempUnitSelectionEntries.Contains(create) || create.Value.Contains('|');
-        var mode = new ComboBox { Width = 110, ItemsSource = TempUnitCreateModes,
+        var mode = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = TempUnitCreateModes,
             SelectedItem = hasSelection ? "Selection" : "Unit", IsEnabled = IsModifiedMode,
-            Margin = new Thickness(0, 0, 8, 4) };
+            Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.ShortEnum);
         subjectRow.Children.Add(mode);
-        var host = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
+        var host = new WrapPanel {
             Margin = new Thickness(0, 0, 8, 4) };
         subjectRow.Children.Add(host);
         if (ageSpecific)
@@ -7428,10 +7473,11 @@ public partial class PowerEditorView : UserControl
                 age.Equals(currentAge, StringComparison.OrdinalIgnoreCase)).ToList();
             if (currentAge.Length > 0 && !ageOptions.Contains(currentAge, StringComparer.OrdinalIgnoreCase))
                 ageOptions.Add(currentAge);
-            var age = new ComboBox { Width = 140, ItemsSource = ageOptions,
+            var age = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = ageOptions,
                 SelectedItem = ageOptions.FirstOrDefault(value => value.Equals(currentAge,
                     StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode,
-                Margin = new Thickness(0, 0, 8, 4) };
+                Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.LongEnum);
+            EditorValidationBindings.Bind(age, create, "@age");
             age.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string selected) return;
@@ -7490,10 +7536,11 @@ public partial class PowerEditorView : UserControl
         RefreshSubject();
     }
 
-    private void BuildTempUnitUnitEditor(StackPanel host, XElement create)
+    private void BuildTempUnitUnitEditor(Panel host, XElement create)
     {
-        var unit = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+        EditorValidationBindings.Bind(unit, create);
         EditorAutoCompleteService.ConfigureStrict(unit, _protoUnitNames, create.Value.Trim(), () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
@@ -7532,11 +7579,12 @@ public partial class PowerEditorView : UserControl
         }
     }
 
-    private void BuildTempUnitSelectionEditor(StackPanel host, XElement create)
+    private void BuildTempUnitSelectionEditor(Panel host, XElement create)
     {
-        var picker = new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ChipSearch);
         var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        EditorValidationBindings.Bind(picker, create);
         void Refresh()
         {
             var values = SplitTempUnitSelection(create.Value);
@@ -7551,8 +7599,8 @@ public partial class PowerEditorView : UserControl
                     Refresh(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 } : null, readOnly: !IsModifiedMode));
             }
-            picker.ItemsSource = _protoUnitNames.Where(name =>
-                !values.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList();
+            EditorAutoCompleteService.SetCatalogSuggestions(picker, _protoUnitNames.Where(name =>
+                !values.Contains(name, StringComparer.OrdinalIgnoreCase)));
         }
         EditorAutoCompleteService.ConfigureStrict(picker, _protoUnitNames, "", () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
@@ -7575,8 +7623,8 @@ public partial class PowerEditorView : UserControl
     private AutoCompleteBox CreateTempUnitProtoBox(string value, Action<string> commit)
     {
         var committedValue = value.Trim();
-        var box = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(box, _protoUnitNames, value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: committed =>
@@ -7596,9 +7644,10 @@ public partial class PowerEditorView : UserControl
         var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
             Margin = new Thickness(0, 0, 14, 4) };
         group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-        var box = new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(
-            create.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode };
+        var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(
+            create.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+        EditorValidationBindings.Bind(box, create, "@" + attribute);
         if (integer)
             EditorNumericInputBehavior.AttachRule(box, minimumZero
                 ? ProtoUnitNumericKind.UnsignedInteger : ProtoUnitNumericKind.SignedInteger);
@@ -7644,8 +7693,8 @@ public partial class PowerEditorView : UserControl
         var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
             Margin = new Thickness(0, 0, 14, 4) };
         group.Children.Add(new TextBlock { Text = "Radius", VerticalAlignment = VerticalAlignment.Center });
-        var mode = new ComboBox { Width = 110, ItemsSource = TempUnitRadiusModes,
-            SelectedItem = min != null || max != null ? "Min/Max" : "Simple", IsEnabled = IsModifiedMode };
+        var mode = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = TempUnitRadiusModes,
+            SelectedItem = min != null || max != null ? "Min/Max" : "Simple", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
         group.Children.Add(mode);
         if ((mode.SelectedItem as string) == "Min/Max")
         {
@@ -7685,9 +7734,9 @@ public partial class PowerEditorView : UserControl
             var patternGroup = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 14, 4) };
             patternGroup.Children.Add(new TextBlock { Text = "Pattern", VerticalAlignment = VerticalAlignment.Center });
-            var combo = new ComboBox { Width = 110, ItemsSource = patternOptions,
+            var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = patternOptions,
                 SelectedItem = patternOptions.FirstOrDefault(value => value.Equals(pattern,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
             combo.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string value) return;
@@ -7724,9 +7773,9 @@ public partial class PowerEditorView : UserControl
             var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 14, 4) };
             group.Children.Add(new TextBlock { Text = "Lifespan Type", VerticalAlignment = VerticalAlignment.Center });
-            var combo = new ComboBox { Width = 110, ItemsSource = lifespanOptions,
+            var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = lifespanOptions,
                 SelectedItem = lifespanOptions.FirstOrDefault(value => value.Equals(lifespanType,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
             combo.SelectionChanged += (_, _) =>
             { if (combo.SelectedItem is string value) SetTempUnitAttribute(create, "lifespantype", value); };
             group.Children.Add(combo);
@@ -7740,6 +7789,7 @@ public partial class PowerEditorView : UserControl
             IsChecked = create.Attribute("removesilentlyatlifespanend") != null,
             IsVisible = IsModifiedMode || create.Attribute("removesilentlyatlifespanend") != null,
             Margin = new Thickness(0, 0, 14, 4) };
+        EditorValidationBindings.Bind(removeAtEnd, create, "@removesilentlyatlifespanend");
         removeAtEnd.IsCheckedChanged += (_, _) =>
         {
             if (_isPopulating || !IsModifiedMode) return;
@@ -7758,9 +7808,9 @@ public partial class PowerEditorView : UserControl
             attribute.Name.LocalName.Equals(flag.XmlName, StringComparison.OrdinalIgnoreCase))).ToList();
         if (IsModifiedMode)
         {
-            var picker = new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
+            var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0, ItemsSource = TempUnitFlags.Where(flag => !selected.Contains(flag))
-                    .Select(flag => flag.Label).ToList() };
+                    .Select(flag => flag.Label).ToList() }, EditorFieldWidthRole.ChipSearch);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(picker, _specificScroll);
             picker.SelectionChanged += (_, _) =>
@@ -7784,7 +7834,7 @@ public partial class PowerEditorView : UserControl
     private void BuildTempUnitSoundControls(StackPanel card, XElement create)
     {
         var value = create.Attribute("createunitsoundset")?.Value;
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         if (value == null)
         {
             if (IsModifiedMode) row.Children.Add(CreateTempUnitAddButton("Soundset", () =>
@@ -7793,9 +7843,9 @@ public partial class PowerEditorView : UserControl
         else
         {
             row.Children.Add(new TextBlock { Text = "On creation", VerticalAlignment = VerticalAlignment.Center });
-            var box = new AutoCompleteBox { Width = 240, ItemsSource = GetSoundSetSuggestions(),
+            var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 240, ItemsSource = GetSoundSetSuggestions(),
                 Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0,
-                IsEnabled = IsModifiedMode };
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.AssetPath);
             EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating, selectAllOnFirstClick: false);
             EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
             box.PropertyChanged += (_, change) =>
@@ -7820,7 +7870,7 @@ public partial class PowerEditorView : UserControl
     private Button CreateTempUnitRemoveButton(Action action)
     {
         var button = PowerEditorDynamicControls.CreateRemoveButton();
-        button.Margin = new Thickness(2, 0, 0, 4);
+        button.Margin = new Thickness(EditorFormLayout.CrossGap, 0, 0, 0);
         button.Click += (_, _) => action(); return button;
     }
 
@@ -7984,17 +8034,18 @@ public partial class PowerEditorView : UserControl
                 value.Equals(currentAge, StringComparison.OrdinalIgnoreCase)).ToList();
             if (currentAge.Length > 0 && !ageOptions.Contains(currentAge, StringComparer.OrdinalIgnoreCase))
                 ageOptions.Add(currentAge);
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, };
             row.Children.Add(new TextBlock { Text = "Age", VerticalAlignment = VerticalAlignment.Center });
-            var age = new ComboBox { Width = 140, ItemsSource = ageOptions,
+            var age = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = ageOptions,
                 SelectedItem = ageOptions.FirstOrDefault(value => value.Equals(currentAge,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(age);
             row.Children.Add(new TextBlock { Text = isDwarvenMine ? "Gold Amount" : "Quantity",
                 VerticalAlignment = VerticalAlignment.Center });
             var quantityAttribute = isDwarvenMine ? "goldamount" : "quantityaddon";
-            var quantity = new TextBox { Width = 90, Text = adjustment.Attribute(quantityAttribute)?.Value ?? "",
-                IsEnabled = IsModifiedMode };
+            var quantity = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = adjustment.Attribute(quantityAttribute)?.Value ?? "",
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+            EditorValidationBindings.Bind(quantity, adjustment, "@" + quantityAttribute);
             EditorNumericFieldStyle.ConfigureNumericTextBox(quantity);
             row.Children.Add(quantity);
             TextBox? gatherRate = null;
@@ -8002,11 +8053,12 @@ public partial class PowerEditorView : UserControl
             {
                 row.Children.Add(new TextBlock { Text = "Gather Rate Multiplier",
                     VerticalAlignment = VerticalAlignment.Center });
-                gatherRate = new TextBox { Width = 90,
+                gatherRate = ConfigurePowerFieldPresentation(new TextBox { Width = 90,
                     Text = adjustment.Attribute("gatherratemultiplier")?.Value ?? "",
-                    IsEnabled = IsModifiedMode };
+                    IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
                 EditorNumericFieldStyle.ConfigureNumericTextBox(gatherRate);
                 row.Children.Add(gatherRate);
+                EditorValidationBindings.Bind(gatherRate, adjustment, "@gatherratemultiplier");
                 gatherRate.TextChanged += (_, _) =>
                 {
                     if (_isPopulating || !IsModifiedMode || !double.TryParse(gatherRate.Text,
@@ -8038,6 +8090,7 @@ public partial class PowerEditorView : UserControl
                 adjustment.SetAttributeValue(quantityAttribute, normalized);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
+            EditorValidationBindings.BindXml(age, adjustment);
             age.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string value) return;
@@ -8178,11 +8231,17 @@ public partial class PowerEditorView : UserControl
             var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 12, 4) };
             group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-            var box = new TextBox { Width = 90, Text = creep.Attribute(attribute)?.Value ?? "0",
-                IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = creep.Attribute(attribute)?.Value ?? "0",
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
+            // Initial TextChanged can arrive after population. A displayed default
+            // is not an edit and must not introduce an absent XML attribute.
+            var previousText = box.Text;
+            EditorValidationBindings.Bind(box, creep, "@" + attribute);
             box.TextChanged += (_, _) =>
             {
+                if (string.Equals(previousText, box.Text, StringComparison.Ordinal)) return;
+                previousText = box.Text;
                 if (_isPopulating || !IsModifiedMode || !double.TryParse(box.Text,
                     NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                     !double.IsFinite(value) || value < 0) return;
@@ -8198,8 +8257,8 @@ public partial class PowerEditorView : UserControl
             var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 12, 4) };
             group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-            var box = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-                MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+                MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
             if (strict) EditorAutoCompleteService.ConfigureStrict(box, values, creep.Attribute(attribute)?.Value ?? "",
                 () => _isPopulating, preserveUnknownInitialValue: true, allowEmpty: true,
                 commitEmptyAsValid: true, selectAllOnFirstClick: false, valueCommitted: value =>
@@ -8233,9 +8292,9 @@ public partial class PowerEditorView : UserControl
             }
             var current = creep.Attribute(attribute)?.Value;
             var options = OptionsIncludingCurrent(values, current);
-            var combo = new ComboBox { Width = 160, ItemsSource = options,
+            var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 160, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(current,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode, Margin = new Thickness(0,0,8,4) };
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode, Margin = new Thickness(0,0,8,4) }, EditorFieldWidthRole.LongEnum);
             combo.SelectionChanged += (_, _) => { if (combo.SelectedItem is string value) SetTerrainAttribute(attribute, value.ToLowerInvariant()); };
             host.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,6,4) });
             host.Children.Add(combo);
@@ -8282,9 +8341,9 @@ public partial class PowerEditorView : UserControl
         var selected = MajorGodCatalog.TerrainCreepFlags.Where(flag => creep.Attribute(flag.Attribute) != null).ToList();
         if (IsModifiedMode)
         {
-            var picker = new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
+            var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0, ItemsSource = MajorGodCatalog.TerrainCreepFlags.Except(selected)
-                    .Select(flag => flag.Label).ToList() };
+                    .Select(flag => flag.Label).ToList() }, EditorFieldWidthRole.ChipSearch);
             EditorAutoCompleteService.EnableDropdown(picker, () => _isPopulating, selectAllOnFirstClick: false);
             picker.SelectionChanged += (_, _) =>
             {
@@ -8314,10 +8373,10 @@ public partial class PowerEditorView : UserControl
 
     private void BuildDroughtInitialDamage(XElement entry, XElement element)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Unit", VerticalAlignment = VerticalAlignment.Center });
-        var unit = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, element.Value, () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
@@ -8327,8 +8386,9 @@ public partial class PowerEditorView : UserControl
             });
         unit.Text = element.Value;
         row.Children.Add(unit); row.Children.Add(new TextBlock { Text = "Factor", VerticalAlignment = VerticalAlignment.Center });
-        var factor = new TextBox { Width = 90, Text = element.Attribute("fraction")?.Value ?? "0",
-            IsEnabled = IsModifiedMode }; EditorNumericFieldStyle.ConfigureNumericTextBox(factor);
+        var factor = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = element.Attribute("fraction")?.Value ?? "0",
+            IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric); EditorNumericFieldStyle.ConfigureNumericTextBox(factor);
+        EditorValidationBindings.Bind(factor, element, "@fraction");
         factor.TextChanged += (_, _) => { if (double.TryParse(factor.Text, NumberStyles.Float,
             CultureInfo.InvariantCulture, out var value) && double.IsFinite(value))
             {
@@ -8360,10 +8420,10 @@ public partial class PowerEditorView : UserControl
 
     private void BuildGreatFloodDamageCap(XElement entry, XElement element)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Unit", VerticalAlignment = VerticalAlignment.Center });
-        var unit = new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode };
+        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
+            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
         var initial = element.Attribute("unittype")?.Value ?? "";
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, initial, () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
@@ -8375,8 +8435,9 @@ public partial class PowerEditorView : UserControl
             });
         unit.Text = initial;
         row.Children.Add(unit); row.Children.Add(new TextBlock { Text = "Cap", VerticalAlignment = VerticalAlignment.Center });
-        var cap = new TextBox { Width = 90, Text = element.Value, IsEnabled = IsModifiedMode };
+        var cap = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = element.Value, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(cap);
+        EditorValidationBindings.BindXml(cap, element);
         cap.TextChanged += (_, _) => { if (double.TryParse(cap.Text, NumberStyles.Float,
             CultureInfo.InvariantCulture, out var value) && double.IsFinite(value))
             {
@@ -8415,8 +8476,8 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(0, 0, 6, 4) });
         var abstractType = armor.Elements().FirstOrDefault(element =>
             element.Name.LocalName.Equals("abstracttype", StringComparison.OrdinalIgnoreCase));
-        var unit = new AutoCompleteBox { Width = 200, MaxWidth = 200, IsEnabled = IsModifiedMode,
-            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 14, 4) };
+        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, MaxWidth = 200, IsEnabled = IsModifiedMode,
+            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 14, 4) }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, abstractType?.Value ?? "", () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
@@ -8444,15 +8505,16 @@ public partial class PowerEditorView : UserControl
         foreach (var armorType in armor.Elements().Where(element =>
                      element.Name.LocalName.Equals("armortype", StringComparison.OrdinalIgnoreCase)).ToList())
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, };
             row.Children.Add(new TextBlock { Text = "Armor Type", VerticalAlignment = VerticalAlignment.Center });
             var current = armorType.Value.Trim();
             var choices = ProtoConstants.KnownArmorTypes.Concat(
                 ProtoConstants.KnownArmorTypes.Contains(current, StringComparer.OrdinalIgnoreCase) || current.Length == 0
                     ? [] : [current]).ToList();
-            var type = new ComboBox { Width = 120, ItemsSource = choices,
+            var type = ConfigurePowerFieldPresentation(new ComboBox { Width = 120, ItemsSource = choices,
                 SelectedItem = choices.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode };
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.BindXml(type, armorType);
             type.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || type.SelectedItem is not string value) return;
@@ -8461,9 +8523,10 @@ public partial class PowerEditorView : UserControl
             };
             row.Children.Add(type);
             row.Children.Add(new TextBlock { Text = "Delta", VerticalAlignment = VerticalAlignment.Center });
-            var valueBox = new TextBox { Width = 90,
-                Text = armorType.Attribute("vulnerabilitypercentdelta")?.Value ?? "", IsEnabled = IsModifiedMode };
+            var valueBox = ConfigurePowerFieldPresentation(new TextBox { Width = 90,
+                Text = armorType.Attribute("vulnerabilitypercentdelta")?.Value ?? "", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(valueBox);
+            EditorValidationBindings.Bind(valueBox, armorType, "@vulnerabilitypercentdelta");
             valueBox.TextChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || !double.TryParse(valueBox.Text,
@@ -8548,15 +8611,16 @@ public partial class PowerEditorView : UserControl
             if (selectedAgeOption.Length > 0 &&
                 !options.Contains(selectedAgeOption, StringComparer.OrdinalIgnoreCase))
                 options.Add(selectedAgeOption);
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var row = new WrapPanel { Orientation = Orientation.Horizontal, };
             row.Children.Add(new TextBlock { Text = "Age", VerticalAlignment = VerticalAlignment.Center });
-            var ageBox = new ComboBox { Width = 140, ItemsSource = options,
+            var ageBox = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(selectedAgeOption,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode };
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(ageBox);
             row.Children.Add(new TextBlock { Text = "Food", VerticalAlignment = VerticalAlignment.Center });
-            var food = new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value), IsEnabled = IsModifiedMode };
+            var food = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(food); row.Children.Add(food);
+            EditorValidationBindings.Bind(ageBox, element, "@age");
             ageBox.SelectionChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string selected) return;
@@ -8568,6 +8632,7 @@ public partial class PowerEditorView : UserControl
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 RefreshAfterSelectorEvent(element, () => RefreshGreatHuntMaxFoods(entry));
             };
+            EditorValidationBindings.BindXml(food, element);
             food.TextChanged += (_, _) =>
             {
                 if (_isPopulating || !IsModifiedMode || !double.TryParse(food.Text, NumberStyles.Float,
@@ -8678,7 +8743,7 @@ public partial class PowerEditorView : UserControl
             foreach (var name in generatedRemoveNames)
             {
                 var remove = PowerEditorDynamicControls.CreateRemoveButton(name);
-                ToolTip.SetTip(remove, $"Remove {name}");
+                ToolTip.SetTip(remove, $"Remove {EditorDisplayText.Caption(name)}");
                 remove.Click += RemoveSpecificAttribute_Click;
                 removeButtons.Children.Add(remove);
             }
@@ -8693,7 +8758,7 @@ public partial class PowerEditorView : UserControl
         var stunVisible = states["Stun lenght"].Visible;
         var shockwaveVfxVisible = states["Shockwave VFX"].Visible;
         _stunLengthLabel.IsVisible = stunVisible || shockwaveVfxVisible;
-        _stunLengthLabel.Text = stunVisible ? "Stun lenght (s)" : "Shockwave VFX";
+        _stunLengthLabel.Text = stunVisible ? "Stun length (s)" : "Shockwave VFX";
         _stunLengthFields.IsVisible = stunVisible;
         _shockwaveVfxFields.IsVisible = shockwaveVfxVisible;
         _shockwaveVfxInlineLabel.IsVisible = stunVisible && shockwaveVfxVisible;
@@ -9039,8 +9104,18 @@ public partial class PowerEditorView : UserControl
 
     private void CommitPowerType(string powerType)
     {
-        if (_currentEntry == null || !CanEditProperties(_currentEntry) ||
-            !PowerTypes.Contains(powerType, StringComparer.OrdinalIgnoreCase)) return;
+        if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
+        if (string.IsNullOrEmpty(powerType))
+        {
+            if (string.IsNullOrEmpty(_currentEntry.Attribute("type")?.Value)) return;
+            // Keep specific data while the required type is temporarily incomplete.
+            // Save validates it; choosing a new type performs the usual conversion.
+            _currentEntry.SetAttributeValue("type", "");
+            MarkCurrentDirty();
+            RefreshRawXmlFromCurrent();
+            return;
+        }
+        if (!PowerTypes.Contains(powerType, StringComparer.OrdinalIgnoreCase)) return;
         _powerTypeBox.Classes.Remove("invalid-field");
         var attribute = _currentEntry.Attribute("type");
         if (attribute?.Value.Equals(powerType, StringComparison.Ordinal) == true) return;
@@ -9899,8 +9974,8 @@ public partial class PowerEditorView : UserControl
             var current = FindPlacementFlag(sound, name)?.Value;
             var choices = current != null && !options.Contains(current, StringComparer.OrdinalIgnoreCase)
                 ? options.Append(current).ToArray() : options;
-            var box = new ComboBox { Width = width, MaxWidth = width, ItemsSource = choices,
-                IsEnabled = IsModifiedMode };
+            var box = ConfigurePowerFieldPresentation(new ComboBox { Width = width, MaxWidth = width, ItemsSource = choices,
+                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
             box.SelectedItem = choices.FirstOrDefault(option =>
                 option.Equals(current, StringComparison.OrdinalIgnoreCase));
             var field = Field(label, box);
@@ -9913,14 +9988,14 @@ public partial class PowerEditorView : UserControl
         }
 
         Dropdown("type", SoundSetTypes, "Type", 120);
-        var soundBox = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox
+        var soundBox = EditorTextFieldStyle.ConfigureSelector(ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Text = sound.Value,
             ItemsSource = suggestions,
             FilterMode = AutoCompleteFilterMode.Contains,
             IsEnabled = IsModifiedMode
-        });
-        soundBox.Width = soundBox.MaxWidth = 200;
+        }, EditorFieldWidthRole.AssetPath));
+        ConfigurePowerFieldPresentation(soundBox, EditorFieldWidthRole.AssetPath);
         EditorAutoCompleteService.EnableDropdown(soundBox, () => _isPopulating, selectAllOnFirstClick: false);
         Field("Sound", soundBox).IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(sound.Value);
         void CommitSound()
@@ -9946,12 +10021,13 @@ public partial class PowerEditorView : UserControl
             button.IsVisible = IsModifiedMode && existing == null;
             button.Margin = new Thickness(0, 0, 6, 4);
             row.Children.Add(button);
-            var box = EditorNumericFieldStyle.ConfigureNumericTextBox(new TextBox
+            var box = EditorNumericFieldStyle.ConfigureNumericTextBox(ConfigurePowerFieldPresentation(new TextBox
             {
                 Text = EditorNumericFieldStyle.FormatDisplay(existing?.Value),
                 IsEnabled = IsModifiedMode
-            });
+            }, EditorFieldWidthRole.Numeric));
             _soundNumericBoxes.Add((box, sound));
+            EditorValidationBindings.Bind(box, sound, "@" + name);
             var field = Field(label, box);
             field.IsVisible = existing != null;
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
@@ -10606,8 +10682,8 @@ public partial class PowerEditorView : UserControl
                 RefreshAttackTypes();
             } : null, readOnly: !IsModifiedMode));
         }
-        picker.ItemsSource = _unitOrTypeNames
-            .Where(value => !values.Contains(value, StringComparer.OrdinalIgnoreCase)).ToList();
+        EditorAutoCompleteService.SetCatalogSuggestions(picker, _unitOrTypeNames
+            .Where(value => !values.Contains(value, StringComparer.OrdinalIgnoreCase)));
         picker.IsVisible = IsModifiedMode;
     }
 
@@ -10693,7 +10769,16 @@ public partial class PowerEditorView : UserControl
         if (_addRestrictPlacementButton.IsVisible) orderedOptions.Add(_addRestrictPlacementButton);
         if (_addOverlapTypeButton.IsVisible) orderedOptions.Add(_addOverlapTypeButton);
         _addPlacementRestrictionButton.IsVisible = IsModifiedMode && _placementDetailsHost.IsVisible;
-        if (_addPlacementRestrictionButton.IsVisible) orderedOptions.Add(_addPlacementRestrictionButton);
+        if (_addPlacementRestrictionButton.Parent is Panel previousRestrictionHost)
+            previousRestrictionHost.Children.Remove(_addPlacementRestrictionButton);
+        if (_addPlacementRestrictionButton.IsVisible)
+        {
+            _addPlacementRestrictionButton.HorizontalAlignment = HorizontalAlignment.Left;
+            _addPlacementRestrictionButton.Margin = new Thickness(0, 0, 0, EditorFormLayout.LabelGap);
+            _placementRestrictionRows.Children.Add(_addPlacementRestrictionButton);
+            _placementRestrictionRows.IsVisible = true;
+            if (!orderedOptions.Contains(_placementRestrictionRows)) orderedOptions.Add(_placementRestrictionRows);
+        }
         _placementOptionsFlow.Children.Clear();
         foreach (var option in orderedOptions)
             _placementOptionsFlow.Children.Add(option);
@@ -10714,30 +10799,29 @@ public partial class PowerEditorView : UserControl
         foreach (var restriction in _currentEntry.Elements().Where(element =>
                      element.Name.LocalName.Equals("placementrestriction", StringComparison.OrdinalIgnoreCase)))
         {
-            var row = new StackPanel
+            var row = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 6,
                 Margin = new Thickness(0, 0, 6, 4)
             };
             row.Children.Add(new TextBlock { Text = "Placement restriction", VerticalAlignment = VerticalAlignment.Center });
-            var type = new AutoCompleteBox
+            var type = ConfigurePowerFieldPresentation(new AutoCompleteBox
             {
                 Width = 200, MaxWidth = 200, ItemsSource = _unitOrTypeNames,
                 FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0,
                 Text = restriction.Value.Trim(), IsEnabled = IsModifiedMode
-            };
+            }, EditorFieldWidthRole.Reference);
             EditorAutoCompleteService.EnableDropdown(type, () => _isPopulating, selectAllOnFirstClick: false);
             type.SelectionChanged += (_, _) => CommitPlacementRestrictionType(restriction, type);
             type.LostFocus += (_, _) => CommitPlacementRestrictionType(restriction, type);
             row.Children.Add(type);
             row.Children.Add(new TextBlock { Text = "Radius", VerticalAlignment = VerticalAlignment.Center });
-            var radius = new TextBox
+            var radius = ConfigurePowerFieldPresentation(new TextBox
             {
                 Width = 110, MaxWidth = 110,
                 Text = EditorNumericFieldStyle.FormatDisplay(FindPlacementFlag(restriction, "radius")?.Value),
                 IsEnabled = IsModifiedMode
-            };
+            }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(radius);
             radius.PropertyChanged += (_, change) =>
             {
@@ -10760,6 +10844,7 @@ public partial class PowerEditorView : UserControl
                 };
                 row.Children.Add(remove);
             }
+            EditorFormLayout.GroupFlowingFields(row);
             _placementRestrictionRows.Children.Add(row);
             _placementRestrictionFields.Add((type, radius, restriction));
         }
@@ -11114,8 +11199,20 @@ public partial class PowerEditorView : UserControl
 
     private void RefreshRawXmlFromCurrent()
     {
+        FinalizePowerPresentation();
         if (_currentEntry != null && !_rawEditorDirty)
-            SetRawXml(PowerCatalog.FormatPreview(_currentEntry));
+        {
+            var preview = new XElement(_currentEntry);
+            var currentName = PowerCatalog.GetName(_currentEntry);
+            var saved = _loadedModDocument == null ? null : PowerCatalog.Find(_loadedModDocument, currentName);
+            // Some form callbacks refresh preview immediately before marking dirty.
+            // Compare the record too so the first edit already shows save order.
+            if (IsModifiedMode && (_session.IsPowerDirty(currentName) || !XNode.DeepEquals(_currentEntry, saved)) &&
+                CurrentPowerXmlDraft?.Session.IsEditing != true && !EditorXmlOrderPolicy.HasProtectedContent(_currentEntry))
+                PowerXmlFieldOrder.NormalizeForEditor(preview);
+            SetRawXml(EditorXmlOrderPolicy.HasProtectedContent(_currentEntry)
+                ? preview.ToString(SaveOptions.DisableFormatting) : PowerCatalog.FormatPreview(preview));
+        }
     }
 
     private void MarkCurrentDirty()
@@ -11417,7 +11514,7 @@ public partial class PowerEditorView : UserControl
 
     private void SetStringBoxTextWithoutEditing(TextBox box, string text)
     {
-        _programmaticStringBoxValues[box] = text;
+        _programmaticStringBoxValues.AddOrUpdate(box, text);
         SetBoxTextWithoutEditing(box, text);
     }
 
@@ -11471,18 +11568,30 @@ public partial class PowerEditorView : UserControl
 
     private bool ConsumeProgrammaticStringBoxChange(TextBox box)
     {
-        if (!_programmaticStringBoxValues.Remove(box, out var expected))
+        if (!_programmaticStringBoxValues.TryGetValue(box, out var expected))
             return false;
-        return string.Equals(expected, box.Text ?? "", StringComparison.Ordinal);
+        if (string.Equals(expected, box.Text ?? "", StringComparison.Ordinal)) return true;
+        _programmaticStringBoxValues.Remove(box);
+        return false;
+    }
+
+    private Control? _numericValidationTarget;
+
+    private string NumericValidationFailure(string message, Control target)
+    {
+        _numericValidationTarget = target;
+        return message;
     }
 
     private string? ValidateNumericProperties()
     {
+        _numericValidationTarget = null;
+        BindPowerValidationFields();
         var orderHint = _currentEntry == null ? null : FindAttribute(_currentEntry, "orderhint");
         if (orderHint != null &&
             (!double.TryParse(orderHint.Value, NumberStyles.Float, CultureInfo.InvariantCulture,
                  out var orderHintValue) || !double.IsFinite(orderHintValue)))
-            return "orderhint must be a valid number.";
+            return NumericValidationFailure("orderhint must be a valid number.", _orderHintBox);
         if (_currentEntry != null && IsSwitchingEffectsPower(_currentEntry))
         {
             var tierType = PowerCatalog.FindField(_currentEntry, "tiertype")?.Value.Trim() ?? "Time";
@@ -11490,7 +11599,7 @@ public partial class PowerEditorView : UserControl
             if (tierType.Equals("Time", StringComparison.OrdinalIgnoreCase) && interval != null &&
                 (!double.TryParse(interval.Value, NumberStyles.Float, CultureInfo.InvariantCulture,
                      out var intervalValue) || !double.IsFinite(intervalValue)))
-                return "Switching Effects Interval must be a valid number.";
+                return NumericValidationFailureAt("Switching Effects Interval must be a valid number.", _currentEntry!, "interval");
             foreach (var effects in _currentEntry.Elements().Where(element =>
                          element.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase)))
             {
@@ -11501,7 +11610,7 @@ public partial class PowerEditorView : UserControl
                 if (requirement != null &&
                     (!int.TryParse(requirement.Value, NumberStyles.Integer, CultureInfo.InvariantCulture,
                          out var requirementValue) || requirementValue < 0))
-                    return "Tier Requirement must be a non-negative whole number.";
+                    return NumericValidationFailureAt("Tier Requirement must be a non-negative whole number.", requirement);
             }
         }
         foreach (var box in new[] { _activeTimeBox, _buildUpBox, _shutDownBox, _shutDownFadeBox })
@@ -11510,7 +11619,7 @@ public partial class PowerEditorView : UserControl
             if (PowerCatalog.FindField(_currentEntry!, tag) == null) continue;
             if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value))
-                return $"{tag} must be a valid number.";
+                return NumericValidationFailure($"{tag} must be a valid number.", box);
         }
         foreach (var box in new[] { _costBox, _repeatCostBox, _limitGlobalBox, _limitPlayerBox })
         {
@@ -11524,34 +11633,34 @@ public partial class PowerEditorView : UserControl
             {
                 if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                         out var number) || !double.IsFinite(number) || number < 0)
-                    return $"{tag} must be a non-negative number.";
+                    return NumericValidationFailure($"{tag} must be a non-negative number.", box);
             }
             else if (!int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture,
                          out var value) || value < 0)
-                return $"{tag} must be a non-negative whole number.";
+                return NumericValidationFailure($"{tag} must be a non-negative whole number.", box);
         }
         if (!string.IsNullOrWhiteSpace(_radiusBox.Text) &&
             (!double.TryParse(_radiusBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                  out var radius) || !double.IsFinite(radius) || radius < 0))
-            return "radius must be a non-negative number.";
+            return NumericValidationFailure("radius must be a non-negative number.", _radiusBox);
         if (!string.IsNullOrWhiteSpace(_minimapDurationBox.Text) &&
             (!double.TryParse(_minimapDurationBox.Text, NumberStyles.Float,
                  CultureInfo.InvariantCulture, out var minimapDuration) ||
              !double.IsFinite(minimapDuration) || minimapDuration < 0))
-            return "Minimap notification duration must be a non-negative number.";
+            return NumericValidationFailure("Minimap notification duration must be a non-negative number.", _minimapDurationBox);
         foreach (var box in EffectAttributeBoxes())
         {
             if (!box.IsVisible || string.IsNullOrWhiteSpace(box.Text)) continue;
             if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value) || value < 0)
-                return $"{box.Tag} must be a non-negative number.";
+                return NumericValidationFailure($"{box.Tag} must be a non-negative number.", box);
         }
         foreach (var (box, sound) in _soundNumericBoxes)
         {
             if (sound.Parent != _currentEntry || !box.IsVisible || string.IsNullOrWhiteSpace(box.Text)) continue;
             if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value) || value < 0)
-                return "Sound set Delay and Fade in must be non-negative numbers.";
+                return NumericValidationFailure("Sound set Delay and Fade in must be non-negative numbers.", box);
         }
         foreach (var box in new[]
                  { _dualPowerMinDistanceBox, _powerBlockerBox, _revealRadiusBox,
@@ -11561,26 +11670,26 @@ public partial class PowerEditorView : UserControl
             if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value) || value < 0 ||
                 (ReferenceEquals(box, _accuracyBox) && value > 1))
-                return $"{box.Tag ?? "Reveal LOS radius"} must be a valid non-negative number" +
-                       (ReferenceEquals(box, _accuracyBox) ? " between 0 and 1." : ".");
+                return NumericValidationFailure($"{box.Tag ?? "Reveal LOS radius"} must be a valid non-negative number" +
+                       (ReferenceEquals(box, _accuracyBox) ? " between 0 and 1." : "."), box);
         }
         var resetText = _resetAbilityChargeBox.Text?.Trim() ?? "";
         var savedReset = PowerCatalog.FindField(_currentEntry!, "abstractpowerresetsabilitychargetype")?.Value.Trim() ?? "";
         if (resetText.Length > 0 && !resetText.Equals(savedReset, StringComparison.OrdinalIgnoreCase) &&
             !_unitOrTypeNames.Contains(resetText, StringComparer.OrdinalIgnoreCase))
-            return "Reset Ability Charge for must be a valid Protounit or Unit Type.";
+            return NumericValidationFailure("Reset Ability Charge for must be a valid Protounit or Unit Type.", _resetAbilityChargeBox);
         var revealText = _revealUnitBox.Text?.Trim() ?? "";
         var savedReveal = PowerCatalog.FindField(_currentEntry!, "reveallos")?.Value.Trim() ?? "Revealer";
         if (!revealText.Equals(savedReveal, StringComparison.OrdinalIgnoreCase) &&
             !revealText.Equals("Revealer", StringComparison.OrdinalIgnoreCase) &&
             !_protoUnitNames.Contains(revealText, StringComparer.OrdinalIgnoreCase))
-            return "Revealer Unit must be a valid Protounit.";
+            return NumericValidationFailure("Revealer Unit must be a valid Protounit.", _revealUnitBox);
         foreach (var box in new[] { _indicatorRangeBox, _indicatorWidthBox, _indicatorSpeedBox })
         {
             if (!box.IsVisible || string.IsNullOrWhiteSpace(box.Text)) continue;
             if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value) || value < 0)
-                return $"Range indicator {box.Tag} must be a non-negative number.";
+                return NumericValidationFailure($"Range indicator {box.Tag} must be a non-negative number.", box);
         }
         foreach (var box in new[] { _rangeIndicatorProtoRadiusBox, _rangeIndicatorProtoCountBox,
                      _rangeIndicatorProtoSpeedBox })
@@ -11591,34 +11700,34 @@ public partial class PowerEditorView : UserControl
                   (ReferenceEquals(box, _numberToTransformBox) || count >= 0)
                 : double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
                   double.IsFinite(number) && number >= 0;
-            if (!valid) return $"Range Indicator Proto {box.Tag} must be a non-negative number.";
+            if (!valid) return NumericValidationFailure($"Range Indicator Proto {box.Tag} must be a non-negative number.", box);
         }
         foreach (var (type, radiusBox, restriction) in _placementRestrictionFields)
         {
             if (restriction.Parent != _currentEntry) continue;
             if (string.IsNullOrWhiteSpace(restriction.Value))
-                return "Placement restriction requires a Protounit or Unit Type.";
+                return NumericValidationFailure("Placement restriction requires a Protounit or Unit Type.", type);
             if (!double.TryParse(radiusBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value) || value < 0)
-                return "Placement restriction radius must be a non-negative number.";
+                return NumericValidationFailure("Placement restriction radius must be a non-negative number.", radiusBox);
         }
         foreach (var (unit, factor, damage) in _droughtDamageFields)
         {
             if (damage.Parent != _currentEntry) continue;
             if (string.IsNullOrWhiteSpace(unit.Text))
-                return "Initial Damage requires a Unit or Unit Type.";
+                return NumericValidationFailure("Initial Damage requires a Unit or Unit Type.", unit);
             if (!double.TryParse(factor.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value))
-                return "Initial Damage Factor must be a valid number.";
+                return NumericValidationFailure("Initial Damage Factor must be a valid number.", factor);
         }
         foreach (var (unit, cap, damageCap) in _greatFloodDamageCapFields)
         {
             if (damageCap.Parent != _currentEntry) continue;
             if (string.IsNullOrWhiteSpace(unit.Text))
-                return "Damage Cap requires a Unit or Unit Type.";
+                return NumericValidationFailure("Damage Cap requires a Unit or Unit Type.", unit);
             if (!double.TryParse(cap.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value))
-                return "Damage Cap must be a valid number.";
+                return NumericValidationFailure("Damage Cap must be a valid number.", cap);
         }
         if (_currentEntry!.Attribute("type")?.Value.Equals("SwapUnit",
                 StringComparison.OrdinalIgnoreCase) == true)
@@ -11627,10 +11736,10 @@ public partial class PowerEditorView : UserControl
                          element.Name.LocalName.Equals("abstracttype", StringComparison.OrdinalIgnoreCase)))
             {
                 if (!_unitOrTypeNames.Contains(swap.Value.Trim(), StringComparer.OrdinalIgnoreCase))
-                    return "Swap Target must be a valid Protounit or Unit Type.";
+                    return NumericValidationFailureAt("Swap Target must be a valid Protounit or Unit Type.", swap);
                 if (!_protoUnitNames.Contains(swap.Attribute("swapto")?.Value.Trim() ?? "",
                         StringComparer.OrdinalIgnoreCase))
-                    return "Swap To must be a valid Protounit.";
+                    return NumericValidationFailureAt("Swap To must be a valid Protounit.", swap, "@swapto");
             }
             var minMax = PowerCatalog.FindField(_currentEntry, "convertusingminmax");
             if (minMax != null &&
@@ -11638,34 +11747,36 @@ public partial class PowerEditorView : UserControl
                      CultureInfo.InvariantCulture, out _) ||
                  !int.TryParse(minMax.Attribute("maxswapamount")?.Value, NumberStyles.Integer,
                      CultureInfo.InvariantCulture, out _)))
-                return "Swap Min/Max amounts must be whole numbers.";
+                return NumericValidationFailure("Swap Min/Max amounts must be whole numbers.",
+                    !int.TryParse(minMax.Attribute("minswapamount")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ? _swapMinAmountBox : _swapMaxAmountBox);
             var delay = PowerCatalog.FindField(_currentEntry, "swapdelay")?.Value;
             if (delay != null && (!double.TryParse(delay, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var delayValue) || !double.IsFinite(delayValue) || delayValue < 0))
-                return "Swap Delay must be a non-negative number.";
+                return NumericValidationFailureAt("Swap Delay must be a non-negative number.", _currentEntry, "swapdelay");
             var chance = PowerCatalog.FindField(_currentEntry, "overallchance")?.Value;
             if (chance != null && (!double.TryParse(chance, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var chanceValue) || !double.IsFinite(chanceValue) || chanceValue is < 0 or > 1))
-                return "Swap Chance must be between 0 and 1.";
+                return NumericValidationFailureAt("Swap Chance must be between 0 and 1.", _currentEntry, "overallchance");
         }
         if (_currentEntry.Attribute("type")?.Value.Equals("Lure", StringComparison.OrdinalIgnoreCase) == true)
         {
             foreach (var attractType in _currentEntry.Elements().Where(element =>
                          element.Name.LocalName.Equals("attracttype", StringComparison.OrdinalIgnoreCase)))
                 if (!_unitOrTypeNames.Contains(attractType.Value.Trim(), StringComparer.OrdinalIgnoreCase))
-                    return "Lure Attract Type must be a valid Protounit or Unit Type.";
+                    return NumericValidationFailureAt("Lure Attract Type must be a valid Protounit or Unit Type.", attractType);
             var usedAges = new HashSet<int>();
             foreach (var ageInfo in _currentEntry.Elements().Where(element =>
                          element.Name.LocalName.Equals("ageinfo", StringComparison.OrdinalIgnoreCase)))
             {
                 if (!int.TryParse(ageInfo.Value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture,
                         out var age) || age is < 1 or > 5 || !usedAges.Add(age))
-                    return "Lure Age info must use each standard Age at most once.";
+                    return NumericValidationFailureAt("Lure Age info must use each standard Age at most once.", ageInfo);
                 if (!int.TryParse(ageInfo.Attribute("maxfood")?.Value, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var maxFood) || maxFood < 0 ||
                     !int.TryParse(ageInfo.Attribute("numspawns")?.Value, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var spawns) || spawns < 0)
-                    return "Lure Max Food and Spawn Amount must be non-negative whole numbers.";
+                    return NumericValidationFailureAt("Lure Max Food and Spawn Amount must be non-negative whole numbers.", ageInfo,
+                        !int.TryParse(ageInfo.Attribute("maxfood")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var fieldFood) || fieldFood < 0 ? "@maxfood" : "@numspawns");
             }
         }
         if (_currentEntry.Attribute("type")?.Value.Equals("FoxCharm",
@@ -11680,17 +11791,17 @@ public partial class PowerEditorView : UserControl
             {
                 var age = adjustment.Value.Trim();
                 if (!StandardAges.Contains(age, StringComparer.OrdinalIgnoreCase) || !usedAges.Add(age))
-                    return "Affected Number must use each standard Age at most once.";
+                    return NumericValidationFailureAt("Affected Number must use each standard Age at most once.", adjustment);
                 if (!int.TryParse(FindAttribute(adjustment, "affectedNumber")?.Value,
                         NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
-                    return "Affected Number must be a whole number.";
+                    return NumericValidationFailureAt("Affected Number must be a whole number.", adjustment, "@affectedNumber");
             }
         }
         if (_currentEntry.Attribute("type")?.Value.Equals("Undermine", StringComparison.OrdinalIgnoreCase) == true)
             foreach (var target in _currentEntry.Elements().Where(element =>
                          element.Name.LocalName.Equals("attacktarget", StringComparison.OrdinalIgnoreCase)))
                 if (!_unitOrTypeNames.Contains(target.Value.Trim(), StringComparer.OrdinalIgnoreCase))
-                    return "Undermine Attack target must be a valid Protounit or Unit Type.";
+                    return NumericValidationFailureAt("Undermine Attack target must be a valid Protounit or Unit Type.", target);
         foreach (var box in new[] { _crackIntervalMinBox, _crackIntervalMaxBox, _timeFactorBox }
                      .Concat(ShockwaveNumberBoxes()).Concat(GaiaNumberBoxes())
                      .Concat(ValorTraitorChaosNumberBoxes()).Concat(SpiderNumberBoxes())
@@ -11712,7 +11823,7 @@ public partial class PowerEditorView : UserControl
                        _pestilenceRofPenaltyBox, _pestilenceTrainRatePenaltyBox,
                        _pestilenceScanIntervalBox, _greatHuntFoodRatioBox }).Concat(NewPowerNumberBoxes()))
         {
-            if (!box.IsVisible || string.IsNullOrWhiteSpace(box.Text)) continue;
+            if (!IsActiveSpecificNumber(box) || string.IsNullOrWhiteSpace(box.Text)) continue;
             var valid = ReferenceEquals(box, _thunderBurstAmountBox)
                 ? int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
                 : ReferenceEquals(box, _treeAmountBox) || ReferenceEquals(box, _numberToCreateBox) ||
@@ -11740,7 +11851,7 @@ public partial class PowerEditorView : UserControl
                      ReferenceEquals(box, _implodePullRadiusBox) ||
                      ReferenceEquals(box, _stayTimeBox)) || value >= 0);
             if (!valid)
-                return ReferenceEquals(box, _timeFactorBox)
+                return NumericValidationFailure(ReferenceEquals(box, _timeFactorBox)
                     ? "Time Factor must be a non-negative number."
                     : ReferenceEquals(box, _unitEffectTimeSecondsBox) ||
                       ReferenceEquals(box, _sharedEffectTimeSecondsBox)
@@ -11775,12 +11886,12 @@ public partial class PowerEditorView : UserControl
                         ? "Pull Radius must be a non-negative number."
                     : ReferenceEquals(box, _stayTimeBox)
                         ? "Stay Time must be a non-negative number."
-                    : $"{box.Tag} must be a valid number.";
+                    : $"{box.Tag} must be a valid number.", box);
         }
         var shockwaveVfx = _shockwaveVfxBox.Text?.Trim() ?? "";
         if (_shockwaveVfxFields.IsVisible && shockwaveVfx.Length > 0 &&
             !_protoUnitNames.Contains(shockwaveVfx, StringComparer.OrdinalIgnoreCase))
-            return "Shockwave VFX must be a valid Protounit.";
+            return NumericValidationFailure("Shockwave VFX must be a valid Protounit.", _shockwaveVfxBox);
         foreach (var (box, label) in new[]
                  { (_treeUnitBox, "Tree Unit"), (_treeEffectVfxBox, "Tree Effect VFX"),
                    (_effectVfxBox, "Effect VFX"), (_vfxProtoBox, "VFX Proto") })
@@ -11788,77 +11899,78 @@ public partial class PowerEditorView : UserControl
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return $"{label} must be a valid Protounit.";
+                return NumericValidationFailure($"{label} must be a valid Protounit.", box);
         }
         foreach (var box in SpiderProtoBoxes())
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Spider properties must use valid Protounits.";
+                return NumericValidationFailure("Spider properties must use valid Protounits.", box);
         }
         foreach (var box in VortexProtoBoxes())
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Vortex properties must use valid Protounits.";
+                return NumericValidationFailure("Vortex properties must use valid Protounits.", box);
         }
         foreach (var box in TartarianProtoBoxes())
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Tartarian Gate attributes must use valid Protounits.";
+                return NumericValidationFailure("Tartarian Gate attributes must use valid Protounits.", box);
         }
         foreach (var box in ImplodeProtoBoxes())
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Implode VFX fields must use valid Protounits.";
+                return NumericValidationFailure("Implode VFX fields must use valid Protounits.", box);
         }
         foreach (var box in NewPowerProtoBoxes())
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Specific VFX and unit fields must use valid Protounits.";
+                return NumericValidationFailure("Specific VFX and unit fields must use valid Protounits.", box);
         }
         var arcadianPlacement = _arcadianPlacementBox.Text?.Trim() ?? "";
         if (_arcadianPlacementBox.IsVisible && arcadianPlacement.Length > 0 &&
             !_unitOrTypeNames.Contains(arcadianPlacement, StringComparer.OrdinalIgnoreCase))
-            return "Terrain Placement Check must be a valid Protounit or Unit Type.";
+            return NumericValidationFailure("Terrain Placement Check must be a valid Protounit or Unit Type.", _arcadianPlacementBox);
         var eidolonType = _underworldEidolonTypeBox.Text?.Trim() ?? "";
         if (_underworldEidolonTypeBox.IsVisible && eidolonType.Length > 0 &&
             !_unitOrTypeNames.Contains(eidolonType, StringComparer.OrdinalIgnoreCase))
-            return "Eidolon Valid Type must be a valid Protounit or Unit Type.";
+            return NumericValidationFailure("Eidolon Valid Type must be a valid Protounit or Unit Type.", _underworldEidolonTypeBox);
         foreach (var techBox in new[] { _underworldTechEffectBox, _underworldOnlyIfTechBox })
         {
             var tech = techBox.Text?.Trim() ?? "";
             if (techBox.IsVisible && tech.Length > 0 &&
                 !_techNames.Contains(tech, StringComparer.OrdinalIgnoreCase))
-                return "Underworld Invasion Tech Effect fields must use valid Technologies.";
+                return NumericValidationFailure("Underworld Invasion Tech Effect fields must use valid Technologies.", techBox);
         }
         foreach (var killType in _currentEntry.Elements().Where(element =>
                      element.Name.LocalName.Equals("killunittype", StringComparison.OrdinalIgnoreCase)))
             if (!_unitOrTypeNames.Contains(killType.Value.Trim(), StringComparer.OrdinalIgnoreCase))
-                return "Kill Unit Type must contain valid Protounits or Unit Types.";
+                return NumericValidationFailureAt("Kill Unit Type must contain valid Protounits or Unit Types.", killType);
         if (PowerCatalog.FindField(_currentEntry, "damagepercentofmaxhp") is { } witherDamage &&
             (!double.TryParse(witherDamage.Value, NumberStyles.Float, CultureInfo.InvariantCulture,
                  out var witherDamageValue) || !double.IsFinite(witherDamageValue) ||
              witherDamageValue is < 0 or > 1))
-            return "% Max HP Damage must be between 0 and 1.";
+            return NumericValidationFailure("% Max HP Damage must be between 0 and 1.", _witherDamageBox);
         foreach (var (proto, grassRadiusBox, grassThetaBox, grass) in _arcadianGrassFields)
         {
             if (grass.Parent != _currentEntry) continue;
             if (!_protoUnitNames.Contains(proto.Text?.Trim() ?? "", StringComparer.OrdinalIgnoreCase))
-                return "VFX Grass must use a valid Protounit.";
+                return NumericValidationFailure("VFX Grass must use a valid Protounit.", proto);
             if (!double.TryParse(grassRadiusBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var radiusValue) ||
                 !double.IsFinite(radiusValue) ||
                 !double.TryParse(grassThetaBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var thetaValue) ||
                 !double.IsFinite(thetaValue))
-                return "VFX Grass r and theta must be valid numbers.";
+                return NumericValidationFailure("VFX Grass r and theta must be valid numbers.",
+                    !double.TryParse(grassRadiusBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var fieldRadius) || !double.IsFinite(fieldRadius) ? grassRadiusBox : grassThetaBox);
         }
         if (_currentEntry.Attribute("type")?.Value.Trim().Equals("PowerClone",
                 StringComparison.OrdinalIgnoreCase) == true)
@@ -11866,7 +11978,7 @@ public partial class PowerEditorView : UserControl
             var slot = PowerCatalog.FindField(_currentEntry, "powerslot")?.Value.Trim();
             if (slot != null && (!int.TryParse(slot, NumberStyles.Integer, CultureInfo.InvariantCulture,
                     out var slotValue) || slotValue is < 1 or > 5))
-                return "Power Slot must be between 1 and 5.";
+                return NumericValidationFailure("Power Slot must be between 1 and 5.", _powerCloneSlotBox);
             var powerNames = _baseEntries.Keys.Concat(GetAllModPowerNames())
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var replacement = PowerCatalog.FindField(_currentEntry, "duplicatetargetreplacement");
@@ -11874,14 +11986,14 @@ public partial class PowerEditorView : UserControl
                 foreach (var target in replacement.Elements().Where(element =>
                              element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase)))
                     if (!powerNames.Contains(target.Value.Trim()))
-                        return "Replacement Power must contain valid power names.";
+                        return NumericValidationFailureAt("Replacement Power must contain valid power names.", target);
         }
         foreach (var box in new[] { _gustDamageActionBox, _divineAttackActionBox })
         {
             var value = box.Text?.Trim() ?? "";
             if (box.IsVisible && value.Length > 0 &&
                 !_protoActionNames.Contains(value, StringComparer.OrdinalIgnoreCase))
-                return "Damage and attack actions must be valid Protoactions.";
+                return NumericValidationFailure("Damage and attack actions must be valid Protoactions.", box);
         }
         foreach (var (segment, reduction, tier) in _damageTierFields)
         {
@@ -11889,17 +12001,18 @@ public partial class PowerEditorView : UserControl
             if (!int.TryParse(segment.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
                 !double.TryParse(reduction.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value))
-                return "Damage Tiers require an integer Segment number and numeric wall-life reduction.";
+                return NumericValidationFailure("Damage Tiers require an integer Segment number and numeric wall-life reduction.",
+                    !int.TryParse(segment.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ? segment : reduction);
         }
         foreach (var (type, damage, element) in _rootDamageFields)
         {
             if (element.Parent == null) continue;
             var typeValue = type.Text?.Trim() ?? "";
             if (!_unitOrTypeNames.Contains(typeValue, StringComparer.OrdinalIgnoreCase))
-                return "Root damage Unit Type must be a valid Protounit or Unit Type.";
+                return NumericValidationFailure("Root damage Unit Type must be a valid Protounit or Unit Type.", type);
             if (!double.TryParse(damage.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                     out var value) || !double.IsFinite(value) || value < 0)
-                return "Root damage must be a non-negative number.";
+                return NumericValidationFailure("Root damage must be a non-negative number.", damage);
         }
         var placement = PowerCatalog.FindField(_currentEntry!, "placement");
         if (!string.Equals(_placementBox.SelectedItem as string, "Skip", StringComparison.OrdinalIgnoreCase) &&
@@ -11908,7 +12021,7 @@ public partial class PowerEditorView : UserControl
              !string.IsNullOrWhiteSpace(_restrictDistanceBox.Text)) &&
             (!double.TryParse(_restrictDistanceBox.Text, NumberStyles.Float,
                  CultureInfo.InvariantCulture, out var distance) || !double.IsFinite(distance) || distance < 0))
-            return "Restrict placement distance must be a non-negative number.";
+            return NumericValidationFailure("Restrict placement distance must be a non-negative number.", _restrictDistanceBox);
         return null;
     }
 
@@ -11923,6 +12036,11 @@ public partial class PowerEditorView : UserControl
     {
         var entryThatLostFocus = _currentEntry;
         if (entryThatLostFocus == null)
+            return;
+        if (!IsKeyboardFocusWithin || GetDialogOwner() is Window { OwnedWindows.Count: > 0 }) return;
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(static () => { }, Avalonia.Threading.DispatcherPriority.Background);
+        if (!ReferenceEquals(entryThatLostFocus, _currentEntry) || !IsKeyboardFocusWithin ||
+            string.Equals((_nameBox.Text ?? "").Trim(), PowerCatalog.GetName(entryThatLostFocus), StringComparison.Ordinal))
             return;
 
         // A newly-created Power is intentionally untyped until the user chooses its kind. Clicking
@@ -12047,6 +12165,9 @@ public partial class PowerEditorView : UserControl
         {
             if (requireExpectedEntry && !ReferenceEquals(expectedEntry, _currentEntry))
                 return true;
+            // Navigation captures raw buffers without parsing them. Save owns
+            // validation, so malformed XML can still be pinned or discarded.
+            if (CurrentPowerXmlDraft?.Session.IsEditing == true) return true;
             return await CommitCurrentPowerCoreAsync();
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -12060,45 +12181,59 @@ public partial class PowerEditorView : UserControl
         }
     }
 
-    private async Task<bool> CommitCurrentPowerCoreAsync()
+    private async Task<bool> CommitCurrentPowerCoreAsync(string? rawName = null,
+        PowerXmlDraft? rawDraft = null, XmlEditSession.Snapshot? rawSnapshot = null)
     {
-        if (!IsModifiedMode || _currentEntry == null)
+        var entry = rawName == null ? _currentEntry : PowerCatalog.Find(_modDocument!, rawName);
+        var raw = rawSnapshot != null;
+        if (entry == null || (rawName == null && !IsModifiedMode))
             return true;
+        if (!raw && CurrentPowerXmlDraft?.Session.IsEditing == true) return true;
 
-        var numericError = _rawEditorDirty ? null : ValidateNumericProperties();
+        var numericError = raw ? null : ValidateNumericProperties();
         if (numericError != null)
         {
+            var invalidEntry = entry;
+            var failure = _numericValidationTarget == null ? null : EditorValidationNavigation.Mark(this, _numericValidationTarget);
             _statusMessage.Text = numericError;
             var validationOwner = GetDialogOwner();
             if (validationOwner != null)
                 await new Prompt(PromptType.Error, "Invalid power number", numericError).ShowDialog(validationOwner);
+            if (failure != null) await failure.RevealAsync(() => ReferenceEquals(_currentEntry, invalidEntry),
+                () => _powerTabs.SelectedIndex = _numericValidationTarget!.GetLogicalAncestors().Contains(_specificScroll) ? 1 : 0);
             return false;
         }
 
-        if (!_rawEditorDirty && string.IsNullOrWhiteSpace(
-                _currentEntry.Attribute("type")?.Value))
+        if (!raw && string.IsNullOrWhiteSpace(
+                entry.Attribute("type")?.Value))
         {
             const string message = "Select a Power Type before saving.";
-            _powerTypeBox.Classes.Add("invalid-field");
-            _powerTypeBox.IsDropDownOpen = false;
+            var invalidEntry = entry;
+            var failure = EditorValidationNavigation.Mark(this, _powerTypeBox,
+                () => !string.IsNullOrWhiteSpace(invalidEntry.Attribute("type")?.Value));
             _statusMessage.Text = message;
             var validationOwner = GetDialogOwner();
             if (validationOwner != null)
                 await new Prompt(PromptType.Error, "Invalid power data", message).ShowDialog(validationOwner);
-            _powerTypeBox.Focus();
+            if (ReferenceEquals(_currentEntry, invalidEntry) &&
+                string.IsNullOrWhiteSpace(invalidEntry.Attribute("type")?.Value))
+            {
+                await failure.RevealAsync(() => ReferenceEquals(_currentEntry, invalidEntry),
+                    () => _powerTabs.SelectedIndex = 1);
+            }
             return false;
         }
 
         var typedName = _nameBox.Text?.Trim() ?? "";
-        if (!_rawEditorDirty && typedName.Equals(PowerCatalog.GetName(_currentEntry), StringComparison.Ordinal))
+        if (!raw && typedName.Equals(PowerCatalog.GetName(entry), StringComparison.Ordinal))
             return true;
 
         try
         {
-            var candidate = _rawEditorDirty
-                ? XElement.Parse(_rawXmlEditor.Text ?? "", LoadOptions.PreserveWhitespace)
-                : new XElement(_currentEntry);
-            if (!_rawEditorDirty)
+            var candidate = raw
+                ? ParsePowerXml(rawName!, rawDraft!, rawSnapshot!.Text)
+                : new XElement(entry);
+            if (!raw)
                 PowerCatalog.SetName(candidate, typedName);
             if (!candidate.Name.LocalName.Equals(PowerCatalog.EntryName, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Raw XML must have a <power> root element.");
@@ -12114,51 +12249,57 @@ public partial class PowerEditorView : UserControl
             var newName = PowerCatalog.GetName(candidate);
             if (string.IsNullOrWhiteSpace(newName))
                 throw new InvalidDataException("Power name cannot be empty.");
-            if (!InternalNamePolicy.IsValidOrUnchangedLegacy(newName, _loadedEntryName))
+            if (!InternalNamePolicy.IsValidOrUnchangedLegacy(newName, rawName ?? _loadedEntryName))
                 throw new InvalidDataException($"Power name can contain only {InternalNamePolicy.AllowedCharactersDescription}.");
             var existingNames = _baseEntries.Keys.Concat(GetAllModPowerNames()).ToList();
             var duplicate = existingNames.FirstOrDefault(name =>
-                !name.Equals(_loadedEntryName, StringComparison.OrdinalIgnoreCase) &&
+                !name.Equals(rawName ?? _loadedEntryName, StringComparison.OrdinalIgnoreCase) &&
                 name.Equals(newName, StringComparison.OrdinalIgnoreCase));
             if (duplicate != null)
                 throw new InvalidDataException($"Power '{newName}' already exists.");
             var namespaceCollision = TechnologyStringIdPolicy.FindNamespaceCollision(
-                newName, existingNames, _loadedEntryName);
+                newName, existingNames, rawName ?? _loadedEntryName);
             if (namespaceCollision != null)
                 throw new InvalidDataException($"Power '{newName}' would share generated string IDs with '{namespaceCollision}'.");
 
-            var oldName = _loadedEntryName ?? PowerCatalog.GetName(_currentEntry);
+            var oldName = rawName ?? _loadedEntryName ?? PowerCatalog.GetName(entry);
             if (!oldName.Equals(newName, StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var tag in StringBackedTags)
+                var before = new XElement(candidate); PowerCatalog.SetName(before, oldName);
+                var changes = PowerCatalog.RenameOwnedStringIds(candidate, oldName, newName);
+                var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var existing = OwnedStringSavePreparation.ReadEntries(_modStringsPath);
+                foreach (var id in changes.Select(change => change.OldId).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    var field = PowerCatalog.FindField(candidate, tag);
-                    var oldId = field?.Value.Trim() ?? "";
-                    if (field == null || !oldId.Equals(PowerCatalog.BuildStringId(oldName, tag),
-                            StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    var newId = PowerCatalog.BuildStringId(newName, tag);
-                    var value = await ResolveStringTextAsync(oldId);
-                    XmlTriviaPreserver.SetText(field, newId);
-                    _session.SetPendingString(newId, value, newName);
-                    ScheduleStringRemoval(oldId, oldName);
+                    var text = await ResolveStringTextAsync(id);
+                    if (existing.ContainsKey(id) || !text.Equals(id, StringComparison.Ordinal)) values[id] = text;
                 }
-                if (IsSwitchingEffectsPower(candidate))
-                    await RenameSwitchingPowerStringsAsync(candidate, oldName, newName);
+                var originalName = _session.ReferenceNameForDeletion(oldName);
+                if (newName.Equals(originalName, StringComparison.OrdinalIgnoreCase) && _loadedModDocument != null &&
+                    PowerCatalog.Find(_loadedModDocument, originalName) is { } saved)
+                    foreach (var id in PowerCatalog.CollectOwnedStringIds(saved)) existing.Remove(id);
+                var plan = OwnedStringLifecyclePolicy.Prepare(changes, [], PowerCatalog.CollectOwnedStringIds(before),
+                    existing, values, PowerCatalog.CollectOwnedStringIds(before), new HashSet<string>());
+                OwnedStringSavePreparation.KeepOnlyApprovedRenames(before, candidate, changes, plan);
+                rawDraft?.StringMigrations.AddRange(plan.ReferenceRenames);
+                foreach (var id in changes.Select(change => change.OldId).Where(id => !values.ContainsKey(id)))
+                    if (_session.TryGetPendingString(id, out var fallback) && fallback.Equals(id, StringComparison.Ordinal)) _session.RemovePendingStringUpdate(id);
+                foreach (var change in plan.ReferenceRenames) ScheduleStringRemoval(change.OldId, oldName);
+                foreach (var update in plan.StringUpdates) _session.SetPendingString(update.Key, update.Value, newName);
                 _session.ReassignPendingStringOwner(oldName, newName);
             }
             foreach (var tag in StringBackedTags)
             {
-                var oldId = PowerCatalog.FindField(_currentEntry, tag)?.Value.Trim() ?? "";
+                var oldId = PowerCatalog.FindField(entry, tag)?.Value.Trim() ?? "";
                 if (oldId.Length > 0 &&
                     oldId.Equals(PowerCatalog.BuildStringId(oldName, tag), StringComparison.OrdinalIgnoreCase) &&
                     !candidate.Descendants().Any(element => !element.HasElements &&
                         element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase)))
                     ScheduleStringRemoval(oldId, oldName);
             }
-            if (IsSwitchingEffectsPower(_currentEntry))
+            if (IsSwitchingEffectsPower(entry))
             {
-                foreach (var oldId in _currentEntry.Descendants().Where(element => !element.HasElements)
+                foreach (var oldId in entry.Descendants().Where(element => !element.HasElements)
                              .Select(element => element.Value.Trim())
                              .Where(id => IsOwnedSwitchingStringId(oldName, id))
                              .Distinct(StringComparer.OrdinalIgnoreCase))
@@ -12168,23 +12309,32 @@ public partial class PowerEditorView : UserControl
                     if (!remains) ScheduleStringRemoval(oldId, oldName);
                 }
             }
-            XmlTriviaPreserver.Preserve(_currentEntry, candidate);
-            _currentEntry.ReplaceWith(candidate);
-            _session.AdoptEntry(newName, candidate);
-            _applyRawXmlButton.IsVisible = false;
+            XmlTriviaPreserver.Preserve(entry, candidate);
+            var selected = ReferenceEquals(entry, _currentEntry);
+            entry.ReplaceWith(candidate);
+            if (_powerXmlDrafts.Remove(oldName, out var xmlDraft)) _powerXmlDrafts[newName] = xmlDraft;
+            if (rawDraft != null) rawDraft.Prepared = rawSnapshot;
+            if (selected) _session.AdoptEntry(newName, candidate);
             if (!oldName.Equals(newName, StringComparison.OrdinalIgnoreCase))
+            {
                 _session.AddOrCollapseRename(oldName, newName);
+                if (raw) XmlPowerRenamed?.Invoke(oldName, newName);
+            }
             _session.RenameDirty(oldName, newName);
-            SetRawXml(PowerCatalog.FormatPreview(candidate));
             SetDirty(true);
-            BrowserStateChanged?.Invoke(this, EventArgs.Empty);
-            var generation = ++_populateGeneration;
-            _populationTask = PopulatePropertiesSafelyAsync(candidate, generation);
+            if (selected)
+            {
+                SetRawXml(PowerCatalog.FormatPreview(candidate));
+                BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+                var generation = ++_populateGeneration;
+                _populationTask = PopulatePropertiesSafelyAsync(candidate, generation);
+            }
+            else BrowserStateChanged?.Invoke(this, EventArgs.Empty);
             return true;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            if (!_rawEditorDirty && _currentEntry != null)
+            if (!raw && _currentEntry != null)
             {
                 var wasPopulating = _isPopulating;
                 _isPopulating = true;
@@ -12286,6 +12436,7 @@ public partial class PowerEditorView : UserControl
             PowerCatalog.SetField(entry, tag, newId);
             _session.SetPendingString(newId, generatedStrings[newId], name);
         }
+        PowerXmlFieldOrder.NormalizeForEditor(entry);
         IsModifiedMode = true;
         _session.AdoptEntry(name, entry);
         _session.MarkDirty(name);
@@ -12295,7 +12446,47 @@ public partial class PowerEditorView : UserControl
     }
 
     public Task DeleteCurrentPowerAsync()
-        => RunNonReentrantCommandAsync("delete Power", DeleteCurrentPowerCoreAsync);
+        => ImmediateDeletionRequestedAsync?.Invoke() ?? RunNonReentrantCommandAsync("delete Power", DeleteCurrentPowerCoreAsync);
+
+    internal Task DeleteAndSaveCurrentPowerAsync()
+        => RunNonReentrantCommandAsync("delete Power", async () =>
+        {
+            if (_currentEntry == null || CurrentPowerName == null || _modDocument == null || _modPath == null)
+                return;
+            var name = CurrentPowerName;
+            var saved = new XElement(_currentEntry);
+            var documentBackup = new XDocument(_modDocument);
+            var candidate = new XDocument(_modDocument);
+            PowerCatalog.Find(candidate, name)?.Remove();
+            _immediateDeletionChecks = PrepareDeletionChecks?.Invoke([name],
+                new Dictionary<string, XDocument> { [Path.GetFullPath(_modPath)] = candidate }) ?? [];
+            var removed = false;
+            var committed = false;
+            try
+            {
+                await DeleteCurrentPowerCoreAsync();
+                removed = PowerCatalog.Find(_modDocument, name) == null;
+                if (!removed) return;
+                await _saveGate.WaitAsync();
+                try { committed = await SaveCoreAsync(); }
+                finally { _saveGate.Release(); }
+            }
+            finally
+            {
+                _immediateDeletionChecks = null;
+                if (removed && !committed)
+                {
+                    _modDocument = documentBackup;
+                    DiscardPowerChanges(name, saved);
+                    SelectPowerFromCommand(name);
+                }
+            }
+            if (committed)
+            {
+                ShowEmpty();
+                BrowserStateChanged?.Invoke(this, EventArgs.Empty);
+            }
+        });
 
     private async Task DeleteCurrentPowerCoreAsync()
     {
@@ -12325,7 +12516,9 @@ public partial class PowerEditorView : UserControl
                     return;
                 }
                 var prompt = new Prompt(PromptType.Confirm, "Delete power?",
-                    $"Delete '{currentName}' from powers_mods.xml?");
+                    _immediateDeletionChecks == null ? $"Delete '{currentName}' from powers_mods.xml?" :
+                    $"Permanently delete '{currentName}' and save the deletion now?",
+                    confirmButtonText: "Delete power", actionRole: PromptActionRole.Destructive).FitToContent(520, 200);
                 await prompt.ShowDialog(deletionOwner);
                 if (!prompt.Confirmed)
                     return;
@@ -12341,10 +12534,12 @@ public partial class PowerEditorView : UserControl
         if (IsSwitchingEffectsPower(_currentEntry))
             RemoveOwnedSwitchingStrings(_currentEntry);
         _currentEntry.Remove();
+        ForgetPowerXmlDraft(currentName);
         _session.MarkDirty(currentName);
         _session.RemoveRenamesForDeletion(referenceName, currentName);
         _session.ClearSelection();
         SetDirty(true);
+        if (_immediateDeletionChecks != null) return;
         ShowEmpty();
         BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -12365,7 +12560,7 @@ public partial class PowerEditorView : UserControl
     }
 
     public bool IsPowerDirty(string name)
-        => _session.IsPowerDirty(name);
+        => _session.IsPowerDirty(name) || _powerXmlDrafts.GetValueOrDefault(name)?.Session.IsDirty == true;
 
     public void DiscardPowerChanges(string name, XElement? savedElement)
     {
@@ -12374,6 +12569,9 @@ public partial class PowerEditorView : UserControl
         var current = FindAnyModPower(name);
         var restored = savedElement == null ? null : new XElement(savedElement);
         var restoredName = restored == null ? "" : PowerCatalog.GetName(restored);
+        var isSelected = string.Equals(CurrentPowerName, name, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(_loadedEntryName, name, StringComparison.OrdinalIgnoreCase);
+        if (current == null && isSelected) current = _currentEntry;
         if (current != null && restored != null)
             current.ReplaceWith(restored);
         else if (current != null)
@@ -12382,20 +12580,28 @@ public partial class PowerEditorView : UserControl
             _modDocument.Root.Add(restored);
 
         _session.DiscardPowerState(name, restoredName);
-        SetDirty(_session.HasPendingWork);
-        if (string.Equals(CurrentPowerName, name, StringComparison.OrdinalIgnoreCase))
+        ForgetPowerXmlDraft(name);
+        if (restoredName.Length > 0) ForgetPowerXmlDraft(restoredName);
+        if (isSelected)
             SelectPower(restoredName.Length == 0 ? null : restoredName);
+        SetDirty(_session.HasPendingWork || _rawEditorDirty);
+        BrowserStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task<bool> SaveAsync()
     {
         await _commandGate.WaitAsync();
+        EditorSaveFeedback.Attempt? feedback = null;
         try
         {
             await _saveGate.WaitAsync();
             try
             {
-                return await SaveCoreAsync();
+                feedback = _saveFeedback.BeginSave();
+                var saved = await SaveCoreAsync();
+                if (saved) feedback.Complete(IsDirty);
+                else SaveFeedbackReported?.Invoke(EditorSaveOutcome.Blocked);
+                return saved;
             }
             finally
             {
@@ -12404,13 +12610,25 @@ public partial class PowerEditorView : UserControl
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
+            ReportSaveFeedback(EditorSaveOutcome.Failed);
             await ShowCommandErrorAsync("Power save failed", "Save failed: " + exception.Message);
             return false;
         }
         finally
         {
             _commandGate.Release();
+            feedback?.Dispose();
+            if (SaveFeedbackReported != null) _statusMessage.Text = "";
         }
+    }
+
+    public void ValidateReferenceMigration(XDocument? proposedDocument)
+    {
+        if (proposedDocument == null || _loadedModDocument == null || _modDocument == null) return;
+        var merge = NamedXmlExternalDocumentMergePolicy.Merge(
+            _loadedModDocument, _modDocument, proposedDocument, PowerCatalog.EntryName, PowerCatalog.GetName);
+        if (merge.ReplacedEditorChanges.Count > 0)
+            throw new IOException("The rename affects a Power with unsaved edits. Save or discard those Power edits before renaming. No reference files were written.");
     }
 
     public void AcknowledgePowerFileSavedByEditor()
@@ -12438,6 +12656,7 @@ public partial class PowerEditorView : UserControl
         _modDocument = merge.Document;
         _loadedModDocument = new XDocument(prepared.Document);
         _loadedFileState = prepared.LoadedState;
+        ReloadChangedCleanPowerXmlDrafts();
         if (!string.IsNullOrWhiteSpace(selectedName) && PowerCatalog.Find(_modDocument, selectedName) != null)
             SelectPowerFromCommand(selectedName);
     }
@@ -12450,15 +12669,20 @@ public partial class PowerEditorView : UserControl
 
     private async Task<bool> SaveCoreAsync()
     {
+        if (!await PreparePowerXmlCoreAsync()) return false;
         if (!await CommitCurrentPowerCoreAsync())
             return false;
         if (!await ValidateEffectTypesForSaveAsync())
             return false;
         if (!IsDirty)
-            return await ValidatePowerDocumentForSaveAsync();
+        {
+            if (!await ValidatePowerDocumentForSaveAsync()) return false;
+            AcceptPowerXmlSaves(CapturePreparedPowerXmlSaves());
+            return true;
+        }
         if (_modDocument == null || string.IsNullOrWhiteSpace(_modPath))
             return false;
-        if (!await ReloadExternallyChangedDocumentAsync())
+        if (_immediateDeletionChecks == null && !await ReloadExternallyChangedDocumentAsync())
             return false;
         if (!await ValidateEffectTypesForSaveAsync())
             return false;
@@ -12467,20 +12691,36 @@ public partial class PowerEditorView : UserControl
 
         try
         {
+            var xmlSaves = CapturePreparedPowerXmlSaves();
             var sessionSnapshot = _session.CreateCommitSnapshot();
             var savePreparation = PowerSavePreparation.Prepare(
                 _modDocument,
                 sessionSnapshot.DirtyNames,
                 sessionSnapshot.Renames,
                 sessionSnapshot.StringUpdates,
-                sessionSnapshot.StringRemovals);
+                sessionSnapshot.StringRemovals,
+                xmlSaves.Select(saved => saved.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
             var renamesToSave = savePreparation.Renames;
             var migration = renamesToSave.Count > 0
                 ? _prepareReferenceMigration?.Invoke(renamesToSave)
                 : null;
-            var stringUpdates = savePreparation.StringUpdates;
-            var stringRemovals = savePreparation.StringRemovals;
-            var writesStrings = savePreparation.WritesStrings;
+            var originalOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in _loadedModDocument?.Root?.Elements(PowerCatalog.EntryName) ?? [])
+                if (sessionSnapshot.DirtyNames.Contains(PowerCatalog.GetName(entry)) ||
+                    PowerCatalog.Find(_modDocument, PowerCatalog.GetName(entry)) == null ||
+                    renamesToSave.Any(rename => rename.Key.Equals(PowerCatalog.GetName(entry), StringComparison.OrdinalIgnoreCase)))
+                    originalOwned.UnionWith(PowerCatalog.CollectOwnedStringIds(entry));
+            var currentOwned = (_modDocument.Root?.Elements(PowerCatalog.EntryName) ?? [])
+                .Where(entry => sessionSnapshot.DirtyNames.Contains(PowerCatalog.GetName(entry)))
+                .SelectMany(PowerCatalog.CollectOwnedStringIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var proposed = new Dictionary<string, XDocument>(StringComparer.OrdinalIgnoreCase) { [Path.GetFullPath(_modPath)] = _modDocument };
+            foreach (var path in migration?.Paths ?? [])
+                if (migration!.GetDocument(path) is { } document) proposed[Path.GetFullPath(path)] = document;
+            var cleanup = OwnedStringSavePreparation.Prepare(_modPath, _modStringsPath, proposed, originalOwned,
+                currentOwned, savePreparation.StringUpdates, sessionSnapshot.StringRemovals, PrepareStringCleanup);
+            var stringUpdates = cleanup.Updates;
+            var stringRemovals = cleanup.Plan.StringRemovals;
+            var writesStrings = cleanup.WritesStrings;
             if (writesStrings && (_saveStringsAsync == null || string.IsNullOrWhiteSpace(_modStringsPath)))
                 throw new InvalidOperationException("Power strings cannot be saved because the active mod string file is unavailable.");
             var expected = migration?.ExpectedStates.ToDictionary(
@@ -12493,12 +12733,24 @@ public partial class PowerEditorView : UserControl
                 ModXmlDocumentKind.Powers,
                 _modDocument,
                 _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath));
+            expected[Path.GetFullPath(_modPath)] = prepared.LoadedState;
+            cleanup.Inspection.MergeExpectedStatesInto(expected);
+            var deletedNames = ModDeletionSafety.FindDeletedNames(
+                (_loadedModDocument?.Root?.Elements().Select(PowerCatalog.GetName) ?? []).Concat(sessionSnapshot.DirtyNames),
+                _modDocument.Root?.Elements().Select(PowerCatalog.GetName) ?? [], renamesToSave);
+            var deletionChecks = PrepareDeletionChecks?.Invoke(deletedNames,
+                new Dictionary<string, XDocument> { [Path.GetFullPath(_modPath)] = _modDocument }) ?? [];
             await ModDocumentPersistence.ExecuteAsync(
                 [prepared],
                 (migration?.Paths ?? []).Concat(writesStrings ? [_modStringsPath!] : []),
                 expected,
                 async () =>
                 {
+                    cleanup.Inspection.ValidateReadDependencies();
+                    migration?.ValidateDiscovery();
+                    if (_immediateDeletionChecks != null)
+                        foreach (var inspection in _immediateDeletionChecks) inspection.ValidateReadDependencies();
+                    foreach (var inspection in deletionChecks) inspection.ValidateReadDependencies();
                     ProtoEditorWindow.SaveAbilityXmlDocument(_modDocument, _modPath);
                     migration?.Save((document, path) =>
                         ProtoEditorWindow.SaveAbilityXmlDocument(document, path));
@@ -12513,13 +12765,15 @@ public partial class PowerEditorView : UserControl
             if (writesStrings)
                 _loadedStringsFileState = FileIntegrityTransaction.CaptureState(_modStringsPath!);
             _session.AcceptCommit();
-            SetDirty(false);
-            _statusMessage.Text = "Saved powers_mods.xml.";
+            AcceptPowerXmlSaves(xmlSaves);
+            ReportSaveFeedback(EditorSaveOutcome.Saved);
+            LastSaveWroteStrings = writesStrings;
             Saved?.Invoke(this, EventArgs.Empty);
             return true;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
+            ReportSaveFeedback(EditorSaveOutcome.Failed);
             await ShowCommandErrorAsync("Power save failed", "Save failed: " + exception.Message);
             return false;
         }
@@ -12558,10 +12812,17 @@ public partial class PowerEditorView : UserControl
         var message = invalid.Count == 1
             ? $"Select a Type for the highlighted {itemLabel} before saving."
             : $"Select a Type for each of the {invalid.Count} highlighted {itemLabel}s before saving.";
+        var invalidEntry = _currentEntry;
+        var target = CurrentPowerXmlDraft?.Session.IsEditing == true ? null : invalid
+            .Select(effect => EditorValidationBindings.Find(this, new LocatedValidationIssue(message, ValidationSourceLocation.From(effect, "@type"))))
+            .FirstOrDefault(control => control != null);
+        var failure = target == null ? null : EditorValidationNavigation.Mark(this, target);
         _statusMessage.Text = message;
         var owner = TopLevel.GetTopLevel(this) as Window ?? _dialogOwner;
         if (owner != null)
             await new Prompt(PromptType.Error, "Invalid power data", message).ShowDialog(owner);
+        if (failure != null)
+            await failure.RevealAsync(() => ReferenceEquals(_currentEntry, invalidEntry), () => _powerTabs.SelectedIndex = 1);
         return false;
     }
 
@@ -12569,13 +12830,19 @@ public partial class PowerEditorView : UserControl
     {
         if (_modDocument == null)
             return true;
+        BindPowerValidationFields();
         var validation = PowerSaveValidator.Validate(
-            _modDocument,
+            CreatePowerXmlSnapshot()!,
             CreatePowerSaveCatalogs());
         if (validation.IsValid)
             return true;
 
         const int maximumDisplayedErrors = 8;
+        EditorValidationNavigation.Clear(this);
+        var invalidEntry = _currentEntry;
+        var target = CurrentPowerXmlDraft?.Session.IsEditing == true ? null : validation.Issues
+            .Select(issue => EditorValidationBindings.Find(this, issue)).FirstOrDefault(control => control != null);
+        var failure = target == null ? null : EditorValidationNavigation.Mark(this, target);
         var displayed = validation.Errors.Take(maximumDisplayedErrors).ToList();
         var remaining = validation.Errors.Count - displayed.Count;
         var message = "Correct the following Power data before saving:" + Environment.NewLine +
@@ -12586,6 +12853,9 @@ public partial class PowerEditorView : UserControl
         var owner = TopLevel.GetTopLevel(this) as Window ?? _dialogOwner;
         if (owner != null)
             await new Prompt(PromptType.Error, "Invalid power data", message).ShowDialog(owner);
+        if (failure != null && target != null)
+            await failure.RevealAsync(() => ReferenceEquals(_currentEntry, invalidEntry) && CurrentPowerXmlDraft?.Session.IsEditing != true,
+                () => _powerTabs.SelectedIndex = target.GetLogicalAncestors().Contains(_specificScroll) ? 1 : 0);
         return false;
     }
 
@@ -12634,7 +12904,10 @@ public partial class PowerEditorView : UserControl
             confirmButtonText: "Reload");
         await prompt.ShowDialog(owner);
         if (!prompt.Confirmed)
+        {
+            ReportSaveFeedback(EditorSaveOutcome.Cancelled);
             return false;
+        }
 
         try
         {
@@ -12661,6 +12934,8 @@ public partial class PowerEditorView : UserControl
             _modDocument = merge.Document;
             _loadedModDocument = new XDocument(external);
             _loadedFileState = prepared.LoadedState;
+            ReloadPowerXmlDrafts(merge.ReplacedEditorChanges);
+            ReloadChangedCleanPowerXmlDrafts();
             SetDirty(_session.HasDirtyRecords);
             var selectedName = CurrentPowerName;
             if (!string.IsNullOrWhiteSpace(selectedName) && PowerCatalog.Find(_modDocument, selectedName) != null)
@@ -12668,9 +12943,7 @@ public partial class PowerEditorView : UserControl
             else
                 ShowEmpty();
             BrowserStateChanged?.Invoke(this, EventArgs.Empty);
-            _statusMessage.Text = merge.ReplacedEditorChanges.Count > 0
-                ? $"External Powers reloaded. {merge.ReplacedEditorChanges.Count} conflicting edit(s) were replaced; review, then save again."
-                : "External Powers reloaded and merged. Review the changes, then save again.";
+            ReportSaveFeedback(EditorSaveOutcome.ReviewRequired);
             return false;
         }
         catch (Exception exception)
@@ -12692,58 +12965,15 @@ public partial class PowerEditorView : UserControl
             element.Name.LocalName.Equals(PowerCatalog.EntryName, StringComparison.OrdinalIgnoreCase) &&
             PowerCatalog.GetName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
 
-    private async void ApplyRawXml_Click(object? sender, RoutedEventArgs e)
-    {
-        if (await CommitCurrentPowerAsync())
-            _statusMessage.Text = "Raw XML applied.";
-    }
-
-    private void RawXmlEditor_TextChanged(object? sender, EventArgs e)
-    {
-        if (_isPopulating || !IsModifiedMode || _currentEntry == null)
-            return;
-        _rawEditorDirty = true;
-        _applyRawXmlButton.IsVisible = true;
-        var name = _loadedEntryName ?? CurrentPowerName;
-        _session.MarkDirty(name);
-        SetDirty(true);
-    }
-
     private void XmlPreviewToggle_Click(object? sender, RoutedEventArgs e)
     {
         _isXmlPreviewCollapsed = !_isXmlPreviewCollapsed;
-        _xmlPreviewContent.IsVisible = !_isXmlPreviewCollapsed;
-        _previewSplitter.IsVisible = !_isXmlPreviewCollapsed;
-        if (_isXmlPreviewCollapsed)
-        {
-            _mainGrid.ColumnDefinitions[1].Width = new GridLength(0);
-            _mainGrid.ColumnDefinitions[2].MinWidth = 28;
-            _mainGrid.ColumnDefinitions[2].Width = new GridLength(28, GridUnitType.Pixel);
-        }
-        else
-        {
-            _mainGrid.ColumnDefinitions[0].Width = new GridLength(4, GridUnitType.Star);
-            _mainGrid.ColumnDefinitions[1].Width = new GridLength(5, GridUnitType.Pixel);
-            _mainGrid.ColumnDefinitions[2].MinWidth = 250;
-            _mainGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-        }
-        _xmlPreviewToggleButton.Content = _isXmlPreviewCollapsed ? "◀" : "▶";
-        ToolTip.SetTip(_xmlPreviewToggleButton,
-            _isXmlPreviewCollapsed ? "Restore XML Preview" : "Collapse XML Preview");
+        EditorXmlPreviewPane.SetCollapsed(_mainGrid, _isXmlPreviewCollapsed);
     }
 
     private void SetRawXml(string text)
     {
-        var wasPopulating = _isPopulating;
-        _isPopulating = true;
-        try
-        {
-            _rawXmlEditor.Text = XmlSyntaxEditorService.PreparePreviewText(text);
-        }
-        finally
-        {
-            _isPopulating = wasPopulating;
-        }
+        BindPowerXmlPreview(text);
     }
 
     private void ShowEmpty()
@@ -13114,16 +13344,15 @@ public partial class PowerEditorView : UserControl
         foreach (var control in ImplodeControls()) control.IsEnabled = false;
         foreach (var control in NewPowerControls()) control.IsEnabled = false;
         RefreshActiveRolloverVisibility();
-        SetRawXml("");
-        XmlSyntaxEditorService.SetReadOnly(_rawXmlEditor, true);
-        _applyRawXmlButton.IsVisible = false;
+        _powerXmlController.Bind(null, false);
         _rawEditorDirty = false;
-        _statusMessage.Text = "Select a power from the list.";
+        _statusMessage.Text = "";
         _isPopulating = false;
     }
 
     private void SetDirty(bool value)
     {
+        if (value) _saveFeedback.ClearSuccessOnEdit();
         if (IsDirty == value)
             return;
         _session.SetDirty(value);

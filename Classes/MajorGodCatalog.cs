@@ -42,6 +42,30 @@ public static class MajorGodCatalog
         "secondaryprayerefficiency", "buildingefficiency", "extrabuildingefficiency", "buildingrepairfactor"
     ];
 
+    internal static readonly (string Label, string Tag)[] SpecialMechanicDefinitions =
+    [
+        ("Shades", "shades"), ("TerrainCreeps", "terraincreeps"),
+        ("BonusUnitSpawning", "bonusunitspawning"), ("BountyResourceEarning", "bountyresourceearning"),
+        ("TimeShifting", "timeshifting"), ("BuildingChain", "buildingchain"),
+        ("CombatXP", "combatxp"), ("OnCastPowerCostFactor", "oncastpowercostfactor")
+    ];
+
+    private static readonly string[] DirectFieldOrder =
+    [
+        "name", "statsid", "displaynameid", "titleid", "rollovernameid",
+        "icon", "portrait", "breakoutportrait", "culture", "key",
+        "minimapborderimage", "backgroundscenario",
+        "agetech", "deathmatchtech", "teamtech", .. EconomicFieldOrder,
+        "startingunits", "startingqueue", "startingresources",
+        "partisans", "devotioncommands", .. SpecialMechanicDefinitions.Select(definition => definition.Tag)
+    ];
+
+    private static readonly IReadOnlyDictionary<string, int> DirectFieldRanks = DirectFieldOrder
+        .Select((name, rank) => (name, rank)).ToDictionary(pair => pair.name, pair => pair.rank, StringComparer.OrdinalIgnoreCase);
+
+    public static void NormalizeEditorFieldOrder(XElement entry)
+        => EditorXmlOrderPolicy.Normalize(entry, DirectFieldRanks);
+
     public static IReadOnlyList<MajorGodDefinition> ExtractDefinitions(XContainer container, bool isBuiltIn)
         => container.Descendants()
             .Where(element => element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase))
@@ -172,24 +196,19 @@ public static class MajorGodCatalog
             element.Name.LocalName.Equals(EntryName, StringComparison.OrdinalIgnoreCase) &&
             GetName(element).Equals(name, StringComparison.OrdinalIgnoreCase));
 
-    public static XElement CreatePass1Entry(string name, string culture = "Greek")
-    {
-        var normalizedName = name.Trim();
-        return new XElement(EntryName,
-            new XElement("name", normalizedName),
-            new XElement("statsid", "SP"),
-            new XElement("key", culture.Length == 0 ? "G" : char.ToUpperInvariant(culture[0]).ToString()),
-            new XElement("culture", culture),
-            new XElement("displaynameid", BuildStringId(normalizedName, "displaynameid")),
-            new XElement("rollovernameid", BuildStringId(normalizedName, "rollovernameid")),
-            new XElement("titleid", BuildStringId(normalizedName, "titleid")),
-            new XElement("icon"),
-            new XElement("portrait"),
-            new XElement("breakoutportrait"),
-            new XElement("minimapborderimage"),
-            new XElement("backgroundscenario"));
-    }
+    public static XElement CreatePass1Entry(string name)
+        => new(EntryName, new XElement("name", name.Trim()), new XElement("statsid", "SP"));
 
+    public static void RemoveEmptyOptionalFields(XElement entry)
+    {
+        var optional = Pass1FieldOrder.Where(tag => tag is not "name" and not "statsid")
+            .Concat(new[] { "deathmatchtech", "teamtech", "buildingefficiency", "extrabuildingefficiency", "buildingrepairfactor" })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var element in entry.Elements().Where(e => e.Name.NamespaceName.Length == 0 &&
+                     optional.Contains(e.Name.LocalName) && !e.HasAttributes && !e.HasElements &&
+                     e.Nodes().All(n => n is XText && n is not XCData) && string.IsNullOrWhiteSpace(e.Value)).ToList())
+            XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
+    }
     public static void EnsureStatsId(XElement entry)
     {
         var statsId = FindDirectChild(entry, "statsid");
@@ -220,18 +239,8 @@ public static class MajorGodCatalog
         }
 
         var created = new XElement(tag, value ?? "");
-        var targetIndex = Array.FindIndex(Pass1FieldOrder, candidate =>
-            candidate.Equals(tag, StringComparison.OrdinalIgnoreCase));
-        var followingKnown = entry.Elements().FirstOrDefault(child =>
-        {
-            var childIndex = Array.FindIndex(Pass1FieldOrder, candidate =>
-                candidate.Equals(child.Name.LocalName, StringComparison.OrdinalIgnoreCase));
-            return childIndex > targetIndex;
-        });
-        if (followingKnown != null)
-            followingKnown.AddBeforeSelf(created);
-        else
-            entry.Add(created);
+        EditorXmlOrderPolicy.InsertNewField(entry, created, DirectFieldRanks);
+        NormalizeDirectChildIndentation(entry);
         return created;
     }
 
@@ -245,7 +254,7 @@ public static class MajorGodCatalog
         if (ageTech == null)
         {
             ageTech = new XElement("agetech", new XAttribute("age", age), new XElement("tech", technology));
-            InsertAssociatedTechElement(entry, ageTech, "deathmatchtech", "teamtech", "icon");
+            InsertAssociatedTechElement(entry, ageTech);
             return ageTech;
         }
 
@@ -274,30 +283,7 @@ public static class MajorGodCatalog
         }
 
         var created = new XElement(tag, technology);
-        if (tag.Equals("deathmatchtech", StringComparison.OrdinalIgnoreCase))
-        {
-            var following = entry.Elements().FirstOrDefault(element =>
-                element.Name.LocalName.Equals("teamtech", StringComparison.OrdinalIgnoreCase) ||
-                element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
-            if (following != null)
-                following.AddBeforeSelf(created);
-            else if (FindDirectChild(entry, "agetech") is { } ageTech)
-                ageTech.AddAfterSelf(created);
-            else
-                InsertAssociatedTechElement(entry, created);
-        }
-        else
-        {
-            var icon = FindDirectChild(entry, "icon");
-            if (icon != null)
-                icon.AddBeforeSelf(created);
-            else if (FindDirectChild(entry, "deathmatchtech") is { } deathmatchTech)
-                deathmatchTech.AddAfterSelf(created);
-            else if (FindDirectChild(entry, "agetech") is { } ageTech)
-                ageTech.AddAfterSelf(created);
-            else
-                InsertAssociatedTechElement(entry, created);
-        }
+        InsertAssociatedTechElement(entry, created);
         return created;
     }
 
@@ -316,7 +302,7 @@ public static class MajorGodCatalog
         }
 
         var created = new XElement(tag.ToLowerInvariant(), value);
-        InsertEconomicElement(entry, created, targetIndex);
+        InsertEconomicElement(entry, created);
         return created;
     }
 
@@ -334,7 +320,7 @@ public static class MajorGodCatalog
             new XAttribute("g", laterGrowth),
             new XAttribute("v", earlyIncomeReduction),
             new XAttribute("z", modifier));
-        InsertEconomicElement(entry, created, 0);
+        InsertEconomicElement(entry, created);
         return created;
     }
 
@@ -345,7 +331,7 @@ public static class MajorGodCatalog
             return existing;
 
         var created = new XElement(tag.ToLowerInvariant());
-        entry.Add(created);
+        EditorXmlOrderPolicy.InsertNewField(entry, created, DirectFieldRanks);
         NormalizeDirectChildIndentation(entry);
         return created;
     }
@@ -604,22 +590,9 @@ public static class MajorGodCatalog
         return element;
     }
 
-    private static void InsertEconomicElement(XElement entry, XElement created, int targetIndex)
+    private static void InsertEconomicElement(XElement entry, XElement created)
     {
-        var following = entry.Elements().FirstOrDefault(element =>
-        {
-            var economicIndex = Array.FindIndex(EconomicFieldOrder, candidate =>
-                candidate.Equals(element.Name.LocalName, StringComparison.OrdinalIgnoreCase));
-            return economicIndex > targetIndex ||
-                   element.Name.LocalName.Equals("startingunits", StringComparison.OrdinalIgnoreCase) ||
-                   element.Name.LocalName.Equals("startingqueue", StringComparison.OrdinalIgnoreCase) ||
-                   element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
-                   element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase);
-        });
-        if (following != null)
-            following.AddBeforeSelf(created);
-        else
-            entry.Add(created);
+        EditorXmlOrderPolicy.InsertNewField(entry, created, DirectFieldRanks);
         NormalizeDirectChildIndentation(entry);
     }
 
@@ -629,13 +602,7 @@ public static class MajorGodCatalog
         if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
             group.SetAttributeValue("mode", mode.ToLowerInvariant());
 
-        var following = entry.Elements().FirstOrDefault(element =>
-            element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
-            element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
-        if (following != null)
-            following.AddBeforeSelf(group);
-        else
-            entry.Add(group);
+        EditorXmlOrderPolicy.InsertNewField(entry, group, DirectFieldRanks);
         NormalizeDirectChildIndentation(entry);
         return group;
     }
@@ -659,11 +626,7 @@ public static class MajorGodCatalog
         if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
             group.SetAttributeValue("mode", mode.ToLowerInvariant());
 
-        var icon = FindDirectChild(entry, "icon");
-        if (icon != null)
-            icon.AddBeforeSelf(group);
-        else
-            entry.Add(group);
+        EditorXmlOrderPolicy.InsertNewField(entry, group, DirectFieldRanks);
         NormalizeDirectChildIndentation(entry);
         return group;
     }
@@ -674,13 +637,7 @@ public static class MajorGodCatalog
         if (!mode.Equals("supremacy", StringComparison.OrdinalIgnoreCase))
             group.SetAttributeValue("mode", mode.ToLowerInvariant());
 
-        var following = entry.Elements().FirstOrDefault(element =>
-            element.Name.LocalName.Equals("startingresources", StringComparison.OrdinalIgnoreCase) ||
-            element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
-        if (following != null)
-            following.AddBeforeSelf(group);
-        else
-            entry.Add(group);
+        EditorXmlOrderPolicy.InsertNewField(entry, group, DirectFieldRanks);
         NormalizeDirectChildIndentation(entry);
         return group;
     }
@@ -725,6 +682,12 @@ public static class MajorGodCatalog
 
     public static void NormalizeDirectChildIndentation(XElement parent)
     {
+        // Scalar/mixed content and explicitly preserved whitespace are data.
+        if (parent.AncestorsAndSelf().Select(e => (string?)e.Attribute(XNamespace.Xml + "space"))
+                .FirstOrDefault(value => value != null) == "preserve" ||
+            parent.Nodes().Any(node => node is XText text &&
+                (node is XCData || !string.IsNullOrWhiteSpace(text.Value))))
+            return;
         var contentNodes = parent.Nodes()
             .Where(node => node is not XText text || !string.IsNullOrWhiteSpace(text.Value))
             .ToList();
@@ -741,6 +704,10 @@ public static class MajorGodCatalog
         {
             parent.Add(new XText(Environment.NewLine + childIndent));
             parent.Add(node);
+            // A group may have been formatted before its parent was attached or
+            // indented. Rebase nested container indentation after attaching it.
+            if (node is XElement child && child.HasElements)
+                NormalizeDirectChildIndentation(child);
         }
         parent.Add(new XText(Environment.NewLine + ownIndent));
     }
@@ -756,21 +723,10 @@ public static class MajorGodCatalog
         return element.Parent == null ? "" : FindElementIndentation(element.Parent) + "  ";
     }
 
-    private static void InsertAssociatedTechElement(XElement entry, XElement created, params string[] followingTags)
+    private static void InsertAssociatedTechElement(XElement entry, XElement created)
     {
-        var following = entry.Elements().FirstOrDefault(element => followingTags.Any(tag =>
-            element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)));
-        if (following != null)
-        {
-            following.AddBeforeSelf(created);
-            return;
-        }
-
-        var title = FindDirectChild(entry, "titleid");
-        if (title != null)
-            title.AddAfterSelf(created);
-        else
-            entry.Add(created);
+        EditorXmlOrderPolicy.InsertNewField(entry, created, DirectFieldRanks);
+        NormalizeDirectChildIndentation(entry);
     }
 
     public static string BuildStringId(string majorGodName, string tag)
@@ -801,19 +757,34 @@ public static class MajorGodCatalog
     {
         ArgumentNullException.ThrowIfNull(entry);
         var changes = new List<OwnedStringRename>();
+        var tags = new[] { "displaynameid", "rollovernameid", "titleid" };
+        var owned = tags.Where(tag => OwnsResolvedStringId(oldMajorGodName, tag, FindDirectChild(entry, tag)?.Value))
+            .Select(tag => BuildStringId(oldMajorGodName, tag)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var tag in new[] { "displaynameid", "rollovernameid", "titleid" })
         {
             var element = FindDirectChild(entry, tag);
-            var oldId = BuildStringId(oldMajorGodName, tag);
-            if (element == null || !element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
+            var oldId = element?.Value.Trim() ?? "";
+            if (element == null || element.Name.Namespace != XNamespace.None || !owned.Contains(oldId))
                 continue;
-            var newId = BuildStringId(newMajorGodName, tag);
+            var sourceTag = tags.First(source => BuildStringId(oldMajorGodName, source).Equals(oldId, StringComparison.OrdinalIgnoreCase));
+            var newId = BuildStringId(newMajorGodName, sourceTag);
             if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase))
                 continue;
             XmlTriviaPreserver.SetText(element, newId);
             changes.Add(new OwnedStringRename(tag, oldId, newId));
         }
         return changes;
+    }
+
+    internal static void ApplyOwnedResolvedStringRenames(XElement entry, IEnumerable<OwnedStringRename> renames)
+    {
+        foreach (var rename in renames)
+        {
+            if (!new[] { "displaynameid", "rollovernameid", "titleid" }.Contains(rename.Field, StringComparer.OrdinalIgnoreCase)) continue;
+            if (FindDirectChild(entry, rename.Field) is { Name.NamespaceName.Length: 0 } field &&
+                field.Value.Trim().Equals(rename.OldId, StringComparison.OrdinalIgnoreCase))
+                XmlTriviaPreserver.SetText(field, rename.NewId);
+        }
     }
 
     public static string BuildBonusGoalStringId(string goalName, string suffix)
@@ -829,20 +800,25 @@ public static class MajorGodCatalog
         if (displayInfo == null)
             return [];
         var changes = new List<OwnedStringRename>();
-        foreach (var (tag, suffix) in new[]
+        var fields = new (string tag, string suffix)[]
                  {
                      ("displaynameid", "SPAWN_REWARD"),
                      ("rolloverid", "SPAWN_REWARD_LR"),
                      ("progresstooltipid", "SPAWN_REWARD_PROGRESS"),
                      ("nextunittooltipid", "SPAWN_NEXT_UNIT"),
                      ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
-                 })
+                 };
+        var owned = fields.Where(field => FindDirectChild(displayInfo, field.tag)?.Value.Trim()
+                .Equals(BuildBonusGoalStringId(oldGoalName, field.suffix), StringComparison.OrdinalIgnoreCase) == true)
+            .Select(field => BuildBonusGoalStringId(oldGoalName, field.suffix)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tag, suffix) in fields)
         {
             var element = FindDirectChild(displayInfo, tag);
-            var oldId = BuildBonusGoalStringId(oldGoalName, suffix);
-            if (element == null || !element.Value.Trim().Equals(oldId, StringComparison.OrdinalIgnoreCase))
+            var oldId = element?.Value.Trim() ?? "";
+            if (element == null || element.Name.Namespace != XNamespace.None || !owned.Contains(oldId))
                 continue;
-            var newId = BuildBonusGoalStringId(newGoalName, suffix);
+            var sourceSuffix = fields.First(field => BuildBonusGoalStringId(oldGoalName, field.suffix).Equals(oldId, StringComparison.OrdinalIgnoreCase)).suffix;
+            var newId = BuildBonusGoalStringId(newGoalName, sourceSuffix);
             if (oldId.Equals(newId, StringComparison.OrdinalIgnoreCase))
                 continue;
             XmlTriviaPreserver.SetText(element, newId);
@@ -855,23 +831,23 @@ public static class MajorGodCatalog
     {
         ArgumentNullException.ThrowIfNull(entry);
         var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (entry.Name.Namespace != XNamespace.None) return owned;
         var majorGodName = GetName(entry);
         foreach (var tag in new[] { "displaynameid", "rollovernameid", "titleid" })
         {
-            var id = FindDirectChild(entry, tag)?.Value.Trim() ?? "";
-            if (majorGodName.Length > 0 && OwnsResolvedStringId(majorGodName, tag, id))
+            var field = FindDirectChild(entry, tag);
+            var id = field?.Value.Trim() ?? "";
+            if (field?.Name.Namespace == XNamespace.None && majorGodName.Length > 0 && OwnsResolvedStringId(majorGodName, tag, id))
                 owned.Add(id);
         }
 
-        foreach (var goal in entry.Descendants().Where(element =>
-                     element.Name.LocalName.Equals("damagegoal", StringComparison.OrdinalIgnoreCase) ||
-                     element.Name.LocalName.Equals("deathcountgoal", StringComparison.OrdinalIgnoreCase) ||
-                     element.Name.LocalName.Equals("resourcegoal", StringComparison.OrdinalIgnoreCase)))
+        foreach (var goal in entry.Elements().Where(element => element.Name == "bonusunitspawning").Elements().Where(element =>
+                     element.Name == "damagegoal" || element.Name == "deathcountgoal" || element.Name == "resourcegoal"))
         {
             var goalName = goal.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase))?.Value.Trim() ?? "";
             var displayInfo = FindDirectChild(goal, "displayinfo");
-            if (goalName.Length == 0 || displayInfo == null)
+            if (goalName.Length == 0 || displayInfo == null || displayInfo.Name.Namespace != XNamespace.None)
                 continue;
             foreach (var (tag, suffix) in new[]
                      {
@@ -882,8 +858,9 @@ public static class MajorGodCatalog
                          ("notificationmessageid", "SPAWN_REWARD_NOTIFICATION")
                      })
             {
-                var id = FindDirectChild(displayInfo, tag)?.Value.Trim() ?? "";
-                if (id.Equals(BuildBonusGoalStringId(goalName, suffix), StringComparison.OrdinalIgnoreCase))
+                var field = FindDirectChild(displayInfo, tag);
+                var id = field?.Value.Trim() ?? "";
+                if (field?.Name.Namespace == XNamespace.None && id.Equals(BuildBonusGoalStringId(goalName, suffix), StringComparison.OrdinalIgnoreCase))
                     owned.Add(id);
             }
         }

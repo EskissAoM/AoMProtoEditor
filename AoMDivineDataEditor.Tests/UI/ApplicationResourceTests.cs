@@ -120,7 +120,7 @@ public sealed class ApplicationResourceTests
         Assert.Contains("XmlSyntaxEditorService.Configure(_xmlPreviewText)", unitCode, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(_xmlPreview)", technologyCode, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(_xmlPreview)", commandCode, StringComparison.Ordinal);
-        Assert.Contains("XmlSyntaxEditorService.Configure(preview)", assetViewerCode, StringComparison.Ordinal);
+        Assert.Contains("XmlSyntaxEditorService.Configure(_preview)", assetViewerCode, StringComparison.Ordinal);
         Assert.Contains("var rawXmlTb = new TextEditor", unitCode, StringComparison.Ordinal);
         Assert.Contains("AddRawEffectXmlEditor", technologyCode, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(box)", technologyCode, StringComparison.Ordinal);

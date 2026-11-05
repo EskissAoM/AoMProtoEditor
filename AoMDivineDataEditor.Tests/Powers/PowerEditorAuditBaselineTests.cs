@@ -74,6 +74,7 @@ public sealed class PowerEditorAuditBaselineTests
             ProjectSource.Read("Windows", "PowerEditorView.axaml.cs"),
             ProjectSource.Read("Windows", "PowerEditorView.axaml"),
             ProjectSource.Read("Classes", "PowerCatalog.cs"),
+            ProjectSource.Read("Classes", "PowerXmlFieldOrder.cs"),
             ProjectSource.Read("Classes", "MajorGodCatalog.cs"));
         var policies = PowerEditorAuditInventory.Classify(snapshot)
             .Where(policy => policy.Mode is PowerEditorCoverageMode.Structured or PowerEditorCoverageMode.Shared);
@@ -175,14 +176,12 @@ public sealed class PowerEditorAuditBaselineTests
         Assert.Contains("ShiftingSands/rangeindicator", PowerEditorAuditInventory.KnownSourceNormalizations.Keys);
     }
 
-    [Fact]
+    [CorpusFact]
+    [Trait("Category", "Corpus")]
     [Trait("Category", "Integration")]
     public void InstalledOriginalCorpusMatchesTheCheckedInSchemaBaseline()
     {
         var documents = LoadInstalledCorpus();
-        if (documents.Count == 0)
-            return;
-
         var actual = PowerSchemaCorpusSnapshot.Capture(documents);
         if (Environment.GetEnvironmentVariable("UPDATE_POWER_SCHEMA_BASELINE") == "1")
         {
@@ -196,13 +195,12 @@ public sealed class PowerEditorAuditBaselineTests
         Assert.Equal(expected.ToJson(), actual.ToJson());
     }
 
-    [Fact]
+    [CorpusFact]
+    [Trait("Category", "Corpus")]
     [Trait("Category", "Integration")]
     public void EveryInstalledOriginalOpensWithoutPopulationFailure()
     {
         var documents = LoadInstalledCorpus();
-        if (documents.Count == 0)
-            return;
         var definitions = PowerCatalog.ExtractDefinitions(documents, isBuiltIn: true);
         Assert.Equal(161, definitions.Count);
 
@@ -226,13 +224,12 @@ public sealed class PowerEditorAuditBaselineTests
         }
     }
 
-    [Fact]
+    [CorpusFact]
+    [Trait("Category", "Corpus")]
     [Trait("Category", "Integration")]
     public void UntouchedModEligibleOriginalClonesRemainSemanticallyIdenticalAfterOpenAndSave()
     {
         var documents = LoadInstalledCorpus();
-        if (documents.Count == 0)
-            return;
         var definitions = PowerCatalog.ExtractDefinitions(documents, isBuiltIn: true);
         Assert.Equal(161, definitions.Count);
         var modEligibleDefinitions = definitions.Where(definition =>
@@ -330,25 +327,13 @@ public sealed class PowerEditorAuditBaselineTests
 
     private static IReadOnlyList<XDocument> LoadInstalledCorpus()
     {
-        var dataBarPath = FindDataBar();
-        if (dataBarPath == null)
-            return [];
+        var dataBarPath = OriginalCorpus.RequirePath();
         using var stream = File.OpenRead(dataBarPath);
         var archive = new BarArchive(stream);
         Assert.True(archive.Load(out var error), error.ToString());
         var documents = PowerCatalog.ExtractBaseDocumentsFromBar(archive, dataBarPath);
         Assert.Equal(10, documents.Count);
         return documents;
-    }
-
-    private static string? FindDataBar()
-    {
-        var configured = Environment.GetEnvironmentVariable("AOM_DATA_BAR");
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
-            return configured;
-        var workspacePath = Path.GetFullPath(Path.Combine(ProjectSource.RootPath, "..",
-            "Age of Mythology Retold", "game", "data", "Data.bar"));
-        return File.Exists(workspacePath) ? workspacePath : null;
     }
 
     private static string GetType(XElement power)

@@ -8,11 +8,15 @@ using AoMDivineDataEditor.Controls;
 
 namespace AoMDivineDataEditor.Windows;
 
-internal sealed record IconManagerItem(string Name, string FullPath, string DisplayPath, bool IsCustom);
+internal sealed record IconManagerItem(string Name, string FullPath, string DisplayPath, bool IsCustom)
+{
+    public IconAssetSource? Source { get; init; }
+}
 
 internal sealed class IconManagerWindow : SimpleWindow
 {
     private readonly List<IconManagerItem> _items;
+    private readonly Dictionary<string, IconAssetSource> _originalSources;
     private readonly TextBox _searchBox;
     private readonly ComboBox _filterComboBox;
     private readonly ListBox _itemsList;
@@ -24,21 +28,20 @@ internal sealed class IconManagerWindow : SimpleWindow
         IEnumerable<string> originalIconPaths,
         IEnumerable<string> customIconPaths,
         string? resourcesDirectory,
-        Func<IconManagerItem, AssetDestination, Task<bool>>? moveAsync = null)
+        Func<IconManagerItem, AssetDestination, Task<bool>>? moveAsync = null,
+        IEnumerable<IconAssetSource>? originalSources = null)
     {
         _resourcesDirectory = resourcesDirectory;
         _moveAsync = moveAsync;
-        var originals = originalIconPaths.Select(path => (Path: path, IsCustom: false));
-        var customs = customIconPaths.Select(path => (Path: path, IsCustom: true));
-        _items = originals.Concat(customs)
-            .Where(item => !string.IsNullOrWhiteSpace(item.Path))
-            .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderByDescending(item => item.IsCustom).First())
-            .Select(item => new IconManagerItem(
-                GetFileName(item.Path),
-                item.Path,
-                RemoveResourcesPrefix(item.Path),
-                item.IsCustom))
+        var archiveSources = (originalSources ?? []).ToDictionary(source => source.LogicalPath, StringComparer.OrdinalIgnoreCase);
+        _originalSources = originalIconPaths.Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(IconSourceResolver.LogicalPath).Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(path => path, path => archiveSources.GetValueOrDefault(path) ??
+                new IconAssetSource(path, [new IconPhysicalSource(IconSourceResolver.ChangeExtension(path, ".dds"), IconFileFormat.Dds, false)]),
+                StringComparer.OrdinalIgnoreCase);
+        _items = _originalSources.Keys.Concat(customIconPaths.Where(path => !string.IsNullOrWhiteSpace(path)).Select(IconSourceResolver.LogicalPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(CreateResolvedItem).OfType<IconManagerItem>()
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -71,6 +74,7 @@ internal sealed class IconManagerWindow : SimpleWindow
 
     private async Task ImportIconAsync()
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (string.IsNullOrWhiteSpace(_resourcesDirectory)) return;
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
@@ -94,17 +98,22 @@ internal sealed class IconManagerWindow : SimpleWindow
         if (destinationDialog.Destination is not { } destination) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destination.AbsolutePath)!);
-            File.Copy(sourcePath, destination.AbsolutePath, overwrite: false);
-            _items.RemoveAll(item => item.FullPath.Equals(destination.XmlValue, StringComparison.OrdinalIgnoreCase));
-            _items.Add(new IconManagerItem(GetFileName(destination.XmlValue), destination.XmlValue, RemoveResourcesPrefix(destination.XmlValue), true));
-            _items.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name));
-            _searchBox.Text = Path.GetFileNameWithoutExtension(destination.XmlValue);
-            _filterComboBox.SelectedItem = "Custom";
-            RefreshList();
+            await ImportToDestinationAsync(sourcePath, destination);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         { await new Prompt(PromptType.Error, "Import failed", exception.Message).ShowDialog(this); }
+    }
+
+    private async Task ImportToDestinationAsync(string sourcePath, AssetDestination destination)
+    {
+        if (!await CatalogAvailabilityPrompt.EnsureAsync(this,
+                () => CustomAssetCatalog.LoadIconPathsResult(_resourcesDirectory), "Custom icons")) return;
+        await AssetCreateService.ImportPngAsync(_resourcesDirectory!, destination, sourcePath);
+        RefreshItem(destination.XmlValue);
+        _items.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name));
+        _searchBox.Text = Path.GetFileNameWithoutExtension(destination.XmlValue);
+        _filterComboBox.SelectedItem = "Custom";
+        RefreshList();
     }
 
     private void RefreshList()
@@ -113,7 +122,7 @@ internal sealed class IconManagerWindow : SimpleWindow
             _items.Count,
             _items.Count(item => !item.IsCustom),
             _items.Count(item => item.IsCustom),
-            "Double-click a custom icon name to rename or move it.");
+            "Double-click a custom icon to rename or move it. Paired PNG/DDS files cannot be moved.");
         _itemsList.ItemsSource = ManagerListShell.FilterItems(
             _items,
             item => item.Name,
@@ -122,9 +131,35 @@ internal sealed class IconManagerWindow : SimpleWindow
             _filterComboBox.SelectedItem as string);
     }
 
+    private IconManagerItem? CreateResolvedItem(string logicalPath)
+    {
+        var source = IconSourceResolver.Merge(logicalPath,
+            (IconSourceResolver.ResolveCustom(_resourcesDirectory, logicalPath)?.PhysicalSources ?? [])
+            .Concat(_originalSources.GetValueOrDefault(logicalPath)?.PhysicalSources ?? []));
+        return source.PhysicalSources.Count == 0 ? null :
+            new IconManagerItem(GetFileName(source.LogicalPath), source.LogicalPath, RemoveResourcesPrefix(source.LogicalPath), source.IsCustom)
+            { Source = source };
+    }
+
+    private void RefreshItem(string logicalPath)
+    {
+        _items.RemoveAll(item => item.FullPath.Equals(logicalPath, StringComparison.OrdinalIgnoreCase));
+        if (CreateResolvedItem(logicalPath) is { } current) _items.Add(current);
+    }
+
+    private string? MoveBlockReason(IconManagerItem item)
+    {
+        if (!item.IsCustom) return "Original game icons cannot be renamed or moved.";
+        if (item.Source == null || !item.Source.IsCustom) return "The custom source is unavailable. Reopen the icon manager.";
+        if (item.Source.HasCompetingCustomFiles) return "Both PNG and DDS files supply this custom icon. Resolve the competing files before renaming or moving it.";
+        if (item.Source.PreferredSource?.Format is not (IconFileFormat.Png or IconFileFormat.Dds)) return "Only PNG or DDS icon files can be moved.";
+        if (_moveAsync == null || string.IsNullOrWhiteSpace(_resourcesDirectory)) return "Select a writable mod before renaming or moving custom icons.";
+        return null;
+    }
+
     private Control CreateRow(IconManagerItem item)
     {
-        var row = ManagerListShell.CreateRow("*,Auto");
+        var row = ManagerListShell.CreateSourceRow();
         row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
         row.Children.Add(new TextBlock
         {
@@ -135,34 +170,49 @@ internal sealed class IconManagerWindow : SimpleWindow
         });
         var path = new TextBlock
         {
-            Text = item.IsCustom ? $"Custom · {item.DisplayPath}" : item.DisplayPath,
+            Text = item.IsCustom
+                ? $"Custom {(item.Source?.HasCompetingCustomFiles == true ? "PNG + DDS · move blocked" : item.Source?.PreferredSource?.Format.ToString().ToUpperInvariant())} · {item.DisplayPath}"
+                : item.DisplayPath,
             Margin = new Thickness(8, 9),
             Foreground = Brushes.Gray,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 430
         };
-        ToolTip.SetTip(path, item.DisplayPath);
+        var sourceDetails = string.Join("\n", item.Source?.PhysicalSources.Select(source =>
+            source.IsCustom ? source.Path : $"{source.ArchivePath ?? "Game archive"} :: {source.Path}") ?? []);
+        ToolTip.SetTip(path, sourceDetails);
         Grid.SetColumn(path, 1);
         row.Children.Add(path);
-        if (item.IsCustom && _moveAsync != null && !string.IsNullOrWhiteSpace(_resourcesDirectory))
+        var blocked = MoveBlockReason(item);
+        if (blocked == null)
         {
             row.DoubleTapped += async (_, _) => await OpenMoveDialogAsync(item);
             ToolTip.SetTip(row, "Double-click to rename or move this custom icon");
         }
+        else ToolTip.SetTip(row, blocked);
         return row;
     }
 
     private async Task OpenMoveDialogAsync(IconManagerItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
+        if (!await CatalogAvailabilityPrompt.EnsureAsync(this,
+                () => CustomAssetCatalog.LoadIconPathsResult(_resourcesDirectory), "Custom icons")) return;
+        if (MoveBlockReason(item) is { } reason)
+        {
+            await new Prompt(PromptType.Error, "Icon move blocked", reason).ShowDialog(this);
+            return;
+        }
         var relative = RemoveResourcesPrefix(item.FullPath);
+        var extension = item.Source!.PreferredSource!.Format == IconFileFormat.Dds ? ".dds" : ".png";
         var dialog = new AssetDestinationWindow(
-            "Rename/Move Icon", _resourcesDirectory!, "game\\ui_myth\\resources", "resources", ".png",
-            Path.GetFileNameWithoutExtension(relative), Path.GetDirectoryName(relative) ?? "", confirmButtonText: "Save");
+            "Rename/Move Icon", _resourcesDirectory!, "game\\ui_myth\\resources", "resources", extension,
+            Path.GetFileNameWithoutExtension(relative), Path.GetDirectoryName(relative) ?? "", confirmButtonText: "Save", usePngIconXmlPath: true);
         await dialog.ShowDialog(this);
         if (dialog.Destination is not { } destination || !await _moveAsync!(item, destination)) return;
-        _items.Remove(item);
-        _items.Add(new IconManagerItem(GetFileName(destination.XmlValue), destination.XmlValue, RemoveResourcesPrefix(destination.XmlValue), true));
+        RefreshItem(item.FullPath);
+        RefreshItem(destination.XmlValue);
         _items.Sort((left, right) =>
         {
             var nameComparison = StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name);

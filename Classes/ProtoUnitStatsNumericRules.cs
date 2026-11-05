@@ -56,6 +56,7 @@ public static class ProtoUnitStatsNumericRules
             ["buildpoints"] = Float("Build Points"),
             ["populationcount"] = UInt("Population Count"),
             ["los"] = Float("Line of Sight"),
+            ["ondiscoverlos"] = Float("On Discover LOS"),
             ["weightclass"] = UInt("Weight Class"),
             ["maxvelocity"] = Float("Max Velocity"),
             ["maxrunvelocity"] = Float("Max Run Velocity"),

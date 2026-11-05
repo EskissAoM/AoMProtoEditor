@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Classes;
@@ -17,32 +16,63 @@ public static class AnimFileCatalog
         "ArtUI.bar"
     };
 
-    private static readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<AnimFileCatalogEntry>>>> Cache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ArchiveCatalogCache<IReadOnlyList<AnimFileCatalogEntry>> Cache = new(LoadCore);
 
-    public static Task<IReadOnlyList<AnimFileCatalogEntry>> LoadAsync(string artDirectory)
+    public static async Task<IReadOnlyList<AnimFileCatalogEntry>> LoadAsync(string artDirectory)
+        => (await LoadResultAsync(artDirectory).ConfigureAwait(false)).Entries;
+
+    public static async Task<CatalogLoadResult<AnimFileCatalogEntry>> LoadResultAsync(string artDirectory)
     {
-        if (string.IsNullOrWhiteSpace(artDirectory) || !Directory.Exists(artDirectory))
-            return Task.FromResult<IReadOnlyList<AnimFileCatalogEntry>>([]);
-
-        var archives = Directory.EnumerateFiles(artDirectory, "Art*.bar", SearchOption.TopDirectoryOnly)
-            .Where(ShouldScanArchive)
-            .Select(path => new FileInfo(path))
-            .OrderBy(info => info.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (archives.Count == 0)
-            return Task.FromResult<IReadOnlyList<AnimFileCatalogEntry>>([]);
-
-        var cacheKey = string.Join('|', archives.Select(info =>
-            $"{info.FullName}:{info.Length}:{info.LastWriteTimeUtc.Ticks}"));
-        return Cache.GetOrAdd(
-            cacheKey,
-            _ => new Lazy<Task<IReadOnlyList<AnimFileCatalogEntry>>>(
-                () => Task.Run(() => LoadCore(archives)),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        var results = new Dictionary<string, AnimFileCatalogEntry>(StringComparer.OrdinalIgnoreCase);
+        var diagnostics = new List<string>();
+        var inspected = 0;
+        var completed = 0;
+        try
+        {
+            // Re-enumerate membership on every call. Only individual successful
+            // archive snapshots are retained, never a partial directory result.
+            foreach (var path in Directory.EnumerateFiles(artDirectory, "Art*.bar", SearchOption.TopDirectoryOnly)
+                         .Where(ShouldScanArchive).Order(StringComparer.OrdinalIgnoreCase))
+            {
+                inspected++;
+                try
+                {
+                    foreach (var entry in await Cache.LoadAsync(path).ConfigureAwait(false))
+                        results.TryAdd(entry.Path, entry);
+                    completed++;
+                }
+                catch (Exception exception) when (IsCatalogReadFailure(exception))
+                {
+                    diagnostics.Add($"Archive '{path}': {exception.Message}");
+                }
+            }
+        }
+        catch (Exception exception) when (IsCatalogReadFailure(exception))
+        {
+            diagnostics.Add($"Art directory '{artDirectory}': {exception.Message}");
+        }
+        var state = diagnostics.Count == 0 ? CatalogLoadState.Complete :
+            completed > 0 ? CatalogLoadState.Partial : CatalogLoadState.Unavailable;
+        if (diagnostics.Count > 0)
+            diagnostics.Insert(0, $"{completed} of {inspected} discovered Art archives loaded successfully.");
+        return new(results.Values.OrderBy(entry => GetFileName(entry.Path), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase).ToList().AsReadOnly(),
+            state, artDirectory, diagnostics.AsReadOnly());
     }
 
-    public static Task<string?> LoadXmlAsync(string artDirectory, AnimFileCatalogEntry animFile)
+    private static bool IsCatalogReadFailure(Exception exception)
+        => exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidDataException;
+
+    public static async Task<string?> LoadXmlAsync(string artDirectory, AnimFileCatalogEntry animFile)
+        => (await LoadXmlResultAsync(artDirectory, animFile).ConfigureAwait(false)).Value;
+
+    public static Task<AssetPayloadResult<string>> LoadXmlResultAsync(string artDirectory, AnimFileCatalogEntry animFile)
+        => LoadXmlResultCoreAsync(artDirectory, animFile, AssetPayloadPolicy.Default);
+
+    internal static async Task<string?> LoadXmlForValidationAsync(string artDirectory, AnimFileCatalogEntry animFile)
+        => (await LoadXmlResultCoreAsync(artDirectory, animFile, AssetPayloadPolicy.AnimationValidation).ConfigureAwait(false)).Value;
+
+    private static Task<AssetPayloadResult<string>> LoadXmlResultCoreAsync(string artDirectory, AnimFileCatalogEntry animFile, AssetPayloadPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(animFile);
         if (string.IsNullOrWhiteSpace(artDirectory) || !Directory.Exists(artDirectory) ||
@@ -50,21 +80,28 @@ public static class AnimFileCatalog
             !Path.GetFileName(animFile.ArchiveName).Equals(animFile.ArchiveName, StringComparison.Ordinal) ||
             !ShouldScanArchive(animFile.ArchiveName))
         {
-            return Task.FromResult<string?>(null);
+            return Task.FromResult(AssetPayloadResult<string>.Failure(artDirectory, "Animation archive or path is unavailable."));
         }
 
         var archivePath = Path.Combine(artDirectory, animFile.ArchiveName);
-        return File.Exists(archivePath)
-            ? Task.Run(() => LoadXmlCore(archivePath, animFile.Path))
-            : Task.FromResult<string?>(null);
+        return AssetPayloadReader.LoadArchiveXmlAsync(archivePath, animFile.Path, policy);
     }
 
     public static async Task<string?> LoadCustomXmlAsync(string? artDirectory, string gamePath)
+        => (await LoadCustomXmlResultAsync(artDirectory, gamePath).ConfigureAwait(false)).Value;
+
+    public static Task<AssetPayloadResult<string>> LoadCustomXmlResultAsync(string? artDirectory, string gamePath)
+        => LoadCustomXmlResultCoreAsync(artDirectory, gamePath, AssetPayloadPolicy.Default);
+
+    internal static async Task<string?> LoadCustomXmlForValidationAsync(string? artDirectory, string gamePath)
+        => (await LoadCustomXmlResultCoreAsync(artDirectory, gamePath, AssetPayloadPolicy.AnimationValidation).ConfigureAwait(false)).Value;
+
+    private static async Task<AssetPayloadResult<string>> LoadCustomXmlResultCoreAsync(string? artDirectory, string gamePath, AssetPayloadPolicy policy)
     {
         if (string.IsNullOrWhiteSpace(artDirectory) || !Directory.Exists(artDirectory) ||
             string.IsNullOrWhiteSpace(gamePath) || !gamePath.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
         {
-            return null;
+            return AssetPayloadResult<string>.Failure(gamePath, "Custom XML folder or path is unavailable.");
         }
 
         try
@@ -72,12 +109,12 @@ public static class AnimFileCatalog
             var root = Path.GetFullPath(artDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             var candidate = Path.GetFullPath(Path.Combine(root, gamePath.Replace('\\', Path.DirectorySeparatorChar)));
             if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(candidate))
-                return null;
-            return await File.ReadAllTextAsync(candidate);
+                return AssetPayloadResult<string>.Failure(candidate, "Custom XML path is missing or outside the asset folder.");
+            return await AssetPayloadReader.LoadLooseXmlAsync(candidate, policy).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            return null;
+            return AssetPayloadResult<string>.Failure(gamePath, exception.Message);
         }
     }
 
@@ -132,38 +169,6 @@ public static class AnimFileCatalog
             .ToList();
     }
 
-    private static string? LoadXmlCore(string archivePath, string gamePath)
-    {
-        try
-        {
-            var normalizedGamePath = gamePath.Trim().Replace('/', '\\');
-            using var stream = File.OpenRead(archivePath);
-            var archive = new BarArchive(stream);
-            if (!archive.Load(out _) || archive.Entries == null)
-                return null;
-
-            var entry = archive.Entries.FirstOrDefault(candidate =>
-                TryGetGamePath(candidate.RelativePath, out var candidateGamePath) &&
-                candidateGamePath.Equals(normalizedGamePath, StringComparison.OrdinalIgnoreCase));
-            if (entry == null)
-                return null;
-
-            var bytes = entry.ReadDataDecompressed(stream);
-            if (entry.RelativePath.EndsWith(".XMB", StringComparison.OrdinalIgnoreCase))
-                return XmbReader.ToFormattedXml(bytes);
-
-            using var memory = new MemoryStream(bytes, writable: false);
-            using var reader = new StreamReader(memory, detectEncodingFromByteOrderMarks: true);
-            var xml = reader.ReadToEnd();
-            return string.IsNullOrWhiteSpace(xml) ? null : xml;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
-                                          ArgumentException or InvalidDataException)
-        {
-            return null;
-        }
-    }
-
     internal static bool TryGetGamePath(string rawPath, out string gamePath)
     {
         var normalized = rawPath?.Trim().Replace('/', '\\') ?? "";
@@ -183,35 +188,13 @@ public static class AnimFileCatalog
         return false;
     }
 
-    private static IReadOnlyList<AnimFileCatalogEntry> LoadCore(IEnumerable<FileInfo> archives)
+    private static IReadOnlyList<AnimFileCatalogEntry> LoadCore(string archivePath)
     {
-        var results = new Dictionary<string, AnimFileCatalogEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var archiveInfo in archives)
-        {
-            try
-            {
-                using var stream = File.OpenRead(archiveInfo.FullName);
-                var archive = new BarArchive(stream);
-                if (!archive.Load(out _) || archive.Entries == null)
-                    continue;
-
-                foreach (var entry in FilterArchiveEntries(
-                             archiveInfo.Name,
-                             archive.Entries.Select(entry => entry.RelativePath)))
-                {
-                    results.TryAdd(entry.Path, entry);
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                // A missing/unreadable optional archive must not prevent the remaining catalogs from loading.
-            }
-        }
-
-        return results.Values
-            .OrderBy(entry => GetFileName(entry.Path), StringComparer.OrdinalIgnoreCase)
-            .ThenBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        using var stream = File.OpenRead(archivePath);
+        var archive = new BarArchive(stream);
+        if (!archive.Load(out var error) || archive.Entries == null)
+            throw new InvalidDataException($"Archive '{archivePath}' metadata could not be read: {error}.");
+        return FilterArchiveEntries(Path.GetFileName(archivePath), archive.Entries.Select(entry => entry.RelativePath));
     }
 
     private static string GetFileName(string path)

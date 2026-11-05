@@ -17,7 +17,9 @@ public static class XmlPreviewFormatter
                 return xml;
 
             NormalizeElement(document.Root, 0);
-            return document.ToString(SaveOptions.DisableFormatting);
+            var formatted = document.ToString(SaveOptions.DisableFormatting);
+            return document.Declaration == null ? formatted : document.Declaration +
+                (formatted.StartsWith('\r') || formatted.StartsWith('\n') ? "" : Environment.NewLine) + formatted;
         }
         catch
         {
@@ -28,6 +30,13 @@ public static class XmlPreviewFormatter
 
     private static void NormalizeElement(XElement element, int depth)
     {
+        if ((string?)element.Attribute(XNamespace.Xml + "space") == "preserve") return;
+        var sawChild = false;
+        foreach (var node in element.Nodes())
+        {
+            if (node is XElement) sawChild = true;
+            else if (sawChild && node is XText text && !string.IsNullOrWhiteSpace(text.Value)) return;
+        }
         var children = element.Elements().ToList();
         foreach (var child in children)
             NormalizeElement(child, depth + 1);
@@ -39,7 +48,13 @@ public static class XmlPreviewFormatter
             whitespace.Remove();
 
         foreach (var child in element.Elements().ToList())
+        {
+            // Mixed-content AnimFile names precede their child elements. Their
+            // existing indentation is part of that text node after parsing.
+            if (child.PreviousNode is XText prefix && !string.IsNullOrWhiteSpace(prefix.Value) &&
+                prefix.Value.EndsWith("\n" + new string('\t', depth + 1), StringComparison.Ordinal)) continue;
             child.AddBeforeSelf(new XText(Environment.NewLine + new string('\t', depth + 1)));
+        }
 
         element.Add(new XText(Environment.NewLine + new string('\t', depth)));
     }

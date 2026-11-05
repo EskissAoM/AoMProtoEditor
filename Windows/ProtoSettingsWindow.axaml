@@ -3,39 +3,49 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:ce="using:AoMDivineDataEditor.Windows"
-        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="280"
+        mc:Ignorable="d" d:DesignWidth="620" d:DesignHeight="300"
         x:Class="AoMDivineDataEditor.Windows.ProtoSettingsWindow"
         x:DataType="ce:ProtoSettingsWindow"
         Foreground="{DynamicResource PrimaryTextBrush}"
         Background="{DynamicResource AppBackgroundBrush}"
         WindowStartupLocation="CenterOwner"
-        CanResize="False" Width="500" Height="280"
+        CanResize="True" Width="620" Height="300" MinWidth="500" MinHeight="280"
         Title="AoM Divine Data Editor Settings">
     <Border Classes="MainPanel" Padding="16">
         <DockPanel>
             <TextBlock DockPanel.Dock="Top" Classes="SectionHeader" Text="AoM Divine Data Editor Settings" FontSize="18" Margin="0,0,0,16" />
 
             <DockPanel DockPanel.Dock="Bottom" Margin="0,15,0,0" LastChildFill="False">
-                <Button DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" Margin="8,0,0,0" />
-                <Button DockPanel.Dock="Right" Classes="positive" Content="Save" Click="Save_Click" />
+                <Button x:Name="CancelSettingsButton" DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" Margin="8,0,0,0" />
+                <Button x:Name="SaveSettingsButton" DockPanel.Dock="Right" Classes="positive" Content="Save" Click="Save_Click" IsEnabled="{Binding CanSaveSettings}" />
             </DockPanel>
 
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="15">
                 <StackPanel>
                     <TextBlock Text="Data.bar Path" FontWeight="Bold" Margin="0,0,0,4" />
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding DataBarPath, Mode=TwoWay}" PlaceholderText="C:\...\Data.bar" />
+                        <TextBox x:Name="DataBarPathBox" Grid.Column="0" Text="{Binding DataBarPath, Mode=TwoWay}" PlaceholderText="C:\...\Data.bar" />
                         <Button Grid.Column="1" Content="Browse..." Click="BrowseBar_Click" Margin="8,0,0,0" />
                     </Grid>
                 </StackPanel>
                 <StackPanel>
                     <TextBlock Text="Steam User Folder or mods\local Folder" FontWeight="Bold" Margin="0,0,0,4" />
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding UserFolderPath, Mode=TwoWay}" PlaceholderText="...\&lt;SteamID&gt; or ...\mods\local" />
+                        <TextBox x:Name="UserFolderPathBox" Grid.Column="0" Text="{Binding UserFolderPath, Mode=TwoWay}" PlaceholderText="...\&lt;SteamID&gt; or ...\mods\local" />
                         <Button Grid.Column="1" Content="Browse..." Click="BrowseUser_Click" Margin="8,0,0,0" />
                     </Grid>
                 </StackPanel>
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="SettingsStatus" Text="{Binding StatusMessage}" TextWrapping="Wrap" IsVisible="{Binding HasStatusMessage}" />
+                    <CheckBox x:Name="RecoveryConfirmation" IsVisible="{Binding NeedsRecoveryConfirmation}"
+                              IsChecked="{Binding ConfirmRecovery, Mode=TwoWay}">
+                        <TextBlock Text="Recover from the validated backup when saving" TextWrapping="Wrap" />
+                    </CheckBox>
+                    <Button x:Name="ReloadSettingsButton" Content="Discard settings edits and reload" Click="Reload_Click" IsVisible="{Binding HasStatusMessage}" />
+                </StackPanel>
             </StackPanel>
+            </ScrollViewer>
         </DockPanel>
     </Border>
 </Window>

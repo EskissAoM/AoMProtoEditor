@@ -121,8 +121,10 @@ public sealed class ProtoActionStateStabilityPass4Tests
         Assert.Contains("state.RenderRevision++;", source, StringComparison.Ordinal);
         Assert.Contains("renderState.RenderRevision != renderRevision", source, StringComparison.Ordinal);
         Assert.Contains("_isPopulating = true;", source, StringComparison.Ordinal);
-        Assert.Contains("bool Busy() => isBusy?.Invoke() == true;", autocompleteSource,
+        Assert.Contains("bool Busy() => binding.IsBusy?.Invoke() == true;", autocompleteSource,
             StringComparison.Ordinal);
+        Assert.Contains("existing.IsBusy = isBusy", autocompleteSource, StringComparison.Ordinal);
+        Assert.Contains("EditorFieldInteraction.UpdateBusy(autoCompleteBox, existing.IsBusy)", autocompleteSource, StringComparison.Ordinal);
         Assert.Contains("lifetime != visualLifetime", autocompleteSource, StringComparison.Ordinal);
     }
 

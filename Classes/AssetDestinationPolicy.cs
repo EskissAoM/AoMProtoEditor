@@ -47,6 +47,7 @@ public static class AssetDestinationPolicy
             var absolutePath = Path.GetFullPath(Path.Combine(root, relativePath.Replace('\\', Path.DirectorySeparatorChar)));
             if (!absolutePath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             { error = "The destination must remain inside the mod asset folder."; return false; }
+            FileIntegrityTransaction.EnsureRegularFileOrMissing(absolutePath);
             var xmlValue = string.IsNullOrWhiteSpace(xmlPrefix)
                 ? relativePath
                 : xmlPrefix.Trim().TrimEnd('\\', '/') + "\\" + relativePath;
@@ -55,5 +56,7 @@ public static class AssetDestinationPolicy
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         { error = "The destination path is not valid."; return false; }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        { error = exception.Message; return false; }
     }
 }

@@ -24,15 +24,22 @@ public sealed class SafeDeletionArchitectureTests
         var window = ProjectSource.Read("Windows", "ProtoEditorWindow.axaml.cs");
         var commandDelete = ProjectSource.ExtractMethod(window, "private async Task<bool> DeleteProtoUnitCommandCoreAsync");
         var abilityDelete = ProjectSource.ExtractMethod(window, "private async Task ApplyAbilityManagerChangesAsync");
-        var tacticsDelete = ProjectSource.ExtractMethod(window, "private async Task ApplyTacticsManagerChangesAsync");
+        var tacticsDelete = ProjectSource.ExtractMethod(window, "private async Task<bool> ApplyTacticsManagerChangesAsync");
 
         Assert.Contains("EnsureIdentifierCanBeDeletedAsync", commandDelete, StringComparison.Ordinal);
         Assert.Contains("ModDocumentPersistence.Execute", commandDelete, StringComparison.Ordinal);
-        Assert.Contains("FilterUnreferencedStringIdsInCurrentMod", commandDelete, StringComparison.Ordinal);
+        Assert.Contains("OwnedStringSavePreparation.Prepare", commandDelete, StringComparison.Ordinal);
+        Assert.Contains("cleanup.Inspection.ValidateReadDependencies();", commandDelete, StringComparison.Ordinal);
         Assert.DoesNotContain("ReviewOrphanStringsAsync", commandDelete, StringComparison.Ordinal);
         Assert.Contains("EnsureIdentifierCanBeDeletedAsync", abilityDelete, StringComparison.Ordinal);
-        Assert.Contains("ModDocumentPersistence.Execute", abilityDelete, StringComparison.Ordinal);
-        Assert.Contains("ReviewOrphanStringsAsync", abilityDelete, StringComparison.Ordinal);
+        Assert.Contains("PrepareAbilityStringSave", abilityDelete, StringComparison.Ordinal);
+        Assert.Contains("PersistAbilityChangesAsync", abilityDelete, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReviewOrphanStringsAsync", abilityDelete, StringComparison.Ordinal);
+        var abilityPersistence = ProjectSource.ExtractMethod(ProjectSource.Read("Windows", "ProtoEditorWindow.AbilityStrings.cs"),
+            "private async Task PersistAbilityChangesAsync");
+        Assert.Contains("ModDocumentPersistence.ExecuteAsync", abilityPersistence, StringComparison.Ordinal);
+        Assert.Contains("cleanup.Inspection.ValidateReadDependencies();", abilityPersistence, StringComparison.Ordinal);
+        Assert.Contains("inspection.ValidateReadDependencies();", abilityPersistence, StringComparison.Ordinal);
         Assert.Contains("EnsureIdentifierCanBeDeletedAsync", tacticsDelete, StringComparison.Ordinal);
         Assert.Contains("FileIntegrityTransaction.Execute", tacticsDelete, StringComparison.Ordinal);
     }
@@ -48,7 +55,11 @@ public sealed class SafeDeletionArchitectureTests
         Assert.Contains("IsEnabled = false", reviewWindow, StringComparison.Ordinal);
         Assert.Contains("They are kept unless you explicitly select them", reviewWindow, StringComparison.Ordinal);
         Assert.Contains("ReviewOrphanStringsAsync", protoWindow, StringComparison.Ordinal);
-        Assert.Contains("new OrphanCleanupReviewWindow", technologyView, StringComparison.Ordinal);
+        Assert.DoesNotContain("new OrphanCleanupReviewWindow", technologyView, StringComparison.Ordinal);
+        Assert.Contains("OwnedStringLifecyclePolicy.Prepare", technologyView, StringComparison.Ordinal);
+        var unitSave = ProjectSource.ExtractMethod(protoWindow, "private async Task SaveCurrentUnitCoreAsync");
+        Assert.DoesNotContain("ReviewOrphanStringsAsync", unitSave, StringComparison.Ordinal);
+        Assert.Contains("stringCleanup.Inspection.References.ValidateReadDependencies()", unitSave, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -70,7 +81,8 @@ public sealed class SafeDeletionArchitectureTests
 
         var sharedDialog = ProjectSource.Read("Windows", "DeletionBlockedDialog.cs");
         Assert.Contains("{entityLabel} is still in use", sharedDialog, StringComparison.Ordinal);
-        Assert.Contains("Width = 680", sharedDialog, StringComparison.Ordinal);
+        Assert.Contains(".FitToContent(680, 400)", sharedDialog, StringComparison.Ordinal);
+        Assert.Contains("await prompt.ShowDialog(owner)", sharedDialog, StringComparison.Ordinal);
     }
 
     [Fact]

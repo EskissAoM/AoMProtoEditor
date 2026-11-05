@@ -319,7 +319,9 @@ public sealed class NavigationRegressionTests
         Assert.Contains("OpenFilePickerAsync", managerCode, StringComparison.Ordinal);
         Assert.Contains("*.png", managerCode, StringComparison.Ordinal);
         Assert.Contains("AssetDestinationWindow", managerCode, StringComparison.Ordinal);
-        Assert.Contains("item.IsCustom ? $\"Custom · {item.DisplayPath}\" : item.DisplayPath", managerCode, StringComparison.Ordinal);
+        Assert.Contains("item.Source?.PreferredSource?.Format.ToString().ToUpperInvariant()", managerCode, StringComparison.Ordinal);
+        Assert.Contains("} · {item.DisplayPath}", managerCode, StringComparison.Ordinal);
+        Assert.Contains("IconSourceResolver.Merge", managerCode, StringComparison.Ordinal);
         Assert.DoesNotContain("deleteButton", managerCode, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("duplicateButton", managerCode, StringComparison.OrdinalIgnoreCase);
     }
@@ -359,10 +361,12 @@ public sealed class NavigationRegressionTests
         Assert.Contains("await CaptureCurrentUnitDraftAsync()", code, StringComparison.Ordinal);
         Assert.Contains("_dirtyUnitNames.Add(capturedName)", code, StringComparison.Ordinal);
         Assert.Contains("_unitAbilityDrafts[capturedName] = CloneAbilityDrafts(_abilityDrafts)", code, StringComparison.Ordinal);
-        Assert.Contains("SavePendingUnitStringDrafts(approvedStringRemovals);", code, StringComparison.Ordinal);
-        Assert.Contains("ReviewOrphanStringsAsync(", code, StringComparison.Ordinal);
-        Assert.Contains("SaveAllPendingAbilityDrafts();", code, StringComparison.Ordinal);
-        Assert.Contains("foreach (var unitName in _dirtyUnitNames.OrderBy", code, StringComparison.Ordinal);
+        Assert.Contains("SavePendingUnitStringDrafts(stringCleanup.Updates, stringCleanup.Plan.StringRemovals, stringCleanup.Abilities?.Updates);", code, StringComparison.Ordinal);
+        Assert.Contains("PreparePendingAbilityDraftSave(existing)", code, StringComparison.Ordinal);
+        Assert.Contains("SavePreparedAbilityDrafts(stringCleanup.Abilities);", code, StringComparison.Ordinal);
+        Assert.Contains("AdoptPreparedAbilityDrafts(stringCleanup.Abilities);", code, StringComparison.Ordinal);
+        var prepared = ProjectSource.Read("Windows", "ProtoEditorWindow.AbilityStrings.cs");
+        Assert.Contains("_dirtyUnitNames.Where(_unitAbilityDrafts.ContainsKey)", prepared, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -370,14 +374,11 @@ public sealed class NavigationRegressionTests
     {
         var root = ProjectSource.RootPath;
         var code = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
-        var captureMethod = Regex.Match(
-            code,
-            @"private async Task<bool> CaptureCurrentUnitDraftAsync\(\).*?(?=\n\s*private async void Save_Click)",
-            RegexOptions.Singleline);
-
-        Assert.True(captureMethod.Success, "Could not locate CaptureCurrentUnitDraftAsync.");
-        var applyIndex = captureMethod.Value.IndexOf("ApplyCurrentEdits();", StringComparison.Ordinal);
-        var stringCaptureIndex = captureMethod.Value.IndexOf("CaptureCurrentUnitStringDraft();", StringComparison.Ordinal);
+        var wrapper = ProjectSource.ExtractMethod(code, "private Task<bool> CaptureCurrentUnitDraftAsync()");
+        Assert.Contains("CaptureCurrentUnitDraftCoreAsync()", wrapper, StringComparison.Ordinal);
+        var captureMethod = ProjectSource.ExtractMethod(code, "private async Task<bool> CaptureCurrentUnitDraftCoreAsync()");
+        var applyIndex = captureMethod.IndexOf("ApplyCurrentEdits();", StringComparison.Ordinal);
+        var stringCaptureIndex = captureMethod.IndexOf("CaptureCurrentUnitStringDraft();", StringComparison.Ordinal);
         Assert.True(applyIndex >= 0 && stringCaptureIndex > applyIndex,
             "A rename must generate and apply its new string IDs before the visible values are captured.");
     }
@@ -539,7 +540,10 @@ public sealed class NavigationRegressionTests
         Assert.DoesNotContain("CryBarEditor", project, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("new IconPreviewControl(_iconPreviewService)", unitEditor, StringComparison.Ordinal);
         Assert.Contains("new IconPreviewControl(_iconPreviewService)", technologyEditor, StringComparison.Ordinal);
-        Assert.Contains("DdsIconDecoder.ConvertToPngBytesAsync", previewService, StringComparison.Ordinal);
+        Assert.Contains("DdsIconDecoder.ConvertResultAsync", previewService, StringComparison.Ordinal);
+        Assert.Contains("AssetPayloadReader.ReadStream(stream, _policy.MaximumImageBytes)", previewService, StringComparison.Ordinal);
+        Assert.Contains("AssetPayloadReader.ReadEntry(stream, entry, _policy.MaximumImageBytes)", previewService, StringComparison.Ordinal);
+        Assert.Contains("_policy.ValidatePng(bytes)", previewService, StringComparison.Ordinal);
         Assert.Contains("new BcDecoder().DecodeAsync(dds)", ddsDecoder, StringComparison.Ordinal);
         Assert.Contains("ChangeExtension(normalizedPath, \".dds\")", previewService, StringComparison.Ordinal);
         Assert.Contains("Width = 132", previewControl, StringComparison.Ordinal);
@@ -550,8 +554,9 @@ public sealed class NavigationRegressionTests
         Assert.Contains("_cycleButton.IsVisible = _options.Count > 1", previewControl, StringComparison.Ordinal);
         Assert.Contains("AttachedToVisualTree", previewControl, StringComparison.Ordinal);
         Assert.Contains("_ = ShowCurrentOptionAsync()", previewControl, StringComparison.Ordinal);
-        Assert.Contains("propertiesLayout.Children.Add(propertiesGrid)", unitEditor, StringComparison.Ordinal);
-        Assert.Contains("Margin = new Thickness(IconPreviewControl.PropertyGridLeftOffset", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("propertiesLayout.Children.Add(identityGrid)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("_activeEditorPanel.Children.Add(propertiesGrid)", unitEditor, StringComparison.Ordinal);
+        Assert.Contains("EditorRolloverField.ConfigureIdentity(propertiesLayout, identityGrid, iconPreview)", unitEditor, StringComparison.Ordinal);
         Assert.DoesNotContain("Grid.SetColumn(iconPreview, 1)", unitEditor, StringComparison.Ordinal);
         Assert.Contains("RefreshCultureIconPreview()", unitEditor, StringComparison.Ordinal);
         Assert.DoesNotContain("displayRow.Children.Add(iconPreview)", unitEditor, StringComparison.Ordinal);

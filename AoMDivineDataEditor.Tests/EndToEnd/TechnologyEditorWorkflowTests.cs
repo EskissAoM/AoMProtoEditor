@@ -14,8 +14,19 @@ namespace AoMDivineDataEditor.Tests;
 /// validation, strings, reference migration, and atomic file writes meet.
 /// </summary>
 [Trait("Category", TestCategories.EndToEnd)]
-public sealed class TechnologyEditorWorkflowTests : IDisposable
+public sealed partial class TechnologyEditorWorkflowTests : IDisposable
 {
+    [Fact]
+    public void NewAgeUpgradeTechnologySavesWithoutAnEmptyIcon()
+    {
+        using var fixture = new TechnologyEditorFixture("<techtreemods/>");
+        var editor = CreateEditor(fixture, (_, _) => Task.CompletedTask);
+        Assert.True(CompleteOnDispatcher(() => editor.AddAgeUpgradeTechnologyAsync("NoIcon")),
+            AvaloniaTestHost.Run(() => GetPrivateField<Avalonia.Controls.TextBlock>(editor, "_statusMessage").Text));
+        Assert.Null(FindTechnology(XDocument.Load(fixture.TechtreePath), "NoIcon").Element("icon"));
+        Assert.Equal("Changes saved.", AvaloniaTestHost.Run(() => GetPrivateField<Avalonia.Controls.TextBlock>(editor, "_statusMessage").Text));
+    }
+
     public void Dispose() => AvaloniaTestHost.CollectUiGarbage();
 
     [Fact]
@@ -202,7 +213,7 @@ public sealed class TechnologyEditorWorkflowTests : IDisposable
                 <flag>AgeUpgrade</flag>
               </tech>
             </techtreemods>
-            """, $"{oldDisplayId} = New Minor God Yeah 2\r\n{oldRolloverId} = Rollover text\r\n");
+            """, $"ID = \"{oldDisplayId}\" ; Str = \"New Minor God Yeah 2\"\r\nID = \"{oldRolloverId}\" ; Str = \"Rollover text\"\r\n");
         IReadOnlyDictionary<string, string>? savedUpdates = null;
         IReadOnlyCollection<string>? savedRemovals = null;
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -284,7 +295,7 @@ public sealed class TechnologyEditorWorkflowTests : IDisposable
         const string rolloverId = "STR_TECH_DELETE_ME_LR";
         using var fixture = new TechnologyEditorFixture(
             $"<techtreemods><tech name=\"DeleteMe\"><displaynameid>{displayId}</displaynameid><rollovertextid>{rolloverId}</rollovertextid></tech></techtreemods>",
-            $"{displayId} = Delete me\r\n{rolloverId} = Delete rollover\r\n");
+            $"ID = \"{displayId}\" ; Str = \"Delete me\"\r\nID = \"{rolloverId}\" ; Str = \"Delete rollover\"\r\n");
         var editor = CreateEditor(fixture, (updates, removals) =>
         {
             var source = File.ReadAllText(fixture.StringsPath);
@@ -308,8 +319,10 @@ public sealed class TechnologyEditorWorkflowTests : IDisposable
         Assert.DoesNotContain(rolloverId, savedStrings.Keys, StringComparer.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void TechnologyRenameCommitsMinorGodAndStringLifecycleWithoutLosingUnmanagedContent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TechnologyRenameCommitsMinorGodAndStringLifecycleWithoutLosingUnmanagedContent(bool rawXml)
     {
         EnsureAvalonia();
         const string oldTechName = "MythicAgePreservedGod";
@@ -366,7 +379,14 @@ public sealed class TechnologyEditorWorkflowTests : IDisposable
                 return prepared;
             });
 
-        Assert.True(CompleteOnDispatcher(() => editor.RenameTechnologyAsync(oldTechName, newTechName)));
+        if (rawXml)
+            AvaloniaTestHost.RunAsync(() => InXmlWindow(editor, async _ =>
+            {
+                await UnlockTechnologyXml(editor, oldTechName);
+                Raw(editor).Text = Raw(editor).Text.Replace($"name=\"{oldTechName}\"", $"name=\"{newTechName}\"", StringComparison.Ordinal);
+                Assert.True(await SaveXmlChecked(editor));
+            }));
+        else Assert.True(CompleteOnDispatcher(() => editor.RenameTechnologyAsync(oldTechName, newTechName)));
 
         var technologies = XDocument.Load(fixture.TechtreePath, LoadOptions.PreserveWhitespace);
         var renamedTechnology = FindTechnology(technologies, newTechName);

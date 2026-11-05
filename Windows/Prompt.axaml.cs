@@ -24,6 +24,9 @@ public partial class Prompt : SimpleWindow
     bool _showProgress = false;
     string? _linkUrl;
     string? _openFolderPath;
+    double _maximumWidth = 600;
+    double _maximumHeight = 400;
+    public PromptActionRole ActionRole { get; private set; }
 
     public string PromptText { get => _text; set { _text = value; OnSelfChanged(); } }
     public string PromptTitle { get => _title; set { _title = value; Title = value; OnSelfChanged(); } }
@@ -54,11 +57,60 @@ public partial class Prompt : SimpleWindow
     {
         DataContext = this;
         InitializeComponent();
+        Opened += (_, _) =>
+        {
+            if (PromptIsError && Owner is Window owner && EditorSaveFeedback.ObserveErrorPopup(owner))
+                PromptText += "\n\nChanges saved earlier in this operation remain saved.";
+        };
     }
 
-    public Prompt(PromptType type, string title, string text = "", Progress<string?>? progress_reporter = null, Progress<double>? progress_value = null, string confirmButtonText = "Confirm") : this()
+    public Prompt FitToContent(double maximumWidth, double maximumHeight)
+    {
+        _maximumWidth = maximumWidth;
+        _maximumHeight = maximumHeight;
+        SizeContent(maximumWidth, maximumHeight);
+        return this;
+    }
+
+    private void SizeContent(double maximumWidth, double maximumHeight)
+    {
+        var limits = DialogLayout.Limits(this, maximumWidth, maximumHeight);
+        var iconWidth = PromptIsConfirm ? 0 : 56;
+        var body = new TextBlock { Text = PromptText, FontSize = FontSize, FontFamily = FontFamily };
+        body.Measure(Size.Infinity);
+        var title = new TextBlock { Text = PromptTitle, FontSize = FontSize, FontFamily = FontFamily, FontWeight = FontWeight.Bold };
+        title.Measure(Size.Infinity);
+        var actions = new TextBlock { Text = "Cancel   " + _confirmButton.Content, FontSize = FontSize, FontFamily = FontFamily };
+        actions.Measure(Size.Infinity);
+        // Reserve actual text space, icon/padding, and both actions; short prompts
+        // shrink while long paths/reference lists use the scrollable height cap.
+        Width = Math.Min(limits.Width, Math.Max(360,
+            Math.Max(Math.Max(body.DesiredSize.Width, title.DesiredSize.Width) + iconWidth + 40,
+                actions.DesiredSize.Width + 80)));
+        var textWidth = Math.Max(1, Width - iconWidth - 40);
+        body.TextWrapping = title.TextWrapping = TextWrapping.Wrap;
+        body.Measure(new Size(textWidth, double.PositiveInfinity));
+        title.Measure(new Size(textWidth, double.PositiveInfinity));
+        MinWidth = MinHeight = 0;
+        Height = Math.Min(limits.Height, Math.Max(150, body.DesiredSize.Height + title.DesiredSize.Height + 100));
+    }
+
+    protected override void OnOpened(EventArgs e)
+    {
+        // Owner/display limits are known here, before SimpleWindow's Opened fit.
+        SizeContent(Math.Max(Width, _maximumWidth), Math.Max(Height, _maximumHeight));
+        base.OnOpened(e);
+        if (PromptIsConfirm) (ActionRole == PromptActionRole.Destructive ? _cancelButton : _confirmButton).Focus();
+    }
+
+    public Prompt(PromptType type, string title, string text = "", Progress<string?>? progress_reporter = null, Progress<double>? progress_value = null, string confirmButtonText = "Confirm", PromptActionRole actionRole = PromptActionRole.Neutral) : this()
     {
         _confirmButton.Content = confirmButtonText;
+        ActionRole = actionRole;
+        if (actionRole == PromptActionRole.Positive) _confirmButton.Classes.Add("positive");
+        if (actionRole == PromptActionRole.Destructive) _confirmButton.Classes.Add("danger");
+        _confirmButton.IsDefault = actionRole != PromptActionRole.Destructive;
+        _cancelButton.IsDefault = actionRole == PromptActionRole.Destructive;
         _type = type;
         PromptText = text;
         PromptTitle = title;
@@ -87,6 +139,7 @@ public partial class Prompt : SimpleWindow
             progressBar.IsIndeterminate = false;
             progressBar.Value = 0;
         }
+        FitToContent(_maximumWidth, _maximumHeight);
     }
 
     void ProgressValueChanged(object? sender, double value)
@@ -170,6 +223,8 @@ public partial class Prompt : SimpleWindow
         }
     }
 }
+
+public enum PromptActionRole { Neutral, Positive, Destructive }
 
 public enum PromptType
 {

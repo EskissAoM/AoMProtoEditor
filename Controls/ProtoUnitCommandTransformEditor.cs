@@ -143,16 +143,19 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(115, 2, 0, 2)
+            Margin = new Thickness(0, 2, 0, 2)
         };
         AddOptionalValue("forbidtech", "Forbid Tech", "Add Forbid Tech", techNames);
         AddOptionalValue("associatedpower", "Power", "Associated Power", powerNames);
         Children.Add(_optionalHost);
+
+        foreach (var row in new[] { transformRow, optionRow, prerequisiteTechRow, AssociatedTechRow })
+            EditorFormLayout.WrapFlowingGridColumns(row, [0, 1], [2, 3]);
     }
 
     private static Grid CreateTwoFieldRow() => new()
     {
-        ColumnDefinitions = new ColumnDefinitions("115,240,Auto,240,*"),
+        ColumnDefinitions = new ColumnDefinitions("115,200,Auto,200,*"),
         ColumnSpacing = 8,
         HorizontalAlignment = HorizontalAlignment.Left,
         Margin = new Thickness(0, 2)
@@ -161,6 +164,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
     private static void AddLabel(Grid row, string text, int column)
     {
         var label = new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center };
+        if (column == 0) label.Width = 115; // Existing compact Command label column.
         Grid.SetColumn(label, column);
         row.Children.Add(label);
     }
@@ -173,7 +177,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
 
     private AutoCompleteBox CreateSelector(string value, IReadOnlyList<string> suggestions, bool enabled, Action<string> commit)
     {
-        var editor = ProtoUnitCommandFieldFactory.CreateStrictSelector(value, suggestions, enabled, 240, commit, _isBusy);
+        var editor = ProtoUnitCommandFieldFactory.CreateStrictSelector(value, suggestions, enabled, EditorFieldWidthRole.Reference, commit, _isBusy);
         editor.TextChanged += (_, _) =>
         {
             if (!enabled || Busy()) return;
@@ -197,6 +201,12 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
     {
         _showValidationErrors = false;
         ApplyValidation(new ProtoUnitCommandTransformValidation(true, true, true, true));
+    }
+
+    public void AddAssociatedTechField(string label, Control editor)
+    {
+        var fields = (WrapPanel)AssociatedTechRow.Children[0];
+        fields.Children.Add(EditorFormLayout.LabeledGroup(label, editor));
     }
 
     private void ApplyValidation(ProtoUnitCommandTransformValidation result)
@@ -237,7 +247,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         _revertHost.Children.Add(RevertOthersEditor);
         if (_editable)
         {
-            var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(2, 0, 0, 0) };
+            var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) =>
             {
                 _transform.RevertOthersTo = string.Empty;
@@ -249,6 +259,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
             };
             _revertHost.Children.Add(remove);
         }
+        EditorFormLayout.UseInlineRowLayout(_revertHost);
     }
 
     private void AddOptionalValue(string tag, string labelText, string addText, IReadOnlyList<string> suggestions)
@@ -256,7 +267,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         var initialValue = GetValue(tag);
         var label = new TextBlock { Text = labelText, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         var editor = CreateSelector(initialValue, suggestions, _editable, value => SetValue(tag, value));
-        var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(2, 0, 8, 0) };
+        var remove = EditorRemoveButtons.Field();
         var add = new Button
         {
             Content = addText,
@@ -265,8 +276,15 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
             Margin = new Thickness(0, 0, 8, 0)
         };
 
+        var group = EditorFormLayout.LabeledGroup(labelText, editor);
+        group.Children.RemoveAt(0);
+        group.Children.Insert(0, label);
+        group.Children.Add(remove);
+        group.Children.Add(add);
+        EditorFormLayout.UseInlineRowLayout(group);
         void SetVisible(bool visible)
         {
+            group.IsVisible = visible || _editable;
             label.IsVisible = visible;
             editor.IsVisible = visible;
             remove.IsVisible = _editable && visible;
@@ -288,10 +306,7 @@ public sealed class ProtoUnitCommandTransformEditor : StackPanel
         };
 
         OptionalValueEditors[tag] = editor;
-        _optionalHost.Children.Add(label);
-        _optionalHost.Children.Add(editor);
-        _optionalHost.Children.Add(remove);
-        _optionalHost.Children.Add(add);
+        _optionalHost.Children.Add(group);
     }
 
     private string GetValue(string tag) => _values.TryGetValue(tag, out var value) ? value ?? string.Empty : string.Empty;
@@ -370,11 +385,8 @@ public sealed class ProtoUnitCommandFlagsEditor : Grid
             {
                 FilterMode = AutoCompleteFilterMode.Contains
             };
-            EditorTextFieldStyle.ConfigureSelector(_picker);
+            ProtoUnitCommandFieldFactory.ConfigureField(_picker, EditorFieldWidthRole.ChipSearch, Busy);
             EditorFieldAppearance.ApplyStandard(_picker);
-            _picker.Width = 50;
-            _picker.MinWidth = 50;
-            _picker.MaxWidth = 50;
             _picker.HorizontalAlignment = HorizontalAlignment.Left;
             EditorAutoCompleteService.EnableDropdown(_picker, Busy, selectAllOnFirstClick: false);
             _picker.SelectionChanged += (_, _) =>

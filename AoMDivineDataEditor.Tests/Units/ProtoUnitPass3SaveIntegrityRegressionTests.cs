@@ -31,7 +31,14 @@ public sealed class ProtoUnitPass3SaveIntegrityRegressionTests
         Assert.True(preflightIndex >= 0 && preflightIndex < transactionIndex);
         Assert.True(transactionIndex >= 0 && transactionIndex < firstWriteIndex);
         Assert.Contains("AddExpectedState(expectedStates, _modFilePath, _loadedModXmlFileState)", saveCode, StringComparison.Ordinal);
-        Assert.Contains("AddExpectedState(expectedStates, GetCurrentModStringsPath(), _loadedModStringsFileState)", saveCode, StringComparison.Ordinal);
+        // Keep the fingerprint captured before reading strings; the reader can
+        // refresh the session's loaded state while preparing the save.
+        const string stringGuard = "AddExpectedState(expectedStates, GetCurrentModStringsPath(), stringsStateBeforeRead ?? _loadedModStringsFileState)";
+        Assert.Contains("var stringsStateBeforeRead = _loadedModStringsFileState;", saveCode, StringComparison.Ordinal);
+        Assert.True(saveCode.IndexOf("var stringsStateBeforeRead", StringComparison.Ordinal) <
+                    saveCode.IndexOf("LoadCurrentModStringEntries(requireReadable: true)", StringComparison.Ordinal));
+        Assert.Contains(stringGuard, saveCode, StringComparison.Ordinal);
+        Assert.True(saveCode.IndexOf(stringGuard, StringComparison.Ordinal) < transactionIndex);
         Assert.Contains("transactionPaths,", saveCode, StringComparison.Ordinal);
         Assert.Contains("expectedStates,", saveCode, StringComparison.Ordinal);
     }
@@ -66,7 +73,7 @@ public sealed class ProtoUnitPass3SaveIntegrityRegressionTests
     public void TacticsManagerCommitsFilesAndReferencesAsOneGuardedTransaction()
     {
         var code = ReadProtoEditorSource();
-        var methodStart = code.IndexOf("private async Task ApplyTacticsManagerChangesAsync", StringComparison.Ordinal);
+        var methodStart = code.IndexOf("private async Task<bool> ApplyTacticsManagerChangesAsync", StringComparison.Ordinal);
         var methodEnd = code.IndexOf("private void RenameTacticsReferences", methodStart, StringComparison.Ordinal);
         Assert.True(methodStart >= 0 && methodEnd > methodStart);
         var methodCode = code[methodStart..methodEnd];

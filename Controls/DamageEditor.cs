@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using AoMDivineDataEditor.Classes;
 
 namespace AoMDivineDataEditor.Controls;
 
@@ -22,11 +23,13 @@ public sealed class DamageEditor : Grid
     {
         TypeField = typeField;
         ValueField = valueField;
+        EditorFormLayout.ApplyWidth(typeField, EditorFieldWidthRole.ShortEnum);
+        EditorFormLayout.ApplyWidth(valueField, EditorFieldWidthRole.Numeric);
 
         ColumnDefinitions = showRemoveButton
             ? new ColumnDefinitions("Auto, Auto, Auto, Auto")
             : new ColumnDefinitions("Auto, Auto, Auto");
-        Margin = new Thickness(0, 0, 8, 0);
+        Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
         HorizontalAlignment = HorizontalAlignment.Left;
         VerticalAlignment = VerticalAlignment.Center;
 
@@ -43,12 +46,7 @@ public sealed class DamageEditor : Grid
 
         if (showRemoveButton)
         {
-            RemoveButton = new Button
-            {
-                Classes = { "remove-button" },
-                Margin = new Thickness(2, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            RemoveButton = EditorRemoveButtons.Row(description: "Remove damage entry");
             Grid.SetColumn(RemoveButton, 3);
             Children.Add(RemoveButton);
         }

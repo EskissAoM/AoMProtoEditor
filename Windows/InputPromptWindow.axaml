@@ -1,14 +1,16 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="AoMDivineDataEditor.Windows.InputPromptWindow"
-        Title="Input Required" Width="350" Height="150"
+        Title="Input Required" Width="400" SizeToContent="Height" MaxHeight="400"
         WindowStartupLocation="CenterOwner" CanResize="False"
         Foreground="{DynamicResource PrimaryTextBrush}" Background="{DynamicResource AppBackgroundBrush}">
     <Border Classes="MainPanel" Padding="16">
         <DockPanel>
-            <TextBlock x:Name="_messageText" DockPanel.Dock="Top" Text="Enter value:" FontWeight="Bold" Margin="0,0,0,10" />
+            <ScrollViewer DockPanel.Dock="Top" MaxHeight="240" HorizontalScrollBarVisibility="Disabled">
+                <TextBlock x:Name="_messageText" Text="Enter value:" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,10" />
+            </ScrollViewer>
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10" Margin="0,15,0,0">
-                <Button Content="Cancel" Click="Cancel_Click" />
+                <Button Content="Cancel" Click="Cancel_Click" IsCancel="True" />
                 <Button x:Name="_confirmButton" Classes="positive" Content="OK" Click="OK_Click" IsDefault="True" />
             </StackPanel>
             <TextBox x:Name="_inputBox" VerticalAlignment="Center" />

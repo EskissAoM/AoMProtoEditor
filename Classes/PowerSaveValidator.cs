@@ -19,6 +19,7 @@ public sealed record PowerSaveCatalogs(
 public sealed record PowerSaveValidation(IReadOnlyList<string> Errors)
 {
     public bool IsValid => Errors.Count == 0;
+    internal IReadOnlyList<LocatedValidationIssue> Issues { get; init; } = [];
 }
 
 /// <summary>
@@ -205,7 +206,7 @@ public static class PowerSaveValidator
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(catalogs);
 
-        var errors = new List<string>();
+        var errors = new LocatedValidationErrors();
         var structural = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.Powers);
         errors.AddRange(structural.Errors.Select(issue => $"{issue.ObjectName}: {issue.Reason}"));
         if (!structural.IsSafeToEdit)
@@ -222,6 +223,7 @@ public static class PowerSaveValidator
             var powerType = AttributeValue(power, "type");
             if (powerType.Length == 0)
             {
+                using var location = LocatedValidationErrors.At(errors, power, "@type");
                 errors.Add($"{owner} /power/@type is required.");
                 continue;
             }
@@ -243,6 +245,22 @@ public static class PowerSaveValidator
         return Result(errors);
     }
 
+    internal static PowerSaveValidation ValidateAbility(XElement power, PowerSaveCatalogs catalogs)
+    {
+        var document = new XDocument(new XElement("powersmod", new XElement(power)));
+        var shape = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.Powers);
+        var errors = shape.Errors.Select(error => $"{error.ObjectName}: {error.Reason}").ToList();
+        if (!shape.IsSafeToEdit) return Result(errors);
+        var owner = $"Ability '{PowerCatalog.GetName(power)}'";
+        ValidateSharedNumbers(power, AttributeValue(power, "type"), owner, errors);
+        ValidateCatalogFields(power, owner, catalogs, errors);
+        foreach (var tag in new[] { "abstractplacementtargettype", "explicitlyrestrictedplacementtargettype" })
+            foreach (var target in power.Elements(tag))
+                ValidateCatalogValue(power, target, null, target.Value, catalogs.ProtoUnitOrTypeNames,
+                    $"{owner} /power/{tag}", catalogs, required: true, errors);
+        return Result(errors);
+    }
+
     private static void ValidateSharedNumbers(
         XElement power,
         string powerType,
@@ -251,16 +269,25 @@ public static class PowerSaveValidator
     {
         foreach (var rule in SharedNumericRules)
         {
-            foreach (var value in ValuesAtPath(power, rule.Path))
-                ValidateNumber(value, $"{owner} /power/{rule.Path}", rule, errors);
+            foreach (var source in SourcesAtPath(power, rule.Path))
+            {
+                using var location = LocatedValidationErrors.At(errors,
+                    source is XAttribute attribute ? attribute.Parent! : (XElement)source,
+                    source is XAttribute field ? "@" + field.Name.LocalName : null);
+                ValidateNumber(source is XAttribute number ? number.Value : ((XElement)source).Value,
+                    $"{owner} /power/{rule.Path}", rule, errors);
+            }
         }
 
         var costKind = powerType.Equals("PowerClone", StringComparison.OrdinalIgnoreCase)
             ? NumberKind.Number
             : NumberKind.WholeNumber;
         foreach (var tag in new[] { "cost", "repeatcost" })
-        foreach (var value in ValuesAtPath(power, tag))
-            ValidateNumber(value, $"{owner} /power/{tag}", new NumericRule(tag, costKind, 0), errors);
+        foreach (var source in SourcesAtPath(power, tag).OfType<XElement>())
+        {
+            using var location = LocatedValidationErrors.At(errors, source);
+            ValidateNumber(source.Value, $"{owner} /power/{tag}", new NumericRule(tag, costKind, 0), errors);
+        }
     }
 
     private static void ValidateStructuredEffects(
@@ -288,14 +315,23 @@ public static class PowerSaveValidator
         if (!Names("Time TotalResources CombatXP").Contains(tierType) &&
             !IsLegacyElementValue(power.Elements().FirstOrDefault(IsNamed("tiertype")) ?? power,
                 tierType, catalogs))
+        {
+            using var location = LocatedValidationErrors.At(errors, power, "tiertype");
             errors.Add($"{owner} /power/tiertype has unsupported value '{tierType}'.");
+        }
         if (tierType.Equals("Time", StringComparison.OrdinalIgnoreCase))
         {
             var intervals = ValuesAtPath(power, "interval").ToList();
             if (intervals.Count == 0)
+            {
+                using var location = LocatedValidationErrors.At(errors, power, "interval");
                 errors.Add($"{owner} /power/interval is required when Tier Type is Time.");
-            foreach (var value in intervals)
-                ValidateNumber(value, $"{owner} /power/interval", new NumericRule("interval"), errors);
+            }
+            foreach (var source in SourcesAtPath(power, "interval").OfType<XElement>())
+            {
+                using var location = LocatedValidationErrors.At(errors, source);
+                ValidateNumber(source.Value, $"{owner} /power/interval", new NumericRule("interval"), errors);
+            }
         }
 
         var progress = power.Elements().FirstOrDefault(IsNamed("progresstype"));
@@ -308,7 +344,10 @@ public static class PowerSaveValidator
             errors.Add($"{owner} /power/timerrolloverid must be omitted when Progress is Hide.");
         if (progress != null && !Names("Default ShieldBlessing SpawnReward").Contains(progress.Value.Trim()) &&
             !IsLegacyElementValue(progress, progress.Value, catalogs))
+        {
+            using var location = LocatedValidationErrors.At(errors, progress);
             errors.Add($"{owner} /power/progresstype has unsupported value '{progress.Value.Trim()}'.");
+        }
 
         var requirementTag = tierType.Equals("TotalResources", StringComparison.OrdinalIgnoreCase)
             ? "resourcetierreq"
@@ -321,10 +360,13 @@ public static class PowerSaveValidator
             var containerPath = $"{owner} /power/effects[{index}]";
             if (requirementTag != null)
             {
-                foreach (var value in ValuesAtPath(container, requirementTag))
-                    ValidateNumber(value,
+                foreach (var source in SourcesAtPath(container, requirementTag).OfType<XElement>())
+                {
+                    using var location = LocatedValidationErrors.At(errors, source);
+                    ValidateNumber(source.Value,
                         $"{owner} /power/effects[{index}]/{requirementTag}",
                         new NumericRule(requirementTag, NumberKind.WholeNumber, 0), errors);
+                }
                 if (requirementTag == "resourcetierreq" &&
                     container.Elements().FirstOrDefault(IsNamed(requirementTag)) is { } requirement)
                     ValidateCatalogValue(power, requirement, "type", AttributeValue(requirement, "type"),
@@ -347,6 +389,7 @@ public static class PowerSaveValidator
         var type = AttributeValue(effect, "type");
         if (type.Length == 0)
         {
+            using var location = LocatedValidationErrors.At(errors, effect, "@type");
             errors.Add($"{path}/@type is required.");
             return;
         }
@@ -377,7 +420,10 @@ public static class PowerSaveValidator
             var relativity = AttributeValue(effect, "relativity");
             if (relativity.Length > 0 && !Names("Absolute Percent BasePercent Assign Override").Contains(relativity) &&
                 !IsLegacyAttributeValue(effect, "relativity", relativity, catalogs))
+            {
+                using var location = LocatedValidationErrors.At(errors, effect, "@relativity");
                 errors.Add($"{path}/@relativity has unsupported value '{relativity}'.");
+            }
         }
 
         foreach (var attributeName in new[] { "amount", "altamount" })
@@ -385,8 +431,11 @@ public static class PowerSaveValidator
             var attribute = effect.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName.Equals(attributeName, StringComparison.OrdinalIgnoreCase));
             if (attribute != null)
+            {
+                using var location = LocatedValidationErrors.At(errors, effect, "@" + attributeName);
                 ValidateNumber(attribute.Value, $"{path}/@{attributeName}",
                     new NumericRule(attributeName), errors);
+            }
         }
 
         ValidateEffectSpecificFields(power, effect, type, path, catalogs, errors);
@@ -404,6 +453,7 @@ public static class PowerSaveValidator
                       IsAny(element.Parent?.Name.LocalName ?? "", "damagetiers", "effects", "onhiteffect")) &&
                      element.Name.LocalName is not ("cost" or "repeatcost")))
         {
+            using var location = LocatedValidationErrors.At(errors, element);
             var name = element.Name.LocalName;
             double? maximum = name.Equals("accuracy", StringComparison.OrdinalIgnoreCase) ||
                           name.Equals("secondaryaccuracy", StringComparison.OrdinalIgnoreCase) ||
@@ -425,6 +475,7 @@ public static class PowerSaveValidator
                      NumericAttributeOwnerNames.Contains(element.Name.LocalName) &&
                      NumericAttributeNames.Contains(attribute.Name.LocalName)))
         {
+            using var location = LocatedValidationErrors.At(errors, element, "@" + attribute.Name.LocalName);
             var name = attribute.Name.LocalName;
             var maximum = name.Equals("chance", StringComparison.OrdinalIgnoreCase) ||
                           name.Equals("prob", StringComparison.OrdinalIgnoreCase) ||
@@ -557,6 +608,7 @@ public static class PowerSaveValidator
             foreach (var (adjustment, index) in adjustments.Select((value, index) => (value, index + 1)))
             {
                 var path = $"{owner} /power/ageadjustment[{index}]";
+                using var location = LocatedValidationErrors.At(errors, adjustment);
                 ValidateAgeValue(adjustment.Value, path, catalogs, adjustment, errors);
                 ValidateRequiredNumberAttribute(adjustment, "affectedNumber", path,
                     NumberKind.WholeNumber, errors);
@@ -571,6 +623,7 @@ public static class PowerSaveValidator
             foreach (var (age, index) in ageInfo.Select((value, index) => (value, index + 1)))
             {
                 var path = $"{owner} /power/ageinfo[{index}]";
+                using var location = LocatedValidationErrors.At(errors, age);
                 if (!int.TryParse(age.Value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture,
                         out var ageNumber) || ageNumber is < 1 or > 5)
                     errors.Add($"{path} must identify an Age from 1 through 5.");
@@ -588,6 +641,7 @@ public static class PowerSaveValidator
             foreach (var (multiplier, index) in multipliers.Select((value, index) => (value, index + 1)))
             {
                 var path = $"{owner} /power/resourcevaluemultiplier[{index}]";
+                using var location = LocatedValidationErrors.At(errors, multiplier);
                 ValidateCatalogValue(power, multiplier, "resourcetype", AttributeValue(multiplier, "resourcetype"),
                     ProtoConstants.KnownResourceTypes, path + "/@resourcetype", catalogs, required: true, errors);
                 if (string.IsNullOrWhiteSpace(multiplier.Value))
@@ -626,6 +680,7 @@ public static class PowerSaveValidator
         }
         foreach (var damageCap in power.Elements().Where(IsNamed("damagecap")))
         {
+            using var location = LocatedValidationErrors.At(errors, damageCap);
             ValidateCatalogValue(power, damageCap, "unittype", AttributeValue(damageCap, "unittype"),
                 catalogs.ProtoUnitOrTypeNames, $"{owner} /power/damagecap/@unittype", catalogs,
                 required: true, errors);
@@ -647,6 +702,7 @@ public static class PowerSaveValidator
                      .SelectMany(container => container.Elements().Where(IsNamed("damagetier"))))
         {
             var path = $"{owner} /power/{RelativePath(power, tier)}";
+            using var location = LocatedValidationErrors.At(errors, tier);
             ValidateRequiredNumberAttribute(tier, "mindestroyed", path,
                 NumberKind.WholeNumber, errors);
             if (string.IsNullOrWhiteSpace(tier.Value))
@@ -661,6 +717,7 @@ public static class PowerSaveValidator
                          .Select((value, index) => (value, index + 1)))
             {
                 var path = $"{owner} /power/createunit[{index}]";
+                using var location = LocatedValidationErrors.At(errors, create);
                 if (string.IsNullOrWhiteSpace(create.Value))
                     errors.Add($"{path} requires at least one Unit.");
                 ValidateRequiredNumberAttribute(create, "quantity", path,
@@ -683,6 +740,7 @@ public static class PowerSaveValidator
                      .Select((value, index) => (value, index + 1)))
         {
             var path = $"{owner} /power/unitmodify[{index}]";
+            using var location = LocatedValidationErrors.At(errors, modify);
             var modifyType = modify.Value.Trim();
             if (modifyType.Length == 0)
                 errors.Add($"{path} requires a Modify Type.");
@@ -692,10 +750,16 @@ public static class PowerSaveValidator
 
             var apply = AttributeValue(modify, "apply");
             if (!Names("Add Multiply Set").Contains(apply) && !IsLegacyAttributeValue(modify, "apply", apply, catalogs))
+            {
+                using var applyLocation = LocatedValidationErrors.At(errors, modify, "@apply");
                 errors.Add($"{path}/@apply must be Add, Multiply, or Set.");
+            }
             ValidateRequiredNumberAttribute(modify, "amount", path, NumberKind.Number, errors);
             if (AttributeValue(modify, "age") is { Length: > 0 } age)
+            {
+                using var ageLocation = LocatedValidationErrors.At(errors, modify, "@age");
                 ValidateAgeValue(age, path + "/@age", catalogs, modify, errors);
+            }
 
             var damageType = AttributeValue(modify, "damagetype");
             if (modifyType.Equals("DamageSpecific", StringComparison.OrdinalIgnoreCase))
@@ -729,6 +793,7 @@ public static class PowerSaveValidator
             var type = AttributeValue(effect, "type");
             if (type.Length == 0)
             {
+                using var location = LocatedValidationErrors.At(errors, effect, "@type");
                 errors.Add($"{path}/@type is required.");
                 continue;
             }
@@ -831,7 +896,10 @@ public static class PowerSaveValidator
         else if (normalized == "assignonhiteffect")
         {
             if (AttributeValue(effect, "action").Length == 0 && AttributeValue(effect, "allactions") != "1")
+            {
+                using var location = LocatedValidationErrors.At(errors, effect, "@action");
                 errors.Add($"{path} requires an Action or allactions=\"1\".");
+            }
             ValidateOptionalCatalogAttribute(power, effect, "action", catalogs.ProtoActionNames, path, catalogs, errors);
             ValidateRequiredCatalogAttribute(power, effect, "srcproto", catalogs.ProtoUnitNames, path, catalogs, errors);
             ValidateRequiredCatalogAttribute(power, effect, "srcaction", catalogs.ProtoActionNames, path, catalogs, errors);
@@ -885,7 +953,10 @@ public static class PowerSaveValidator
             var components = Names("BuyFactor SellFactor BuyDelta SellDelta BuyFactorSpecific SellFactorSpecific");
             if (component.Length == 0 || (!components.Contains(component) &&
                                          !IsLegacyAttributeValue(effect, "component", component, catalogs)))
+            {
+                using var location = LocatedValidationErrors.At(errors, effect, "@component");
                 errors.Add($"{path}/@component requires a supported Market component.");
+            }
             if (component.EndsWith("Specific", StringComparison.OrdinalIgnoreCase))
                 ValidateRequiredCatalogAttribute(power, effect, "resource", ProtoConstants.KnownResourceTypes,
                     path, catalogs, errors);
@@ -905,11 +976,18 @@ public static class PowerSaveValidator
     {
         var type = AttributeValue(modify, "type");
         if (type.Length == 0)
+        {
+            using var location = LocatedValidationErrors.At(errors, modify, "@type");
             errors.Add($"{path}/@type requires a Modify Type.");
+        }
         else if (!ProtoConstants.KnownModifyTypes.Contains(type, StringComparer.OrdinalIgnoreCase) &&
                  !IsLegacyAttributeValue(modify, "type", type, catalogs))
+        {
+            using var location = LocatedValidationErrors.At(errors, modify, "@type");
             errors.Add($"{path}/@type has unknown Modify Type '{type}'.");
-        ValidateNumber(modify.Value, path, new NumericRule("value"), errors);
+        }
+        using (LocatedValidationErrors.At(errors, modify))
+            ValidateNumber(modify.Value, path, new NumericRule("value"), errors);
         if (IsAny(type, "DamageSpecific", "ArmorSpecific"))
         {
             var catalog = type.Equals("ArmorSpecific", StringComparison.OrdinalIgnoreCase)
@@ -922,7 +1000,10 @@ public static class PowerSaveValidator
         {
             var value = AttributeValue(modify, attribute);
             if (value.Length > 0)
+            {
+                using var location = LocatedValidationErrors.At(errors, modify, "@" + attribute);
                 ValidateNumber(value, path + "/@" + attribute, new NumericRule(attribute), errors);
+            }
         }
     }
 
@@ -932,6 +1013,7 @@ public static class PowerSaveValidator
         string path,
         List<string> errors)
     {
+        using var location = LocatedValidationErrors.At(errors, element, "@" + name);
         if (AttributeValue(element, name).Length == 0)
             errors.Add($"{path}/@{name} is required.");
     }
@@ -944,6 +1026,7 @@ public static class PowerSaveValidator
         List<string> errors,
         double? minimum = null)
     {
+        using var location = LocatedValidationErrors.At(errors, element, "@" + name);
         var value = AttributeValue(element, name);
         if (value.Length == 0)
         {
@@ -991,6 +1074,7 @@ public static class PowerSaveValidator
         List<string> errors)
     {
         value = value.Trim();
+        using var location = LocatedValidationErrors.At(errors, element, attributeName == null ? null : "@" + attributeName);
         if (value.Length == 0)
         {
             if (required) errors.Add($"{path} is required.");
@@ -1062,6 +1146,7 @@ public static class PowerSaveValidator
         List<string> errors)
     {
         var age = AttributeValue(element, attribute);
+        using var location = LocatedValidationErrors.At(errors, element, "@" + attribute);
         if (age.Length == 0)
             errors.Add($"{path}/@{attribute} is required.");
         else
@@ -1141,6 +1226,9 @@ public static class PowerSaveValidator
         => candidates.Contains(value, StringComparer.OrdinalIgnoreCase);
 
     private static IEnumerable<string> ValuesAtPath(XElement owner, string path)
+        => SourcesAtPath(owner, path).Select(source => source is XAttribute attribute ? attribute.Value : ((XElement)source).Value);
+
+    private static IEnumerable<XObject> SourcesAtPath(XElement owner, string path)
     {
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         IEnumerable<XElement> elements = [owner];
@@ -1152,13 +1240,13 @@ public static class PowerSaveValidator
                 return elements.SelectMany(element => element.Attributes()
                     .Where(attribute => attribute.Name.LocalName.Equals(attributeName,
                         StringComparison.OrdinalIgnoreCase))
-                    .Select(attribute => attribute.Value));
+                    .Cast<XObject>());
             }
 
             elements = elements.SelectMany(element => element.Elements().Where(IsNamed(segment)));
         }
 
-        return elements.Select(element => element.Value);
+        return elements.Cast<XObject>();
     }
 
     private static void ValidateNumber(
@@ -1209,5 +1297,6 @@ public static class PowerSaveValidator
         => element => element.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase);
 
     private static PowerSaveValidation Result(IEnumerable<string> errors)
-        => new(errors.Distinct(StringComparer.Ordinal).ToList());
+        => new(errors.Distinct(StringComparer.Ordinal).ToList())
+        { Issues = errors is LocatedValidationErrors located ? located.Issues : [] };
 }

@@ -15,6 +15,33 @@ public sealed class AbilityBindingMetadataStoreTests : IDisposable
     }
 
     [Fact]
+    public void PreparedUnitReplacementPreservesOtherRecordsAndRefusesInvalidRootWithoutWriting()
+    {
+        using var workspace = new TestWorkspace("ability-metadata-preparation");
+        var mod = workspace.GetPath("proto_mods.xml");
+        var original = new System.Text.Json.Nodes.JsonArray
+        {
+            new System.Text.Json.Nodes.JsonObject { ["ModPath"] = mod + "other", ["UnitName"] = "Owner", ["AbilityName"] = "Keep", ["Future"] = "unchanged" },
+            new System.Text.Json.Nodes.JsonObject { ["ModPath"] = mod, ["UnitName"] = "OtherUnit", ["AbilityName"] = "Keep", ["Future"] = 42 },
+            new System.Text.Json.Nodes.JsonObject { ["ModPath"] = mod, ["UnitName"] = "Owner", ["AbilityName"] = "Old" }
+        };
+        var path = workspace.WriteText("bindings.json", original.ToJsonString());
+        var before = File.ReadAllBytes(path);
+        var replacements = new Dictionary<string, IReadOnlyList<AbilityBindingMetadataRecord>>
+        { ["Owner"] = [new() { AbilityName = "New", MainAction = "Attack" }] };
+        var prepared = AbilityBindingMetadataStore.PrepareUnitReplacements(mod, replacements, path);
+        var result = System.Text.Json.Nodes.JsonNode.Parse(prepared)!.AsArray();
+        Assert.Equal(3, result.Count);
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original[0], result[0]));
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original[1], result[1]));
+        Assert.Equal("New", result[2]!["AbilityName"]!.GetValue<string>());
+        Assert.Equal(before, File.ReadAllBytes(path));
+        File.WriteAllText(path, "{}");
+        Assert.Throws<InvalidDataException>(() => AbilityBindingMetadataStore.PrepareUnitReplacements(mod, replacements, path));
+        Assert.Equal("{}", File.ReadAllText(path));
+    }
+
+    [Fact]
     public void ReplaceUnit_PersistsIndependentMainAndAuxOwnershipAcrossReloads()
     {
         var modPath = Path.Combine(Path.GetTempPath(), "AoMTestMod", Guid.NewGuid().ToString("N"));

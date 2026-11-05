@@ -157,7 +157,7 @@ internal sealed class MinorGodManagerWindow : SimpleWindow
     {
         if (item.IsBuiltIn || !await _validateDeleteAsync(this, item.TechName)) return;
         var confirm = new Prompt(PromptType.Confirm, "Remove Minor God?",
-            $"Are you sure you want to remove '{item.Name}'?", confirmButtonText: "Remove");
+            $"Are you sure you want to remove '{item.Name}'?", confirmButtonText: "Delete minor god", actionRole: PromptActionRole.Destructive);
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed || !await _deleteAsync(item.TechName)) return;
         _items.Remove(item);
@@ -183,7 +183,7 @@ internal sealed class MinorGodManagerWindow : SimpleWindow
     {
         _footerText.Text = ManagerListShell.FormatEntityCountFooter(
             _items.Count, _items.Count(item => item.IsBuiltIn), _items.Count(item => !item.IsBuiltIn),
-            "");
+            "Double-click a custom minor god name to rename it.");
         _itemsList.ItemsSource = ManagerListShell.FilterItems(
             _items, item => item.Name, item => item.IsBuiltIn,
             _searchBox.Text, _filterComboBox.SelectedItem as string);
@@ -191,7 +191,7 @@ internal sealed class MinorGodManagerWindow : SimpleWindow
 
     private Control CreateRow(EditableItem item)
     {
-        var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto,Auto");
+        var row = ManagerListShell.CreateActionRow(3);
         row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
         row.Children.Add(new TextBlock
         {
@@ -210,23 +210,19 @@ internal sealed class MinorGodManagerWindow : SimpleWindow
         Grid.SetColumn(status, 1);
         row.Children.Add(status);
 
-        var edit = CreateEditButton();
-        ToolTip.SetTip(edit, item.IsBuiltIn ? "View Minor God" : "Edit Minor God");
+        var edit = ManagerActionButtons.Edit(item.IsBuiltIn ? "View minor god" : "Edit minor god");
         edit.Click += async (_, _) => await RunExclusiveAsync(() => OpenEditorAsync(item));
         Grid.SetColumn(edit, 2);
         row.Children.Add(edit);
 
-        var copy = CreateCopyButton();
-        ToolTip.SetTip(copy, "Copy Minor God");
+        var copy = ManagerActionButtons.Copy("Duplicate minor god");
         copy.Click += async (_, _) => await RunExclusiveAsync(() => DuplicateAsync(item));
         Grid.SetColumn(copy, 3);
         row.Children.Add(copy);
 
         if (!item.IsBuiltIn)
         {
-            var delete = CreateIconButton("×");
-            delete.Background = Brush.Parse("#992824");
-            delete.Foreground = Brushes.White;
+            var delete = ManagerActionButtons.Delete("Delete minor god");
             delete.Click += async (_, _) => await RunExclusiveAsync(() => DeleteAsync(item));
             Grid.SetColumn(delete, 4);
             row.Children.Add(delete);
@@ -243,60 +239,11 @@ internal sealed class MinorGodManagerWindow : SimpleWindow
         UsageCount = item.UsageCount
     };
 
-    private static Button CreateIconButton(string text) => new()
-    {
-        Content = text,
-        FontSize = 16,
-        Width = 28,
-        Height = 28,
-        Padding = new Thickness(0),
-        Margin = new Thickness(4),
-        HorizontalContentAlignment = HorizontalAlignment.Center,
-        VerticalContentAlignment = VerticalAlignment.Center
-    };
-
-    private static Button CreateEditButton()
-    {
-        var button = CreateIconButton("");
-        button.Content = new TextBlock
-        {
-            Text = "✎",
-            FontSize = 16,
-            RenderTransform = new ScaleTransform(-1, 1),
-            RenderTransformOrigin = RelativePoint.Center
-        };
-        return button;
-    }
-
-    private static Button CreateCopyButton()
-    {
-        var icon = new Canvas { Width = 16, Height = 16 };
-        var back = new Border
-        {
-            Width = 10, Height = 12, BorderBrush = Brushes.White,
-            BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1)
-        };
-        Canvas.SetLeft(back, 5);
-        Canvas.SetTop(back, 1);
-        icon.Children.Add(back);
-        var front = new Border
-        {
-            Width = 10, Height = 12, BorderBrush = Brushes.White,
-            BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1),
-            Background = Brush.Parse("#191C1A")
-        };
-        Canvas.SetLeft(front, 1);
-        Canvas.SetTop(front, 4);
-        icon.Children.Add(front);
-        var button = CreateIconButton("");
-        button.Content = icon;
-        return button;
-    }
-
     private async Task RunExclusiveAsync(Func<Task> operation)
     {
         if (_operationInProgress) return;
         _operationInProgress = true;
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         try
         {
             await operation();

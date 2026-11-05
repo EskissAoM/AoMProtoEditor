@@ -22,6 +22,79 @@ public static class PowerCatalog
     public const string ModRootName = "powersmod";
     public const string EntryName = "power";
 
+    internal static readonly string[] OwnedStringTags = ["displaynameid", "rolloverid", "activepowerrolloverid",
+        "exclusiveerrormsgid", "notificationformatid", "selfnotificationformatid"];
+
+    public static IReadOnlySet<string> CollectOwnedStringIds(XElement entry)
+    {
+        var name = GetName(entry);
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (entry.Name.Namespace != XNamespace.None || name.Length == 0) return owned;
+        foreach (var field in OwnedStringFields(entry))
+        {
+            var id = field.Value.Trim();
+            if (ReferenceEquals(field.Parent, entry) && OwnedStringTags.Contains(field.Name.LocalName, StringComparer.OrdinalIgnoreCase))
+            {
+                if (id.Equals(BuildStringId(name, field.Name.LocalName), StringComparison.OrdinalIgnoreCase)) owned.Add(id);
+            }
+            else
+            {
+                var kind = field.Name.LocalName.ToLowerInvariant() switch
+                { "timerrolloverid" => "PROG", "displaynameid" => "NAME", "rolloverid" => "LR", "notificationmessageid" => "NOTIF", _ => "TOOLTIP" };
+                var basis = SwitchingEffectsFamilyController.CreateStringId(name, kind);
+                if (id.Equals(basis, StringComparison.OrdinalIgnoreCase) ||
+                    (kind != "PROG" && id.StartsWith(basis + "_", StringComparison.OrdinalIgnoreCase) &&
+                     int.TryParse(id[(basis.Length + 1)..], out var index) && index > 0 &&
+                     index.ToString(System.Globalization.CultureInfo.InvariantCulture) == id[(basis.Length + 1)..])) owned.Add(id);
+            }
+        }
+        return owned;
+    }
+
+    public static IReadOnlyList<OwnedStringRename> RenameOwnedStringIds(XElement entry, string oldName, string newName)
+    {
+        var original = new XElement(entry); SetName(original, oldName);
+        var owned = CollectOwnedStringIds(original);
+        var mappings = OwnedStringTags.ToDictionary(tag => BuildStringId(oldName, tag), tag => BuildStringId(newName, tag), StringComparer.OrdinalIgnoreCase);
+        var oldSwitchingPrefix = SwitchingEffectsFamilyController.CreateStringId(oldName, "");
+        var newSwitchingPrefix = SwitchingEffectsFamilyController.CreateStringId(newName, "");
+        var changes = new List<OwnedStringRename>();
+        foreach (var field in OwnedStringFields(entry))
+        {
+            var id = field.Value.Trim();
+            if (!owned.Contains(id)) continue;
+            var next = mappings.GetValueOrDefault(id) ?? (id.StartsWith(oldSwitchingPrefix, StringComparison.OrdinalIgnoreCase)
+                ? newSwitchingPrefix + id[oldSwitchingPrefix.Length..] : id);
+            if (id.Equals(next, StringComparison.OrdinalIgnoreCase)) continue;
+            XmlTriviaPreserver.SetText(field, next);
+            changes.Add(new OwnedStringRename(field.Name.LocalName, id, next));
+        }
+        return changes;
+    }
+
+    internal static void ApplyOwnedStringRenames(XElement entry, IEnumerable<OwnedStringRename> renames)
+    {
+        foreach (var rename in renames)
+            foreach (var field in OwnedStringFields(entry).Where(field =>
+                         field.Name.LocalName.Equals(rename.Field, StringComparison.OrdinalIgnoreCase) &&
+                         field.Value.Trim().Equals(rename.OldId, StringComparison.OrdinalIgnoreCase)))
+                XmlTriviaPreserver.SetText(field, rename.NewId);
+    }
+
+    private static IEnumerable<XElement> OwnedStringFields(XElement entry)
+    {
+        foreach (var field in entry.Elements().Where(field => field.Name.Namespace == XNamespace.None &&
+                     OwnedStringTags.Contains(field.Name.LocalName, StringComparer.OrdinalIgnoreCase) && !field.HasElements)) yield return field;
+        if (!SwitchingEffectsFamilyController.IsPower(entry)) yield break;
+        foreach (var timer in entry.Elements().Where(field => field.Name == "timerrolloverid" && !field.HasElements)) yield return timer;
+        foreach (var tier in entry.Elements().Where(field => field.Name == "effects"))
+        {
+            foreach (var field in tier.Elements().Where(field => field.Name.Namespace == XNamespace.None && !field.HasElements &&
+                         new[] { "displaynameid", "rolloverid", "notificationmessageid" }.Contains(field.Name.LocalName, StringComparer.OrdinalIgnoreCase))) yield return field;
+            foreach (var field in tier.Elements("extratooltips").Elements("string").Where(field => !field.HasElements)) yield return field;
+        }
+    }
+
     public static string BuildStringId(string powerName, string tag)
     {
         var suffix = tag.ToLowerInvariant() switch
@@ -64,7 +137,11 @@ public static class PowerCatalog
             .FirstOrDefault(value => value != null)
             ?? parentIndentation + (parentIndentation.Contains('\t') ? "\t" : "  ");
         var trailingWhitespace = entry.Nodes().LastOrDefault() as XText;
-        if (trailingWhitespace != null && string.IsNullOrWhiteSpace(trailingWhitespace.Value))
+        var nodes = entry.Nodes().ToList();
+        var insertionIndex = PowerXmlFieldOrder.FindInsertionIndex(nodes, entry, created);
+        if (insertionIndex >= 0 && insertionIndex < nodes.Count)
+            nodes[insertionIndex].AddBeforeSelf(new XText("\n" + indentation), created);
+        else if (trailingWhitespace != null && string.IsNullOrWhiteSpace(trailingWhitespace.Value))
             trailingWhitespace.AddBeforeSelf(new XText("\n" + indentation), created);
         else
             entry.Add(new XText("\n" + indentation), created, new XText("\n" + parentIndentation));
@@ -93,6 +170,7 @@ public static class PowerCatalog
     /// </summary>
     public static void CollapseExcessiveBlankLines(XElement entry)
     {
+        if (EditorXmlOrderPolicy.HasProtectedContent(entry)) return;
         foreach (var whitespace in entry.Nodes().OfType<XText>()
                      .Where(node => string.IsNullOrWhiteSpace(node.Value)).ToList())
         {
@@ -145,6 +223,7 @@ public static class PowerCatalog
     public static void NormalizeNestedElementIndentation(XElement container)
     {
         ArgumentNullException.ThrowIfNull(container);
+        if (EditorXmlOrderPolicy.HasProtectedContent(container)) return;
         var parentIndentation = GetNodeIndent(container) ?? "    ";
         var indentUnit = parentIndentation.Contains('\t') ? "\t" : "  ";
         var childIndentation = parentIndentation + indentUnit;
@@ -220,9 +299,10 @@ public static class PowerCatalog
     public static string FormatPreview(XElement entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        if (EditorXmlOrderPolicy.HasProtectedContent(entry)) return entry.ToString(SaveOptions.DisableFormatting);
         var preview = new XElement(entry);
         foreach (var whitespace in preview.DescendantsAndSelf()
-                     .Where(element => element.HasElements)
+                     .Where(element => element.HasElements && !EditorXmlOrderPolicy.HasProtectedContent(element))
                      .SelectMany(element => element.Nodes().OfType<XText>())
                      .Where(text => string.IsNullOrWhiteSpace(text.Value))
                      .ToList())
@@ -345,15 +425,18 @@ public static class PowerCatalog
             .ToList();
 
     public static bool IsModCatalogPower(XElement power)
+        => !IsAbilityPower(power);
+
+    public static bool IsAbilityPower(XElement power)
     {
         var type = FindAttribute(power, "type")?.Value.Trim() ?? "";
         if (type.Equals("UnitAction", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (!type.Equals("GeneralEffect", StringComparison.OrdinalIgnoreCase))
             return true;
+        if (!type.Equals("GeneralEffect", StringComparison.OrdinalIgnoreCase))
+            return false;
 
         var godPower = FindAttribute(power, "godpower");
-        return godPower != null && string.IsNullOrWhiteSpace(godPower.Value);
+        return godPower == null || !string.IsNullOrWhiteSpace(godPower.Value);
     }
 
     public static string GetName(XElement entry)

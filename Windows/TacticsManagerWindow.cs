@@ -12,7 +12,8 @@ using AoMDivineDataEditor.Controls;
 
 namespace AoMDivineDataEditor.Windows;
 
-internal sealed record TacticsManagerItem(string Name, bool IsBuiltIn, bool IsModifiedBuiltIn, int UsageCount);
+internal sealed record TacticsManagerItem(string Name, bool IsBuiltIn, bool IsModifiedBuiltIn, int UsageCount,
+    ManagedTacticsSource? Source = null);
 internal sealed record TacticsRenameOperation(string OldName, string NewName);
 
 internal sealed class TacticsManagerResult
@@ -31,6 +32,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
         public bool IsBuiltIn { get; init; }
         public bool IsModifiedBuiltIn { get; init; }
         public int UsageCount { get; init; }
+        public ManagedTacticsSource? Source { get; init; }
     }
 
     private readonly List<EditableTacticsItem> _items;
@@ -75,7 +77,8 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                 Name = item.Name,
                 IsBuiltIn = item.IsBuiltIn,
                 IsModifiedBuiltIn = item.IsModifiedBuiltIn,
-                UsageCount = item.UsageCount
+                UsageCount = item.UsageCount,
+                Source = item.Source
             })
             .ToList();
 
@@ -112,6 +115,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task AddTacticsAsync()
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         var prompt = new InputPromptWindow("New tactics name:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
@@ -142,6 +146,12 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task DuplicateTacticsAsync(EditableTacticsItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
+        if (item.Source?.IsAmbiguous == true)
+        {
+            await ShowErrorAsync("Conflicting tactics files", item.Source.ReadOnlyReason!);
+            return;
+        }
         var prompt = new InputPromptWindow("Duplicate tactics as:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null)
@@ -172,12 +182,20 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task RenameTacticsAsync(EditableTacticsItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
+        if (item.Source?.ReadOnlyReason is { } reason)
+        {
+            await ShowErrorAsync("Tactics is read-only", reason);
+            return;
+        }
         if (item.IsBuiltIn)
             return;
 
-        var prompt = new InputPromptWindow("Rename tactics:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
+        var initialStem = Path.ChangeExtension(item.Name, null) ?? item.Name;
+        var prompt = new InputPromptWindow("Rename tactics:", initialStem,
+            confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
-        if (prompt.InputText == null)
+        if (prompt.InputText == null || prompt.InputText.Equals(initialStem, StringComparison.OrdinalIgnoreCase))
             return;
 
         var newName = NormalizeName(prompt.InputText);
@@ -198,6 +216,12 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task DeleteTacticsAsync(EditableTacticsItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
+        if (item.Source?.ReadOnlyReason is { } reason)
+        {
+            await ShowErrorAsync("Tactics is read-only", reason);
+            return;
+        }
         if (item.IsBuiltIn)
             return;
         if (_validateDeleteAsync != null)
@@ -217,7 +241,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             PromptType.Confirm,
             "Remove tactics?",
             $"Are you sure you want to remove '{item.Name}'?",
-            confirmButtonText: "Save");
+            confirmButtonText: "Delete tactics", actionRole: PromptActionRole.Destructive);
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed)
             return;
@@ -241,7 +265,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
             _items.Count,
             _items.Count(item => item.IsBuiltIn),
             _items.Count(item => !item.IsBuiltIn),
-            "Double-click a custom tactics name to rename it.");
+            "Double-click editable XML tactics to rename. Compiled tactics can be viewed or duplicated as XML.");
         _itemsList.ItemsSource = ManagerListShell.FilterItems(
             _items,
             item => item.Name,
@@ -252,7 +276,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private Control CreateRow(EditableTacticsItem item)
     {
-            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto,Auto");
+            var row = ManagerListShell.CreateActionRow(3);
             row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
 
             var nameBlock = new TextBlock
@@ -266,7 +290,9 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
             var status = new TextBlock
             {
-                Text = item.IsModifiedBuiltIn
+                Text = item.Source?.IsAmbiguous == true ? "Conflicting files"
+                    : item.Source?.IsCompiled == true ? "Compiled (read-only)"
+                    : item.IsModifiedBuiltIn
                     ? "Data.bar (Modified)"
                     : item.IsBuiltIn
                         ? "Data.bar"
@@ -278,84 +304,23 @@ internal sealed class TacticsManagerWindow : SimpleWindow
                 VerticalAlignment = VerticalAlignment.Center
             };
             Grid.SetColumn(status, 1);
+            ToolTip.SetTip(status, item.Source?.ReadOnlyReason);
             row.Children.Add(status);
 
-            var editButton = new Button
-            {
-                Content = new TextBlock
-                {
-                    Text = "✎",
-                    FontSize = 16,
-                    RenderTransform = new ScaleTransform(-1, 1),
-                    RenderTransformOrigin = RelativePoint.Center
-                },
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(4),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            ToolTip.SetTip(editButton, item.IsBuiltIn ? "View tactics" : "Edit tactics");
+            var editButton = ManagerActionButtons.Edit(item.IsBuiltIn || item.Source?.ReadOnlyReason != null ? "View tactics" : "Edit tactics");
             editButton.Click += async (_, _) => await OpenTacticsEditorAsync(item);
             Grid.SetColumn(editButton, 2);
             row.Children.Add(editButton);
 
-            var duplicateIcon = new Canvas { Width = 16, Height = 16 };
-            var backPage = new Border
-            {
-                Width = 10,
-                Height = 12,
-                BorderBrush = Brushes.White,
-                BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(1)
-            };
-            Canvas.SetLeft(backPage, 5);
-            Canvas.SetTop(backPage, 1);
-            duplicateIcon.Children.Add(backPage);
-            var frontPage = new Border
-            {
-                Width = 10,
-                Height = 12,
-                BorderBrush = Brushes.White,
-                BorderThickness = new Thickness(1.5),
-                CornerRadius = new CornerRadius(1),
-                Background = Brush.Parse("#191C1A")
-            };
-            Canvas.SetLeft(frontPage, 1);
-            Canvas.SetTop(frontPage, 4);
-            duplicateIcon.Children.Add(frontPage);
-
-            var duplicateButton = new Button
-            {
-                Content = duplicateIcon,
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(4),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            ToolTip.SetTip(duplicateButton, "Duplicate tactics");
+            var duplicateButton = ManagerActionButtons.Copy(item.Source?.IsCompiled == true ? "Duplicate as editable XML" : "Duplicate tactics");
             duplicateButton.Click += async (_, _) => await DuplicateTacticsAsync(item);
             Grid.SetColumn(duplicateButton, 3);
             row.Children.Add(duplicateButton);
 
             if (!item.IsBuiltIn)
             {
-                var deleteButton = new Button
-                {
-                    Content = "×",
-                    FontSize = 16,
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(4),
-                    Background = Brush.Parse("#992824"),
-                    Foreground = Brushes.White,
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center
-                };
+                var deleteButton = ManagerActionButtons.Delete("Delete tactics");
+                ToolTip.SetTip(deleteButton, item.Source?.ReadOnlyReason ?? "Delete tactics");
                 deleteButton.Click += async (_, _) => await DeleteTacticsAsync(item);
                 Grid.SetColumn(deleteButton, 4);
                 row.Children.Add(deleteButton);
@@ -367,6 +332,7 @@ internal sealed class TacticsManagerWindow : SimpleWindow
 
     private async Task OpenTacticsEditorAsync(EditableTacticsItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (_openEditorAsync != null)
         {
             await _openEditorAsync(this, item.Name, item.IsBuiltIn);

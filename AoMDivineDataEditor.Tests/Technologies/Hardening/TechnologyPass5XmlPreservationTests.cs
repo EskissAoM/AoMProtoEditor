@@ -73,14 +73,15 @@ public sealed class TechnologyPass5XmlPreservationTests
     }
 
     [Fact]
-    public void SaveAndPreviewNormalizeChangedEffectsWithoutReorderingTechnologyChildren()
+    public void SaveAndPreviewUseSharedOrderOnlyForStructuredDirtyTechnologyChildren()
     {
         var source = ReadSource("Windows", "TechnologyEditorView.axaml.cs");
 
         Assert.Contains("NormalizeChangedEffectAttributeOrder(technology)", source, StringComparison.Ordinal);
         Assert.Contains("TechnologyXmlShapePolicy.FindChangedEffects(previewTech, savedTechnology)", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("NormalizeTechnologyChildOrder(technology);", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("NormalizeTechnologyChildOrder(previewTech);", source, StringComparison.Ordinal);
+        Assert.Contains("_dirtyTechnologyNames.Contains(name) && !rawXmlNames.Contains(name)", source, StringComparison.Ordinal);
+        Assert.Contains("TechnologyXmlOrderPolicy.NormalizeForEditor(technology)", source, StringComparison.Ordinal);
+        Assert.Contains("CurrentTechnologyXmlDraft?.Session.IsEditing != true", source, StringComparison.Ordinal);
     }
 
     [Fact]

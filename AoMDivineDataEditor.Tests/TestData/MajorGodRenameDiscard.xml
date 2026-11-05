@@ -1,0 +1,158 @@
+<civsmods>
+  <civ>
+    <name>FuxiCopybaaazd</name>
+    <statsid>SP</statsid>
+    <displaynameid>STR_CIV_FUXICOPYBAAAZD</displaynameid>
+    <titleid>STR_CIV_FUXICOPYBAAAZD_T</titleid>
+    <rollovernameid>STR_CIV_FUXICOPYBAAAZD_LR</rollovernameid>
+    <icon>resources\chinese\static_color\major_gods\fuxi_icon.png</icon>
+    <portrait>resources\chinese\static_color\major_gods\fuxi_portrait.png</portrait>
+    <breakoutportrait>resources\chinese\static_color\major_gods\fuxi_breakoutportrait.png</breakoutportrait>
+    <culture>Egyptian</culture>
+    <key>E</key>
+    <minimapborderimage>ui\ingame\minimap\chi_min_panel</minimapborderimage>
+    <backgroundscenario>backgrounds\\background_atlantis.mythscn</backgroundscenario>
+    <agetech age="ArchaicAge">
+      <tech>ArchaicAgeFuxi</tech>
+    </agetech>
+    <deathmatchtech>DeathMatchEgyptian</deathmatchtech>
+    <secondaryprayerefficiency g="2" v="2" z="2" />
+    <buildingefficiency>0</buildingefficiency>
+    <extrabuildingefficiency>0</extrabuildingefficiency>
+    <buildingrepairfactor>0</buildingrepairfactor>
+    <startingunits>
+      <unit count="2" delay="2" x="-4" y="0" z="-6">VillagerChinese</unit>
+      <unit count="1" delay="3" x="-10" y="0" z="-5">Kuafu</unit>
+      <unit count="1" delay="4.5" x="6" y="0" z="-5">Pioneer</unit>
+    </startingunits>
+    <startingunits mode="deathmatch">
+      <unit count="5" x="0" y="0" z="0" delay="1">VillagerChinese</unit>
+      <unit count="1" delay="2" x="0" y="0" z="0">Kuafu</unit>
+      <unit count="1" delay="4" x="-12" y="0" z="0">Achilles</unit>
+    </startingunits>
+    <startingqueue>
+      <unit autotrain="true">VillagerChinese</unit>
+      <unit autotrain="true" prequeue="true">AjaxOlder</unit>
+    </startingqueue>
+    <startingresources mode="deathmatch">
+      <food>18000</food>
+      <gold>18000</gold>
+    </startingresources>
+    <startingresources>
+      <food>20</food>
+      <wood>0</wood>
+      <gold>0</gold>
+    </startingresources>
+    <buildingchain>
+      <anchor vfx="Achilles">AbstractFortress</anchor>
+      <abundancevfx small="VFXAbundanceSmall" medium="VFXAbundanceMedium" large="VFXAbundanceLarge"></abundancevfx>
+      <chainablebuilding generationresource="Wood" chainradius="19.5">TownCenter</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="20">CitadelCenter</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="15">VillageCenter</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="6">House</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="6">TentSPC</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="10">Dock</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="15">Temple</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">SentryTower</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">Armory</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">Market</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="25">Wonder</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="25">CitadelCenter</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="6">Silo</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">MachineWorkshop</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">MachineWorkshopTower</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">MachineWorkshopTrainingYard</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="10">MilitaryCamp</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="10">MilitaryCampTower</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="10">MilitaryCampTrainingYard</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">ImperialAcademy</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="25">Baolei</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="15">ThePeachBlossomSpring</chainablebuilding>
+      <chainablebuilding generationresource="Favor" chainradius="12">Manor</chainablebuilding>
+      <resourcegeneration>
+        <tilerateperminutetier resource="Favor" mintiles="0">0.0075</tilerateperminutetier>
+        <tilerateperminutetier resource="Favor" mintiles="5000">0.0025</tilerateperminutetier>
+        <tilerateperminutetier resource="Favor" mintiles="9000">0.1</tilerateperminutetier>
+      </resourcegeneration>
+    </buildingchain>
+    <bountyresourceearning>
+      <active>true</active>
+      <vfx>VFXCoinBurst</vfx>
+      <excludedtarget>AbstractWall</excludedtarget>
+      <excludedtarget>AbeNoSeimei</excludedtarget>
+      <bountydamagegoal>80</bountydamagegoal>
+      <bountyreductionstart>100</bountyreductionstart>
+      <bountyreductionend>200</bountyreductionend>
+      <bountyreductionstrength>0.5</bountyreductionstrength>
+      <bountyreward unittype="Building" resourcetype="Food" condition="Destroy" asspawnedunit="AcidPool">0.5</bountyreward>
+      <bountyreward unittype="Building" resourcetype="Wood" multiplybyunitcost="true" condition="Destroy">0.5</bountyreward>
+      <bountyreward unittype="Building" resourcetype="Gold" multiplybyunitcost="true" condition="Destroy">0.5</bountyreward>
+      <bountytargetmultiplier condition="Damage" resourcetype="Favor" protounit="Hersir">0.5</bountytargetmultiplier>
+      <bountytargetmultiplier unittype="AbstractArcher" condition="Destroy" resourcetype="Favor" attackertype="AbeNoSeimei" relativity="basepercent">0</bountytargetmultiplier>
+      <researchreward techtype="AgeUpgrade" resourcetype="Food">3</researchreward>
+      <researchcostmultiplier techtype="HeroInfantry" resourcetype="Favor">2.1</researchcostmultiplier>
+      <excludedtechflag>AgeUpgrade</excludedtechflag>
+    </bountyresourceearning>
+    <timeshifting maxconcurrenttimeshifts="3">
+      <protounit costratio="2.1" timeratio="1.5">Achilles</protounit>
+    </timeshifting>
+    <bonusunitspawning>
+      <resourcegoal name="MyGoal3" rewardtracking="Single">
+        <goalamount>3</goalamount>
+        <spawnlocation type="FromBuilding" landbuilding="AbeNoSeimei" waterbuilding="AbeNoSeimei" />
+        <reward>AbstractArcher</reward>
+        <excludefromreward>AbeNoSeimei</excludefromreward>
+        <currentageonly>true</currentageonly>
+        <forcespawn>true</forcespawn>
+      </resourcegoal>
+    </bonusunitspawning>
+    <combatxp>
+      <tier>100</tier>
+      <tier>200</tier>
+      <tier>300</tier>
+      <tier>400</tier>
+    </combatxp>
+    <partisans>1</partisans>
+    <terraincreeps>
+      <terraincreep creep="GaiaCreep" maxradius="2" growthrate="10" decayrate="2" minupdateinterval="10" maxupdateinterval="100" strength="3" avoidunbuildable="" avoidshallowwater="" buildability="unbuildableenemies" preventplacement="AbstractArmory">
+        <protounit>Manor</protounit>
+      </terraincreep>
+      <terraincreep creep="GaiaCreep" maxradius="0" growthrate="0" decayrate="0" minupdateinterval="0" maxupdateinterval="0">
+        <protounit>AgaveBloom</protounit>
+      </terraincreep>
+    </terraincreeps>
+  </civ>
+  <civ>
+    <name>NewMajorGod</name>
+    <statsid>SP</statsid>
+    <displaynameid>STR_CIV_NEWMAJORGOD</displaynameid>
+    <titleid>STR_CIV_NEWMAJORGOD_T</titleid>
+    <rollovernameid>STR_CIV_NEWMAJORGOD_LR</rollovernameid>
+    <icon>resources\spc\player_color\units\abe_no_seimei_icon.png</icon>
+    <portrait>resources\chinese\static_color\technologies\abundance_icon.png</portrait>
+    <breakoutportrait>resources\spc\player_color\units\abe_no_seimei_icon.png</breakoutportrait>
+    <culture>Atlantean</culture>
+    <key>A</key>
+    <minimapborderimage>ui\ingame\minimap\azt_min_panel</minimapborderimage>
+    <backgroundscenario>backgrounds\\background_aztec.mythscn</backgroundscenario>
+    <agetech age="ArchaicAge">
+      <tech>AOTGAgeUpsFreeDivine</tech>
+    </agetech>
+    <deathmatchtech>AjaxEnable</deathmatchtech>
+    <buildingefficiency>0.6</buildingefficiency>
+    <extrabuildingefficiency>0.3</extrabuildingefficiency>
+    <buildingrepairfactor>0</buildingrepairfactor>
+    <startingunits>
+      <unit count="2" x="0" y="0" z="0">AbeNoSeimei</unit>
+    </startingunits>
+    <startingqueue>
+      <unit>Achilles</unit>
+    </startingqueue>
+    <startingresources>
+      <food>100</food>
+      <wood>0</wood>
+      <gold>0</gold>
+      <favor>0</favor>
+    </startingresources>
+  </civ>
+</civsmods>

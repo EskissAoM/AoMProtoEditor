@@ -170,14 +170,12 @@ public sealed class ProtoActionTacticsOverlayPass2Tests
     }
 
     [Fact]
-    public void StatsValidationReport_IdentifiesTheFailingProtoUnit()
+    public void StatsValidationReport_UsesOneInstructionAndRetainsAllIssues()
     {
         var report = ProtoEditorWindow.BuildProtoUnitStatsValidationReport(
-            "PeachBlossomCopy",
-            ["Numeric fields:\n• Invalid value"]);
+            ["Numeric fields:\n• Invalid value", "Cross-field requirements:\n• Missing Include Type"]);
 
-        Assert.Contains("ProtoUnit: PeachBlossomCopy", report, StringComparison.Ordinal);
-        Assert.Contains("Invalid value", report, StringComparison.Ordinal);
+        Assert.Equal("Correct these fields before saving:\n\nNumeric fields:\n• Invalid value\n\nCross-field requirements:\n• Missing Include Type", report);
     }
 
     [Fact]

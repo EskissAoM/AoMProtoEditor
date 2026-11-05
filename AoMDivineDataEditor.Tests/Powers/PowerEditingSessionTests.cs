@@ -57,6 +57,8 @@ public sealed class PowerEditingSessionTests
     public void DiscardRemovesOnlyStateOwnedByTheDiscardedPower()
     {
         var session = new PowerEditingSession();
+        session.Select("Kept", XElement.Parse("<power name='Kept'/>"));
+        session.RawEditorDirty = true;
         session.MarkDirty("Discarded");
         session.MarkDirty("Kept");
         session.AddOrCollapseRename("OriginalDiscarded", "Discarded");
@@ -73,6 +75,7 @@ public sealed class PowerEditingSessionTests
         Assert.Equal("keep", Assert.Single(snapshot.StringUpdates).Value);
         Assert.Equal(["STR_OLD_KEPT"], snapshot.StringRemovals);
         Assert.True(session.HasPendingWork);
+        Assert.True(session.RawEditorDirty);
     }
 
     [Fact]

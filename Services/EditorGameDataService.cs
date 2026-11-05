@@ -13,8 +13,33 @@ public interface IEditorGameDataService
 /// <summary>Provides configured base-game paths and localized strings to the standalone editor.</summary>
 public sealed class EditorGameDataService : IEditorGameDataService
 {
-    private Dictionary<string, string>? _baseGameStrings;
+    private readonly Func<ProtoEditorSettingsLoadResult> _settings;
+    private readonly Func<ProtoEditorSettingsLoadResult> _refreshSettings;
+    private readonly object _stringsGate = new();
+    private Task<Dictionary<string, string>>? _stringLoad;
     private string? _loadedDataBarPath;
+
+    public EditorGameDataService() : this(ProtoEditorSettings.LoadCachedSettingsResult, ProtoEditorSettings.LoadSettingsResult) { }
+
+    internal EditorGameDataService(ProtoEditorSettingsStore store) : this(store.LoadCached, store.Load) { }
+
+    private EditorGameDataService(Func<ProtoEditorSettingsLoadResult> settings, Func<ProtoEditorSettingsLoadResult> refreshSettings)
+    {
+        _settings = settings;
+        _refreshSettings = refreshSettings;
+    }
+
+    /// <summary>Explicitly adopt external settings changes; ordinary warm lookups do not re-read settings.</summary>
+    public ProtoEditorSettingsLoadResult RefreshSettings()
+    {
+        var result = _refreshSettings();
+        lock (_stringsGate)
+        {
+            _stringLoad = null;
+            _loadedDataBarPath = null;
+        }
+        return result;
+    }
 
     public string? RootDirectory
     {
@@ -36,20 +61,26 @@ public sealed class EditorGameDataService : IEditorGameDataService
         if (dataBarPath is null)
             return null;
 
-        if (_baseGameStrings is null ||
-            !string.Equals(_loadedDataBarPath, dataBarPath, StringComparison.OrdinalIgnoreCase))
+        Task<Dictionary<string, string>> load;
+        lock (_stringsGate)
         {
-            _baseGameStrings = await Task.Run(() => LoadBaseGameStrings(dataBarPath));
-            _loadedDataBarPath = dataBarPath;
+            if (_stringLoad == null || !string.Equals(_loadedDataBarPath, dataBarPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _stringLoad = Task.Run(() => LoadBaseGameStrings(dataBarPath));
+                _loadedDataBarPath = dataBarPath;
+            }
+            load = _stringLoad;
         }
-
-        return _baseGameStrings.TryGetValue(key, out string? value) ? value : null;
+        var strings = await load;
+        return strings.TryGetValue(key, out string? value) ? value : null;
     }
 
-    private static string? GetConfiguredDataBarPath()
+    private string? GetConfiguredDataBarPath()
     {
-        string? path = ProtoEditorSettings.LoadSettings().DataBarPath;
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? Path.GetFullPath(path) : null;
+        string? path = _settings().Config?.DataBarPath;
+        try { return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? Path.GetFullPath(path) : null; }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        { return null; }
     }
 
     private static Dictionary<string, string> LoadBaseGameStrings(string dataBarPath)

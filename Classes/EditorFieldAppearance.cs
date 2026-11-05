@@ -34,7 +34,9 @@ public static class EditorFieldAppearance
     public static void ApplyReadOnly(Control control)
     {
         control.IsEnabled = false;
-        control.IsHitTestVisible = false;
+        // Disabled fields must still participate in pointer hit-testing so the
+        // shared ShowOnDisabled full-value tooltip can be reached.
+        control.IsHitTestVisible = true;
         control.Focusable = false;
         if (control is TextBox textBox)
             textBox.IsReadOnly = true;

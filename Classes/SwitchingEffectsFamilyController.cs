@@ -92,10 +92,13 @@ public static class SwitchingEffectsFamilyController
     }
 
     public static SwitchingEffectCreation AddEffectContainer(XElement entry, string powerName,
-        string tierType)
+        string tierType, IEnumerable<string>? reservedIds = null)
     {
         var index = entry.Elements().Count(element =>
             element.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase));
+        var reserved = entry.Descendants().Where(element => !element.HasElements).Select(element => element.Value.Trim())
+            .Concat(reservedIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        while (new[] { "NAME", "LR", "NOTIF" }.Any(kind => reserved.Contains(CreateStringId(powerName, kind, index)))) index++;
         var container = PowerCatalog.AddRepeatedField(entry, "effects", "");
         var ids = new[]
         {
@@ -117,13 +120,16 @@ public static class SwitchingEffectsFamilyController
         return new SwitchingEffectCreation(container, ids);
     }
 
-    public static XElement AddExtraTooltip(XElement entry, XElement effectContainer, string powerName)
+    public static XElement AddExtraTooltip(XElement entry, XElement effectContainer, string powerName, IEnumerable<string>? reservedIds = null)
     {
         var extras = PowerCatalog.FindField(effectContainer, "extratooltips") ??
                      PowerCatalog.SetField(effectContainer, "extratooltips", "");
         var index = entry.Descendants().Count(element =>
             element.Name.LocalName.Equals("string", StringComparison.OrdinalIgnoreCase) &&
             element.Parent?.Name.LocalName.Equals("extratooltips", StringComparison.OrdinalIgnoreCase) == true);
+        var reserved = entry.Descendants().Where(element => !element.HasElements).Select(element => element.Value.Trim())
+            .Concat(reservedIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        while (reserved.Contains(CreateStringId(powerName, "TOOLTIP", index))) index++;
         var field = new XElement("string", CreateStringId(powerName, "TOOLTIP", index));
         extras.Add(field);
         PowerCatalog.NormalizeNestedElementIndentation(extras);

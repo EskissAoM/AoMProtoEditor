@@ -16,7 +16,9 @@ public sealed class TechnologyExternalStringRefreshRegressionTests
         Assert.Contains("prompt.Width = 560", technologyCode, StringComparison.Ordinal);
         Assert.Contains("prompt.Height = 220", technologyCode, StringComparison.Ordinal);
         Assert.Contains("TechnologyStringMergePolicy.UseExternalVersionsForChangedIds", technologyCode, StringComparison.Ordinal);
-        Assert.Contains("External strings reloaded and merged", technologyCode, StringComparison.Ordinal);
+        var reload = ProjectSource.ExtractMethod(technologyCode, "private async Task<bool> ReloadExternallyChangedStringsAsync");
+        Assert.Contains("ReportSaveFeedback(EditorSaveOutcome.ReviewRequired)", reload, StringComparison.Ordinal);
+        Assert.Contains("return false;", reload, StringComparison.Ordinal);
         Assert.Contains("_reloadStringsFromDisk?.Invoke()", technologyCode, StringComparison.Ordinal);
         Assert.Contains("InvalidateModStringEntriesCache,", parentCode, StringComparison.Ordinal);
     }

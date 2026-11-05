@@ -53,12 +53,7 @@ public sealed class OptionalFieldHost : Grid
                 SetExpanded(true);
         };
 
-        RemoveButton = new Button
-        {
-            Classes = { "remove-button" },
-            Margin = new Thickness(2, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
+        RemoveButton = EditorRemoveButtons.Field();
         RemoveButton.Click += async (_, _) =>
         {
             if (await _onRemove())

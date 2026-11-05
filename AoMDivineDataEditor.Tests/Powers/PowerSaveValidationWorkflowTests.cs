@@ -1,5 +1,8 @@
 using System.Xml.Linq;
 using AoMDivineDataEditor.Windows;
+using Avalonia.Controls;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using Xunit;
 
 namespace AoMDivineDataEditor.Tests;
@@ -32,11 +35,27 @@ public sealed class PowerSaveValidationWorkflowTests
                 editor.SelectPower("Selected");
             });
 
-            var saved = AvaloniaTestHost.RunAsync(editor.SaveAsync);
+            var saved = AvaloniaTestHost.RunAsync(async () =>
+            {
+                var owner = new Window { Content = editor };
+                owner.Show();
+                try
+                {
+                    var saving = editor.SaveAsync();
+                    Dispatcher.UIThread.RunJobs();
+                    var popup = Assert.Single(owner.OwnedWindows.OfType<Prompt>());
+                    Assert.Contains("InvalidOther", popup.PromptText, StringComparison.Ordinal);
+                    Assert.True(popup.IsVisible);
+                    popup.Close();
+                    var result = await saving.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.DoesNotContain(editor.GetLogicalDescendants().OfType<Control>(), field => field.Classes.Contains("invalid-field"));
+                    return result;
+                }
+                finally { foreach (var child in owner.OwnedWindows.ToArray()) child.Close(); owner.Close(); }
+            });
 
             Assert.False(saved);
-            Assert.Contains("InvalidOther", AvaloniaTestHost.Run(() => editor.StatusMessage),
-                StringComparison.Ordinal);
+            Assert.Equal("Save blocked.", AvaloniaTestHost.Run(() => editor.StatusMessage));
             Assert.True(XNode.DeepEquals(before,
                 XDocument.Load(path, LoadOptions.PreserveWhitespace)));
         }

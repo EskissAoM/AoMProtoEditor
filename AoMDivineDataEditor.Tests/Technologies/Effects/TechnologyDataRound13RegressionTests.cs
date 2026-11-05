@@ -53,7 +53,8 @@ public sealed class TechnologyDataRound13RegressionTests
         Assert.Contains("AddAutoAttackTypeDataEffectEditor", code, StringComparison.Ordinal);
         Assert.Contains("private Control CreateTacticNameEditor", code, StringComparison.Ordinal);
         Assert.Contains("return _tacticNames.Count > 0", code, StringComparison.Ordinal);
-        Assert.Contains("CreateFreeTextEffectAttributeBox(effect, \"tactic\", width)", code, StringComparison.Ordinal);
+        Assert.Contains("CreateFreeTextEffectAttributeBox(effect, \"tactic\", role)", code, StringComparison.Ordinal);
+        Assert.Contains("CreateTacticNameEditor(XElement effect, EditorFieldWidthRole role = EditorFieldWidthRole.Reference)", code, StringComparison.Ordinal);
         Assert.Contains("CreateLabeledEffectSegment(\"Can auto attack\", CreateStrictEffectSelector(\n            _prereqUnitNames", code, StringComparison.Ordinal);
     }
 
@@ -70,7 +71,10 @@ public sealed class TechnologyDataRound13RegressionTests
         var powerViewEnd = code.IndexOf("private GameIdentifierReferenceMigrationPlan PreparePowerReferenceMigration",
             powerViewStart, StringComparison.Ordinal);
         var powerView = code[powerViewStart..powerViewEnd];
-        Assert.Contains("GetTechnologyTacticDefinitionNames());", powerView, StringComparison.Ordinal);
+        Assert.Contains("var powerCatalogs = CreatePowerSelectorCatalogs()", powerView, StringComparison.Ordinal);
+        var catalogs = ReadSource("Windows", "ProtoEditorWindow.SelectorCatalogs.cs");
+        Assert.Contains("tacticNames: GetTechnologyTacticDefinitionNames()", catalogs, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetAvailableTacticsNames()", catalogs, StringComparison.Ordinal);
         Assert.DoesNotContain("GetAvailableTacticsNames()", powerView, StringComparison.Ordinal);
     }
 

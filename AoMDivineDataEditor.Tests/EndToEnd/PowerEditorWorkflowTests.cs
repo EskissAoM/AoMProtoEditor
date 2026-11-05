@@ -5,6 +5,7 @@ using System.Xml.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using AvaloniaEdit;
 using AoMDivineDataEditor.Classes;
@@ -281,7 +282,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.Equal("3.5", GetPrivateField<TextBox>(editor, "_orderHintBox").Text);
             Assert.False(GetPrivateField<TextBox>(editor, "_orderHintBox").IsEnabled);
             Assert.False(GetPrivateField<Button>(editor, "_addOrderHintButton").IsVisible);
-            Assert.True(GetPrivateField<StackPanel>(editor, "_shutDownRow").IsVisible);
+            Assert.True(GetPrivateField<Panel>(editor, "_shutDownRow").IsVisible);
             Assert.Equal("2", GetPrivateField<TextBox>(editor, "_shutDownBox").Text);
             Assert.Equal("0.75", GetPrivateField<TextBox>(editor, "_shutDownFadeBox").Text);
             var chips = GetPrivateField<WrapPanel>(editor, "_placementFlagChips")
@@ -305,7 +306,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             InvokePrivateClick(editor, "AddUseLimit_Click");
         });
 
-        Assert.True(AvaloniaTestHost.Run(() => GetPrivateField<StackPanel>(editor, "_useLimitRow").IsVisible));
+        Assert.True(AvaloniaTestHost.Run(() => GetPrivateField<Panel>(editor, "_useLimitRow").IsVisible));
         Assert.True(AvaloniaTestHost.Run(() => GetPrivateField<TextBlock>(editor, "_limitLabel").IsVisible));
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
         var saved = FindPower(XDocument.Load(path), "P");
@@ -652,6 +653,17 @@ public sealed class PowerEditorWorkflowTests : IDisposable
     [Fact]
     public void OpenedPlacementOptionsComeBeforeUnusedButtons()
     {
+        static void AssertUnusedOptions(WrapPanel flow, int openedCount, params Button[] expected)
+        {
+            var unused = flow.Children.Skip(openedCount).ToArray();
+            Assert.Equal(expected.Length, unused.Length);
+            var buttons = unused.Select(child => child is Button button ? button :
+                Assert.Single(child.GetLogicalDescendants().OfType<Button>(), candidate => candidate.IsVisible)).ToArray();
+            Assert.All(expected, button => Assert.Contains(button, buttons));
+            Assert.All(unused, child => Assert.DoesNotContain(child.GetLogicalDescendants(),
+                descendant => descendant is AutoCompleteBox or TextBox or ComboBox));
+        }
+
         using var workspace = new TestWorkspace(nameof(OpenedPlacementOptionsComeBeforeUnusedButtons));
         var path = workspace.WriteText("powers_mods.xml",
             "<powersmod><power name=\"P\" type=\"GodPower\"><placement>Full</placement></power></powersmod>");
@@ -665,15 +677,24 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var flow = GetPrivateField<WrapPanel>(editor, "_placementOptionsFlow");
             Assert.Equal(4, flow.Children.Count);
             Assert.Same(GetPrivateField<StackPanel>(editor, "_restrictPlacementRow"), flow.Children[0]);
-            Assert.Same(GetPrivateField<Button>(editor, "_addLosProtoUnitButton"), flow.Children[1]);
-            Assert.Same(GetPrivateField<Button>(editor, "_addOverlapTypeButton"), flow.Children[2]);
-            Assert.Same(GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"), flow.Children[3]);
+            var restrictions = GetPrivateField<StackPanel>(editor, "_placementRestrictionRows");
+            Assert.Same(GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"), Assert.Single(restrictions.Children));
+            AssertUnusedOptions(flow, 1, GetPrivateField<Button>(editor, "_addLosProtoUnitButton"),
+                GetPrivateField<Button>(editor, "_addOverlapTypeButton"), GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"));
             GetPrivateField<Button>(editor, "_addLosProtoUnitButton")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Same(GetPrivateField<StackPanel>(editor, "_losProtoUnitRow"), flow.Children[0]);
             Assert.Same(GetPrivateField<StackPanel>(editor, "_restrictPlacementRow"), flow.Children[1]);
-            Assert.Same(GetPrivateField<Button>(editor, "_addOverlapTypeButton"), flow.Children[2]);
-            Assert.Same(GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"), flow.Children[3]);
+            Assert.Same(GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"), Assert.Single(restrictions.Children));
+            AssertUnusedOptions(flow, 2, GetPrivateField<Button>(editor, "_addOverlapTypeButton"),
+                GetPrivateField<Button>(editor, "_addPlacementRestrictionButton"));
+            GetPrivateField<Button>(editor, "_addPlacementRestrictionButton")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Same(GetPrivateField<StackPanel>(editor, "_losProtoUnitRow"), flow.Children[0]);
+            Assert.Same(GetPrivateField<StackPanel>(editor, "_restrictPlacementRow"), flow.Children[1]);
+            Assert.Same(restrictions, flow.Children[2]);
+            Assert.Single(restrictions.GetLogicalDescendants().OfType<AutoCompleteBox>());
+            AssertUnusedOptions(flow, 3, GetPrivateField<Button>(editor, "_addOverlapTypeButton"));
         });
     }
 
@@ -693,17 +714,17 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         AvaloniaTestHost.Run(() =>
         {
             var add = GetPrivateField<Button>(editor, "_addPlacementRestrictionButton");
-            var rows = GetPrivateField<WrapPanel>(editor, "_placementRestrictionRows");
+            var rows = GetPrivateField<StackPanel>(editor, "_placementRestrictionRows");
             add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            var first = Assert.IsType<StackPanel>(rows.Children.Single());
-            first.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Scout";
-            first.Children.OfType<TextBox>().Single().Text = "5.5";
+            var first = Assert.Single(rows.Children.OfType<Panel>());
+            DescendantControls(first).OfType<AutoCompleteBox>().Single().SelectedItem = "Scout";
+            DescendantControls(first).OfType<TextBox>().Single().Text = "5.5";
             Assert.Equal("5.5", (string?)GetPrivateField<XElement>(editor, "_currentEntry")
                 .Elements("placementrestriction").First().Attribute("radius"));
             add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            var second = Assert.IsType<StackPanel>(rows.Children.Last());
-            second.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "AbstractSettlement";
-            second.Children.OfType<TextBox>().Single().Text = "10";
+            var second = rows.Children.OfType<Panel>().Last();
+            DescendantControls(second).OfType<AutoCompleteBox>().Single().SelectedItem = "AbstractSettlement";
+            DescendantControls(second).OfType<TextBox>().Single().Text = "10";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
         var power = FindPower(XDocument.Load(path), "P");
@@ -996,12 +1017,17 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         Assert.Equal("You cast it", strings[selfId]);
         AvaloniaTestHost.Run(() =>
         {
-            var flow = Assert.IsType<WrapPanel>(GetPrivateField<Grid>(editor, "_castMessageRow").Parent);
+            var flow = Assert.IsType<StackPanel>(GetPrivateField<Grid>(editor, "_castMessageRow").Parent);
             var children = flow.Children.ToList();
+            int RowIndex(Control child)
+            {
+                while (child.Parent is Control parent && !ReferenceEquals(parent, flow)) child = parent;
+                return children.IndexOf(child);
+            }
             Assert.True(children.IndexOf(GetPrivateField<Grid>(editor, "_castMessageRow")) <
-                        children.IndexOf(GetPrivateField<Button>(editor, "_addCastSelfMessageButton")));
+                        RowIndex(GetPrivateField<Button>(editor, "_addCastSelfMessageButton")));
             Assert.True(children.IndexOf(GetPrivateField<Grid>(editor, "_castSelfMessageRow")) <
-                        children.IndexOf(GetPrivateField<Button>(editor, "_addAlertPlayerButton")));
+                        RowIndex(GetPrivateField<Button>(editor, "_addAlertPlayerButton")));
         });
 
         AvaloniaTestHost.Run(() => GetPrivateField<Button>(editor, "_removeCastMessageButton")
@@ -1180,7 +1206,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.Equal(2, rows.Count);
             static StackPanel Field(WrapPanel row, string label) => row.Children
                 .OfType<StackPanel>().Single(field =>
-                    field.Children.OfType<TextBlock>().First().Text == label);
+                    DescendantControls(field).OfType<TextBlock>().First().Text == label);
             var firstSound = Field(rows[0], "Sound").Children.OfType<AutoCompleteBox>().Single();
             Assert.Contains("OriginalSound", firstSound.ItemsSource!.Cast<string>());
             Assert.Contains("ModSound", firstSound.ItemsSource!.Cast<string>());
@@ -1213,18 +1239,18 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         {
             var rows = GetPrivateField<StackPanel>(editor, "_soundSetRows").Children
                 .OfType<WrapPanel>().ToList();
-            var delay = rows[1].Children.OfType<StackPanel>().Single(field =>
-                field.Children.OfType<TextBlock>().First().Text == "Delay");
-            delay.Children.OfType<TextBox>().Single().Text = "-1";
+            var delay = rows[1].Children.OfType<Panel>().Single(field =>
+                DescendantControls(field).OfType<TextBlock>().First().Text == "Delay");
+            DescendantControls(delay).OfType<TextBox>().Single().Text = "-1";
         });
         Assert.False(AvaloniaTestHost.RunAsync(editor.SaveAsync));
         AvaloniaTestHost.Run(() =>
         {
             var rows = GetPrivateField<StackPanel>(editor, "_soundSetRows").Children
                 .OfType<WrapPanel>().ToList();
-            var delay = rows[1].Children.OfType<StackPanel>().Single(field =>
-                field.Children.OfType<TextBlock>().First().Text == "Delay");
-            delay.Children.OfType<TextBox>().Single().Text = "2.5";
+            var delay = rows[1].Children.OfType<Panel>().Single(field =>
+                DescendantControls(field).OfType<TextBlock>().First().Text == "Delay");
+            DescendantControls(delay).OfType<TextBox>().Single().Text = "2.5";
             rows[0].Children.OfType<Button>().Last().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
@@ -1442,7 +1468,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         });
 
         Assert.False(AvaloniaTestHost.RunAsync(editor.SaveAsync));
-        Assert.Equal("Select a Power Type before saving.", AvaloniaTestHost.Run(() =>
+        Assert.Equal("Save blocked.", AvaloniaTestHost.Run(() =>
             GetPrivateField<TextBlock>(editor, "_statusMessage").Text));
         Assert.Contains("invalid-field", AvaloniaTestHost.Run(() =>
             GetPrivateField<AutoCompleteBox>(editor, "_powerTypeBox").Classes));
@@ -1582,19 +1608,20 @@ public sealed class PowerEditorWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void AppliedRawXmlRoundTripsUnknownContentAndRenamesThePower()
+    public void EditedRawXmlRoundTripsUnknownContentAndRenamesThePower()
     {
-        using var workspace = new TestWorkspace(nameof(AppliedRawXmlRoundTripsUnknownContentAndRenamesThePower));
+        using var workspace = new TestWorkspace(nameof(EditedRawXmlRoundTripsUnknownContentAndRenamesThePower));
         var path = workspace.WriteText(
             "powers_mods.xml",
             "<powersmod><power name=\"OldPower\" type=\"GodPower\"><future old=\"yes\" /></power></powersmod>",
             new UTF8Encoding(false));
         var editor = AvaloniaTestHost.Run(() => new PowerEditorView([], path));
 
-        AvaloniaTestHost.Run(() =>
+        AvaloniaTestHost.RunAsync(async () =>
         {
             editor.SetModifiedMode(true);
-            editor.SelectPower("OldPower");
+            await editor.SelectPowerAsync("OldPower");
+            await PowerXmlTestHelpers.UnlockAsync(editor);
             GetPrivateField<TextEditor>(editor, "_rawXmlEditor").Text =
                 "<power name=\"NewPower\" type=\"GodPower\"><future old=\"yes\"><payload value=\"42\" /></future></power>";
         });
@@ -1649,10 +1676,11 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             "<powersmod><power name=\"EditedPower\" type=\"GodPower\"><value old=\"yes\" /></power></powersmod>");
         var editor = AvaloniaTestHost.Run(() => new PowerEditorView([], path));
 
-        AvaloniaTestHost.Run(() =>
+        AvaloniaTestHost.RunAsync(async () =>
         {
             editor.SetModifiedMode(true);
-            editor.SelectPower("EditedPower");
+            await editor.SelectPowerAsync("EditedPower");
+            await PowerXmlTestHelpers.UnlockAsync(editor);
             GetPrivateField<TextEditor>(editor, "_rawXmlEditor").Text =
                 "<power name=\"EditedPower\" type=\"GodPower\"><value edited=\"yes\" /></power>";
         });
@@ -1923,14 +1951,10 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.False(GetPrivateField<Button>(editor, "_removeThrowPropertiesButton").IsVisible);
             Assert.Equal(VerticalAlignment.Top,
                 GetPrivateField<Grid>(editor, "_throwPropertiesRow").Children.OfType<TextBlock>().Single().VerticalAlignment);
-            Assert.Same(GetPrivateField<StackPanel>(editor, "_throwDistanceFields"),
-                GetPrivateField<TextBox>(editor, "_minThrowDistanceBox").Parent);
-            Assert.Same(GetPrivateField<StackPanel>(editor, "_throwDistanceFields"),
-                GetPrivateField<TextBox>(editor, "_maxThrowDistanceBox").Parent);
-            Assert.Same(GetPrivateField<StackPanel>(editor, "_throwHeightFields"),
-                GetPrivateField<TextBox>(editor, "_minThrowHeightBox").Parent);
-            Assert.Same(GetPrivateField<StackPanel>(editor, "_throwVelocityFields"),
-                GetPrivateField<TextBox>(editor, "_maxThrowVelocityBox").Parent);
+            Assert.Contains(GetPrivateField<TextBox>(editor, "_minThrowDistanceBox"), DescendantControls(GetPrivateField<Panel>(editor, "_throwDistanceFields")));
+            Assert.Contains(GetPrivateField<TextBox>(editor, "_maxThrowDistanceBox"), DescendantControls(GetPrivateField<Panel>(editor, "_throwDistanceFields")));
+            Assert.Contains(GetPrivateField<TextBox>(editor, "_minThrowHeightBox"), DescendantControls(GetPrivateField<Panel>(editor, "_throwHeightFields")));
+            Assert.Contains(GetPrivateField<TextBox>(editor, "_maxThrowVelocityBox"), DescendantControls(GetPrivateField<Panel>(editor, "_throwVelocityFields")));
             GetPrivateField<TextBox>(editor, "_stunLengthBox").Text = "1.25";
             GetPrivateField<AutoCompleteBox>(editor, "_shockwaveVfxBox").SelectedItem = "VFXShockwave";
             foreach (var (field, value) in new[]
@@ -2421,8 +2445,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             GetPrivateField<AutoCompleteBox>(editor, "_wallProtoBox").SelectedItem = "EarthWall";
             GetPrivateField<TextBox>(editor, "_wallSegmentCountBox").Text = "42";
             GetPrivateField<Button>(editor, "_addDamageTierButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            var row = GetPrivateField<StackPanel>(editor, "_damageTierRows").Children.OfType<StackPanel>().Last();
-            var boxes = row.Children.OfType<TextBox>().ToArray(); boxes[0].Text = "1"; boxes[1].Text = "0.125";
+            var row = GetPrivateField<StackPanel>(editor, "_damageTierRows").Children.OfType<Panel>().Last();
+            var boxes = DescendantControls(row).OfType<TextBox>().ToArray(); boxes[0].Text = "1"; boxes[1].Text = "0.125";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
 
@@ -2446,16 +2470,16 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             GetPrivateField<TextBox>(editor, "_rootDurationBox").Text = "1.5";
             GetPrivateField<TextBox>(editor, "_slowHealMultiplierBox").Text = "0.5";
             var existing = GetPrivateField<StackPanel>(editor, "_rootDamageRows")
-                .Children.OfType<StackPanel>().Single();
-            Assert.Equal("Unit", existing.Children.OfType<AutoCompleteBox>().Single().Text);
+                .Children.OfType<Panel>().Single();
+            Assert.Equal("Unit", DescendantControls(existing).OfType<AutoCompleteBox>().Single().Text);
             Assert.Contains("add-component", GetPrivateField<Button>(editor, "_addRootDamageButton").Classes);
             Assert.Contains("add-component", GetPrivateField<Button>(editor, "_addDamageTierButton").Classes);
             Assert.Equal(VerticalAlignment.Top, GetPrivateField<Grid>(editor, "_forestVfxRow")
                 .Children.OfType<TextBlock>().Single().VerticalAlignment);
             GetPrivateField<Button>(editor, "_addRootDamageButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            var row = GetPrivateField<StackPanel>(editor, "_rootDamageRows").Children.OfType<StackPanel>().Last();
-            row.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Hero";
-            row.Children.OfType<TextBox>().Single().Text = "3";
+            var row = GetPrivateField<StackPanel>(editor, "_rootDamageRows").Children.OfType<Panel>().Last();
+            DescendantControls(row).OfType<AutoCompleteBox>().Single().SelectedItem = "Hero";
+            DescendantControls(row).OfType<TextBox>().Single().Text = "3";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
 
@@ -2507,8 +2531,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var card = Assert.IsType<StackPanel>(container.Child);
             var top = Assert.IsType<Grid>(card.Children[0]);
             var subjectRow = top.Children.OfType<WrapPanel>().Single();
-            Assert.Equal("Selection", subjectRow.Children.OfType<ComboBox>().Single().SelectedItem);
-            var subject = subjectRow.Children.OfType<StackPanel>().Single();
+            Assert.Equal("Selection", DescendantControls(subjectRow).OfType<ComboBox>().Single().SelectedItem);
+            var subject = subjectRow.Children.OfType<Panel>().Single(panel => panel.Children.OfType<WrapPanel>().Any());
             Assert.Equal(2, subject.Children.OfType<WrapPanel>().Single().Children.Count);
             Assert.Contains("add-component", GetPrivateField<Button>(editor,
                 "_addTempUnitCreateButton").Classes);
@@ -2524,8 +2548,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var addedCard = Assert.IsType<StackPanel>(addedContainer.Child);
             var addedTop = Assert.IsType<Grid>(addedCard.Children[0]);
             var addedSubjectRow = addedTop.Children.OfType<WrapPanel>().Single();
-            var addedSubject = addedSubjectRow.Children.OfType<StackPanel>().Single();
-            var addedUnit = addedSubject.Children.OfType<AutoCompleteBox>().Single();
+            var addedSubject = addedSubjectRow.Children.OfType<Panel>().Single(panel => DescendantControls(panel).OfType<AutoCompleteBox>().Any());
+            var addedUnit = DescendantControls(addedSubject).OfType<AutoCompleteBox>().Single();
             addedUnit.SelectedItem = "Ayotochtli";
         });
 
@@ -2580,7 +2604,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var card = Assert.IsType<StackPanel>(container.Child);
             var top = Assert.IsType<Grid>(card.Children[0]);
             var subject = top.Children.OfType<WrapPanel>().Single()
-                .Children.OfType<StackPanel>().Single();
+                .Children.OfType<Panel>().Single(panel => DescendantControls(panel).OfType<Button>().Any(button => Equals(button.Content, "Water Unit")));
             subject.Children.OfType<Button>().Single(button =>
                     Equals(button.Content, "Water Unit"))
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -2590,9 +2614,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             card = Assert.IsType<StackPanel>(container.Child);
             top = Assert.IsType<Grid>(card.Children[0]);
             subject = top.Children.OfType<WrapPanel>().Single()
-                .Children.OfType<StackPanel>().Single();
-            Assert.Contains(subject.Children.OfType<TextBlock>(), label => label.Text == "Water Unit");
-            Assert.Equal(2, subject.Children.OfType<AutoCompleteBox>().Count());
+                .Children.OfType<Panel>().Single(panel => DescendantControls(panel).OfType<TextBlock>().Any(label => label.Text == "Water Unit"));
+            Assert.Contains(DescendantControls(subject).OfType<TextBlock>(), label => label.Text == "Water Unit");
+            Assert.Equal(2, DescendantControls(subject).OfType<AutoCompleteBox>().Count());
         });
     }
 
@@ -2616,7 +2640,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         {
             editor.SelectPower("Vibrant");
             Assert.Equal(2, GetPrivateField<WrapPanel>(editor, "_vibrantTreeUnitsHost")
-                .Children.OfType<StackPanel>().Count());
+                .Children.OfType<Panel>().Count());
             GetPrivateField<TextBox>(editor, "_vibrantGenerateIntervalBox").Text = "120";
             GetPrivateField<AutoCompleteBox>(editor, "_vibrantTreeVfxBox").SelectedItem = "TreeVfx";
             GetPrivateField<TextBox>(editor, "_vibrantRotateMinBox").Text = "50";
@@ -2666,7 +2690,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             editor.SetModifiedMode(true);
             editor.SelectPower("Vibrant");
             var host = GetPrivateField<WrapPanel>(editor, "_vibrantTreeUnitsHost");
-            Assert.Single(host.Children.OfType<AutoCompleteBox>());
+            Assert.Single(DescendantControls(host).OfType<AutoCompleteBox>());
             Assert.Contains(host.Children.OfType<Button>(), button => Equals(button.Content, "Add Tree Unit"));
 
             GetPrivateField<Button>(editor, "_otherSpecificAttributesButton")
@@ -2710,17 +2734,17 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             }
 
             editor.SelectPower("Drought");
-            var damageUnit = GetPrivateField<StackPanel>(editor, "_droughtInitialDamageRows")
-                .Children.OfType<StackPanel>().Single().Children.OfType<AutoCompleteBox>().Single();
+            var damageRow = GetPrivateField<StackPanel>(editor, "_droughtInitialDamageRows").Children.OfType<Panel>().Single();
+            var damageUnit = DescendantControls(damageRow).OfType<AutoCompleteBox>().Single();
             Assert.Equal("Building", damageUnit.Text);
             Assert.DoesNotContain(DescendantControls(GetPrivateField<StackPanel>(editor, "_droughtTerrainCreepHost"))
                 .OfType<TextBlock>(), label => label.Text == "Generator");
 
             editor.SelectPower("Flood");
             var capRow = GetPrivateField<StackPanel>(editor, "_greatFloodDamageCapRows")
-                .Children.OfType<StackPanel>().Single();
-            Assert.Equal("AbstractArcher", capRow.Children.OfType<AutoCompleteBox>().Single().Text);
-            Assert.Equal("12.5", capRow.Children.OfType<TextBox>().Single().Text);
+                .Children.OfType<Panel>().Single();
+            Assert.Equal("AbstractArcher", DescendantControls(capRow).OfType<AutoCompleteBox>().Single().Text);
+            Assert.Equal("12.5", DescendantControls(capRow).OfType<TextBox>().Single().Text);
         });
     }
 
@@ -2756,9 +2780,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             GetPrivateField<Button>(editor, "_addDroughtInitialDamageButton")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var damageRow = GetPrivateField<StackPanel>(editor, "_droughtInitialDamageRows")
-                .Children.OfType<StackPanel>().Single();
-            damageRow.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Building";
-            damageRow.Children.OfType<TextBox>().Single().Text = "0.10";
+                .Children.OfType<Panel>().Single();
+            DescendantControls(damageRow).OfType<AutoCompleteBox>().Single().SelectedItem = "Building";
+            DescendantControls(damageRow).OfType<TextBox>().Single().Text = "0.10";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
 
@@ -2777,9 +2801,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             GetPrivateField<Button>(editor, "_addGreatFloodDamageCapButton")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var capRow = GetPrivateField<StackPanel>(editor, "_greatFloodDamageCapRows")
-                .Children.OfType<StackPanel>().Single();
-            capRow.Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Unit";
-            capRow.Children.OfType<TextBox>().Single().Text = "9.5";
+                .Children.OfType<Panel>().Single();
+            DescendantControls(capRow).OfType<AutoCompleteBox>().Single().SelectedItem = "Unit";
+            DescendantControls(capRow).OfType<TextBox>().Single().Text = "9.5";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
 
@@ -2788,9 +2812,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             editor.SelectPower("Drought");
             editor.SelectPower("Flood");
             var capRow = GetPrivateField<StackPanel>(editor, "_greatFloodDamageCapRows")
-                .Children.OfType<StackPanel>().Single();
-            Assert.Equal("Unit", capRow.Children.OfType<AutoCompleteBox>().Single().Text);
-            Assert.Equal("9.5", capRow.Children.OfType<TextBox>().Single().Text);
+                .Children.OfType<Panel>().Single();
+            Assert.Equal("Unit", DescendantControls(capRow).OfType<AutoCompleteBox>().Single().Text);
+            Assert.Equal("9.5", DescendantControls(capRow).OfType<TextBox>().Single().Text);
         });
 
         var document = XDocument.Load(path);
@@ -2955,10 +2979,10 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.Equal(3, DescendantControls(bronzeRows).OfType<TextBlock>().Count(label => label.Text == "Delta"));
             editor.SelectPower("Hunt");
             var huntRows = GetPrivateField<StackPanel>(editor, "_greatHuntMaxFoodRows").Children
-                .OfType<StackPanel>().ToList();
+                .OfType<Panel>().ToList();
             Assert.Equal(2, huntRows.Count);
-            var firstAges = Assert.IsAssignableFrom<IEnumerable<string>>(huntRows[0]
-                .Children.OfType<ComboBox>().Single().ItemsSource).ToList();
+            var firstAges = Assert.IsAssignableFrom<IEnumerable<string>>(DescendantControls(huntRows[0])
+                .OfType<ComboBox>().Single().ItemsSource).ToList();
             Assert.Contains("ArchaicAge", firstAges);
             Assert.DoesNotContain("ClassicalAge", firstAges);
             GetPrivateField<AutoCompleteBox>(editor, "_greatHuntSpawnIfNoTargetBox").SelectedItem = "Deer";
@@ -2978,9 +3002,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.False(addMaxFood.IsVisible);
             editor.SelectPower("Summon");
             var ageRows = GetPrivateField<StackPanel>(editor, "_tempUnitAgeRows").Children
-                .OfType<StackPanel>().ToList();
-            var firstTempAges = Assert.IsAssignableFrom<IEnumerable<string>>(ageRows[0]
-                .Children.OfType<ComboBox>().Single().ItemsSource).ToList();
+                .OfType<Panel>().ToList();
+            var firstTempAges = Assert.IsAssignableFrom<IEnumerable<string>>(DescendantControls(ageRows[0])
+                .OfType<ComboBox>().Single().ItemsSource).ToList();
             Assert.Contains("ClassicalAge", firstTempAges);
             Assert.DoesNotContain("HeroicAge", firstTempAges);
         });
@@ -3053,8 +3077,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var swapRow = GetPrivateField<StackPanel>(editor, "_swapEntryRows")
                 .Children.OfType<WrapPanel>().Single();
-            Assert.Equal("Transform", swapRow.Children.OfType<TextBlock>().First().Text);
-            var swapBoxes = swapRow.Children.OfType<AutoCompleteBox>().ToList();
+            Assert.Equal("Transform", DescendantControls(swapRow).OfType<TextBlock>().First().Text);
+            var swapBoxes = DescendantControls(swapRow).OfType<AutoCompleteBox>().ToList();
             swapBoxes[0].SelectedItem = "Hero";
             swapBoxes[1].SelectedItem = "Replacement";
             GetPrivateField<Button>(editor, "_addSwapMinMaxButton")
@@ -3072,18 +3096,18 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var options = GetPrivateField<WrapPanel>(editor, "_swapOptionalFields");
             options.Children.OfType<Button>().Single(button => Equals(button.Content, "Delay"))
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            options.Children.OfType<StackPanel>().Single(group =>
-                group.Children.OfType<TextBlock>().Any(label => label.Text == "Delay"))
+            options.Children.OfType<Panel>().Single(group =>
+                DescendantControls(group).OfType<TextBlock>().Any(label => label.Text == "Delay"))
                 .Children.OfType<TextBox>().Single().Text = "1.5";
             options.Children.OfType<Button>().Single(button => Equals(button.Content, "Chance"))
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            options.Children.OfType<StackPanel>().Single(group =>
-                group.Children.OfType<TextBlock>().Any(label => label.Text == "Chance"))
+            options.Children.OfType<Panel>().Single(group =>
+                DescendantControls(group).OfType<TextBlock>().Any(label => label.Text == "Chance"))
                 .Children.OfType<TextBox>().Single().Text = "0.75";
             options.Children.OfType<Button>().Single(button => Equals(button.Content, "VFX"))
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            options.Children.OfType<StackPanel>().Single(group =>
-                group.Children.OfType<TextBlock>().Any(label => label.Text == "VFX"))
+            options.Children.OfType<Panel>().Single(group =>
+                DescendantControls(group).OfType<TextBlock>().Any(label => label.Text == "VFX"))
                 .Children.OfType<AutoCompleteBox>().Single().SelectedItem = "SwapVfx";
             GetPrivateField<AutoCompleteBox>(editor, "_swapFlagPicker").SelectedItem = "Mutate";
             GetPrivateField<AutoCompleteBox>(editor, "_swapFlagPicker").SelectedItem = "ForceFullHP";
@@ -3204,8 +3228,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             editor.SelectPower("Mine");
             Assert.Single(GetPrivateField<StackPanel>(editor, "_tempUnitCreateRows").Children);
             var ageRow = GetPrivateField<StackPanel>(editor, "_tempUnitAgeRows")
-                .Children.OfType<StackPanel>().Single();
-            var values = ageRow.Children.OfType<TextBox>().ToList();
+                .Children.OfType<Panel>().Single();
+            var values = DescendantControls(ageRow).OfType<TextBox>().ToList();
             Assert.Equal("250", values[0].Text);
             Assert.Equal("1.25", values[1].Text);
             values[0].Text = "300.5";
@@ -3252,15 +3276,15 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             addAge.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             addAge.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var ageRows = GetPrivateField<StackPanel>(editor, "_lureAgeInfoRows")
-                .Children.OfType<StackPanel>().ToList();
+                .Children.OfType<Panel>().ToList();
             Assert.Equal(2, ageRows.Count);
             var firstAgeOptions = Assert.IsAssignableFrom<IEnumerable<string>>(
-                ageRows[0].Children.OfType<ComboBox>().Single().ItemsSource).ToList();
+                DescendantControls(ageRows[0]).OfType<ComboBox>().Single().ItemsSource).ToList();
             Assert.DoesNotContain("ClassicalAge", firstAgeOptions);
-            var firstValues = ageRows[0].Children.OfType<TextBox>().ToList();
+            var firstValues = DescendantControls(ageRows[0]).OfType<TextBox>().ToList();
             firstValues[0].Text = "1200";
             firstValues[1].Text = "3";
-            var secondValues = ageRows[1].Children.OfType<TextBox>().ToList();
+            var secondValues = DescendantControls(ageRows[1]).OfType<TextBox>().ToList();
             secondValues[0].Text = "1300";
             secondValues[1].Text = "4";
         });
@@ -3304,10 +3328,10 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             addTarget.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             addTarget.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var rows = GetPrivateField<WrapPanel>(editor, "_undermineTargetRows")
-                .Children.OfType<StackPanel>().ToList();
-            rows[0].Children.OfType<AutoCompleteBox>().Single().SelectedItem = "WallGate";
+                .Children.OfType<Panel>().ToList();
+            DescendantControls(rows[0]).OfType<AutoCompleteBox>().Single().SelectedItem = "WallGate";
             rows[0].Children.OfType<CheckBox>().Single().IsChecked = true;
-            rows[1].Children.OfType<AutoCompleteBox>().Single().SelectedItem = "Building";
+            DescendantControls(rows[1]).OfType<AutoCompleteBox>().Single().SelectedItem = "Building";
         });
         Assert.True(AvaloniaTestHost.RunAsync(editor.SaveAsync));
 
@@ -3417,7 +3441,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             addTiming.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             addTiming.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var timingBoxes = GetPrivateField<WrapPanel>(editor, "_tempestLargeTimingRows")
-                .Children.OfType<StackPanel>().SelectMany(row => row.Children.OfType<TextBox>()).ToList();
+                .Children.OfType<Panel>().SelectMany(row => DescendantControls(row).OfType<TextBox>()).ToList();
             timingBoxes[0].Text = "6"; timingBoxes[1].Text = "12";
             var avoids = GetPrivateField<AutoCompleteBox>(editor, "_tempestAvoidPicker");
             avoids.SelectedItem = "Water"; avoids.SelectedItem = "Buildings"; avoids.SelectedItem = "Impassable";
@@ -3666,7 +3690,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         Assert.Equal("0.1", AvaloniaTestHost.Run(() =>
             GetPrivateField<TextBox>(originalEditor, "_tempestStrengthMinBox").Text));
         Assert.False(AvaloniaTestHost.Run(() =>
-            GetPrivateField<StackPanel>(originalEditor, "_tempestAmplitudeHost").IsVisible));
+            GetPrivateField<Panel>(originalEditor, "_tempestAmplitudeHost").IsVisible));
 
         using var workspace = new TestWorkspace(nameof(TempestSpcShowsLegacyTreeBendButCustomTempestDoesNotProposeItByDefault));
         var path = workspace.WriteText("powers_mods.xml",
@@ -3781,7 +3805,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
                      })
             {
                 var pair = Assert.IsType<StackPanel>(GetPrivateField<AutoCompleteBox>(editor, fieldName).Parent);
-                Assert.Contains(pair.Children.OfType<TextBlock>(), text => text.Text == label);
+                Assert.Contains(DescendantControls(pair).OfType<TextBlock>(), text => text.Text == label);
             }
             GetPrivateField<TextBox>(editor, "_minThrowDistanceBox").Text = "6";
             GetPrivateField<TextBox>(editor, "_maxThrowDistanceBox").Text = "10";
@@ -4153,7 +4177,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         Assert.Equal("-0.99", AvaloniaTestHost.Run(() =>
             GetPrivateField<TextBox>(editor, "_frostArmorBox").Text));
         Assert.False(AvaloniaTestHost.Run(() =>
-            GetPrivateField<StackPanel>(editor, "_frostTransitionHost").IsVisible));
+            GetPrivateField<Panel>(editor, "_frostTransitionHost").IsVisible));
         Assert.False(AvaloniaTestHost.Run(() =>
             GetPrivateField<StackPanel>(editor, "_frostSnowDriftHost").IsVisible));
         Assert.False(AvaloniaTestHost.Run(() =>
@@ -4291,7 +4315,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             addGrass.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             addGrass.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var grassGroups = GetPrivateField<WrapPanel>(editor, "_arcadianGrassRows")
-                .Children.OfType<StackPanel>().ToList();
+                .Children.OfType<Panel>().ToList();
             Assert.Equal(2, grassGroups.Count);
             Assert.All(grassGroups, group => Assert.IsType<WrapPanel>(group.Parent));
             grassGroups[0].Children.OfType<AutoCompleteBox>().Single().SelectedItem = "GreekGrass";
@@ -4590,8 +4614,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.Equal(2, rows.Children.OfType<Border>().Count());
             var firstCard = Assert.IsType<StackPanel>(rows.Children.OfType<Border>().First().Child);
             var subject = Assert.IsType<Grid>(firstCard.Children[0]).Children.OfType<WrapPanel>().Single();
-            Assert.Equal("ArchaicAge", subject.Children.OfType<ComboBox>()
-                .Single(combo => combo.Width == 140).SelectedItem);
+            Assert.Equal("ArchaicAge", DescendantControls(subject).OfType<ComboBox>()
+                .Single(combo => combo.ItemsSource!.Cast<string>().Contains("ArchaicAge")).SelectedItem);
             Assert.Contains(DescendantControls(firstCard).OfType<TextBlock>(),
                 label => label.Text == "placementRef");
 
@@ -4655,9 +4679,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.True(GetPrivateField<StackPanel>(editor, "_fimbulWolfVfxFields").IsVisible);
             Assert.True(GetPrivateField<StackPanel>(editor, "_fimbulExtraSpawnsFields").IsVisible);
             var driftRows = GetPrivateField<WrapPanel>(editor, "_fimbulSnowDriftRows");
-            var firstDrift = Assert.IsType<StackPanel>(driftRows.Children[0]);
-            Assert.Equal("AbstractTownCenter", firstDrift.Children.OfType<AutoCompleteBox>().First().Text);
-            Assert.Equal("SnowDriftSettlement", firstDrift.Children.OfType<AutoCompleteBox>().Last().Text);
+            var firstDrift = Assert.IsAssignableFrom<Panel>(driftRows.Children[0]);
+            Assert.Equal("AbstractTownCenter", DescendantControls(firstDrift).OfType<AutoCompleteBox>().First().Text);
+            Assert.Equal("SnowDriftSettlement", DescendantControls(firstDrift).OfType<AutoCompleteBox>().Last().Text);
             GetPrivateField<TextBox>(editor, "_fimbulWolfSoftCapBox").Text = "42";
             GetPrivateField<TextBox>(editor, "_fimbulSecondaryPackRadiusBox").Text = "18.5";
             Assert.Equal("20", GetPrivateField<TextBox>(editor,
@@ -4666,9 +4690,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             GetPrivateField<Button>(editor, "_addFimbulSnowDriftButton")
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(3, GetPrivateField<WrapPanel>(editor, "_fimbulSnowDriftRows").Children.Count);
-            var addedDrift = Assert.IsType<StackPanel>(
+            var addedDrift = Assert.IsAssignableFrom<Panel>(
                 GetPrivateField<WrapPanel>(editor, "_fimbulSnowDriftRows").Children[2]);
-            var addedSelectors = addedDrift.Children.OfType<AutoCompleteBox>().ToList();
+            var addedSelectors = DescendantControls(addedDrift).OfType<AutoCompleteBox>().ToList();
             addedSelectors[0].SelectedItem = "AbstractSettlement";
             addedSelectors[1].SelectedItem = "SnowDriftTower";
         });
@@ -4712,7 +4736,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.False(GetPrivateField<StackPanel>(editor, "_fimbulWolfSoftCapFields").IsVisible);
             Assert.True(GetPrivateField<StackPanel>(editor, "_fimbulWolfHardCapFields").IsVisible);
             Assert.False(GetPrivateField<StackPanel>(editor, "_fimbulMainPackSizeFields").IsVisible);
-            Assert.True(GetPrivateField<StackPanel>(editor, "_fimbulSecondaryPackRadiusFields").IsVisible);
+            Assert.True(GetPrivateField<Panel>(editor, "_fimbulSecondaryPackRadiusFields").IsVisible);
             Assert.Equal("22", GetPrivateField<TextBox>(editor,
                 "_fimbulSecondaryPackMaxRadiusBox").Text);
             Assert.False(GetPrivateField<StackPanel>(editor, "_fimbulMainPackTargetFields").IsVisible);
@@ -4838,7 +4862,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             editor.SetModifiedMode(true);
             editor.SelectPower("Purge");
             Assert.Equal(2, GetPrivateField<WrapPanel>(editor, "_cageSimilarTypeChips").Children.Count);
-            Assert.Single(GetPrivateField<WrapPanel>(editor, "_cageResourceMultiplierRows").Children);
+            Assert.Single(GetPrivateField<WrapPanel>(editor, "_cageResourceMultiplierRows").Children.OfType<StackPanel>());
             Assert.True(GetPrivateField<WrapPanel>(editor, "_cageVfxFields").IsVisible);
             Assert.Equal("Spine", GetPrivateField<AutoCompleteBox>(editor,
                 "_cageVfxMainTargetBoneBox").Text);
@@ -4892,7 +4916,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var vfxFlow = GetPrivateField<WrapPanel>(custom, "_cageVfxFields");
             var visibleVfxControls = vfxFlow.Children.Where(control => control.IsVisible).ToList();
-            Assert.Same(GetPrivateField<StackPanel>(custom, "_cageVfxMainTargetFields"),
+            Assert.Same(GetPrivateField<Panel>(custom, "_cageVfxMainTargetFields"),
                 visibleVfxControls[0]);
             Assert.All(visibleVfxControls.Skip(1).Take(4), control => Assert.IsType<Button>(control));
             Assert.Same(GetPrivateField<Button>(custom, "_removeCageVfxButton"),
@@ -5449,7 +5473,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             card = Assert.IsType<Border>(Assert.Single(rows.Children));
             var altAmount = DescendantControls(card).OfType<TextBox>().Single(control =>
                 Equals(control.Tag, "altamount"));
-            Assert.Equal(2, altAmount.Margin.Right);
+            Assert.Equal(0, altAmount.Margin.Right);
             altAmount.Text = "1.5";
         });
 
@@ -5690,7 +5714,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         Assert.False(AvaloniaTestHost.RunAsync(editor.SaveAsync));
         AvaloniaTestHost.Run(() =>
         {
-            Assert.Equal("Select a Type for the highlighted Effect before saving.",
+            Assert.Equal("Save blocked.",
                 GetPrivateField<TextBlock>(editor, "_statusMessage").Text);
             var card = Assert.IsType<Border>(
                 GetPrivateField<StackPanel>(editor, "_sharedEffectRows").Children[0]);
@@ -5931,7 +5955,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.Equal("Root", GetPrivateField<AutoCompleteBox>(editor, "_modifyVfxBoneBox").Text);
             Assert.Equal("VFXTailwindBirth", GetPrivateField<AutoCompleteBox>(editor, "_modifyVfxBirthBox").Text);
             Assert.True(GetPrivateField<Control>(editor, "_modifyVfxBirthFields").IsVisible);
-            Assert.Equal(2, GetPrivateField<Button>(editor, "_removeModifyVfxBirthButton").Margin.Left);
+            Assert.Equal(4, GetPrivateField<Button>(editor, "_removeModifyVfxBirthButton").Margin.Left);
             Assert.Equal(VerticalAlignment.Center,
                 GetPrivateField<Button>(editor, "_removeModifyVfxButton").VerticalAlignment);
 
@@ -5978,9 +6002,9 @@ public sealed class PowerEditorWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void SwitchingEffectsEditsReindexAndDeleteTheirOwnedStrings()
+    public void SwitchingEffectsEditsKeepReservedIdsAndDeleteTheirOwnedStrings()
     {
-        using var workspace = new TestWorkspace(nameof(SwitchingEffectsEditsReindexAndDeleteTheirOwnedStrings));
+        using var workspace = new TestWorkspace(nameof(SwitchingEffectsEditsKeepReservedIdsAndDeleteTheirOwnedStrings));
         var path = workspace.WriteText("powers_mods.xml", """
             <powersmod>
               <power name="Cycle" type="SwitchingEffects">
@@ -6046,18 +6070,20 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             var timerRollover = GetPrivateField<TextBox>(editor, "_switchingTimerRolloverBox");
             Assert.True(timerRollover.AcceptsReturn);
             Assert.Equal(TextWrapping.Wrap, timerRollover.TextWrapping);
-            Assert.Equal(VerticalAlignment.Center,
+            Assert.Equal(VerticalAlignment.Top,
                 GetPrivateField<Button>(editor, "_removeSwitchingTimerRolloverButton").VerticalAlignment);
+            Assert.Same(timerRollover.Parent, GetPrivateField<Button>(editor, "_removeSwitchingTimerRolloverButton").Parent);
+            RolloverAssertions.Configured(timerRollover);
             var progressRow = GetPrivateField<Grid>(editor, "_switchingProgressRow");
             Assert.Equal(VerticalAlignment.Center,
                 progressRow.Children.OfType<TextBlock>().Single().VerticalAlignment);
             var initialFirstCard = Assert.IsType<Border>(
                 GetPrivateField<StackPanel>(editor, "_switchingEffectContainers").Children[0]);
-            Assert.Equal(250, DescendantControls(initialFirstCard).OfType<TextBox>()
+            Assert.Equal(300, DescendantControls(initialFirstCard).OfType<TextBox>()
                 .Single(control => control.Text == "First name").Width);
             var extraRemove = DescendantControls(initialFirstCard).OfType<Button>().Single(button =>
                 button.Tag is XElement element && element.Name.LocalName == "string");
-            Assert.Equal(2, extraRemove.Margin.Left);
+            Assert.Equal(4, extraRemove.Margin.Left);
             Assert.Equal(VerticalAlignment.Center, extraRemove.VerticalAlignment);
             var sound = DescendantControls(initialFirstCard).OfType<AutoCompleteBox>().Single(control =>
                 Equals(control.Tag, "notificationsound"));
@@ -6103,20 +6129,23 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         Assert.Null(saved.Element("progresstype"));
         Assert.Null(saved.Element("timerrolloverid"));
         var remaining = Assert.Single(saved.Elements("effects"));
-        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_NAME", remaining.Element("displaynameid")?.Value);
-        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_LR", remaining.Element("rolloverid")?.Value);
-        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_NOTIF", remaining.Element("notificationmessageid")?.Value);
-        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_TOOLTIP",
+        // Existing keys are reserved: deleting the first tier must not reuse its
+        // keys for the surviving tier, even while their cleanup is pending.
+        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_NAME_1", remaining.Element("displaynameid")?.Value);
+        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_LR_1", remaining.Element("rolloverid")?.Value);
+        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_NOTIF_1", remaining.Element("notificationmessageid")?.Value);
+        Assert.Equal("STR_SWITCHING_EFFECT_CYCLE_TOOLTIP_1",
             remaining.Element("extratooltips")?.Element("string")?.Value);
         Assert.Equal("0", remaining.Element("combatxptierreq")?.Value);
         Assert.Null(remaining.Element("resourcetierreq"));
 
         var strings = StringTableDocument.Parse(File.ReadAllText(stringsPath)).ToDictionary();
-        Assert.Equal("Second name", strings["STR_SWITCHING_EFFECT_CYCLE_NAME"]);
-        Assert.Equal("Second rollover", strings["STR_SWITCHING_EFFECT_CYCLE_LR"]);
-        Assert.Equal("Second tooltip", strings["STR_SWITCHING_EFFECT_CYCLE_TOOLTIP"]);
-        Assert.Equal("Second notification", strings["STR_SWITCHING_EFFECT_CYCLE_NOTIF"]);
-        Assert.DoesNotContain("STR_SWITCHING_EFFECT_CYCLE_NAME_1", strings.Keys);
+        Assert.Equal("Second name", strings["STR_SWITCHING_EFFECT_CYCLE_NAME_1"]);
+        Assert.Equal("Second rollover", strings["STR_SWITCHING_EFFECT_CYCLE_LR_1"]);
+        Assert.Equal("Second tooltip", strings["STR_SWITCHING_EFFECT_CYCLE_TOOLTIP_1"]);
+        Assert.Equal("Second notification", strings["STR_SWITCHING_EFFECT_CYCLE_NOTIF_1"]);
+        foreach (var removed in new[] { "NAME", "LR", "TOOLTIP", "NOTIF" })
+            Assert.DoesNotContain("STR_SWITCHING_EFFECT_CYCLE_" + removed, strings.Keys);
         Assert.DoesNotContain("STR_SWITCHING_EFFECT_CYCLE_PROG", strings.Keys);
         Assert.DoesNotContain(strings.Keys,
             id => id.EndsWith("_2", StringComparison.OrdinalIgnoreCase));
@@ -6196,7 +6225,8 @@ public sealed class PowerEditorWorkflowTests : IDisposable
                 var box = DescendantControls(containers).OfType<TextBox>().First(control => control.Text == text);
                 Assert.True(box.AcceptsReturn);
                 Assert.Equal(TextWrapping.Wrap, box.TextWrapping);
-                Assert.Equal(32, box.MinHeight);
+                Assert.Equal(EditorFormLayout.FieldHeight, box.MinHeight);
+                RolloverAssertions.Configured(box);
             }
             var icons = DescendantControls(containers).OfType<AssetPathEditor>().ToList();
             Assert.Equal(2, icons.Count);
@@ -6236,7 +6266,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             Assert.True(GetPrivateField<Grid>(editor, "_effectInAreaOnHitRow").IsVisible);
             var mainFlow = Assert.IsType<WrapPanel>(mainRow.Children[1]);
             Assert.Contains(GetPrivateField<AutoCompleteBox>(editor, "_effectInAreaAreaVfxBox"),
-                Assert.IsType<StackPanel>(mainFlow.Children[0]).Children);
+                DescendantControls(mainFlow.Children[0]));
             Assert.Same(GetPrivateField<StackPanel>(editor, "_effectInAreaRepeatDelayFields"),
                 mainFlow.Children[1]);
             Assert.True(GetPrivateField<StackPanel>(editor,
@@ -6252,7 +6282,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
             {
                 Assert.Contains("editor-card", card.CardSurface.Classes);
                 Assert.DoesNotContain(card.ActiveField, card.Header.Children);
-                Assert.DoesNotContain(card.Header.Children.OfType<TextBlock>(),
+                Assert.DoesNotContain(DescendantControls(card.Header).OfType<TextBlock>(),
                     label => label.Text == "Active:");
             });
             Assert.Equal(["Reincarnation", "DamageOverTime", "Attach"], cards
@@ -6308,7 +6338,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
 
             Assert.Contains("editor-card", card.CardSurface.Classes);
             Assert.DoesNotContain(card.ActiveField, card.Header.Children);
-            Assert.DoesNotContain(card.Header.Children.OfType<TextBlock>(),
+            Assert.DoesNotContain(DescendantControls(card.Header).OfType<TextBlock>(),
                 label => label.Text == "Active:");
             var labels = DescendantControls(card).OfType<TextBlock>()
                 .Select(label => label.Text).ToList();
@@ -6346,7 +6376,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
         });
 
         Assert.False(AvaloniaTestHost.RunAsync(editor.SaveAsync));
-        Assert.Equal("Select a Type for the highlighted On Hit Effect before saving.",
+        Assert.Equal("Save blocked.",
             AvaloniaTestHost.Run(() => GetPrivateField<TextBlock>(editor, "_statusMessage").Text));
         var type = AvaloniaTestHost.Run(() => GetPrivateField<StackPanel>(editor,
             "_effectInAreaOnHitRows").Children.Cast<OnHitEffectEditor>().Single().TypeField);
@@ -6368,6 +6398,7 @@ public sealed class PowerEditorWorkflowTests : IDisposable
     private static IEnumerable<Control> DescendantControls(Control root)
     {
         yield return root;
+        if (root is AssetPathEditor or AutoCompleteBox or ComboBox or TextBox) yield break;
         if (root is Panel panel)
             foreach (var child in panel.Children)
                 foreach (var descendant in DescendantControls(child)) yield return descendant;

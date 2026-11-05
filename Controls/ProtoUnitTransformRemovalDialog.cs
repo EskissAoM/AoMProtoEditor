@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using AoMDivineDataEditor.Classes;
 
 namespace AoMDivineDataEditor.Controls;
 
@@ -18,11 +19,12 @@ public static class ProtoUnitTransformRemovalDialog
     public static async Task<ProtoUnitTransformRemovalChoice> ShowAsync(Window owner, string commandName)
     {
         var choice = ProtoUnitTransformRemovalChoice.Cancel;
-        var dialog = new Window
+        var dialog = new RemovalWindow
         {
             Title = "Remove Transform command",
             Width = 560,
-            Height = 180,
+            SizeToContent = SizeToContent.Height,
+            MaxHeight = 360,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = Brush.Parse("#111311"),
@@ -32,31 +34,34 @@ public static class ProtoUnitTransformRemovalDialog
         var root = new Grid
         {
             Margin = new Thickness(16),
-            RowDefinitions = new RowDefinitions("*,Auto")
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            RowSpacing = 16
         };
-        root.Children.Add(new TextBlock
+        var message = new ScrollViewer { MaxHeight = 220,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            Content = new TextBlock
         {
             Text = $"Remove '{commandName}' from this ProtoUnit only, or remove the custom command completely?",
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center
-        });
+        }};
+        root.Children.Add(message);
 
-        var buttons = new StackPanel
+        var buttons = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            ItemSpacing = 8,
+            LineSpacing = 8,
             HorizontalAlignment = HorizontalAlignment.Right
         };
-        var cancel = new Button { Content = "Cancel", Padding = new Thickness(12, 5) };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, IsDefault = true };
         cancel.Click += (_, _) => { choice = ProtoUnitTransformRemovalChoice.Cancel; dialog.Close(); };
-        var onlyThisUnit = new Button { Content = "Only this unit", Padding = new Thickness(12, 5) };
+        var onlyThisUnit = new Button { Content = "Remove from this Unit", Classes = { "danger" } };
         onlyThisUnit.Click += (_, _) => { choice = ProtoUnitTransformRemovalChoice.OnlyThisUnit; dialog.Close(); };
         var removeTotally = new Button
         {
-            Content = "Remove totally",
-            Background = Brush.Parse("#7A1F1C"),
-            BorderBrush = Brush.Parse("#B55640"),
-            Padding = new Thickness(12, 5)
+            Content = "Delete command",
+            Classes = { "danger" }
         };
         removeTotally.Click += (_, _) => { choice = ProtoUnitTransformRemovalChoice.RemoveTotally; dialog.Close(); };
         buttons.Children.Add(cancel);
@@ -65,8 +70,18 @@ public static class ProtoUnitTransformRemovalDialog
         Grid.SetRow(buttons, 1);
         root.Children.Add(buttons);
         dialog.Content = root;
+        dialog.Opened += (_, _) =>
+        {
+            var limits = DialogLayout.Limits(dialog, 560, 360);
+            dialog.Width = limits.Width;
+            dialog.MaxHeight = limits.Height;
+            message.MaxHeight = Math.Max(1, limits.Height - 120);
+            cancel.Focus();
+        };
 
         await dialog.ShowDialog(owner);
         return choice;
     }
+
+    private sealed class RemovalWindow : SimpleWindow { }
 }

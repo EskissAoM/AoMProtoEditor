@@ -41,8 +41,8 @@ public sealed class OnHitEffectEditor : Border
         Header = new Grid
         {
             ColumnDefinitions = !isReadOnly
-                ? new ColumnDefinitions("Auto, 170, Auto, Auto, *, Auto, Auto")
-                : new ColumnDefinitions("Auto, 170, Auto, Auto, *, Auto"),
+                ? new ColumnDefinitions("Auto, Auto, Auto, Auto, *, Auto, Auto")
+                : new ColumnDefinitions("Auto, Auto, Auto, Auto, *, Auto"),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         Header.Children.Add(new TextBlock
@@ -92,10 +92,7 @@ public sealed class OnHitEffectEditor : Border
 
         if (!isReadOnly)
         {
-            RemoveButton = new Button
-            {
-                Classes = { "remove-button" }
-            };
+            RemoveButton = EditorRemoveButtons.Card(description: "Remove effect");
             Grid.SetColumn(RemoveButton, 6);
             Header.Children.Add(RemoveButton);
         }

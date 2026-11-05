@@ -9,13 +9,7 @@ public static class DocumentSafetyDialog
         var prompt = new Prompt(
             PromptType.Error,
             $"{documentLabel} file cannot be edited",
-            message)
-        {
-            Width = 700,
-            Height = 300,
-            MinWidth = 580,
-            MinHeight = 240
-        };
+            message).FitToContent(700, 400);
         await prompt.ShowDialog(owner);
     }
 }

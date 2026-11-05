@@ -68,7 +68,15 @@ public static class XmlTriviaPreserver
             var sameNameOriginalCount = originalChildren.Count(candidate => candidate.Name == originalChild.Name);
             var sameNameUpdatedCount = updatedChildren.Count(candidate => candidate.Name == originalChild.Name);
             XElement? match = null;
-            if (sameNameOriginalCount == 1 && sameNameUpdatedCount == 1)
+            var unitChip = original.Name == "unit" && originalChild.Name.NamespaceName.Length == 0 &&
+                originalChild.Name.LocalName is "unittype" or "flag";
+            if (unitChip)
+            {
+                match = candidates.FirstOrDefault(candidate =>
+                    candidate.Value.Equals(originalChild.Value, StringComparison.OrdinalIgnoreCase));
+                if (match == null) continue;
+            }
+            else if (sameNameOriginalCount == 1 && sameNameUpdatedCount == 1)
             {
                 match = candidates[0];
             }
@@ -137,7 +145,29 @@ public static class XmlTriviaPreserver
         {
             insertionIndex--;
         }
-        rebuilt.InsertRange(insertionIndex, additions);
+        foreach (var addition in additions)
+        {
+            // Unit chip sets are rebuilt in sorted order. Keep new members with
+            // their existing group rather than after tactics/actions at the end.
+            var groupIndex = addition is XElement element && original.Name == "unit" &&
+                element.Name.NamespaceName.Length == 0 && element.Name.LocalName is "unittype" or "flag"
+                ? rebuilt.FindLastIndex(node => node is XElement sibling && sibling.Name == element.Name)
+                : -1;
+            // Unit additions use the same registry as structured Save. Otherwise
+            // a new field would land beyond an opaque trailing block and could
+            // no longer join its form group without moving that existing block.
+            var knownIndex = original.Name == "unit" && addition is XElement addedField
+                ? ProtoUnitXmlOrderPolicy.FindNewFieldInsertionIndex(rebuilt, addedField) : -1;
+            var index = knownIndex >= 0 ? knownIndex : groupIndex >= 0 ? groupIndex + 1 : insertionIndex;
+            if (groupIndex > 0 && rebuilt[groupIndex - 1] is XText whitespace &&
+                string.IsNullOrWhiteSpace(whitespace.Value))
+            {
+                rebuilt.Insert(index++, new XText(whitespace.Value));
+                insertionIndex++;
+            }
+            rebuilt.Insert(index, addition);
+            insertionIndex++;
+        }
 
         updated.ReplaceNodes(rebuilt);
     }

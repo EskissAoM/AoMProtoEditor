@@ -62,13 +62,14 @@ public static class ProtoUnitStatsXmlPreserver
         ["animfile"] = Schema(["culture"]),
     };
 
-    public static void PreserveUnmanagedContent(XElement originalUnit, XElement updatedUnit)
+    public static void PreserveUnmanagedContent(XElement originalUnit, XElement updatedUnit, IReadOnlySet<string>? fullyPreservedMaps = null)
     {
         ArgumentNullException.ThrowIfNull(originalUnit);
         ArgumentNullException.ThrowIfNull(updatedUnit);
 
         foreach (var schemaEntry in Schemas)
         {
+            if (fullyPreservedMaps?.Contains(schemaEntry.Key) == true) continue;
             var originalElements = ElementsNamed(originalUnit, schemaEntry.Key).ToList();
             var updatedElements = ElementsNamed(updatedUnit, schemaEntry.Key).ToList();
             if (originalElements.Count == 0 || updatedElements.Count == 0)
@@ -89,22 +90,22 @@ public static class ProtoUnitStatsXmlPreserver
                     continue;
 
                 usedOriginals.Add(original);
-                MergeElement(original, updated);
+                MergeElement(original, updated, fullyPreservedMaps);
             }
         }
 
         PreserveAdditionalMapEntries(originalUnit, updatedUnit, "cost", "resourcetype", ProtoConstants.KnownResourceTypes);
         PreserveAdditionalMapEntries(originalUnit, updatedUnit, "armor", "type", ProtoConstants.KnownArmorTypes);
-        PreserveAdditionalMapEntries(originalUnit, updatedUnit, "killreward", "resourcetype", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
-        PreserveAdditionalMapEntries(originalUnit, updatedUnit, "ResourceReturn", "resourceType", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
-        PreserveAdditionalMapEntries(originalUnit, updatedUnit, "ResourceReturnRate", "resourceType", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
-        PreserveAdditionalMapEntries(originalUnit, updatedUnit, "carrycapacity", "resourcetype", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
-        PreserveAdditionalMapEntries(originalUnit, updatedUnit, "initialresource", "resourcetype", ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
+        foreach (var (name, attribute) in new[] { ("killreward", "resourcetype"), ("ResourceReturn", "resourceType"),
+                     ("ResourceReturnRate", "resourceType"), ("carrycapacity", "resourcetype"), ("initialresource", "resourcetype") })
+            if (fullyPreservedMaps?.Contains(name) != true)
+                PreserveAdditionalMapEntries(originalUnit, updatedUnit, name, attribute, ProtoConstants.KnownResourceTypes, requireUpdatedEntry: true);
         XmlTriviaPreserver.Preserve(originalUnit, updatedUnit);
     }
 
-    private static void MergeElement(XElement original, XElement updated)
+    private static void MergeElement(XElement original, XElement updated, IReadOnlySet<string>? fullyPreservedMaps)
     {
+        if (fullyPreservedMaps?.Contains(updated.Name.LocalName) == true) return;
         if (!Schemas.TryGetValue(updated.Name.LocalName, out var schema))
             return;
 
@@ -130,7 +131,7 @@ public static class ProtoUnitStatsXmlPreserver
             var originalChildren = ElementsNamed(original, childName).ToList();
             var updatedChildren = ElementsNamed(updated, childName).ToList();
             for (var index = 0; index < Math.Min(originalChildren.Count, updatedChildren.Count); index++)
-                MergeElement(originalChildren[index], updatedChildren[index]);
+                MergeElement(originalChildren[index], updatedChildren[index], fullyPreservedMaps);
         }
     }
 

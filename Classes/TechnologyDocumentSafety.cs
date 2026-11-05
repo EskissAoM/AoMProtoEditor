@@ -37,6 +37,7 @@ public static class TechnologyDocumentSafety
         var nestedTechnologies = root.Descendants()
             .Where(element => element.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase))
             .Except(directTechnologies)
+            .Where(element => !IsRandomTechReference(element, directTechnologies))
             .ToList();
         if (nestedTechnologies.Count > 0)
             errors.Add($"Found {nestedTechnologies.Count} <tech> element(s) outside the root technology list.");
@@ -80,5 +81,27 @@ public static class TechnologyDocumentSafety
         }
 
         return new TechnologyDocumentValidation(errors.Distinct(StringComparer.Ordinal).ToList());
+    }
+
+    private static bool IsRandomTechReference(XElement element, IReadOnlyCollection<XElement> directTechnologies)
+    {
+        // RandomTech uses text-valued <Tech> choices, not nested technology definitions.
+        // Keep definition-shaped nodes subject to the structural ownership check.
+        if (element.HasElements || element.Attributes().Any(attribute =>
+                attribute.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        var effect = element.Parent;
+        if (effect == null || !effect.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase) ||
+            effect.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value
+                .Equals("RandomTech", StringComparison.OrdinalIgnoreCase) != true)
+            return false;
+
+        var owner = effect.Parent;
+        if (owner?.Name.LocalName.Equals("effects", StringComparison.OrdinalIgnoreCase) == true)
+            owner = owner.Parent;
+
+        return owner != null && directTechnologies.Contains(owner);
     }
 }

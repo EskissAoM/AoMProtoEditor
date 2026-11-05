@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace AoMDivineDataEditor.Classes;
 
@@ -30,6 +31,70 @@ public static class AbilityBindingMetadataStore
     private static string MetadataPath => ProtoEditorSettings.GetAppDataPath(MetadataFilename);
 
     internal static string StoragePath => MetadataPath;
+
+    internal static string PrepareUnitReplacements(string modPath,
+        IReadOnlyDictionary<string, IReadOnlyList<AbilityBindingMetadataRecord>> replacements, string path)
+    {
+        var records = File.Exists(path)
+            ? JsonNode.Parse(File.ReadAllText(path)) as JsonArray
+                ?? throw new InvalidDataException("Ability binding metadata must contain a JSON array. No files were written.")
+            : new JsonArray();
+        var normalized = NormalizeModPath(modPath);
+        foreach (var record in records.OfType<JsonObject>().Where(record =>
+                     string.Equals(record["ModPath"]?.GetValue<string>(), normalized, StringComparison.OrdinalIgnoreCase) &&
+                     replacements.Keys.Contains(record["UnitName"]?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase)).ToArray())
+            records.Remove(record);
+        foreach (var (unit, bindings) in replacements)
+            foreach (var binding in bindings.Where(binding => !string.IsNullOrWhiteSpace(binding.AbilityName) &&
+                         (!string.IsNullOrWhiteSpace(binding.MainAction) || !string.IsNullOrWhiteSpace(binding.AuxAction) ||
+                          binding.MainOwnsChargeAction || binding.AuxOwnsChargeAction)))
+            {
+                binding.ModPath = normalized;
+                binding.UnitName = unit;
+                records.Add(JsonSerializer.SerializeToNode(binding, JsonOptions));
+            }
+        return records.ToJsonString(JsonOptions);
+    }
+
+    internal static string? PrepareAbilityRenames(string modPath,
+        IReadOnlyList<KeyValuePair<string, string>> renames, string path)
+    {
+        if (!File.Exists(path)) return null;
+        // Rename is a write operation: unlike read-only ownership lookup, malformed
+        // metadata must not be silently replaced with an empty collection.
+        var records = JsonNode.Parse(File.ReadAllText(path)) as JsonArray
+            ?? throw new InvalidDataException("Ability binding metadata must contain a JSON array. No files were written.");
+        var normalized = NormalizeModPath(modPath);
+        var changed = false;
+        foreach (var rename in renames)
+        {
+            var matching = records.OfType<JsonObject>().Where(record =>
+                string.Equals(record["ModPath"]?.GetValue<string>(), normalized, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var record in matching.Where(record =>
+                         string.Equals(record["AbilityName"]?.GetValue<string>(), rename.Key, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (matching.Any(other => !ReferenceEquals(record, other) &&
+                    string.Equals(other["UnitName"]?.GetValue<string>(), record["UnitName"]?.GetValue<string>(), StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(other["AbilityName"]?.GetValue<string>(), rename.Value, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("The renamed Ability already has binding metadata for this Unit. No files were written.");
+                record["AbilityName"] = rename.Value;
+                changed = true;
+            }
+        }
+        return changed ? records.ToJsonString(JsonOptions) : null;
+    }
+
+    internal static void SavePrepared(string path, string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(temp, contents);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
 
     private static string NormalizeModPath(string modPath)
     {

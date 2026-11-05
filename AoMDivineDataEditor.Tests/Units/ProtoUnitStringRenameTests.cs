@@ -6,6 +6,27 @@ namespace AoMDivineDataEditor.Tests;
 public sealed class ProtoUnitStringRenameTests
 {
     [Fact]
+    public void CanonicalRenamePreservesCustomAndMissingKeysAndDistinctEqualTextKeys()
+    {
+        var oldIds = new Dictionary<string, string>
+        {
+            ["displaynameid"] = "STR_UNIT_OLD_NAME", ["editornameid"] = "STR_UNIT_OLD_EDITOR",
+            ["rollovertextid"] = "STR_CUSTOM", ["shortrollovertextid"] = "STR_UNIT_OLD_SR"
+        };
+        var text = new Dictionary<string, string>
+        {
+            ["displaynameid"] = "Same", ["editornameid"] = "Same",
+            ["rollovertextid"] = "Custom", ["shortrollovertextid"] = ""
+        };
+        var ids = ProtoEditorWindow.BuildRenamedUnitStringIds("New", oldIds, text, "Old",
+            new HashSet<string> { "STR_UNIT_OLD_NAME", "STR_UNIT_OLD_EDITOR", "STR_CUSTOM" });
+        Assert.Equal("STR_UNIT_NEW_NAME", ids["displaynameid"]);
+        Assert.Equal("STR_UNIT_NEW_EDITOR", ids["editornameid"]);
+        Assert.Equal("STR_CUSTOM", ids["rollovertextid"]);
+        Assert.Equal("STR_UNIT_OLD_SR", ids["shortrollovertextid"]);
+    }
+
+    [Fact]
     public void BuildRenamedUnitStringIds_ChangesIdsWithoutChangingFieldValues()
     {
         var oldIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

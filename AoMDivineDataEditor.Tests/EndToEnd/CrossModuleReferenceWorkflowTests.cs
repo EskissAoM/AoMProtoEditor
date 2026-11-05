@@ -28,7 +28,7 @@ public sealed class CrossModuleReferenceWorkflowTests
     [Theory]
     [InlineData(GameIdentifierKind.Ability, "<root><power name='Old'/><ability>Old</ability><castpower>Old</castpower><effect power='Old'/></root>", 3)]
     [InlineData(GameIdentifierKind.ProtoUnitCommand, "<root><protounitcommand><name>Old</name><sharedcommand>Old</sharedcommand></protounitcommand><unit><command>Old</command></unit><effect command='Old'/></root>", 3)]
-    [InlineData(GameIdentifierKind.Tactics, "<root><unit><tactics>Old.tactics</tactics></unit><effect tactic='Old'/></root>", 2)]
+    [InlineData(GameIdentifierKind.Tactics, "<root><unit><tactics>Old.tactics</tactics></unit><unit><tactics>Old</tactics></unit></root>", 2)]
     public void Shared_policy_renames_supported_identifiers_without_renaming_definitions(
         GameIdentifierKind kind,
         string xml,
@@ -45,7 +45,27 @@ public sealed class CrossModuleReferenceWorkflowTests
         if (kind == GameIdentifierKind.ProtoUnitCommand)
             Assert.Equal("Old", document.Descendants("protounitcommand").Single().Element("name")?.Value);
         if (kind == GameIdentifierKind.Tactics)
-            Assert.Equal("New", document.Descendants("tactics").Single().Value);
+            Assert.All(document.Descendants("tactics"), tactics => Assert.Equal("New", tactics.Value));
+    }
+
+    [Theory]
+    [InlineData("Old")]
+    [InlineData("Old.tactics")]
+    public void TacticFileRenameRefusesUnknownTacticAttributesWithoutWritingAnyFile(string unknownValue)
+    {
+        using var workspace = new TestWorkspace(nameof(TacticFileRenameRefusesUnknownTacticAttributesWithoutWritingAnyFile));
+        var unitPath = workspace.WriteXml("game/data/gameplay/proto_mods.xml",
+            "<protomods><unit name='U'><tactics>Old.tactics</tactics></unit></protomods>");
+        var unknownPath = workspace.WriteXml("game/data/gameplay/custom.xml",
+            $"<root><effect tactic='{unknownValue}'/></root>");
+        var before = new[] { unitPath, unknownPath }.ToDictionary(path => path, File.ReadAllBytes);
+        var unknown = XDocument.Load(unknownPath);
+        Assert.Empty(GameIdentifierReferencePolicy.FindRecognizedReferences(unknown, GameIdentifierKind.Tactics, "Old"));
+        Assert.Contains("@tactic", GameIdentifierReferencePolicy.FindUnrecognizedReferences(unknown, GameIdentifierKind.Tactics, "Old"));
+        Assert.Throws<InvalidOperationException>(() => GameIdentifierReferenceMigrationPlan.Prepare(
+            ModReferenceFileCatalog.Discover(workspace.RootPath), GameIdentifierKind.Tactics, [new("Old", "New")]));
+        foreach (var (path, bytes) in before)
+            Assert.Equal(bytes, File.ReadAllBytes(path));
     }
 
     [Fact]

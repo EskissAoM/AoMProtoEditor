@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace AoMDivineDataEditor.Classes;
 
@@ -26,6 +27,7 @@ public static class FileIntegrityTransaction
 
         public string BackupDirectory { get; }
         public IReadOnlyList<Snapshot> Items { get; }
+        public bool RetainForRecovery { get; set; }
 
         public void Dispose()
         {
@@ -34,6 +36,8 @@ public static class FileIntegrityTransaction
                 try { snapshot.BackupStream?.Dispose(); }
                 catch { }
             }
+            if (RetainForRecovery)
+                return;
             try
             {
                 if (Directory.Exists(BackupDirectory))
@@ -103,7 +107,7 @@ public static class FileIntegrityTransaction
         }
         catch (Exception commitException)
         {
-            RollBack(snapshots.Items, commitException);
+            RollBack(snapshots, commitException);
         }
     }
 
@@ -125,7 +129,7 @@ public static class FileIntegrityTransaction
         }
         catch (Exception commitException)
         {
-            RollBack(snapshots.Items, commitException);
+            RollBack(snapshots, commitException);
         }
     }
 
@@ -149,6 +153,18 @@ public static class FileIntegrityTransaction
             {
                 for (var index = 0; index < normalizedPaths.Count; index++)
                     snapshots.Add(CaptureSnapshot(normalizedPaths[index], backupDirectory, index));
+                // Write the recovery map before any commit can change the originals.
+                using var manifest = new FileStream(Path.Combine(backupDirectory, "recovery.json"),
+                    FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                JsonSerializer.Serialize(manifest, snapshots.Select(snapshot => new
+                {
+                    OriginalPath = snapshot.Path,
+                    SnapshotFile = snapshot.BackupStream == null ? null : Path.GetFileName(snapshot.BackupStream.Name),
+                    snapshot.Existed,
+                    snapshot.State.Length,
+                    snapshot.State.Sha256
+                }), new JsonSerializerOptions { WriteIndented = true });
+                manifest.Flush(flushToDisk: true);
             }
             catch
             {
@@ -179,7 +195,7 @@ public static class FileIntegrityTransaction
             FileAccess.ReadWrite,
             FileShare.Read | FileShare.Delete,
             bufferSize: 128 * 1024,
-            FileOptions.SequentialScan | FileOptions.DeleteOnClose);
+            FileOptions.SequentialScan);
         try
         {
             using (var source = new FileStream(
@@ -251,10 +267,10 @@ public static class FileIntegrityTransaction
         }
     }
 
-    private static void RollBack(IReadOnlyList<Snapshot> snapshots, Exception commitException)
+    private static void RollBack(SnapshotCollection snapshots, Exception commitException)
     {
         var rollbackErrors = new List<Exception>();
-        foreach (var snapshot in snapshots.Reverse())
+        foreach (var snapshot in snapshots.Items.Reverse())
         {
             try
             {
@@ -283,8 +299,11 @@ public static class FileIntegrityTransaction
 
         if (rollbackErrors.Count > 0)
         {
+            snapshots.RetainForRecovery = true;
             throw new AggregateException(
-                "The save failed and one or more files could not be restored. Restore the affected mod files from backup before continuing.",
+                "The save failed and one or more files could not be restored. " +
+                $"Recovery snapshots were retained in '{snapshots.BackupDirectory}'. " +
+                "Use recovery.json to identify each original path and snapshot. Restore the affected mod files before continuing.",
                 new[] { commitException }.Concat(rollbackErrors));
         }
 
@@ -332,7 +351,7 @@ public static class FileIntegrityTransaction
         }
     }
 
-    private static void EnsureRegularFileOrMissing(string path)
+    internal static void EnsureRegularFileOrMissing(string path)
     {
         EnsureNoLinkedDirectoryAncestors(path);
         if (Directory.Exists(path))
@@ -358,8 +377,13 @@ public static class FileIntegrityTransaction
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         while (!string.IsNullOrWhiteSpace(directory))
         {
-            if (Directory.Exists(directory) &&
-                (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            // Exists returns false for a dangling directory link. Inspect the
+            // entry itself so a missing link target cannot bypass containment.
+            FileAttributes attributes = 0;
+            try { attributes = File.GetAttributes(directory); }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
                 throw new IOException(
                     $"'{path}' is inside a symbolic-link or reparse-point directory. " +

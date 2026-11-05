@@ -83,13 +83,20 @@ public sealed class ProtoUnitCommandHardeningPass678Tests
     }
 
     [Fact]
-    public void CommandStringCleanupFailures_AreReportedInsteadOfSilentlyIgnored()
+    public void CommandStringCleanup_UsesTheSharedTransactionAndReportsFailures()
     {
         var root = ProjectSource.RootPath;
         var protoEditor = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
 
-        Assert.Contains("CleanupProtoUnitCommandStringsWithWarningAsync", protoEditor, StringComparison.Ordinal);
-        Assert.Contains("String cleanup incomplete", protoEditor, StringComparison.Ordinal);
+        var start = protoEditor.IndexOf("private async Task<string?> OpenProtoUnitCommandEditorAsync", StringComparison.Ordinal);
+        var end = protoEditor.IndexOf("private async Task OpenProtoUnitCommandsManagerAsync", start, StringComparison.Ordinal);
+        var callback = protoEditor[start..end];
+        Assert.Contains("PrepareCommandStringSave(", callback, StringComparison.Ordinal);
+        Assert.Contains("cleanup.Inspection.MergeExpectedStatesInto(expected);", callback, StringComparison.Ordinal);
+        Assert.Contains("cleanup.Inspection.ValidateReadDependencies();", callback, StringComparison.Ordinal);
+        Assert.Contains("await SaveResolvedStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals.ToArray(),", callback, StringComparison.Ordinal);
+        Assert.Contains("new Prompt(PromptType.Error, \"Save command\", ex.Message)", callback, StringComparison.Ordinal);
+        Assert.DoesNotContain("CleanupProtoUnitCommandStringsWithWarningAsync", callback, StringComparison.Ordinal);
         Assert.DoesNotContain("try { CleanupUnreferencedProtoUnitCommandStrings", protoEditor, StringComparison.Ordinal);
     }
 

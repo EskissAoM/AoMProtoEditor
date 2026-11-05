@@ -24,7 +24,7 @@ public sealed class OptionalFieldHostTests
             Assert.Equal(3, host.Children.Count);
             Assert.Same(editor, host.Children[1]);
             Assert.Equal(10, ((TextBlock)host.Children[0]).Margin.Right);
-            Assert.Equal(2, host.RemoveButton.Margin.Left);
+            Assert.Equal(4, host.RemoveButton.Margin.Left);
         });
     }
 
@@ -118,7 +118,7 @@ public sealed class OptionalFieldHostTests
             Assert.Same(value, editor.Children[2]);
             Assert.Same(editor.RemoveButton, editor.Children[3]);
             Assert.Equal(8, ((TextBlock)editor.Children[0]).Margin.Right);
-            Assert.Equal(2, editor.RemoveButton!.Margin.Left);
+            Assert.Equal(4, editor.RemoveButton!.Margin.Left);
         });
     }
 
@@ -141,7 +141,7 @@ public sealed class OptionalFieldHostTests
             editor.SetDamageTypeVisible(false);
 
             Assert.False(editor.DamageTypeGroup.IsVisible);
-            Assert.Equal(2, editor.RemoveButton.Margin.Left);
+            Assert.Equal(4, editor.RemoveButton.Margin.Left);
         });
     }
 
@@ -161,7 +161,7 @@ public sealed class OptionalFieldHostTests
             Assert.Same(value, editor.Children[1]);
             Assert.Same(marker, editor.SourceMarkerHost.Content);
             Assert.Same(editor.RemoveButton, editor.Children[3]);
-            Assert.Equal(2, editor.RemoveButton!.Margin.Left);
+            Assert.Equal(4, editor.RemoveButton!.Margin.Left);
         });
     }
 

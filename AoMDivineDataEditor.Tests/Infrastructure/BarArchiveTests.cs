@@ -9,6 +9,26 @@ namespace AoMDivineDataEditor.Tests;
 
 public sealed class BarArchiveTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnitTypeMigrationCatalogDistinguishesCompleteAndPartialArchive(bool damagedPart)
+    {
+        var bytes = XmbReaderTests.BuildSampleXmb(unitTypes: true);
+        var entries = new List<TestEntry> { new("game/data/abstract_unit_types.xml.xmb", bytes, bytes.Length, false) };
+        if (damagedPart) entries.Add(new("game/data/dlc/abstract_unit_types.xmb", [0, 1], 2, false));
+        using var encoded = BuildArchive(entries.ToArray());
+        using var workspace = new TestWorkspace("catalog-bar-readiness");
+        var path = workspace.GetPath("Data.bar");
+        File.WriteAllBytes(path, encoded.ToArray());
+        using var stream = File.OpenRead(path);
+        var archive = new BarArchive(stream);
+        Assert.True(archive.Load(out _));
+        var definitions = AoMDivineDataEditor.Classes.UnitTypeCatalog.ExtractBaseDefinitionsFromBar(archive, path, out var complete);
+        Assert.Equal(!damagedPart, complete);
+        Assert.Equal("Old", Assert.Single(definitions).Name); // Partial suggestions remain usable, but not trusted.
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public void Configured_real_data_bar_loads_strings_and_representative_xmb()
@@ -116,7 +136,7 @@ public sealed class BarArchiveTests
         Assert.Equal(BarArchiveLoadError.InvalidFormat, error);
     }
 
-    private static MemoryStream BuildArchive(params TestEntry[] entries)
+    internal static MemoryStream BuildArchive(params TestEntry[] entries)
     {
         const int headerSize = 296;
         var stream = new MemoryStream();
@@ -193,5 +213,5 @@ public sealed class BarArchiveTests
         return output;
     }
 
-    private sealed record TestEntry(string RelativePath, byte[] ArchiveData, int UncompressedSize, bool IsCompressed);
+    internal sealed record TestEntry(string RelativePath, byte[] ArchiveData, int UncompressedSize, bool IsCompressed);
 }

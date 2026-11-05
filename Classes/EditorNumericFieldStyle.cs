@@ -15,13 +15,12 @@ namespace AoMDivineDataEditor.Classes;
 /// </summary>
 public static class EditorNumericFieldStyle
 {
-    public const double CompactWidth = 90;
+    public const double CompactWidth = EditorFormLayout.NumericWidth;
     private static readonly ConditionalWeakTable<TextBox, object> InputFilters = new();
 
     public static TextBox ConfigureNumericTextBox(TextBox textBox)
     {
-        textBox.Width = CompactWidth;
-        textBox.MaxWidth = CompactWidth;
+        EditorFormLayout.ApplyConfiguredWidth(textBox, CompactWidth);
         textBox.HorizontalAlignment = HorizontalAlignment.Left;
         textBox.HorizontalContentAlignment = HorizontalAlignment.Left;
         textBox.Text = FormatNumericDisplay(textBox.Text);
@@ -36,6 +35,16 @@ public static class EditorNumericFieldStyle
             }, RoutingStrategies.Tunnel);
         }
         return textBox;
+    }
+
+    public static TextBox ConfigureNumericTextBox(TextBox textBox, EditorFieldWidthRole role)
+    {
+        if (role is not (EditorFieldWidthRole.Numeric or EditorFieldWidthRole.DenseNumeric or
+            EditorFieldWidthRole.TacticsWeight or EditorFieldWidthRole.DamageBonusMultiplier))
+            throw new ArgumentException("Choose a numeric presentation role.", nameof(role));
+
+        EditorFormLayout.ApplyWidth(textBox, role);
+        return ConfigureNumericTextBox(textBox);
     }
 
     public static string FormatDisplay(string? value) => FormatNumericDisplay(value);

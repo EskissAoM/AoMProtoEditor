@@ -129,11 +129,13 @@ public sealed class GodModulesStructuralAndFieldValidationTests
     {
         var root = ProjectSource.RootPath;
         var majorGodEditor = File.ReadAllText(Path.Combine(root, "Windows", "MajorGodEditorView.axaml.cs"));
+        var majorGodXmlEditing = File.ReadAllText(Path.Combine(root, "Windows", "MajorGodEditorView.XmlEditing.cs"));
         var host = File.ReadAllText(Path.Combine(root, "Windows", "ProtoEditorWindow.axaml.cs"));
         var cultureEditor = File.ReadAllText(Path.Combine(root, "Windows", "CultureEditorWindow.cs"));
 
-        Assert.Contains("ValidateCandidateStructure(candidate)", majorGodEditor, StringComparison.Ordinal);
-        Assert.Contains("ValidateSharedFields(candidate)", majorGodEditor, StringComparison.Ordinal);
+        Assert.Contains("ValidateMajorGodCandidate(candidate,", majorGodEditor, StringComparison.Ordinal);
+        Assert.Contains("ValidateCandidateStructure(candidate)", majorGodXmlEditing, StringComparison.Ordinal);
+        Assert.Contains("ValidateSharedFields(candidate)", majorGodXmlEditing, StringComparison.Ordinal);
         Assert.Contains("GodModuleFieldValidation.ValidateCultureDefinition", host, StringComparison.Ordinal);
         Assert.Contains("GodModuleFieldValidation.ValidateMinorGodDefinition", host, StringComparison.Ordinal);
         Assert.Contains("Display name is required", cultureEditor, StringComparison.Ordinal);

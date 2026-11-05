@@ -18,7 +18,11 @@ public static class XmbReader
     }
 
     public static string? ToFormattedXml(ReadOnlySpan<byte> data)
+        => ToFormattedXml(data, int.MaxValue);
+
+    internal static string? ToFormattedXml(ReadOnlySpan<byte> data, int maximumOutputCharacters)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputCharacters);
         try
         {
             var reader = new XmbSpanReader(data);
@@ -41,7 +45,8 @@ public static class XmbReader
                 OmitXmlDeclaration = true
             };
 
-            using (var writer = XmlWriter.Create(output, settings))
+            using var boundedOutput = new BoundedOutput(output, maximumOutputCharacters);
+            using (var writer = XmlWriter.Create(boundedOutput, settings))
             {
                 if (!TryWriteNode(writer, ref reader, elements, attributes, 0))
                     return null;
@@ -53,6 +58,24 @@ public static class XmbReader
         {
             return null;
         }
+    }
+
+    // Referencing a long name repeatedly can expand a small binary file substantially.
+    // Bound decoded output while it is produced, before allocating the complete XML.
+    private sealed class BoundedOutput(StringBuilder output, int maximumCharacters) : StringWriter(output)
+    {
+        private void RequireCapacity(int count)
+        {
+            if (count > maximumCharacters - GetStringBuilder().Length)
+                throw new InvalidOperationException("Decoded XMB exceeds the XML inspection limit.");
+        }
+
+        public override void Write(char value) { RequireCapacity(1); base.Write(value); }
+        public override void Write(string? value) { RequireCapacity(value?.Length ?? 0); base.Write(value); }
+        public override void Write(char[] buffer, int index, int count)
+        { RequireCapacity(count); base.Write(buffer, index, count); }
+        public override void Write(ReadOnlySpan<char> buffer)
+        { RequireCapacity(buffer.Length); base.Write(buffer); }
     }
 
     private static bool TryReadNames(ref XmbSpanReader reader, bool allowEmpty, out List<string> names)

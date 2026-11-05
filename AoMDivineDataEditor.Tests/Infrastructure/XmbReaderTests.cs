@@ -30,7 +30,7 @@ public sealed class XmbReaderTests
         Assert.Null(XmbReader.ToFormattedXml(data));
     }
 
-    private static byte[] BuildSampleXmb()
+    internal static byte[] BuildSampleXmb(bool unitTypes = false)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.Unicode, leaveOpen: true);
@@ -43,16 +43,38 @@ public sealed class XmbReaderTests
         writer.Write(4u);
         writer.Write(8u);
 
-        WriteNames(writer, "unit", "nameid");
+        WriteNames(writer, unitTypes ? "abstractunittypes" : "unit", unitTypes ? "abstractunittype" : "nameid");
         WriteNames(writer, "name");
 
-        WriteNode(writer, elementIndex: 0, text: "", attributes: [(0, "VillagerGreek")], childCount: 1);
-        WriteNode(writer, elementIndex: 1, text: "STR_UNIT_VILLAGER", attributes: [], childCount: 0);
+        WriteNode(writer, elementIndex: 0, text: "", attributes: unitTypes ? [] : [(0, "VillagerGreek")], childCount: 1);
+        WriteNode(writer, elementIndex: 1, text: unitTypes ? "Old" : "STR_UNIT_VILLAGER", attributes: [], childCount: 0);
 
         long end = stream.Position;
         stream.Position = 2;
         writer.Write(checked((int)end - 6));
         stream.Position = end;
+        return stream.ToArray();
+    }
+
+    internal static byte[] BuildDocument(XElement root)
+    {
+        var elements = root.DescendantsAndSelf().Select(element => element.Name.LocalName).Distinct().ToArray();
+        var attributes = root.DescendantsAndSelf().Attributes().Select(attribute => attribute.Name.LocalName).Distinct().ToArray();
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.Unicode, leaveOpen: true);
+        writer.Write((byte)'X'); writer.Write((byte)'1'); writer.Write(0);
+        writer.Write((byte)'X'); writer.Write((byte)'R'); writer.Write(4u); writer.Write(8u);
+        WriteNames(writer, elements); WriteNames(writer, attributes);
+        void WriteElement(XElement element)
+        {
+            WriteNode(writer, Array.IndexOf(elements, element.Name.LocalName),
+                string.Concat(element.Nodes().OfType<XText>().Select(text => text.Value)),
+                element.Attributes().Select(attribute => (Array.IndexOf(attributes, attribute.Name.LocalName), attribute.Value)).ToArray(),
+                element.Elements().Count());
+            foreach (var child in element.Elements()) WriteElement(child);
+        }
+        WriteElement(root);
+        var end = stream.Position; stream.Position = 2; writer.Write(checked((int)end - 6));
         return stream.ToArray();
     }
 

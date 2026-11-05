@@ -19,10 +19,10 @@ public static class ProtoConstants
     public static readonly SimpleFieldDefinition[] SimpleFields =
     [
         // Identity
-        new("displaynameid",       "Display Name",       FieldInputMode.Free),
+        new("displaynameid",       EditorDisplayText.DisplayName, FieldInputMode.Free),
         new("editornameid",        "Editor Name",        FieldInputMode.Free),
-        new("rollovertextid",      "Rollover Text",      FieldInputMode.Free),
-        new("shortrollovertextid", "Short Rollover Text",FieldInputMode.Free),
+        new("rollovertextid",      EditorDisplayText.Rollover, FieldInputMode.Free),
+        new("shortrollovertextid", EditorDisplayText.ShortRollover, FieldInputMode.Free),
         // Visuals
         new("icon",                "Icon Path",             FieldInputMode.Suggest),
         new("animfile",            "Animation File",        FieldInputMode.Suggest),
@@ -69,6 +69,19 @@ public static class ProtoConstants
            ?? "";
     public static readonly string[] KnownReplacementTypes = ["dead", "killed", "birth", "build", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
     public static readonly string[] KnownSpawnTypes = ["dead", "killed", "birth", "build", "mutate", "hit", "hitGround", "revertToSocket", "hitWater", "selfDestruct"];
+
+    public static string GetEnumCaption(string? value, IEnumerable<string> tokens)
+    {
+        var input = value?.Trim() ?? "";
+        var token = tokens.FirstOrDefault(token => token.Equals(input, StringComparison.OrdinalIgnoreCase));
+        return token is { Length: > 0 } ? char.ToUpperInvariant(token[0]) + token[1..] : input;
+    }
+
+    public static string GetXmlEnumToken(string? caption, IEnumerable<string> tokens)
+    {
+        var input = caption?.Trim() ?? "";
+        return tokens.FirstOrDefault(token => token.Equals(input, StringComparison.OrdinalIgnoreCase)) ?? input;
+    }
     public static readonly string[] KnownRechargeTypes = ["Kills", "Damage", "Attacks", "resourceDropoff"];
     public static readonly string[] KnownOnHitEffectTypes =
     [

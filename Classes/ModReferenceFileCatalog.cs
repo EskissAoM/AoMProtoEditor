@@ -1,7 +1,7 @@
 namespace AoMDivineDataEditor.Classes;
 
 /// <summary>
-/// Discovers editable, XML-based reference sources across one mod. Unknown XML
+/// Discovers XML and read-only compiled tactics reference sources across one mod. Unknown XML
 /// and tactics files are deliberately included so a rename cannot silently
 /// ignore a user-authored gameplay file merely because the editor does not own
 /// its filename.
@@ -9,6 +9,38 @@ namespace AoMDivineDataEditor.Classes;
 public static class ModReferenceFileCatalog
 {
     private const int MaximumReferenceFileCount = 20_000;
+
+    /// <summary>
+    /// Discovers once and retains that exact membership for later validation.
+    /// Unlike optional catalog browsing, guarded operations require an accessible mod root.
+    /// </summary>
+    public static IReadOnlyList<TechnologyReferenceFile> Discover(
+        string modRootDirectory, out FileDiscoverySnapshot snapshot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modRootDirectory);
+        var root = Path.GetFullPath(modRootDirectory);
+        var files = DiscoverRequiredRoot(root);
+        snapshot = FileDiscoverySnapshot.Capture(
+            files.Select(file => file.Path),
+            () => DiscoverRequiredRoot(root).Select(file => file.Path));
+        return files.AsReadOnly();
+    }
+
+    private static List<TechnologyReferenceFile> DiscoverRequiredRoot(string root)
+    {
+        RequireDirectory(root);
+        var files = Discover(root).ToList();
+        // The existing optional discovery API returns an empty set for a missing root.
+        // Reject a root that disappeared while this guarded discovery was running.
+        RequireDirectory(root);
+        return files;
+    }
+
+    private static void RequireDirectory(string root)
+    {
+        if ((File.GetAttributes(root) & FileAttributes.Directory) == 0)
+            throw new IOException($"The mod reference root '{root}' is not a directory. No files were written.");
+    }
 
     public static IReadOnlyList<TechnologyReferenceFile> Discover(string? modRootDirectory)
     {
@@ -20,7 +52,8 @@ public static class ModReferenceFileCatalog
         {
             var extension = Path.GetExtension(path);
             if (!extension.Equals(".xml", StringComparison.OrdinalIgnoreCase) &&
-                !extension.Equals(".tactics", StringComparison.OrdinalIgnoreCase))
+                !extension.Equals(".tactics", StringComparison.OrdinalIgnoreCase) &&
+                !ModReferenceDocumentReader.IsCompiledTactics(path))
             {
                 continue;
             }
@@ -33,7 +66,7 @@ public static class ModReferenceFileCatalog
             if (files.Count > MaximumReferenceFileCount)
             {
                 throw new InvalidOperationException(
-                    $"Reference discovery found more than {MaximumReferenceFileCount:N0} editable XML/tactics files. " +
+                    $"Reference discovery found more than {MaximumReferenceFileCount:N0} XML/tactics reference files. " +
                     "The operation was cancelled to keep memory and scan time bounded.");
             }
         }
@@ -62,7 +95,8 @@ public static class ModReferenceFileCatalog
             return TechnologyReferenceDocumentKind.MajorGods;
         if (fileName.Equals(MinorGodCatalog.ModFileName, StringComparison.OrdinalIgnoreCase))
             return TechnologyReferenceDocumentKind.MinorGods;
-        if (Path.GetExtension(path).Equals(".tactics", StringComparison.OrdinalIgnoreCase))
+        if (Path.GetExtension(path).Equals(".tactics", StringComparison.OrdinalIgnoreCase) ||
+            ModReferenceDocumentReader.IsCompiledTactics(path))
             return TechnologyReferenceDocumentKind.Tactics;
         return TechnologyReferenceDocumentKind.Other;
     }

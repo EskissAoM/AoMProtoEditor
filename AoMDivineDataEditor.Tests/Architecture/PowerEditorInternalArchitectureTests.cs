@@ -162,7 +162,9 @@ public sealed class PowerEditorInternalArchitectureTests
         Assert.DoesNotContain("private readonly Func<", view, StringComparison.Ordinal);
         Assert.DoesNotContain("private readonly IReadOnlyList<string>", view, StringComparison.Ordinal);
 
-        Assert.Contains("new PowerEditorCatalogs(", host, StringComparison.Ordinal);
+        Assert.Contains("var powerCatalogs = CreatePowerSelectorCatalogs()", host, StringComparison.Ordinal);
+        var catalogComposition = ProjectSource.Read("Windows", "ProtoEditorWindow.SelectorCatalogs.cs");
+        Assert.Contains("private PowerEditorCatalogs CreatePowerSelectorCatalogs() => new(", catalogComposition, StringComparison.Ordinal);
         Assert.Contains("new PowerEditorHostServices(", host, StringComparison.Ordinal);
         Assert.Contains("new PowerEditorView(new PowerEditorComposition(", host, StringComparison.Ordinal);
     }

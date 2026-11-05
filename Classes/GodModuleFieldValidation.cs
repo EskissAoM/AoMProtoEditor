@@ -17,39 +17,29 @@ internal static class GodModuleFieldValidation
         ArgumentNullException.ThrowIfNull(definition);
         foreach (var (tag, label) in new[]
                  {
-                     ("displaynameid", "Display Name"),
-                     ("rollovernameid", "Rollover"),
-                     ("titleid", "Title")
-                 })
-        {
-            if (ReadDirectText(definition, tag).Length == 0)
-                throw new InvalidDataException($"{label} string ID is required.");
-        }
-
-        foreach (var (tag, label) in new[]
-                 {
                      ("icon", "Icon"),
                      ("portrait", "Portrait"),
                      ("breakoutportrait", "Breakout Portrait")
                  })
         {
-            ValidateCatalogAsset(ReadDirectText(definition, tag), iconPaths, label);
+            if (ReadDirectText(definition, tag).Length > 0)
+                ValidationSourceLocation.Validate(definition, tag, () => ValidateCatalogAsset(ReadDirectText(definition, tag), iconPaths, label));
         }
 
-        ValidateCatalogText(
+        if (ReadDirectText(definition, "minimapborderimage").Length > 0) ValidationSourceLocation.Validate(definition, "minimapborderimage", () => ValidateCatalogText(
             ReadDirectText(definition, "minimapborderimage"),
             minimapBorderValues,
-            "Minimap Border Image");
-        ValidateCatalogText(
+            "Minimap Border Image"));
+        if (ReadDirectText(definition, "backgroundscenario").Length > 0) ValidationSourceLocation.Validate(definition, "backgroundscenario", () => ValidateCatalogText(
             ReadDirectText(definition, "backgroundscenario"),
             backgroundScenarioValues,
-            "Background Scenario");
+            "Background Scenario"));
 
         if (FindDirect(definition, "partisans") is { } partisans && partisans.Value.Trim() != "1")
-            throw new InvalidDataException("Has Partisans must contain 1 when present.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException("Has Partisans must contain 1 when present."), partisans);
         if (FindDirect(definition, "devotioncommands") is { } devotionCommands &&
             !string.IsNullOrWhiteSpace(devotionCommands.Value))
-            throw new InvalidDataException("Has Devotion Commands must be empty when present.");
+            throw ValidationSourceLocation.Attach(new InvalidDataException("Has Devotion Commands must be empty when present."), devotionCommands);
     }
 
     internal static void ValidateCultureDefinition(XElement definition, string unchangedName)

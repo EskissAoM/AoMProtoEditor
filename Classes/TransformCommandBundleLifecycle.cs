@@ -101,7 +101,9 @@ public static class TransformCommandBundleLifecycle
                     $"Owned Transform technology '{source.TechnologyName}' could not be duplicated because it could not be found.");
             var technologyCopy = TransformAssociatedTechnologyDefinition.FromElement(technology);
             technologyCopy.Name = newName;
-            destinationTechnologyDocument.Root!.Add(technologyCopy.ToElement());
+            var copiedTechnology = technologyCopy.ToElement();
+            destinationTechnologyDocument.Root!.Add(copiedTechnology);
+            TechnologyXmlOrderPolicy.NormalizeForEditor(copiedTechnology);
 
             ReplaceAssignment(duplicatedUnit, source.CommandName, newName);
             created.Add(new OwnedTransformCommandBundle(newName, newName, duplicatedUnitName, source.ToUnit));
@@ -143,7 +145,9 @@ public static class TransformCommandBundleLifecycle
                     $"Owned Transform technology '{oldBundle.TechnologyName}' could not be renamed because it is not present in techtree_mods.xml.");
             var technology = TransformAssociatedTechnologyDefinition.FromElement(technologyElement);
             technology.Name = newName;
-            technologyElement.ReplaceWith(technology.ToElement());
+            var renamedTechnology = technology.ToElement();
+            technologyElement.ReplaceWith(renamedTechnology);
+            TechnologyXmlOrderPolicy.NormalizeForEditor(renamedTechnology);
 
             ReplaceAssignment(renamedUnit, oldBundle.CommandName, newName);
             renamed.Add((oldBundle, new OwnedTransformCommandBundle(newName, newName, newUnitName, oldBundle.ToUnit)));
@@ -189,7 +193,9 @@ public static class TransformCommandBundleLifecycle
 
         var technology = TransformAssociatedTechnologyDefinition.FromElement(technologyElement);
         technology.Name = newName;
-        technologyElement.ReplaceWith(technology.ToElement());
+        var renamedTechnology = technology.ToElement();
+        technologyElement.ReplaceWith(renamedTechnology);
+        TechnologyXmlOrderPolicy.NormalizeForEditor(renamedTechnology);
 
         return (oldBundle, new OwnedTransformCommandBundle(newName, newName, transform.From, transform.To));
     }

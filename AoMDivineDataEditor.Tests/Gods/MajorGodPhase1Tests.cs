@@ -43,16 +43,13 @@ public sealed class MajorGodPhase1Tests
     }
 
     [Fact]
-    public void CreatePass1Entry_UsesCanonicalOrderAndRequiredStatsId()
+    public void CreatePass1Entry_ContainsOnlyIdentityAndInternalStatsMetadata()
     {
-        var entry = MajorGodCatalog.CreatePass1Entry("New God", "Greek");
+        var entry = MajorGodCatalog.CreatePass1Entry("New God");
 
-        Assert.Equal(MajorGodCatalog.Pass1FieldOrder, entry.Elements().Select(element => element.Name.LocalName));
+        Assert.Equal(new[] { "name", "statsid" }, entry.Elements().Select(element => element.Name.LocalName));
         Assert.Equal("SP", entry.Element("statsid")?.Value);
-        Assert.Equal("G", entry.Element("key")?.Value);
-        Assert.Equal("STR_CIV_NEW_GOD", entry.Element("displaynameid")?.Value);
-        Assert.Equal("STR_CIV_NEW_GOD_LR", entry.Element("rollovernameid")?.Value);
-        Assert.Equal("STR_CIV_NEW_GOD_T", entry.Element("titleid")?.Value);
+        Assert.Equal("New God", entry.Element("name")?.Value);
         Assert.Null(entry.Element("main"));
     }
 
@@ -112,17 +109,20 @@ public sealed class MajorGodPhase1Tests
             previous = current;
         }
         Assert.Contains("x:Name=\"_rawXmlEditor\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("x:Name=\"_applyRawXmlButton\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"_editXmlButton\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content=\"Apply\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_xmlPreviewToggleButton\"", xaml, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinition Width=\"4*\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("ColumnDefinition Width=\"1*\" MinWidth=\"250\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("ColumnDefinition Width=\"1*\" MinWidth=\"28\"", xaml, StringComparison.Ordinal);
         Assert.Contains("<Grid x:Name=\"_mainGrid\">", xaml, StringComparison.Ordinal);
         Assert.Contains("<Grid RowDefinitions=\"Auto,*,Auto\">", xaml, StringComparison.Ordinal);
         Assert.Contains("<TextBlock Grid.Row=\"2\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("Grid.ColumnSpan=\"3\" x:Name=\"_statusMessage\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_cultureBox\" Width=\"200\" MaxWidth=\"200\"", xaml, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"_rolloverNameBox\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("MinHeight=\"96\" AcceptsReturn=\"True\" TextWrapping=\"Wrap\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("MinHeight=\"96\" AcceptsReturn=\"True\" TextWrapping=\"Wrap\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("EditorRolloverField.Configure(_rolloverNameBox)", File.ReadAllText(
+            Path.Combine(root, "Windows", "MajorGodEditorView.axaml.cs")), StringComparison.Ordinal);
         Assert.Contains("EditorAutoCompleteService.EnableDropdown(_cultureBox", File.ReadAllText(
             Path.Combine(root, "Windows", "MajorGodEditorView.axaml.cs")), StringComparison.Ordinal);
     }
@@ -292,7 +292,7 @@ public sealed class MajorGodPhase1Tests
         Assert.Equal("OlympianTeamBonus", entry.Element("teamtech")?.Value);
         Assert.Equal("DeprecatedButPreserved", entry.Element("empirewarstech")?.Value);
         Assert.Equal("keep", entry.Element("custom")?.Value);
-        Assert.True(entry.Elements().ToList().IndexOf(entry.Element("agetech")!) <
+        Assert.True(entry.Elements().ToList().IndexOf(entry.Element("agetech")!) >
                     entry.Elements().ToList().IndexOf(entry.Element("icon")!));
     }
 
@@ -336,7 +336,7 @@ public sealed class MajorGodPhase1Tests
         Assert.Equal("0", unit.Attribute("y")?.Value);
         Assert.Equal("0", unit.Attribute("z")?.Value);
         Assert.Null(unit.Attribute("delay"));
-        Assert.True(entry.Elements().ToList().IndexOf(group) < entry.Elements().ToList().IndexOf(entry.Element("icon")!));
+        Assert.True(entry.Elements().ToList().IndexOf(group) > entry.Elements().ToList().IndexOf(entry.Element("icon")!));
     }
 
     [Fact]
@@ -376,7 +376,7 @@ public sealed class MajorGodPhase1Tests
         Assert.Null(group.Attribute("mode"));
         Assert.Equal(["food", "wood", "gold", "favor"], group.Elements().Select(element => element.Name.LocalName));
         Assert.All(group.Elements(), resource => Assert.Equal("10", resource.Value));
-        Assert.True(entry.Elements().ToList().IndexOf(group) < entry.Elements().ToList().IndexOf(entry.Element("icon")!));
+        Assert.True(entry.Elements().ToList().IndexOf(group) > entry.Elements().ToList().IndexOf(entry.Element("icon")!));
     }
 
     [Fact]
@@ -449,7 +449,8 @@ public sealed class MajorGodPhase1Tests
 
         var xml = entry.ToString(SaveOptions.DisableFormatting).Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.Contains("\n    <unit>Hoplite</unit>\n  </startingqueue>", xml, StringComparison.Ordinal);
-        Assert.Contains("\n  <startingresources mode=\"deathmatch\">\n    <food>18000</food>\n    <gold>18000</gold>\n  </startingresources>\n  <icon>", xml, StringComparison.Ordinal);
+        Assert.Contains("\n  <startingresources mode=\"deathmatch\">\n    <food>18000</food>\n    <gold>18000</gold>\n  </startingresources>\n</civ>", xml, StringComparison.Ordinal);
+        Assert.Equal(new[] { "startingqueue", "icon", "startingresources" }, entry.Elements().Select(element => element.Name.LocalName));
     }
 
     [Fact]
@@ -521,7 +522,8 @@ public sealed class MajorGodPhase1Tests
         Assert.Contains("CreateInlineLabel(\"Early Income Reduction\")", code, StringComparison.Ordinal);
         Assert.Contains("CreateInlineLabel(\"Modifier\")", code, StringComparison.Ordinal);
         Assert.Contains("ProtoUnitNumericKind.UnsignedFloat", code, StringComparison.Ordinal);
-        Assert.Contains("ValidateEconomicAttributes(candidate)", code, StringComparison.Ordinal);
+        var validation = File.ReadAllText(Path.Combine(root, "Windows", "MajorGodEditorView.XmlEditing.cs"));
+        Assert.Contains("ValidateEconomicAttributes(candidate)", validation, StringComparison.Ordinal);
         Assert.Contains("must be a number greater than or equal to zero", code, StringComparison.Ordinal);
     }
 
@@ -677,7 +679,7 @@ public sealed class MajorGodPhase1Tests
                      "Shades", "TerrainCreeps", "BonusUnitSpawning", "BountyResourceEarning",
                      "TimeShifting", "BuildingChain", "CombatXP", "OnCastPowerCostFactor"
                  })
-            Assert.Contains($"(\"{label}\",", code, StringComparison.Ordinal);
+            Assert.Contains(MajorGodCatalog.SpecialMechanicDefinitions, definition => definition.Label == label);
         Assert.Contains("SetSpecialMechanicToggle(\"partisans\"", code, StringComparison.Ordinal);
         Assert.Contains("SetSpecialMechanicToggle(\"devotioncommands\"", code, StringComparison.Ordinal);
         Assert.Contains("can only occur once", code, StringComparison.Ordinal);
@@ -766,7 +768,7 @@ public sealed class MajorGodPhase1Tests
         Assert.Contains("\"allowDisconnectedGrowth\"", catalog, StringComparison.Ordinal);
         Assert.Contains("TerrainCreepBuildabilityValues", editor, StringComparison.Ordinal);
         Assert.Contains("Text = \"Update Interval (s)\"", editor, StringComparison.Ordinal);
-        Assert.Contains("CreateInlineLabel(\"Prevent Placement of\")", editor, StringComparison.Ordinal);
+        Assert.Contains("EditorFormLayout.LabeledGroup(\"Prevent Placement of\", selector)", editor, StringComparison.Ordinal);
         Assert.Contains("BuildTerrainCreepPlacementOptions(intervalRow, creep);", editor, StringComparison.Ordinal);
         Assert.Contains("BuildTerrainCreepGenerators", editor, StringComparison.Ordinal);
         Assert.Contains("ValidateTerrainCreeps", editor, StringComparison.Ordinal);
@@ -911,7 +913,8 @@ public sealed class MajorGodPhase1Tests
         Assert.Contains("_saveStringsAsync!(stringUpdates, stringRemovals)", code, StringComparison.Ordinal);
         Assert.Contains("AddBonusSubcontainer(host, \"Goal\"", code, StringComparison.Ordinal);
         Assert.Contains("AddBonusSubcontainer(host, \"Display info\"", code, StringComparison.Ordinal);
-        Assert.Contains("\"rolloverid\", \"SPAWN_REWARD_LR\", 380", code, StringComparison.Ordinal);
+        Assert.Contains("EditorRolloverField.CreateRow(\"Rollover\"", code, StringComparison.Ordinal);
+        Assert.Contains("\"rolloverid\", \"SPAWN_REWARD_LR\"", code, StringComparison.Ordinal);
         Assert.Contains("\"notificationmessageid\", \"SPAWN_REWARD_NOTIFICATION\", 380", code, StringComparison.Ordinal);
         var identityStart = code.IndexOf("private void BuildBonusGoalIdentity", StringComparison.Ordinal);
         var identityEnd = code.IndexOf("private void BuildBonusGoalReward", identityStart, StringComparison.Ordinal);

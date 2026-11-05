@@ -31,8 +31,11 @@ public sealed class TechnologyDataRound9RegressionTests
 
         Assert.Contains("CreateLabeledEffectSegment(\"Type\", CreateStrictEffectSelector(\n            ProtoConstants.KnownSpawnTypes", NormalizeNewlines(code), StringComparison.Ordinal);
         Assert.Contains("CreateLabeledEffectSegment(\"Action\", CreateStrictEffectSelector(\n            _protoActionNames", NormalizeNewlines(code), StringComparison.Ordinal);
-        Assert.Contains("var segment = CreateLabeledEffectSegment(label, box, leftSpacing: 8);", code, StringComparison.Ordinal);
-        Assert.Contains("segment.Children.Add(CreateRemoveButton", code, StringComparison.Ordinal);
+        var optional = ProjectSource.ExtractMethod(code, "private void AddOptionalEffectAttribute");
+        Assert.Contains("var segment = CreateLabeledEffectSegment(label, box);", optional, StringComparison.Ordinal);
+        Assert.Contains("segment.Children.Add(CreateRemoveButton", optional, StringComparison.Ordinal);
+        var presentation = ProjectSource.Read("Windows", "TechnologyEditorView.FieldPresentation.cs");
+        Assert.Contains("EditorFormLayout.GroupFlowingFields", presentation, StringComparison.Ordinal);
     }
 
     private static string NormalizeNewlines(string value) => value.Replace("\r\n", "\n");

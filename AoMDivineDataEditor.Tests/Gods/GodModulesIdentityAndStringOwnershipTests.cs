@@ -185,7 +185,8 @@ public sealed class GodModulesIdentityAndStringOwnershipTests
         Assert.Contains("ValidatePendingGeneratedStringClaims", majorGodEditor, StringComparison.Ordinal);
         Assert.Contains("CultureCatalog.OwnsDisplayNameId", cultureHost, StringComparison.Ordinal);
         Assert.Contains("EnsureCultureGeneratedStringNamespaceAvailable", cultureHost, StringComparison.Ordinal);
-        Assert.Contains("SaveCultureStringValuesAsync(stringUpdates, stringRemovals)", cultureHost, StringComparison.Ordinal);
+        Assert.Contains("SaveCultureStringValuesAsync(cleanup.Updates, cleanup.Plan.StringRemovals)", cultureHost, StringComparison.Ordinal);
+        Assert.Contains("cleanup.Inspection.ValidateReadDependencies()", cultureHost, StringComparison.Ordinal);
         Assert.Contains("displayNameUpdate", cultureEditor, StringComparison.Ordinal);
     }
 }

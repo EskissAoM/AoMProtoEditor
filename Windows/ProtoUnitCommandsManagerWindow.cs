@@ -97,6 +97,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private async Task AddCommandAsync()
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         var prompt = new InputPromptWindow("New command name:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
@@ -124,6 +125,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private async Task DuplicateCommandAsync(EditableProtoUnitCommandItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         var prompt = new InputPromptWindow("Duplicate command as:", confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
         if (prompt.InputText == null) return;
@@ -151,6 +153,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private async Task RenameCommandAsync(EditableProtoUnitCommandItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         var prompt = new InputPromptWindow("Rename command:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
@@ -172,6 +175,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private async Task DeleteCommandAsync(EditableProtoUnitCommandItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         item.UsageCount = Math.Max(item.UsageCount, _resolveUsageCount?.Invoke(item.Name) ?? 0);
         if (_validateDeleteAsync != null)
@@ -189,7 +193,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
             PromptType.Confirm,
             "Remove command?",
             $"Are you sure you want to remove '{item.Name}'?",
-            confirmButtonText: "Save");
+            confirmButtonText: "Delete command", actionRole: PromptActionRole.Destructive);
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed)
             return;
@@ -218,7 +222,7 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
 
     private Control CreateRow(EditableProtoUnitCommandItem item)
     {
-            var row = ManagerListShell.CreateRow("*,Auto,Auto,Auto,Auto");
+            var row = ManagerListShell.CreateActionRow(3);
             row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
             row.Children.Add(new TextBlock
             {
@@ -238,25 +242,10 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
             Grid.SetColumn(status, 1);
             row.Children.Add(status);
 
-            var editButton = new Button
-            {
-                Content = new TextBlock
-                {
-                    Text = "✎",
-                    FontSize = 16,
-                    RenderTransform = new ScaleTransform(-1, 1),
-                    RenderTransformOrigin = RelativePoint.Center
-                },
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(4),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            ToolTip.SetTip(editButton, item.IsBuiltIn ? "View command" : "Edit command");
+            var editButton = ManagerActionButtons.Edit(item.IsBuiltIn ? "View command" : "Edit command");
             editButton.Click += async (_, _) =>
             {
+                using var activity = (Content as ManagerListShell)?.BeginActivity();
                 if (_openEditorAsync == null) return;
                 var updatedName = await _openEditorAsync(this, item.Name, item.IsBuiltIn);
                 if (!item.IsBuiltIn && !string.IsNullOrWhiteSpace(updatedName) &&
@@ -270,41 +259,14 @@ internal sealed class ProtoUnitCommandsManagerWindow : SimpleWindow
             Grid.SetColumn(editButton, 2);
             row.Children.Add(editButton);
 
-            var duplicateIcon = new Canvas { Width = 16, Height = 16 };
-            var backPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1) };
-            Canvas.SetLeft(backPage, 5); Canvas.SetTop(backPage, 1); duplicateIcon.Children.Add(backPage);
-            var frontPage = new Border { Width = 10, Height = 12, BorderBrush = Brushes.White, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(1), Background = Brush.Parse("#191C1A") };
-            Canvas.SetLeft(frontPage, 1); Canvas.SetTop(frontPage, 4); duplicateIcon.Children.Add(frontPage);
-            var duplicateButton = new Button
-            {
-                Content = duplicateIcon,
-                Width = 28,
-                Height = 28,
-                Padding = new Thickness(0),
-                Margin = new Thickness(4),
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            ToolTip.SetTip(duplicateButton, "Duplicate command");
+            var duplicateButton = ManagerActionButtons.Copy("Duplicate command");
             duplicateButton.Click += async (_, _) => await DuplicateCommandAsync(item);
             Grid.SetColumn(duplicateButton, 3);
             row.Children.Add(duplicateButton);
 
             if (!item.IsBuiltIn)
             {
-                var deleteButton = new Button
-                {
-                    Content = "×",
-                    FontSize = 16,
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(4),
-                    Background = Brush.Parse("#992824"),
-                    Foreground = Brushes.White,
-                    HorizontalContentAlignment = HorizontalAlignment.Center,
-                    VerticalContentAlignment = VerticalAlignment.Center
-                };
+                var deleteButton = ManagerActionButtons.Delete("Delete command");
                 deleteButton.Click += async (_, _) => await DeleteCommandAsync(item);
                 Grid.SetColumn(deleteButton, 4);
                 row.Children.Add(deleteButton);

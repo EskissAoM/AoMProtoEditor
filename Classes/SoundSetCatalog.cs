@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AoMDivineDataEditor.GameData;
 
 namespace AoMDivineDataEditor.Classes;
@@ -13,25 +12,31 @@ public static class SoundSetCatalog
         "soundmanifest.xml"
     };
 
-    private static readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<AnimFileCatalogEntry>>>> Cache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ArchiveCatalogCache<IReadOnlyList<AnimFileCatalogEntry>> Cache = new(LoadCore);
 
-    public static Task<IReadOnlyList<AnimFileCatalogEntry>> LoadAsync(string archivePath)
+    public static async Task<IReadOnlyList<AnimFileCatalogEntry>> LoadAsync(string archivePath)
+        => (await LoadResultAsync(archivePath).ConfigureAwait(false)).Entries;
+
+    public static async Task<CatalogLoadResult<AnimFileCatalogEntry>> LoadResultAsync(string archivePath)
     {
-        if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
-            return Task.FromResult<IReadOnlyList<AnimFileCatalogEntry>>([]);
-        var info = new FileInfo(archivePath);
-        var key = $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
-        return Cache.GetOrAdd(key, _ => new Lazy<Task<IReadOnlyList<AnimFileCatalogEntry>>>(
-            () => Task.Run(() => LoadCore(info.FullName)), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        try
+        {
+            return new(await Cache.LoadAsync(archivePath).ConfigureAwait(false),
+                CatalogLoadState.Complete, archivePath, []);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidDataException)
+        {
+            return new([], CatalogLoadState.Unavailable, archivePath, [exception.Message]);
+        }
     }
 
-    public static Task<string?> LoadXmlAsync(string archivePath, AnimFileCatalogEntry soundSet)
+    public static async Task<string?> LoadXmlAsync(string archivePath, AnimFileCatalogEntry soundSet)
+        => (await LoadXmlResultAsync(archivePath, soundSet).ConfigureAwait(false)).Value;
+
+    public static Task<AssetPayloadResult<string>> LoadXmlResultAsync(string archivePath, AnimFileCatalogEntry soundSet)
     {
         ArgumentNullException.ThrowIfNull(soundSet);
-        return !string.IsNullOrWhiteSpace(archivePath) && File.Exists(archivePath)
-            ? Task.Run(() => LoadXmlCore(archivePath, soundSet.Path))
-            : Task.FromResult<string?>(null);
+        return AssetPayloadReader.LoadArchiveXmlAsync(archivePath, soundSet.Path);
     }
 
     internal static IReadOnlyList<AnimFileCatalogEntry> FilterArchiveEntries(IEnumerable<string> paths)
@@ -52,39 +57,11 @@ public static class SoundSetCatalog
 
     private static IReadOnlyList<AnimFileCatalogEntry> LoadCore(string archivePath)
     {
-        try
-        {
-            using var stream = File.OpenRead(archivePath);
-            var archive = new BarArchive(stream);
-            return archive.Load(out _) && archive.Entries != null
-                ? FilterArchiveEntries(archive.Entries.Select(entry => entry.RelativePath))
-                : [];
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            return [];
-        }
+        using var stream = File.OpenRead(archivePath);
+        var archive = new BarArchive(stream);
+        if (!archive.Load(out var error) || archive.Entries == null)
+            throw new InvalidDataException($"Archive '{archivePath}' metadata could not be read: {error}.");
+        return FilterArchiveEntries(archive.Entries.Select(entry => entry.RelativePath));
     }
 
-    private static string? LoadXmlCore(string archivePath, string gamePath)
-    {
-        try
-        {
-            using var stream = File.OpenRead(archivePath);
-            var archive = new BarArchive(stream);
-            if (!archive.Load(out _) || archive.Entries == null) return null;
-            var entry = archive.Entries.FirstOrDefault(candidate =>
-                TryGetGamePath(candidate.RelativePath, out var candidatePath) &&
-                candidatePath.Equals(gamePath.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase));
-            if (entry == null) return null;
-            var bytes = entry.ReadDataDecompressed(stream);
-            return entry.RelativePath.EndsWith(".XMB", StringComparison.OrdinalIgnoreCase)
-                ? XmbReader.ToFormattedXml(bytes)
-                : System.Text.Encoding.UTF8.GetString(bytes);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
-        {
-            return null;
-        }
-    }
 }

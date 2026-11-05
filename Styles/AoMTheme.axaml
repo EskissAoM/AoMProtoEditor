@@ -1,6 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:micons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia">
+        xmlns:micons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+        xmlns:controls="clr-namespace:AoMDivineDataEditor.Controls"
+        xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls">
   <Styles.Resources>
     <Color x:Key="BackgroundTopColor">#171816</Color>
     <Color x:Key="BackgroundMainColor">#111311</Color>
@@ -119,7 +121,17 @@
     <Setter Property="BorderBrush" Value="#B58A47" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
-  <Style Selector="AutoCompleteBox.invalid-field">
+  <Style Selector="AutoCompleteBox.invalid-field, TextBox.invalid-field, ComboBox.invalid-field, controls|AssetPathEditor.invalid-field TextBox, controls|AssetPathEditor.invalid-field AutoCompleteBox">
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
+  <Style Selector="Border.invalid-field">
+    <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+  </Style>
+  <!-- Fluent's focused TextBox paints its template border independently of
+       BorderBrush on the outer control. Keep validation visible after focus. -->
+  <Style Selector="TextBox.invalid-field /template/ Border#PART_BorderElement, AutoCompleteBox.invalid-field /template/ TextBox /template/ Border#PART_BorderElement, controls|AssetPathEditor.invalid-field TextBox /template/ Border#PART_BorderElement, controls|AssetPathEditor.invalid-field AutoCompleteBox /template/ TextBox /template/ Border#PART_BorderElement">
     <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
     <Setter Property="BorderThickness" Value="2" />
   </Style>
@@ -202,6 +214,9 @@
     <Setter Property="BorderBrush" Value="#76A47F" />
   </Style>
   <Style Selector="Button.add-component">
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="Background" Value="#153A41" />
     <Setter Property="Foreground" Value="#DDF0EE" />
     <Setter Property="BorderBrush" Value="#4F9098" />
@@ -219,15 +234,46 @@
     <Setter Property="Background" Value="#304A61" />
     <Setter Property="BorderBrush" Value="#83A9C3" />
   </Style>
+  <Style Selector="Button.copy-import:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="#1B2C3D" />
+    <Setter Property="BorderBrush" Value="#526F88" />
+  </Style>
+
+  <Style Selector="Button.inline-action">
+    <Setter Property="Height" Value="30" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="AutoCompleteBox.compact-chip-picker">
+    <Setter Property="Width" Value="50" />
+    <Setter Property="MaxWidth" Value="50" />
+    <Setter Property="Height" Value="30" />
+    <Setter Property="MinHeight" Value="30" />
+  </Style>
+  <Style Selector="AutoCompleteBox.compact-chip-picker /template/ ListBox#PART_SelectingItemsControl">
+    <Setter Property="MinWidth" Value="250" />
+  </Style>
+
+  <Style Selector="Button.manager-action">
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="MinWidth" Value="28" />
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
 
   <Style Selector="Button.remove-button">
+    <Setter Property="ToolTip.Tip" Value="Remove item" />
+    <Setter Property="automation:AutomationProperties.Name" Value="Remove item" />
     <Setter Property="Content" Value="×" />
     <Setter Property="Width" Value="28" />
     <Setter Property="Height" Value="28" />
     <Setter Property="MinWidth" Value="28" />
     <Setter Property="MinHeight" Value="28" />
     <Setter Property="Padding" Value="0" />
-    <Setter Property="Margin" Value="6,0,0,0" />
+    <Setter Property="Margin" Value="4,0,0,0" />
     <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
@@ -246,7 +292,14 @@
     <Setter Property="Background" Value="{DynamicResource DisabledSurfaceBrush}" />
     <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
   </Style>
+  <Style Selector="Button.manager-action:disabled /template/ ContentPresenter, Button.copy-import:disabled /template/ ContentPresenter, Button.positive:disabled /template/ ContentPresenter, Button.danger:disabled /template/ ContentPresenter, Button.remove-button:disabled /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DisabledSurfaceBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource DisabledTextBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}" />
+  </Style>
   <Style Selector="Button.chip-remove-button">
+    <Setter Property="ToolTip.Tip" Value="Remove selection" />
+    <Setter Property="automation:AutomationProperties.Name" Value="Remove selection" />
     <Setter Property="Content" Value="×" />
     <Setter Property="MinWidth" Value="16" />
     <Setter Property="MinHeight" Value="16" />

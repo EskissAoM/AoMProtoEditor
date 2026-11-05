@@ -200,7 +200,8 @@ public static class TechnologyReferenceIndex
         foreach (var element in source.Document.Descendants().Where(element => !element.HasElements))
         {
             if (recognizedObjects.Contains(element) ||
-                !LooksLikeTechnologyField(element.Name.LocalName) ||
+                !(LooksLikeTechnologyField(element.Name.LocalName) ||
+                  source.Kind == TechnologyReferenceDocumentKind.Powers && IsPotentialPowerTechnologyTarget(element)) ||
                 IgnoredTechLikeNames.Contains(element.Name.LocalName))
                 continue;
             yield return new ReferenceCandidate(
@@ -236,6 +237,20 @@ public static class TechnologyReferenceIndex
             return false;
 
         var name = element.Name.LocalName;
+        if (kind == TechnologyReferenceDocumentKind.Powers && element.Name == "target" &&
+            GetUnqualifiedAttribute(element, "type")?.Value.Equals("Tech", StringComparison.OrdinalIgnoreCase) == true &&
+            element.Parent is { } effect && effect.Name == "effect" &&
+            (GetUnqualifiedAttribute(effect, "type")?.Value.Equals("TechActivate", StringComparison.OrdinalIgnoreCase) == true ||
+             GetUnqualifiedAttribute(effect, "type")?.Value.Equals("Cost", StringComparison.OrdinalIgnoreCase) == true))
+        {
+            var power = effect.Parent?.Name == "effects" ? effect.Parent.Parent : effect.Parent;
+            if (power?.Name == "power" && power.Parent is { } root && root.Parent == null &&
+                (root.Name == "powers" || root.Name == "powersmod"))
+            {
+                field = $"Power {GetUnqualifiedAttribute(effect, "type")!.Value} target technology";
+                return true;
+            }
+        }
         if (kind == TechnologyReferenceDocumentKind.Techtree)
         {
             if (name.Equals("techstatus", StringComparison.OrdinalIgnoreCase))
@@ -300,6 +315,19 @@ public static class TechnologyReferenceIndex
 
             var type = GetAttribute(owner, "type")?.Value ?? "";
             var subtype = GetAttribute(owner, "subtype")?.Value ?? "";
+            if (attribute.Name.Namespace == XNamespace.None && owner.Name == "effect" &&
+                GetUnqualifiedAttribute(owner, "type")?.Value.Equals("Data", StringComparison.OrdinalIgnoreCase) == true &&
+                (GetUnqualifiedAttribute(owner, "subtype")?.Value.Equals("CommandAdd", StringComparison.OrdinalIgnoreCase) == true ||
+                 GetUnqualifiedAttribute(owner, "subtype")?.Value.Equals("CommandRemove", StringComparison.OrdinalIgnoreCase) == true))
+            {
+                var tech = owner.Parent?.Name == "effects" ? owner.Parent.Parent : owner.Parent;
+                if (tech?.Name == "tech" && tech.Parent is { } root && root.Parent == null &&
+                    (root.Name == "techtree" || root.Name == "techtreemods"))
+                {
+                    field = $"{subtype} technology";
+                    return true;
+                }
+            }
             if (type.Equals("SetName", StringComparison.OrdinalIgnoreCase) ||
                 type.Equals("Data", StringComparison.OrdinalIgnoreCase) &&
                 subtype.Equals("ResourceIfTechActive", StringComparison.OrdinalIgnoreCase))
@@ -322,8 +350,19 @@ public static class TechnologyReferenceIndex
         => name.Contains("tech", StringComparison.OrdinalIgnoreCase) ||
            name.Contains("technology", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsPotentialPowerTechnologyTarget(XElement element)
+        => element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase) &&
+           GetAttribute(element, "type")?.Value.Equals("Tech", StringComparison.OrdinalIgnoreCase) == true &&
+           element.Parent is { } effect && effect.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase) &&
+           (GetAttribute(effect, "type")?.Value.Equals("Cost", StringComparison.OrdinalIgnoreCase) == true ||
+            GetAttribute(effect, "type")?.Value.Equals("TechActivate", StringComparison.OrdinalIgnoreCase) == true);
+
     private static XAttribute? GetAttribute(XElement? element, string name)
         => element?.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private static XAttribute? GetUnqualifiedAttribute(XElement element, string name)
+        => element.Attributes().FirstOrDefault(attribute => attribute.Name.Namespace == XNamespace.None &&
             attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase));
 
     private static string GetOwner(XElement? element, TechnologyReferenceDocumentKind kind)

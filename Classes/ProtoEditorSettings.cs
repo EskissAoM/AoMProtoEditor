@@ -33,7 +33,10 @@ internal partial class ProtoEditorJsonContext : JsonSerializerContext { }
 
 public static class ProtoEditorSettings
 {
-    private const string SettingsFilename = "aom_editor_settings.json";
+    internal const string SettingsFilename = "aom_editor_settings.json";
+    private static readonly Lazy<ProtoEditorSettingsStore> Store = new(() => new(
+        AppDomain.CurrentDomain.BaseDirectory,
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
 
     internal static string GetAppDataPath(string filename)
     {
@@ -55,40 +58,29 @@ public static class ProtoEditorSettings
         }
     }
 
-    private static string GetSettingsPath()
-        => GetAppDataPath(SettingsFilename);
+    public static ProtoEditorSettingsLoadResult LoadSettingsResult() => Store.Value.Load();
+    public static ProtoEditorSettingsLoadResult LoadCachedSettingsResult() => Store.Value.LoadCached();
+    public static ProtoEditorSettingsLoadResult SelectSettingsSource(string path) => Store.Value.SelectSource(path);
+    public static ProtoEditorSettingsSaveResult TryRememberLastModPath(string path) => Store.Value.RememberLastModPath(path);
+    public static ProtoEditorSettingsSaveResult TryRememberDataBar(ProtoEditorSettingsLoadResult observed, string path, double mtime)
+        => Store.Value.RememberDataBar(observed, path, mtime);
 
-    public static ProtoEditorConfig LoadSettings()
-    {
-        string path = GetSettingsPath();
-        if (!File.Exists(path))
-        {
-            return new ProtoEditorConfig();
-        }
+    public static ProtoEditorSettingsSaveResult TrySaveSettings(ProtoEditorSettingsLoadResult observed,
+        ProtoEditorConfig config, bool confirmRecovery = false)
+        => Store.Value.TrySave(observed, config, confirmRecovery);
 
-        try
-        {
-            string json = File.ReadAllText(path);
-            var config = JsonSerializer.Deserialize(json, ProtoEditorJsonContext.Default.ProtoEditorConfig);
-            return config ?? new ProtoEditorConfig();
-        }
-        catch
-        {
-            return new ProtoEditorConfig();
-        }
-    }
+    // Compatibility for external readers; editor callers use explicit load/save outcomes.
+    public static ProtoEditorConfig LoadSettings() => LoadSettingsResult().Config ?? new ProtoEditorConfig();
 
     public static void SaveSettings(ProtoEditorConfig config)
     {
-        string path = GetSettingsPath();
         try
         {
-            string json = JsonSerializer.Serialize(config, ProtoEditorJsonContext.Default.ProtoEditorConfig);
-            File.WriteAllText(path, json);
+            Store.Value.Save(config);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Could not save settings to {path}: {ex.Message}");
+            Console.WriteLine($"Warning: Could not save settings: {ex.Message}");
         }
     }
 }

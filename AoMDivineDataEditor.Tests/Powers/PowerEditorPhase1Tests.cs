@@ -183,15 +183,13 @@ public sealed class PowerEditorPhase1Tests
         Assert.Contains("DeleteCurrentPowerAsync", mainCode, StringComparison.Ordinal);
         Assert.Contains("await _powerView.SaveAsync()", mainCode, StringComparison.Ordinal);
         Assert.Contains("PowerCatalog.ModFileName", mainCode, StringComparison.Ordinal);
-        Assert.Equal(4, mainCode.Split(
-            "PowerCatalog.AddNewEntry(doc, replacement, PowerDocumentSection.Abilities)",
-            StringSplitOptions.None).Length - 1
-            + mainCode.Split(
-                "PowerCatalog.AddNewEntry(doc, power, PowerDocumentSection.Abilities)",
-                StringSplitOptions.None).Length - 1
-            + mainCode.Split(
-                "PowerCatalog.AddNewEntry(powerFile.Document, clone, PowerDocumentSection.Abilities)",
-                StringSplitOptions.None).Length - 1);
+        foreach (var signature in new[] { "private async Task<bool> CreateManagedAbilityAsync",
+                     "private async Task<bool> DuplicateManagedAbilityAsync", "private async Task SaveManagedAbilityPowerCoreAsync" })
+        {
+            var method = ProjectSource.ExtractMethod(mainCode, signature);
+            Assert.Contains("PowerCatalog.AddNewEntry(", method, StringComparison.Ordinal);
+            Assert.Contains("PowerDocumentSection.Abilities", method, StringComparison.Ordinal);
+        }
 
         Assert.Contains("Text=\"XML Preview\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("<Grid x:Name=\"_mainGrid\">", viewXaml, StringComparison.Ordinal);
@@ -200,7 +198,12 @@ public sealed class PowerEditorPhase1Tests
         Assert.DoesNotContain("Grid.ColumnSpan=\"3\" x:Name=\"_statusMessage\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("Header=\"Properties\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("Header=\"Specific\"", viewXaml, StringComparison.Ordinal);
-        Assert.Contains("<TextBox Grid.Column=\"1\" x:Name=\"_nameBox\" Width=\"380\"", viewXaml, StringComparison.Ordinal);
+        var nameBox = XDocument.Parse(viewXaml).Descendants().Single(element =>
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name" && attribute.Value == "_nameBox"));
+        Assert.Equal("TextBox", nameBox.Name.LocalName);
+        var presentation = ProjectSource.Read("Windows", "PowerEditorView.FieldPresentation.cs");
+        Assert.Contains("\"_nameBox\"", presentation, StringComparison.Ordinal);
+        Assert.Contains("TextBox => EditorFieldWidthRole.SingleLineText", presentation, StringComparison.Ordinal);
         Assert.DoesNotContain("<TextBlock Text=\"Name\"", viewXaml, StringComparison.Ordinal);
         Assert.DoesNotContain("MinHeight=\"96\"", viewXaml, StringComparison.Ordinal);
         Assert.Contains("_displayNameBox", viewXaml, StringComparison.Ordinal);
@@ -214,7 +217,9 @@ public sealed class PowerEditorPhase1Tests
             Assert.Contains(field, viewXaml, StringComparison.Ordinal);
         Assert.Contains("XmlSyntaxEditorService.Configure(_rawXmlEditor)", viewCode, StringComparison.Ordinal);
         Assert.Contains("public async Task<bool> CommitCurrentPowerAsync()", viewCode, StringComparison.Ordinal);
-        Assert.Contains("XElement.Parse(_rawXmlEditor.Text", viewCode, StringComparison.Ordinal);
+        var xmlEditing = ProjectSource.Read("Windows", "PowerEditorView.XmlEditing.cs");
+        Assert.Contains("new XmlEditController(_rawXmlEditor, _editXmlButton, _powerStructuredForm", xmlEditing, StringComparison.Ordinal);
+        Assert.Contains("XElement.Parse(text, LoadOptions.PreserveWhitespace)", xmlEditing, StringComparison.Ordinal);
         Assert.Contains("ModXmlDocumentKind.Powers", viewCode, StringComparison.Ordinal);
         Assert.Contains("NamedXmlExternalDocumentMergePolicy.Merge", viewCode, StringComparison.Ordinal);
         Assert.Contains("PowerDocumentSection.Powers", viewCode, StringComparison.Ordinal);

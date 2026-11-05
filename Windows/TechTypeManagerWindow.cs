@@ -79,6 +79,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
 
     private async Task AddAsync()
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         var name = await PromptForNameAsync("New Tech Type name:");
         if (name == null || !await _createAsync(name)) return;
         _items.Add(new EditableItem { Name = name, IsBuiltIn = false, Usage = default });
@@ -87,6 +88,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
 
     private async Task RenameAsync(EditableItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         var prompt = new InputPromptWindow("Rename Tech Type:", item.Name, confirmButtonText: "Save", allowWhitespace: false);
         await prompt.ShowDialog(this);
@@ -106,6 +108,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
 
     private async Task DeleteAsync(EditableItem item)
     {
+        using var activity = (Content as ManagerListShell)?.BeginActivity();
         if (item.IsBuiltIn) return;
         item.Usage = _resolveUsage(item.Name);
         if (_validateDeleteAsync != null)
@@ -123,7 +126,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
         }
 
         var message = $"Are you sure you want to remove '{item.Name}'?";
-        var confirm = new Prompt(PromptType.Confirm, "Remove Tech Type?", message, confirmButtonText: "Remove");
+        var confirm = new Prompt(PromptType.Confirm, "Remove Tech Type?", message, confirmButtonText: "Delete tech type", actionRole: PromptActionRole.Destructive);
         await confirm.ShowDialog(this);
         if (!confirm.Confirmed || !await _deleteAsync(item.Name)) return;
         _items.Remove(item);
@@ -162,7 +165,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
 
     private Control CreateRow(EditableItem item)
     {
-        var row = ManagerListShell.CreateRow("*,Auto,Auto");
+        var row = ManagerListShell.CreateActionRow(1);
         row.Margin = new Thickness(0, 1, ManagerListShell.ScrollBarClearance, 1);
             row.Children.Add(new TextBlock
             {
@@ -173,9 +176,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
             });
             var status = new TextBlock
             {
-                Text = item.IsBuiltIn
-                    ? item.Usage.TotalCount > 0 ? $"Data.bar · Used by {item.Usage.TotalCount}" : "Data.bar"
-                    : item.Usage.TotalCount > 0 ? $"Used by {item.Usage.TotalCount}" : "Custom",
+                Text = ManagerListShell.FormatTypeUsageStatus(item.IsBuiltIn, item.Usage.TotalCount),
                 Foreground = Brushes.Gray,
                 Margin = new Thickness(8, 9),
                 VerticalAlignment = VerticalAlignment.Center
@@ -185,17 +186,7 @@ internal sealed class TechTypeManagerWindow : SimpleWindow
 
             if (!item.IsBuiltIn)
             {
-                var deleteButton = new Button
-                {
-                    Content = "×",
-                    FontSize = 16,
-                    Width = 28,
-                    Height = 28,
-                    Padding = new Thickness(0),
-                    Margin = new Thickness(4),
-                    Background = Brush.Parse("#992824"),
-                    Foreground = Brushes.White
-                };
+                var deleteButton = ManagerActionButtons.Delete("Delete tech type");
                 deleteButton.Click += async (_, _) => await DeleteAsync(item);
                 Grid.SetColumn(deleteButton, 2);
                 row.Children.Add(deleteButton);

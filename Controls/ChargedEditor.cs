@@ -30,12 +30,7 @@ public sealed class ChargedEditor : Border
 
         if (!isReadOnly && showRemoveButton)
         {
-            RemoveButton = new Button
-            {
-                Classes = { "remove-button" },
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top
-            };
+            RemoveButton = EditorRemoveButtons.Card(description: "Remove charged block");
             Root.Children.Add(RemoveButton);
         }
     }

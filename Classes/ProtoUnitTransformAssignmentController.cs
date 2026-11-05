@@ -25,6 +25,7 @@ public sealed class TransformCommandAssignmentState
     public TransformAssociatedTechnologyDefinition? AssociatedTechnology { get; set; }
     public bool AssociatedTechnologyIsBuiltIn { get; set; }
     public XElement? LoadedAssociatedTechnologySnapshot { get; set; }
+    public FileIntegrityTransaction.FileState? LoadedStringsState { get; set; }
     public bool RenameOwnedBundleOnSave { get; set; }
 }
 
