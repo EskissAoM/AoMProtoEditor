@@ -135,7 +135,7 @@ public sealed class GameDataTextTests
         Assert.Equal(
             content +
             "\r\n" +
-            "// === AoM: DDE ==  Units ===\r\n" +
+            "// === AoM: DDE ==  Units ===\r\n\r\n" +
             "ID = \"STR_NEW_UNIT\"   ;   Str = \"New unit\"\r\n",
             updated);
     }
@@ -157,10 +157,10 @@ public sealed class GameDataTextTests
 
         Assert.Equal(
             "Language = \"English\"\n\n" +
-            "// === AoM: DDE ==  Units ===\n" +
+            "// === AoM: DDE ==  Units ===\n\n" +
             "ID = \"STR_UNIT_OLD\" ; Str = \"Old unit\"\n" +
             "ID = \"STR_UNIT_NEW\"   ;   Str = \"New unit\"\n" +
-            "// === AoM: DDE ==  Technologies ===\n" +
+            "\n// === AoM: DDE ==  Technologies ===\n\n" +
             "ID = \"STR_TECH_OLD\" ; Str = \"Old technology\"\n",
             updated);
     }
@@ -187,7 +187,7 @@ public sealed class GameDataTextTests
             "// keep between\n" +
             "ID = \"STR_UNRELATED\" ; Str = \"Unrelated\"\n" +
             "\n" +
-            "// === AoM: DDE ==  Units ===\n" +
+            "// === AoM: DDE ==  Units ===\n\n" +
             "ID = \"STR_UNIT_NEW\"   ;   Str = \"New\"\n",
             updated);
     }
@@ -251,6 +251,26 @@ public sealed class GameDataTextTests
         var updated = document.ApplySnapshot(document.ToDictionary(), StringTableSection.Units);
 
         Assert.Equal(content, updated);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void StringTableDocument_section_spacing_is_idempotent_and_preserves_multiline_strings(string newline)
+    {
+        var marker = StringTableDocument.GetSectionMarker(StringTableSection.UnitCommands);
+        var literal = $"ID = \"STR_LITERAL\" ; Str = \"first{newline}{marker}{newline}last\"{newline}";
+        var content = literal + marker + newline + "ID = \"STR_EXISTING\" ; Str = \"old\"" + newline;
+        var updated = StringTableDocument.Parse(content).Apply(
+            new Dictionary<string, string> { ["STR_NEW"] = "new" }, [], StringTableSection.UnitCommands);
+        Assert.StartsWith(literal + newline + marker + newline + newline, updated, StringComparison.Ordinal);
+        Assert.Equal($"first{newline}{marker}{newline}last", StringTableDocument.Parse(updated).ToDictionary()["STR_LITERAL"]);
+        var again = StringTableDocument.Parse(updated).Apply(
+            new Dictionary<string, string> { ["STR_NEXT"] = "next" }, [], StringTableSection.UnitCommands);
+        Assert.StartsWith(literal + newline + marker + newline + newline, again, StringComparison.Ordinal);
+        Assert.DoesNotContain(newline + newline + newline, again, StringComparison.Ordinal);
+        Assert.Equal(again, StringTableDocument.Parse(again).ApplySnapshot(
+            StringTableDocument.Parse(again).ToDictionary(), StringTableSection.UnitCommands));
     }
 
     [Fact]

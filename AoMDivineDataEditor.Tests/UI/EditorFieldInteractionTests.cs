@@ -125,6 +125,31 @@ public sealed class EditorFieldInteractionTests
         }, width);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NativeDeleteDoesNotRestoreAStrictCatalogSelection(bool deferred)
+    {
+        var commits = new List<string>();
+        WithField(() =>
+        {
+            var box = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox { Text = LongName }, EditorFieldWidthRole.Reference);
+            EditorAutoCompleteService.ConfigureStrict(box, [LongName, "Horse"], LongName,
+                commitEmptyAsValid: true, deferSelectionCommit: deferred, valueCommitted: commits.Add);
+            return box;
+        }, async (window, owner, sink) =>
+        {
+            var box = Assert.IsType<AutoCompleteBox>(owner);
+            Click(window, Input(box)); await Settle();
+            Assert.Equal(LongName.Length, Math.Abs(Input(box).SelectionEnd - Input(box).SelectionStart));
+            commits.Clear(); window.KeyPress(Key.Delete, RawInputModifiers.None, PhysicalKey.None, null);
+            window.KeyRelease(Key.Delete, RawInputModifiers.None, PhysicalKey.None, null); await Settle();
+            Assert.Equal("", box.Text); Assert.True(box.IsKeyboardFocusWithin); Assert.Contains("", commits);
+            sink.Focus(); await Settle(); Assert.Equal("", box.Text); Assert.Equal("", commits.Last());
+            box.SelectedItem = "Horse"; await Settle(); Assert.Equal("Horse", box.Text); Assert.Equal("Horse", commits.Last());
+        });
+    }
+
     [Fact]
     public void FilledCatalogFirstClickDoesNotChangeTheCommittedValueAndTypingStillFilters()
         => WithField(() =>
@@ -291,11 +316,19 @@ public sealed class EditorFieldInteractionTests
             var asset = Assert.IsType<AssetPathEditor>(owner);
             Assert.False(OpenTip(asset).Cancel); Assert.Equal(path, ValueTip(asset).Text);
             Click(window, asset.CompactPresenter); await Settle();
+            Assert.True(asset.Editor.IsVisible);
+            Assert.True(asset.Editor.IsKeyboardFocusWithin);
             var input = Input(asset.Editor);
             Assert.Equal(path.Length, Math.Abs(input.SelectionEnd - input.SelectionStart));
             Assert.Equal(path, input.Text); Assert.InRange(Scroll(input).Offset.X, 0, .5);
             Assert.Equal(0, calls);
+            // Closing the suggestion list must not close the focused text editor.
+            // Once focus then leaves the field, it returns to compact mode.
+            asset.Editor.IsDropDownOpen = false;
+            Assert.True(asset.Editor.IsKeyboardFocusWithin);
             sink.Focus(); await Settle();
+            Assert.False(asset.Editor.IsVisible);
+            Assert.True(asset.CompactPresenter.IsVisible);
             Assert.Equal(path, asset.FullValue); Assert.Equal(0, calls);
         });
     }

@@ -377,7 +377,9 @@ public static class EditorAutoCompleteService
                 applyingSelection = true;
                 try
                 {
-                    autoCompleteBox.SelectedItem = null;
+                    // Let AutoCompleteBox finish clearing its native selection.
+                    // Setting SelectedItem here, inside TextProperty's notification,
+                    // can restore the previous search text before the edit completes.
                     valueCommitted?.Invoke(string.Empty);
                 }
                 finally { applyingSelection = false; }

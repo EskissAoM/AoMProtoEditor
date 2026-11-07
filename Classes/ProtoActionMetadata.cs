@@ -19,7 +19,8 @@ public sealed record ProtoActionFieldDefinition(
     string Label,
     ProtoActionFieldEditorKind EditorKind,
     bool IsRepeatable = false,
-    IReadOnlyList<string>? XmlAttributeNames = null);
+    IReadOnlyList<string>? XmlAttributeNames = null,
+    bool HasUnitTargetTypeAttribute = false);
 
 public sealed record ProtoActionObservedField(
     ProtoActionFieldDefinition Definition,
@@ -104,12 +105,12 @@ public static class ProtoActionMetadataCatalog
         ["rof"] = new("rof", "Rate of Fire", ProtoActionFieldEditorKind.Number),
         ["maxrange"] = new("maxrange", "Max Range", ProtoActionFieldEditorKind.Number),
         ["minrange"] = new("minrange", "Min Range", ProtoActionFieldEditorKind.Number),
-        ["typedmaxrange"] = new("typedmaxrange", "Typed Max Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
-        ["typedminrange"] = new("typedminrange", "Typed Min Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
-        ["rate"] = new("rate", "Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type", "resource", "yield", "overrideResource", "inventoryRate"]),
-        ["minrate"] = new("minrate", "Min Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type", "resource"]),
+        ["typedmaxrange"] = new("typedmaxrange", "Typed Max Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
+        ["typedminrange"] = new("typedminrange", "Typed Min Range", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
+        ["rate"] = new("rate", "Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type", "resource", "yield", "overrideResource", "inventoryRate"], HasUnitTargetTypeAttribute: true),
+        ["minrate"] = new("minrate", "Min Rate", ProtoActionFieldEditorKind.StructuredList, true, ["type", "resource"], HasUnitTargetTypeAttribute: true),
         ["damage"] = new("damage", "Damage", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
-        ["damagebonus"] = new("damagebonus", "Damage Bonus", ProtoActionFieldEditorKind.StructuredList, true, ["type", "unittype"]),
+        ["damagebonus"] = new("damagebonus", "Damage Bonus", ProtoActionFieldEditorKind.StructuredList, true, ["type", "unittype"], HasUnitTargetTypeAttribute: true),
         ["damagearea"] = new("damagearea", "Damage Area", ProtoActionFieldEditorKind.Number),
         ["damageflags"] = new("damageflags", "Damage Flags", ProtoActionFieldEditorKind.Text),
         ["damagecap"] = new("damagecap", "Damage Cap", ProtoActionFieldEditorKind.Number),
@@ -158,9 +159,9 @@ public static class ProtoActionMetadataCatalog
         ["conversionprotoid"] = new("conversionprotoid", "Conversion Proto ID", ProtoActionFieldEditorKind.StructuredList, true, ["srctype"]),
         ["conditionaltransformrule"] = new("conditionaltransformrule", "Conditional Transform Rule", ProtoActionFieldEditorKind.StructuredList, true, ["type", "actiontype"]),
         ["trailprotounit"] = new("trailprotounit", "Trail Proto Unit", ProtoActionFieldEditorKind.StructuredList, true, ["frequency"]),
-        ["typedduration"] = new("typedduration", "Typed Duration", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
-        ["typedstunduration"] = new("typedstunduration", "Typed Stun Duration", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
-        ["typedanim"] = new("typedanim", "Typed Animation", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
+        ["typedduration"] = new("typedduration", "Typed Duration", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
+        ["typedstunduration"] = new("typedstunduration", "Typed Stun Duration", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
+        ["typedanim"] = new("typedanim", "Typed Animation", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
         ["sizeclassanim"] = new("sizeclassanim", "Size Class Animation", ProtoActionFieldEditorKind.StructuredList, true, ["class"]),
     };
 
@@ -197,7 +198,7 @@ public static class ProtoActionMetadataCatalog
         ["infectionrange"] = new("infectionrange", "Infection Range", ProtoActionFieldEditorKind.Number),
         ["infectionattachment"] = new("infectionattachment", "Infection Attachment", ProtoActionFieldEditorKind.Text),
         ["infectionattachmentbone"] = new("infectionattachmentbone", "Infection Attachment Bone", ProtoActionFieldEditorKind.Text),
-        ["scalebycontainedunittype"] = new("scalebycontainedunittype", "Scale By Contained Unit Type", ProtoActionFieldEditorKind.StructuredList, true, ["type"]),
+        ["scalebycontainedunittype"] = new("scalebycontainedunittype", "Scale By Contained Unit Type", ProtoActionFieldEditorKind.StructuredList, true, ["type"], HasUnitTargetTypeAttribute: true),
         ["empowerdata"] = new("empowerdata", "Empower Data", ProtoActionFieldEditorKind.StructuredList),
         ["enemyempowerdata"] = new("enemyempowerdata", "Enemy Empower Data", ProtoActionFieldEditorKind.StructuredList),
         ["natureempowerdata"] = new("natureempowerdata", "Nature Empower Data", ProtoActionFieldEditorKind.StructuredList),

@@ -132,6 +132,20 @@ public sealed partial class UnitXmlEditingTests
             var labels = OpenUnitOptionalMenu(host).ItemsSource!.Cast<string>().ToArray();
             Assert.True(labels.Length > 35, $"Unexpectedly small {unitType} optional menu: {labels.Length}");
             var errors = new List<Exception>();
+            void CheckEmptyHints(Control scope)
+            {
+                foreach (var control in scope.GetLogicalDescendants().OfType<Control>().Prepend(scope).Distinct())
+                {
+                    var hint = control switch
+                    {
+                        AutoCompleteBox selector => selector.PlaceholderText,
+                        ComboBox combo => combo.PlaceholderText,
+                        TextBox text => text.PlaceholderText,
+                        _ => null
+                    };
+                    Assert.True(string.IsNullOrEmpty(hint), $"{unitType} / {control.GetType().Name}: redundant hint '{hint}'");
+                }
+            }
             void Capture(object? sender, DispatcherUnhandledExceptionEventArgs args)
             { errors.Add(args.Exception); args.Handled = true; }
             Dispatcher.UIThread.UnhandledException += Capture;
@@ -146,6 +160,7 @@ public sealed partial class UnitXmlEditingTests
                         .GetField("OtherSpecificAttributeLabels", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!)
                         .Single(pair => pair.Value == label).Key;
                     var container = Assert.IsAssignableFrom<Control>(containers[key]);
+                    CheckEmptyHints(Field<StackPanel>(host, "_statsEditorPanel"));
                     var clicked = new HashSet<Button>();
                     var count = 0;
                     while (container.GetLogicalDescendants().OfType<Button>().FirstOrDefault(button =>
@@ -153,6 +168,7 @@ public sealed partial class UnitXmlEditingTests
                     {
                         Assert.True(++count <= 80, $"Unbounded Add chain in {label}");
                         clicked.Add(add); add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await RoleSettle(host);
+                        CheckEmptyHints(container);
                         Assert.True(errors.Count == 0, $"{unitType} / {label} / {add.Content}: {string.Join("; ", errors)}");
                     }
                     Assert.True(errors.Count == 0, $"{unitType} / {label}: {string.Join("; ", errors)}");

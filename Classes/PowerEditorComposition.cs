@@ -16,7 +16,7 @@ public sealed class PowerEditorCatalogs
         IEnumerable<string>? boneNames = null,
         IEnumerable<string>? tacticNames = null)
     {
-        IconPaths = Normalize(iconPaths, IconCatalog.ToResourceRelativePath);
+        IconPaths = new SelectorCatalog(Normalize(iconPaths, IconCatalog.ToResourceRelativePath));
         ProtoUnitNames = new SelectorCatalog(protoUnitNames);
         UnitTypeNames = new SelectorCatalog(unitTypeNames);
         UnitOrTypeNames = new SelectorCatalog(ProtoUnitNames.Concat(UnitTypeNames));
@@ -50,6 +50,9 @@ public sealed class PowerEditorCatalogs
         changed |= ((SelectorCatalog)UnitOrTypeNames).ReplaceWith(ProtoUnitNames.Concat(UnitTypeNames));
         return changed;
     }
+
+    internal bool RefreshIcons(IEnumerable<string> paths)
+        => ((SelectorCatalog)IconPaths).ReplaceWith(Normalize(paths, IconCatalog.ToResourceRelativePath));
 
     private static IReadOnlyList<string> Normalize(
         IEnumerable<string>? values,

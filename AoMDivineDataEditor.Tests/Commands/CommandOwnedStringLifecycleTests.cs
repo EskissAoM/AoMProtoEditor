@@ -40,10 +40,15 @@ public sealed class CommandOwnedStringLifecycleTests
                     var dirty = (HashSet<string>)typeof(AoMDivineDataEditor.Windows.ProtoEditorWindow).GetField("_dirtyUnitNames", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(host)!;
                     dirty.Add("Draft"); host.Set("_isDirty", true);
                 }
+                Assert.Contains("Old", (List<string>)host.Call("GetAvailableCommandNames")!);
                 var success = operation == "rename"
                     ? await (Task<bool>)host.Call("RenameProtoUnitCommandAsync", "Old", "New")!
                     : await (Task<bool>)host.Call("DeleteProtoUnitCommandCoreAsync", "Old", null!)!;
                 Assert.True(success);
+                host.Call("RefreshEditorsAfterCommandManager");
+                var names = (List<string>)host.Call("GetAvailableCommandNames")!;
+                Assert.DoesNotContain("Old", names);
+                if (operation == "rename") Assert.Contains("New", names);
                 var saved = StringTableDocument.Parse(File.ReadAllText(stringsPath)).ToDictionary();
                 Assert.Equal("Keep", saved["STR_KEEP"]);
                 Assert.Equal(reference is "shared" or "draft" or "custom", saved.ContainsKey(oldId));

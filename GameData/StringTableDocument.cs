@@ -170,13 +170,15 @@ public sealed partial class StringTableDocument
             .OrderBy(update => update.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (additions.Count == 0)
-            return output.ToString();
+            return additionSection != null && edits.Count > 0
+                ? EnsureSectionSpacing(output.ToString(), DetectNewline(_source))
+                : output.ToString();
 
         var newline = DetectNewline(_source);
         if (additionSection != null)
         {
             AppendAdditionsToSection(output, additions, additionSection.Value, newline);
-            return output.ToString();
+            return EnsureSectionSpacing(output.ToString(), newline);
         }
 
         if (output.Length == 0)
@@ -245,6 +247,7 @@ public sealed partial class StringTableDocument
 
     private static IEnumerable<SectionMarkerLine> FindSectionMarkerLines(string content)
     {
+        var entries = Parse(content)._entries;
         for (var lineStart = 0; lineStart < content.Length;)
         {
             var lineEnd = lineStart;
@@ -253,7 +256,8 @@ public sealed partial class StringTableDocument
 
             var text = content[lineStart..lineEnd].Trim();
             if (text.StartsWith("// === AoM: DDE ==  ", StringComparison.Ordinal) &&
-                text.EndsWith(" ===", StringComparison.Ordinal))
+                text.EndsWith(" ===", StringComparison.Ordinal) &&
+                !entries.Any(entry => lineStart >= entry.Start && lineStart < entry.End))
             {
                 yield return new SectionMarkerLine(lineStart, text);
             }
@@ -264,6 +268,39 @@ public sealed partial class StringTableDocument
                 lineEnd++;
             lineStart = lineEnd;
         }
+    }
+
+    private static string EnsureSectionSpacing(string content, string newline)
+    {
+        var insertions = new Dictionary<int, string>();
+        foreach (var marker in FindSectionMarkerLines(content))
+        {
+            var previousEnd = marker.Start;
+            if (previousEnd > 0 && content[previousEnd - 1] == '\n') previousEnd--;
+            if (previousEnd > 0 && content[previousEnd - 1] == '\r') previousEnd--;
+            var previousStart = previousEnd;
+            while (previousStart > 0 && content[previousStart - 1] is not '\r' and not '\n') previousStart--;
+            if (marker.Start == 0 || !string.IsNullOrWhiteSpace(content[previousStart..previousEnd]))
+                insertions[marker.Start] = newline;
+
+            var end = marker.Start;
+            while (end < content.Length && content[end] is not '\r' and not '\n') end++;
+            if (end == content.Length)
+            {
+                insertions[end] = newline + newline;
+                continue;
+            }
+            if (content[end] == '\r') end++;
+            if (end < content.Length && content[end] == '\n') end++;
+            var nextEnd = end;
+            while (nextEnd < content.Length && content[nextEnd] is not '\r' and not '\n') nextEnd++;
+            if (end == content.Length || !string.IsNullOrWhiteSpace(content[end..nextEnd]))
+                insertions[end] = newline;
+        }
+        var output = new StringBuilder(content);
+        foreach (var insertion in insertions.OrderByDescending(pair => pair.Key))
+            output.Insert(insertion.Key, insertion.Value);
+        return output.ToString();
     }
 
     private static void AppendEntries(

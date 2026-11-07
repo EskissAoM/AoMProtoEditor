@@ -62,6 +62,7 @@ internal static class EditorFormLayout
 
     public static T ApplyWidth<T>(T editor, EditorFieldWidthRole role) where T : Control
     {
+        ClearSelectorPlaceholder(editor);
         var width = WidthFor(role);
         WidthSelections.GetValue(editor, _ => new WidthSelection(role)).Role = role;
         ApplyRoleWidth(editor, width);
@@ -82,6 +83,7 @@ internal static class EditorFormLayout
 
     internal static void ApplyConfiguredWidth(Control editor, double legacyWidth)
     {
+        ClearSelectorPlaceholder(editor);
         if (WidthSelections.TryGetValue(editor, out var selection))
             ApplyRoleWidth(editor, WidthFor(selection.Role));
         else
@@ -90,6 +92,14 @@ internal static class EditorFormLayout
             editor.Width = legacyWidth;
             editor.MaxWidth = legacyWidth;
         }
+    }
+
+    private static void ClearSelectorPlaceholder(Control editor)
+    {
+        // Form selectors already have adjacent labels. Search/filter TextBoxes
+        // and transient loading/error messages retain their own placeholders.
+        if (editor is AutoCompleteBox selector) selector.PlaceholderText = null;
+        else if (editor is ComboBox combo) combo.PlaceholderText = null;
     }
 
     private static void ApplyRoleWidth(Control editor, double width)

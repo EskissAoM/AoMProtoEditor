@@ -1,0 +1,37 @@
+[
+  {
+    "Id": "entity-lifecycles",
+    "Consumers": ["U01", "U02", "U06", "E01", "E02", "E03", "E07", "E09", "W01", "W05", "G01", "G02"],
+    "Checks": ["UnitXmlEditingTests.CommittedUnitLifecycleRefreshesRetainedPowerAndDiscardDoesNotLeaveChoices", "TechnologyEditorWorkflowTests.RealTechnologyLifecyclePublishesOnlySuccessfulSavesToRetainedConsumers", "TechnologyEditorWorkflowTests.PowerAndGodMutationsRefreshRetainedTechnologyWithoutPublishingUnsavedEntries"]
+  },
+  {
+    "Id": "type-lifecycles",
+    "Consumers": ["U03", "E03", "E09", "G03", "G04"],
+    "Checks": ["TechnologyEditorWorkflowTests.RealTypeManagerMutationsRefreshRetainedSelectorsAndSaveMembership", "TechnologyEditorWorkflowTests.UnitTypeCatalogFormAndXmlSaveFollowedByManagerRenameKeepsTheIndependentUnit", "TechTypeCatalogTests"]
+  },
+  {
+    "Id": "source-tactics-lifecycles",
+    "Consumers": ["A01", "A02", "A03", "A04", "A07", "T01", "T02", "T03", "B03", "E08", "W03"],
+    "Checks": ["TechnologyEditorWorkflowTests.GlobalActionCatalogIncludesLooseAndCompiledTacticsAndRefreshesExistingSelector", "TechnologyEditorWorkflowTests.GlobalTacticsMetadataIncludesBarAndRetriesPartialLooseSources", "TechnologyEditorWorkflowTests.ModSwitchDropsRetainedViewsAndAllModSpecificCatalogMembers", "TacticsStartupTests.SelectorCatalogMainDamageBonusUsesSharedTargetsAndSavesCustomUnit", "TacticsStartupTests.SelectorCatalogTacticsMixedFieldsAndDamageBonusUseHostContext", "TacticsStartupTests.SelectorCatalogStandaloneAbilityExcludesSyntheticUnitAndSavesCustomTarget", "TacticsStartupTests.WarmReuseCopiesBaseDataAndSuggestionsWithoutCopyingDraftsOrStaleAssetLists", "TacticsStartupTests.UnusableOrDifferentSourceRefusesReuseWithoutAdoptingState"]
+  },
+  {
+    "Id": "remaining-manager-lifecycles",
+    "Consumers": ["B01", "B02", "B03", "B04", "C01", "C02", "C03", "M01", "M02", "M03"],
+    "Checks": ["TechnologyEditorWorkflowTests.CultureCallbacksRefreshTheActualGodSelectorAndItsSaveMembership", "TechnologyEditorWorkflowTests.CommandManagerCallbacksRefreshTheRetainedTechnologySelectorAndSaveMembership", "AbilityOwnedStringLifecycleTests", "TacticsStartupTests.AbilityClassificationUsesTheExistingPowerBoundary", "TacticsStartupTests.AbilityCatalogMembershipAndCustomNamesExcludeGodPowersWithoutWriting", "TacticsStartupTests.AbilityManagerRefreshTracksCreateDuplicateRenameAndReclassification", "TacticsStartupTests.AbilityEditorRejectsGodPowerBeforeInitializationOrSave", "TacticsStartupTests.AbilitySaveCannotOverwriteAnExternallyReclassifiedGodPower", "TacticsStartupTests.AbilityManagerCannotRenameOrDeleteAGodPowerFromAStaleEntry", "CommandOwnedStringLifecycleTests", "Commands.TransformCommandBundleLifecycleTests", "CultureOwnedStringLifecycleTests", "Gods.MinorGodManagerTests"]
+  },
+  {
+    "Id": "retained-controls",
+    "Consumers": ["U05", "E01", "E10", "W01", "W06", "G01", "G05"],
+    "Checks": ["SelectorCatalogRefreshTests", "SelectorCatalogViewTests", "TechnologyEditorWorkflowTests.SelectorCatalogRefreshRetainsTechnologyXmlSessionAndDirtyText", "RetainedIconCatalogTests", "UI.AssetPathCatalogRefreshTests", "AssetPathDisplayServiceTests", "UI.AssetPathEditorSizingTests", "Gods.GodModulesPreservationIntegrationCacheTests", "TechnologyPhase1RegressionTests.TechnologyEditor_MultiValuePrerequisitesExcludeValuesUsedByOtherEntries", "TechnologyEditorWorkflowTests.PrerequisiteReferenceGroupsAndAddButtonsStayCenteredAfterRebuild", "TechnologyEditorWorkflowTests.PrerequisiteFailureRevealsItsExactFieldAndCorrectionSaves"]
+  },
+  {
+    "Id": "prerequisite-editing",
+    "Consumers": ["E09"],
+    "Checks": ["TechnologyEditorWorkflowTests.MultiPrerequisiteNewAndAdditionalRowsStayEmptyUntilChosen", "TechnologyEditorWorkflowTests.MultiPrerequisiteDeleteAndRetypeKeepsFocusAndEmptyValueBlocksSave", "TechnologyEditorWorkflowTests.MultiPrerequisiteExclusionsAndAddAvailabilityFollowEditsWithoutRebuilding", "TechnologyEditorWorkflowTests.MultiPrerequisiteAddingToLegacyTextPreservesItsValueAndComment", "EditorFieldInteractionTests.NativeDeleteDoesNotRestoreAStrictCatalogSelection"]
+  },
+  {
+    "Id": "reference-safety",
+    "Consumers": ["A01", "A02", "A03", "A04", "A07", "T01", "T02", "T03", "E03", "E08"],
+    "Checks": ["CatalogActionReferenceContractTests", "ReferenceGroup6Tests", "TacticTargetReferenceTests", "CompiledTacticsSafetyTests", "ReferenceIntegrationG1Tests", "ReferenceIntegrationG2Tests", "ReferenceIntegrationG3Tests", "ReferenceSaveEntryGuardTests", "FileDiscoverySnapshotTests", "SetUnitTypeReferenceDomainTests", "BaselineSafetyTests"]
+  }
+]

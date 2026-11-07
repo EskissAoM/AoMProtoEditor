@@ -1,0 +1,42 @@
+[
+  {
+    "Id": "reference-core",
+    "Consumers": ["U01", "U02", "U03", "U04", "U06", "U07", "A01", "A02", "A03", "A04", "A05", "A06", "A07", "T01", "T02", "T03", "B01", "B02", "B03", "E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "W01", "W02", "W03", "W04", "W05", "G01", "G02", "G03", "G04", "M03"],
+    "Checks": ["CatalogActionReferenceContractTests", "ReferenceCoverageCheckpointBTests", "ReferenceCoverageCheckpointCTests", "ReferenceCoverageCheckpointETests", "ReferenceCoverageCheckpointEScopeTests", "ReferenceIdentityContextTests", "ReferenceGroup3ProtectionTests", "ReferenceGroup5Tests", "ReferenceGroup6Tests", "ReferenceGroup7Tests", "ReferenceIntegrationG1Tests", "ReferenceIntegrationG2Tests", "ReferenceIntegrationG3Tests", "GameIdentifierReferencePolicyTests", "TechnologyReferenceIndexTests", "TechnologyReferenceGroup4Tests", "TechnologyReferenceReadDependencyTests", "FileDiscoverySnapshotTests", "ReferenceSaveEntryGuardTests", "StrictReferencePolicyTests", "ReferenceCatalogSafetyTests", "SetUnitTypeReferenceDomainTests", "CrossModuleReferenceWorkflowTests"]
+  },
+  {
+    "Id": "unit-workflows",
+    "Consumers": ["U01", "U02", "U03", "U06", "U07", "A01", "A02", "A03", "A04", "A05", "A06", "A07"],
+    "Checks": ["UnitXmlEditingTests.RawRootRenameUsesReferenceAndOwnedStringLifecycle", "UnitXmlEditingTests.RawRootRenameMigratesAnotherUnitsActionTargetOnGlobalSave", "UnitXmlEditingTests.NewerRawTextSurvivesPreparedSaveAndCanBeSavedAgain", "UnitXmlEditingTests.InvalidRawSaveKeepsDiskAndBufferAndCanBeDiscarded", "UnitXmlEditingTests.InvalidPinnedXmlCanCloseThroughTheRealDiscardPrompt", "UnitXmlEditingTests.ExternalReloadReplacesConflictingRawDraftAndRelocksIt", "UnitXmlEditingTests.GlobalSaveValidatesRawUnitAndPreservesExactStructureAndSibling"]
+  },
+  {
+    "Id": "technology-workflows",
+    "Consumers": ["E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "E10", "M01"],
+    "Checks": ["TechnologyEditorWorkflowTests.TechnologyRenameCommitsMinorGodAndStringLifecycleWithoutLosingUnmanagedContent", "TechnologyEditorWorkflowTests.PendingRenameMigratesTechnologyReferencesInTheCommittedCandidate", "TechnologyEditorWorkflowTests.D2FollowUpGlobalXmlRenameMigratesRandomTechAndSelectorReferences", "TechnologyEditorWorkflowTests.D2FollowUpUnknownRandomTechReferenceStillBlocksWithoutWritingFiles", "TechnologyEditorWorkflowTests.D2FollowUpPointerDiscardSynchronizesTheBrowserAndClearsOnlyStaleFeedback", "TechnologyEditorWorkflowTests.XmlRawRenameUsesLocalExternalReferenceAndOwnedStringLifecycle", "TechnologyEditorWorkflowTests.XmlWriteFailureRollsBackFilesAndKeepsTheRawRenameAvailableForDiscard", "TechnologyEditorWorkflowTests.XmlRenameRetainsOwnedStringMigrationWhenNewerXmlStillContainsOldIds", "TechnologyEditorWorkflowTests.XmlInvalidSavePreservesExactDiskAndDraftAndAllowsDiscard", "TechnologyEditorWorkflowTests.XmlMalformedPinnedTabCanReachTheRealHostDiscardPromptAndClose", "TechnologyEditorWorkflowTests.UnitTypeCatalogSetUnitTypeUsesHostTypesAndSavesCustomSelection", "TechnologyEditorWorkflowTests.UnitTypeCatalogRefreshPreservesCleanFormOrDirtyRawSession", "TechnologyEditorWorkflowTests.UnitTypeCatalogRejectsConcreteUnitWithoutReplacingTheType", "TechnologyEditorWorkflowTests.UnitTypeCatalogRawXmlCannotUseAConcreteUnitAsTheAssignedType", "TechnologyEditorWorkflowTests.UnitTypeCatalogFormAndXmlSaveFollowedByManagerRenameKeepsTheIndependentUnit"]
+  },
+  {
+    "Id": "power-god-workflows",
+    "Consumers": ["W01", "W02", "W03", "W04", "W05", "G01", "G02", "G03", "G04"],
+    "Checks": ["PowerXmlEditingTests", "MajorGodXmlEditingTests", "PowerGodOwnedStringLifecycleTests"]
+  },
+  {
+    "Id": "command-transform-workflows",
+    "Consumers": ["U06", "U07", "C01", "C02", "C03", "E07", "M03"],
+    "Checks": ["CommandXmlEditingTests.ActualOwnerRawRenameMigratesUnitStringsAndTransformTogether", "CommandXmlEditingTests.NewerRawRenameReconcilesOwnedIdsAndLocalReferencesOnNextSave", "CommandXmlEditingTests.InvalidRawSaveKeepsTextDiskAndDiscardAvailable", "CommandXmlEditingTests.RawSavePreservesExactKnownAndUnknownStructureAndAdoptsForm", "CommandXmlEditingTests.CommandOptionalRemovalRestoresAddAndRetainsTheReaddedValueOnDisk", "CommandOwnedStringLifecycleTests", "Commands.TransformCommandBundleLifecycleTests"]
+  },
+  {
+    "Id": "ability-tactics-workflows",
+    "Consumers": ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "T01", "T02", "T03", "B01", "B02", "B03", "B04", "M03"],
+    "Checks": ["AbilityGeneralReferenceTests", "AbilityOwnedStringLifecycleTests", "TacticTargetReferenceTests", "TacticsStartupTests.StandaloneXmlSaveUsesDefinitionRootAndPreservesUnknownContent", "TacticsStartupTests.StandaloneXmlInvalidDraftBlocksWriteAndReachesDiscard", "TacticsStartupTests.StandaloneXmlFailedOrNewerSaveKeepsBufferAndRetries", "TacticsStartupTests.StandaloneAbilityXmlRenameDelegatesIdentityAndPreservesReconciledKeysForNewerText", "TacticsStartupTests.StandaloneAbilityRawSaveUsesActualHostTransactionWithoutRestoringRemovedPlacementAttributes", "TacticsStartupTests.StandaloneAbilityXmlExternalConflictKeepsDraftAndDisk"]
+  },
+  {
+    "Id": "manager-workflows",
+    "Consumers": ["U03", "U04", "E09", "G01", "G04", "M01", "M02", "M03"],
+    "Checks": ["Gods.MinorGodManagerTests", "CultureOwnedStringLifecycleTests", "TechTypeCatalogTests", "BaselineSafetyTests"]
+  },
+  {
+    "Id": "asset-transactions",
+    "Consumers": ["U05", "B03", "C03", "E10", "W06", "G05", "M01", "M03"],
+    "Checks": ["AssetReferenceMigrationPlanTests", "AssetMoveAcceptanceTests", "AssetMovePlanTests", "IconMoveIdentityTests", "ProtoUnitAssetReferenceMigrationTests", "TechnologyPass4ReferenceIntegrityTests", "AlphaModLifecycleWorkflowTests"]
+  }
+]

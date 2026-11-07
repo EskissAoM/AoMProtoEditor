@@ -12,7 +12,7 @@ public sealed partial class CommandXmlEditingTests
     public void CommandOptionalRemovalRestoresAddAndRetainsTheReaddedValueOnDisk()
         => WithCommand(async (window, path, _) =>
         {
-            var add = window.GetLogicalDescendants().OfType<Button>().Single(button => Equals(button.Content, "Value"));
+            var add = window.GetLogicalDescendants().OfType<Button>().Single(button => Equals(button.Content, "Value Text"));
             add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var fields = Field<Dictionary<string, Control>>(window, "_valueEditors");
             var value = Assert.IsType<TextBox>(fields["valuetext"]);

@@ -62,9 +62,18 @@ public sealed class EditorFieldSizingRoleTests
     public void CompactSelectorAndBonusNumericFitTheirExistingHostsWithFourPixelCrossGaps()
         => AvaloniaTestHost.Run(() =>
         {
-            var selector = new AutoCompleteBox { Text = "AbstractCloseCombatShip", MinWidth = 380 };
+            var selector = new AutoCompleteBox { Text = "AbstractCloseCombatShip", MinWidth = 380, PlaceholderText = "Repeated field label" };
             EditorTextFieldStyle.ConfigureSelector(selector, EditorFieldWidthRole.CompactReference);
+            Assert.Null(selector.PlaceholderText);
+            selector.PlaceholderText = "Another field hint";
             EditorTextFieldStyle.ConfigureSelector(selector);
+            Assert.Null(selector.PlaceholderText); Assert.Equal("AbstractCloseCombatShip", selector.Text);
+            var combo = new ComboBox { ItemsSource = new[] { "Hack" }, SelectedItem = "Hack", PlaceholderText = "Damage type" };
+            EditorFormLayout.ApplyWidth(combo, EditorFieldWidthRole.ShortEnum);
+            Assert.Null(combo.PlaceholderText); Assert.Equal("Hack", combo.SelectedItem);
+            var search = new TextBox { PlaceholderText = "Search..." };
+            EditorTextFieldStyle.ConfigureTextBox(search, EditorFieldWidthRole.SingleLineText);
+            Assert.Equal("Search...", search.PlaceholderText);
             var number = new TextBox { Text = "123456789.2500" };
             EditorNumericFieldStyle.ConfigureNumericTextBox(number, EditorFieldWidthRole.DamageBonusMultiplier);
             var selectorHost = new Grid { Width = 150, Children = { selector } };

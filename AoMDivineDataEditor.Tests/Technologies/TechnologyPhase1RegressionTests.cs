@@ -349,7 +349,7 @@ public sealed class TechnologyPhase1RegressionTests
 
         Assert.Contains("CreateInlineLabel(\"Unit\")", techCode, StringComparison.Ordinal);
         Assert.Contains("prereq.Value.Trim(),\n            EditorFieldWidthRole.Reference,", techCode.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        Assert.Contains("CreateStrictPrereqSelector(availableOptions, currentValue, EditorFieldWidthRole.Reference", techCode, StringComparison.Ordinal);
+        Assert.Contains("CreateStrictPrereqSelector(AvailableOptions(), currentValue, EditorFieldWidthRole.Reference", techCode, StringComparison.Ordinal);
         Assert.Contains("selectAllOnFirstClick: true", techCode, StringComparison.Ordinal);
         Assert.Contains("AddPrerequisiteButton(tech);", techCode, StringComparison.Ordinal);
         Assert.Contains("if (prereqs.Count == 0 && !IsModifiedTab)", techCode, StringComparison.Ordinal);

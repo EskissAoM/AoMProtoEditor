@@ -16,7 +16,8 @@ public sealed record TechnologySaveCatalogs(
     IReadOnlyCollection<string> CultureNames,
     IReadOnlyCollection<string> MajorGodNames,
     IReadOnlyCollection<string> BoneNames,
-    IReadOnlyCollection<string> CommandNames);
+    IReadOnlyCollection<string> CommandNames,
+    IReadOnlyCollection<string>? UnitTypeNames = null);
 
 public sealed record TechnologySaveValidation(IReadOnlyList<string> Errors)
 {
@@ -197,6 +198,7 @@ public static class TechnologySaveValidator
         var knownStructuredTypes = ToSet(catalogs.KnownStructuredEffectTypes);
         var technologyNames = ToSet(catalogs.TechnologyNames);
         var unitOrTypeNames = ToSet(catalogs.ProtoUnitOrTypeNames);
+        var unitTypeNames = ToSet(catalogs.UnitTypeNames ?? catalogs.ProtoUnitOrTypeNames);
         var protoUnitNames = ToSet(catalogs.ProtoUnitNames);
         var techTypeNames = ToSet(catalogs.TechTypeNames);
         var actionNames = ToSet(catalogs.ProtoActionNames);
@@ -235,7 +237,7 @@ public static class TechnologySaveValidator
             {
                 ValidateEffect(
                     effects[index], technologyName, index + 1, knownDataSubtypes, knownStructuredTypes,
-                    technologyNames, unitOrTypeNames, protoUnitNames, techTypeNames, actionNames,
+                    technologyNames, unitOrTypeNames, protoUnitNames, unitTypeNames, techTypeNames, actionNames,
                     tacticNames, powerNames, majorGodNames, boneNames, commandNames, resources, errors);
             }
         }
@@ -373,6 +375,7 @@ public static class TechnologySaveValidator
         HashSet<string> technologyNames,
         HashSet<string> unitOrTypeNames,
         HashSet<string> protoUnitNames,
+        HashSet<string> unitTypeNames,
         HashSet<string> techTypeNames,
         HashSet<string> actionNames,
         HashSet<string> tacticNames,
@@ -489,8 +492,9 @@ public static class TechnologySaveValidator
             ValidateOptionalCatalogAttribute(effect, "modifytype", ToSet(ProtoConstants.KnownModifyTypes), context, errors);
             ValidateOptionalCatalogAttribute(effect, "damagetype", ToSet(ProtoConstants.KnownDamageTypes.Prepend("All")), context, errors);
             ValidateOptionalUnitAttribute(effect, "proto", unitOrTypeNames, context, errors);
-            ValidateOptionalUnitAttribute(effect, "unittype", unitOrTypeNames, context, errors);
-            ValidateOptionalUnitAttribute(effect, "unitType", unitOrTypeNames, context, errors);
+            var operandTypes = subtype.Equals("SetUnitType", StringComparison.OrdinalIgnoreCase) ? unitTypeNames : unitOrTypeNames;
+            ValidateOptionalUnitAttribute(effect, "unittype", operandTypes, context, errors);
+            ValidateOptionalUnitAttribute(effect, "unitType", operandTypes, context, errors);
             ValidateOptionalUnitAttribute(effect, "targetType", unitOrTypeNames, context, errors);
             ValidateOptionalUnitAttribute(effect, "queryUnitType", unitOrTypeNames, context, errors);
             ValidateOptionalUnitAttribute(effect, "rewardType", unitOrTypeNames, context, errors);

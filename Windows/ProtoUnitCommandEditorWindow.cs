@@ -67,7 +67,7 @@ internal sealed partial class ProtoUnitCommandEditorWindow : SimpleWindow
         ["associatedtech"]="Associated Tech", ["trainableunitreq"]="Trainable Unit", ["prereqcommand"]="Command",
         ["displaynameid"]="Display Name", ["rollovertextid"]="Rollover", ["shortrollovertextid"]="Short Rollover",
         ["activerollovertextid"]="Active Rollover", ["disabledrollovertextid"]="Disabled Rollover",
-        ["buildlimittextid"]="Build Limit", ["valuetext"]="Value", ["associatedpower"]="Power",
+        ["buildlimittextid"]="Build Limit Text", ["valuetext"]="Value Text", ["associatedpower"]="Power",
         ["forbidtech"]="Forbid Tech", ["protounit"]="Proto Unit", ["amount"]="Amount", ["costprotounit"]="Cost Proto Unit",
         ["age"]="Age", ["actionforactiveicon"]="Action For Active Icon", ["activeicon"]="Active Icon (deprecated)",
         ["disabledicon"]="Disabled Icon (deprecated)"

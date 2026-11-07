@@ -294,9 +294,10 @@ public partial class TechnologyEditorView : UserControl
     private readonly HashSet<string> _pendingStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _automaticStringRemovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _loadedStringValues = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IReadOnlyList<string> _iconPaths = [];
+    private readonly SelectorCatalog _iconPaths = new([]);
     private readonly IReadOnlyList<string> _prereqUnitNames = [];
     private readonly IReadOnlyList<string> _protoUnitNames = [];
+    private readonly SelectorCatalog _unitTypeNames = new(ProtoConstants.KnownUnitTypes);
     private readonly IReadOnlyList<string> _cultureNames = [];
     private IReadOnlyList<string> _majorGodNames = [];
     private readonly IReadOnlyList<string> _techTypeNames = [];
@@ -397,7 +398,8 @@ public partial class TechnologyEditorView : UserControl
         Func<Window, string, Task<bool>>? confirmLinkedMinorGodRemovalAsync = null,
         Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
             prepareMinorGodLifecycle = null,
-        Func<IEnumerable<string>, IReadOnlySet<string>>? externalStringReferenceProvider = null)
+        Func<IEnumerable<string>, IReadOnlySet<string>>? externalStringReferenceProvider = null,
+        IEnumerable<string>? unitTypeNames = null)
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
@@ -417,9 +419,10 @@ public partial class TechnologyEditorView : UserControl
         _prepareMinorGodLifecycle = prepareMinorGodLifecycle;
         _externalStringReferenceProvider = externalStringReferenceProvider;
         _iconPreviewService = iconPreviewService;
-        _iconPaths = iconPaths?.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        _iconPaths.ReplaceWith(iconPaths ?? []);
         _prereqUnitNames = new SelectorCatalog(prereqUnitNames);
         _protoUnitNames = new SelectorCatalog(protoUnitNames);
+        if (unitTypeNames != null) _unitTypeNames.ReplaceWith(unitTypeNames);
         _cultureNames = new SelectorCatalog(cultureNames);
         _majorGodNames = new SelectorCatalog(majorGodNames);
         _techTypeNames = new SelectorCatalog(techTypeNames);
@@ -619,15 +622,19 @@ public partial class TechnologyEditorView : UserControl
 
     public void UpdateMajorGodNames(IEnumerable<string> names)
     {
-        if (!((SelectorCatalog)_majorGodNames).ReplaceWith(names)) return;
-        if (_current != null)
-            _ = BuildEditorAsync();
+        var loading = _loadingUi;
+        _loadingUi = true;
+        try
+        {
+            if (((SelectorCatalog)_majorGodNames).ReplaceWith(names)) SelectorCatalogRefresh.Apply(this);
+        }
+        finally { _loadingUi = loading; }
     }
 
     internal void UpdateReferenceCatalogs(IEnumerable<string> units, IEnumerable<string> mixedUnits,
         IEnumerable<string> cultures, IEnumerable<string> gods, IEnumerable<string> techTypes,
         IEnumerable<string> actions, IEnumerable<string> tactics, IEnumerable<string> commands,
-        IEnumerable<string> powers)
+        IEnumerable<string> powers, IEnumerable<string>? unitTypes = null)
     {
         var loading = _loadingUi;
         _loadingUi = true;
@@ -639,6 +646,7 @@ public partial class TechnologyEditorView : UserControl
                          (_protoActionNames, actions), (_tacticNames, tactics), (_protoUnitCommandNames, commands),
                          (_godPowerNames, powers) })
                 changed |= ((SelectorCatalog)pair.Item1).ReplaceWith(pair.Item2);
+            if (unitTypes != null) changed |= _unitTypeNames.ReplaceWith(unitTypes);
             if (changed) SelectorCatalogRefresh.Apply(this);
         }
         finally { _loadingUi = loading; }
@@ -1048,12 +1056,12 @@ public partial class TechnologyEditorView : UserControl
         RefreshIconPreview();
         _propertiesPanel.Children.Add(identityLayout);
 
-        var displayName = FindVisible("displaynameid");
+        var displayName = FindVisible("displaynameid") ?? (IsModifiedTab ? new XElement("displaynameid") : null);
         await AddPrimaryTechnologyRowAsync(tech, displayName, identityFields);
 
-        var rollover = FindVisible("rollovertextid");
+        var rollover = FindVisible("rollovertextid") ?? (IsModifiedTab ? new XElement("rollovertextid") : null);
         if (rollover != null)
-            await AddStringBackedPropertyRowAsync(EditorDisplayText.Rollover, rollover, multiline: true, target: identityFields);
+            await AddStringBackedPropertyRowAsync(EditorDisplayText.Rollover, rollover, multiline: true, target: identityFields, owner: tech);
 
         var advancedRollover = FindVisible("advancedrollovertextoverrideid");
         if (advancedRollover != null)
@@ -1114,6 +1122,23 @@ public partial class TechnologyEditorView : UserControl
         _pendingStringUpdates[stringId] = value;
     }
 
+    // Missing core text fields are form placeholders, not document changes. Allocate
+    // the normal owned ID only on an actual edit; the existing save collision checks
+    // and owned-string lifecycle then apply exactly as for other Technology fields.
+    private string PrepareTechnologyStringField(XElement owner, XElement element, string value)
+    {
+        var stringId = element.Value.Trim();
+        if (stringId.Length == 0)
+        {
+            if (value.Length == 0) return "";
+            stringId = BuildTechnologyStringId((string?)owner.Attribute("name") ?? "", element.Name.LocalName);
+            XmlTriviaPreserver.SetText(element, stringId);
+        }
+        if (element.Parent == null)
+            InsertBeforeEffectsOrAppend(owner, element);
+        return stringId;
+    }
+
     private async Task AddPrimaryTechnologyRowAsync(XElement tech, XElement? displayNameElement, Panel target)
     {
         var hasIcon = tech.Elements()
@@ -1147,9 +1172,11 @@ public partial class TechnologyEditorView : UserControl
             var lastDisplayText = text;
             ObserveTechnologyTextEdits(displayBox, (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(stringId)) return;
+                if (_loadingUi || !IsModifiedTab) return;
                 var value = displayBox.Text ?? "";
                 if (value.Equals(lastDisplayText, StringComparison.Ordinal)) return;
+                stringId = PrepareTechnologyStringField(tech, displayNameElement, value);
+                if (stringId.Length == 0) return;
                 lastDisplayText = value;
                 _pendingStringRemovals.Remove(stringId);
                 SetPendingTechnologyStringValue(stringId, value);
@@ -1442,7 +1469,8 @@ public partial class TechnologyEditorView : UserControl
         XElement element,
         bool multiline = false,
         bool removable = false,
-        Panel? target = null)
+        Panel? target = null,
+        XElement? owner = null)
     {
         var stringId = element.Value.Trim();
         var text = await ResolveTechnologyStringValueAsync(stringId);
@@ -1466,9 +1494,11 @@ public partial class TechnologyEditorView : UserControl
         Grid.SetColumn(row, 1);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrWhiteSpace(stringId)) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var value = box.Text ?? "";
             if (value.Equals(lastText, StringComparison.Ordinal)) return;
+            if (owner != null) stringId = PrepareTechnologyStringField(owner, element, value);
+            if (stringId.Length == 0) return;
             lastText = value;
             _pendingStringRemovals.Remove(stringId);
             SetPendingTechnologyStringValue(stringId, value);
@@ -2341,24 +2371,25 @@ public partial class TechnologyEditorView : UserControl
         var entries = prereq.Elements().Where(e => e.Name.LocalName.Equals(childName, StringComparison.OrdinalIgnoreCase)).ToList();
         if (entries.Count == 0 && !string.IsNullOrWhiteSpace(prereq.Value))
             entries.Add(new XElement(childName, prereq.Value.Trim()));
+        if (entries.Count == 0 && IsModifiedTab)
+            entries.Add(new XElement(childName)); // A detached form placeholder must not dirty an untouched document.
 
         var catalogOptions = options
             .Where(option => !string.IsNullOrWhiteSpace(option))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Distinct(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < entries.Count; index++)
         {
             var entry = entries[index];
             var activeEntry = entry;
             var isAttached = activeEntry.Parent == prereq;
             var currentValue = activeEntry.Value.Trim();
-            var otherValues = entries
-                .Where(other => !ReferenceEquals(other, entry))
-                .Select(other => other.Value.Trim());
-            var availableOptions = GetAvailableMultiValuePrerequisiteOptions(
-                catalogOptions,
-                otherValues,
-                currentValue);
+            IEnumerable<string> AvailableOptions()
+            {
+                foreach (var option in GetAvailableMultiValuePrerequisiteOptions(catalogOptions,
+                    prereq.Elements().Where(other => other.Name.LocalName.Equals(childName, StringComparison.OrdinalIgnoreCase) &&
+                        !ReferenceEquals(other, activeEntry)).Select(other => other.Value.Trim()), activeEntry.Value.Trim()))
+                    yield return option;
+            }
             var entryGroup = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -2366,12 +2397,12 @@ public partial class TechnologyEditorView : UserControl
             };
             if (index == 0)
                 entryGroup.Children.Add(CreateInlineLabel(label));
-            var entrySelector = CreateStrictPrereqSelector(availableOptions, currentValue, EditorFieldWidthRole.Reference, value =>
+            var entrySelector = CreateStrictPrereqSelector(AvailableOptions(), currentValue, EditorFieldWidthRole.Reference, value =>
             {
                 if (!isAttached)
                 {
                     activeEntry = new XElement(childName, value);
-                    prereq.RemoveNodes();
+                    foreach (var text in prereq.Nodes().OfType<XText>().ToArray()) text.Remove();
                     prereq.Add(activeEntry);
                     isAttached = true;
                 }
@@ -2381,8 +2412,19 @@ public partial class TechnologyEditorView : UserControl
                 }
                 MarkDirty();
                 UpdatePreview();
-                _ = BuildEditorAsync();
-            }, selectAllOnFirstClick: true);
+                // Clearing/choosing a value must not replace the focused input.
+                // Refresh only membership/exclusions and dependent Add availability.
+                var loading = _loadingUi;
+                _loadingUi = true;
+                try
+                {
+                    // The active AutoCompleteBox is still processing its text event.
+                    // Resetting its ItemsSource here can restore the just-deleted text.
+                    foreach (var control in firstRow.Children.Where(control => !ReferenceEquals(control, entryGroup)))
+                        SelectorCatalogRefresh.Apply(control);
+                }
+                finally { _loadingUi = loading; }
+            }, deferSelectionCommit: true, selectAllOnFirstClick: true);
             EditorValidationBindings.Bind(entrySelector, isAttached ? entry : prereq);
             if (IsModifiedTab && isAttached)
                 entrySelector.Margin = new Thickness(entrySelector.Margin.Left, entrySelector.Margin.Top, 0, entrySelector.Margin.Bottom);
@@ -2398,24 +2440,34 @@ public partial class TechnologyEditorView : UserControl
         {
             var add = CreateOptionalPropertyButton($"Add {label.ToLowerInvariant()}");
             add.Margin = new Thickness(8, 4, 8, 4);
-            var usedValues = entries
-                .Select(entry => entry.Value.Trim())
-                .Where(value => value.Length > 0)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var nextValue = catalogOptions.FirstOrDefault(option => !usedValues.Contains(option));
-            add.IsEnabled = nextValue != null;
+            bool HasUnusedOptions()
+            {
+                var used = prereq.Elements().Where(element => element.Name.LocalName.Equals(childName, StringComparison.OrdinalIgnoreCase))
+                    .Select(element => element.Value.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!prereq.HasElements) used.Add(prereq.Value.Trim());
+                return catalogOptions.Any(option => !used.Contains(option));
+            }
+            SelectorCatalogRefresh.RegisterDependent(add, () => add.IsEnabled = HasUnusedOptions());
             add.Click += (_, _) =>
             {
-                if (nextValue == null) return;
-                prereq.Add(new XElement(childName, nextValue));
+                if (!HasUnusedOptions()) return;
+                // Preserve a legacy direct-text prerequisite when adding a second entry.
+                if (!prereq.HasElements && !string.IsNullOrWhiteSpace(prereq.Value))
+                {
+                    var legacy = prereq.Value.Trim();
+                    foreach (var text in prereq.Nodes().OfType<XText>().ToArray()) text.Remove();
+                    prereq.Add(new XElement(childName, legacy));
+                }
+                prereq.Add(new XElement(childName));
                 MarkDirty();
+                UpdatePreview();
                 _ = BuildEditorAsync();
             };
             firstRow.Children.Add(add);
         }
     }
 
-    internal static IReadOnlyList<string> GetAvailableMultiValuePrerequisiteOptions(
+    internal static IEnumerable<string> GetAvailableMultiValuePrerequisiteOptions(
         IEnumerable<string> options,
         IEnumerable<string> valuesUsedByOtherEntries,
         string currentValue)
@@ -2425,8 +2477,7 @@ public partial class TechnologyEditorView : UserControl
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return options
             .Where(option => option.Equals(currentValue, StringComparison.OrdinalIgnoreCase) || !used.Contains(option))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private AutoCompleteBox CreateStrictPrereqSelector(
@@ -2438,11 +2489,9 @@ public partial class TechnologyEditorView : UserControl
         bool selectAllOnFirstClick = false)
     {
         var values = options
-            .Append(current)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase);
         var selector = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox
         {
             Text = current,
@@ -2546,7 +2595,7 @@ public partial class TechnologyEditorView : UserControl
                 new XAttribute("count", "1.00"),
                 new XAttribute("state", "aliveState"),
                 new XAttribute("operator", "gte")),
-            "Culture" => new XElement("culture", new XElement("cultureName", "Greek")),
+            "Culture" => new XElement("culture", new XElement("cultureName", "")),
             "Civilization" => new XElement("civilization", new XElement("civName", "")),
             "KBStat" => new XElement("KBStat",
                 new XAttribute("kbStat", ""),
@@ -6108,7 +6157,7 @@ public partial class TechnologyEditorView : UserControl
         AddDataTargetEditor(effect, row);
         row.Children.Add(CreateEnableDisableAmountCombo(effect));
         row.Children.Add(CreateLabeledEffectSegment("Unit type", CreateStrictEffectSelector(
-            ProtoConstants.KnownUnitTypes,
+            _unitTypeNames,
             GetCaseInsensitiveAttribute(effect, "unittype")?.Value.Trim() ?? "",
             value =>
             {
@@ -7084,8 +7133,7 @@ public partial class TechnologyEditorView : UserControl
             : actionAttribute;
         var suggestions = (allowAllActions ? new[] { "All" } : [])
             .Concat(_protoActionNames.Where(value => !value.Equals("All", StringComparison.OrdinalIgnoreCase)))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
         var selector = CreateStrictEffectSelector(suggestions, current, value =>
         {
@@ -9611,7 +9659,8 @@ public partial class TechnologyEditorView : UserControl
             _cultureNames,
             _majorGodNames,
             _boneNames,
-            _protoUnitCommandNames);
+            _protoUnitCommandNames,
+            _unitTypeNames);
 
     internal static TechnologyEffectCatalogRuntimeSnapshot GetEffectCatalogRuntimeSnapshot()
         => TechnologyEffectCatalogInventory.CreateSnapshot();

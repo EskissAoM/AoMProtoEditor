@@ -35,7 +35,7 @@ public partial class ProtoEditorWindow
             GetTechnologyProtoUnitNames(), GetTechnologyPrerequisiteUnitNames(), GetKnownCultureNames(),
             GetTechnologyPrerequisiteMajorGodNames(), GetTechnologyTechTypeNames(),
             GetTechnologyProtoActionNames(), GetTechnologyTacticDefinitionNames(),
-            GetAvailableCommandNames(), GetTechnologyGodPowerNames());
+            GetAvailableCommandNames(), GetTechnologyGodPowerNames(), GetKnownUnitTypeNames());
     }
 
     private void RefreshRetainedSelectorCatalogs()
@@ -43,5 +43,47 @@ public partial class ProtoEditorWindow
         RefreshPowerSelectorCatalogs();
         RefreshMajorGodSelectorCatalogs();
         RefreshTechnologySelectorCatalogs();
+    }
+
+    private void ReloadIconCatalogsAfterManager()
+    {
+        LoadCurrentModAssetCatalogs();
+        var icons = _baseGameIconPaths.Concat(_customIconPaths).ToArray();
+        _technologyView?.UpdateIconCatalog(icons);
+        _powerView?.UpdateIconCatalog(icons);
+        _majorGodView?.UpdateIconCatalog(icons);
+    }
+
+    private void RefreshEditorsAfterTypeManager(bool unitTypes)
+    {
+        if (unitTypes)
+        {
+            _cachedUnitTypeDefinitions = null;
+            _cachedBuildLimitTargets = null;
+        }
+        else _cachedTechTypeDefinitions = null;
+        RefreshTechnologyViewAfterTechTypeChanges();
+        RefreshRetainedSelectorCatalogs();
+        if (unitTypes && !string.IsNullOrWhiteSpace(_currentUnitName))
+        {
+            var tabIndex = _editorTabs.SelectedIndex;
+            BuildEditorPanel(_currentUnitName, resetScroll: false);
+            if (tabIndex >= 0) _editorTabs.SelectedIndex = tabIndex;
+        }
+    }
+
+    private void RefreshEditorsAfterCommandManager()
+    {
+        EnsureProtoUnitCommandCatalogLoaded(force: true);
+        _cachedCommandNames = null;
+        RefreshTechnologySelectorCatalogs();
+        if (!string.IsNullOrWhiteSpace(_currentUnitName)) BuildEditorPanel(_currentUnitName, resetScroll: false);
+    }
+
+    private void RefreshEditorsAfterTacticsManager()
+    {
+        _cachedTacticsNames = null;
+        RefreshRetainedSelectorCatalogs();
+        if (!string.IsNullOrWhiteSpace(_currentUnitName)) BuildEditorPanel(_currentUnitName, resetScroll: false);
     }
 }

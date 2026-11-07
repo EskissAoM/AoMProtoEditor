@@ -74,7 +74,7 @@ public partial class MajorGodEditorView : UserControl
     private readonly SelectorCatalog _technologyFlagNames;
     private readonly SelectorCatalog _techTypeNames;
     private readonly IReadOnlyList<string> _terrainCreepNames;
-    private readonly IReadOnlyList<string> _iconPaths;
+    private readonly SelectorCatalog _iconPaths = new([]);
     private readonly IReadOnlyList<string> _minimapBorderValues;
     private readonly IReadOnlyList<string> _backgroundScenarioValues;
     private readonly XElement? _baseSharedData;
@@ -187,12 +187,7 @@ public partial class MajorGodEditorView : UserControl
             technologyBox.ItemsSource = _technologyNames;
             EditorAutoCompleteService.EnableDropdown(technologyBox, () => _isPopulating);
         }
-        _iconPaths = (iconPaths ?? [])
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        _iconPaths.ReplaceWith(iconPaths ?? []);
         _minimapBorderValues = ExtractBaseValues("minimapborderimage");
         _backgroundScenarioValues = ExtractBaseValues("backgroundscenario");
         _iconPreview = new IconPreviewControl(iconPreviewService);

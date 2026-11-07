@@ -64,7 +64,7 @@ public static class GameIdentifierReferencePolicy
          "explicitlyrestrictedplacementtargettype abstractattacktargettype explicitlyrestrictedattacktargettype " +
          "placementrestriction abstractpowerresetsabilitychargetype").Split(' '), StringComparer.OrdinalIgnoreCase);
 
-    private enum ReferenceDomain { Unknown, Unit, UnitType, Mixed, MajorGod, Power }
+    private enum ReferenceDomain { Unknown, NonIdentifier, Unit, UnitType, Mixed, MajorGod, Power }
 
     private static bool MatchesDomain(ReferenceDomain domain, GameIdentifierKind kind) => domain switch
     {
@@ -145,11 +145,26 @@ public static class GameIdentifierReferencePolicy
     {
         if (!IsPlainXml(owner) || attribute.Name.Namespace != XNamespace.None) return ReferenceDomain.Unknown;
         var name = attribute.Name.LocalName.ToLowerInvariant();
+        // SetUnitType assigns an abstract type; its @unittype is not a concrete
+        // Unit reference even when both catalogs contain the same spelling.
+        if (name == "unittype" && IsTechnologyEffect(owner) && EffectKind(owner) == "setunittype")
+            return ReferenceDomain.UnitType;
         // These action selectors accept concrete Units as well as UnitTypes.
         // Classify the exact context so rename/deletion and ambiguity checks
         // agree, without treating arbitrary @type values as Unit identities.
-        if (name == "type" && owner.Name.LocalName.ToLowerInvariant() is "rate" or "damagebonus" &&
-            owner.Parent is { } ownerAction && IsActionDefinition(ownerAction)) return ReferenceDomain.Mixed;
+        if (name == "type" && owner.Parent is { } ownerAction && IsActionDefinition(ownerAction) &&
+            ProtoActionMetadataCatalog.GetFieldDefinition(owner.Name.LocalName).HasUnitTargetTypeAttribute)
+        {
+            var actionType = ownerAction.Elements().FirstOrDefault(element =>
+                element.Name.Namespace == XNamespace.None &&
+                element.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.Trim();
+            if (owner.Name.LocalName.Equals("minrate", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(actionType, "Trade", StringComparison.OrdinalIgnoreCase) ||
+                owner.Name.LocalName.Equals("rate", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(actionType, "ModifyGather", StringComparison.OrdinalIgnoreCase))
+                return ReferenceDomain.NonIdentifier;
+            return ReferenceDomain.Mixed;
+        }
         if (IsKnownPowerField(owner))
         {
             if (owner.Name == "abstracttype" && name == "swapto" &&

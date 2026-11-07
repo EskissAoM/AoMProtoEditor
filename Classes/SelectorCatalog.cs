@@ -33,6 +33,16 @@ public sealed class SelectorCatalog : IReadOnlyList<string>
 
 internal static class SelectorCatalogRefresh
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, Action> Dependents = new();
+
+    // Optional controls such as "Add major god" depend on unused catalog values
+    // too. Keep their availability live without rebuilding an owner's draft.
+    internal static void RegisterDependent(Control control, Action refresh)
+    {
+        Dependents.Add(control, refresh);
+        refresh();
+    }
+
     // The owning view must hold its normal population guard. A refresh changes
     // suggestions, not form values, XML, dirty state or the active raw buffer.
     internal static void Apply(Control root)
@@ -40,7 +50,9 @@ internal static class SelectorCatalogRefresh
         foreach (var control in root.GetLogicalDescendants().OfType<Control>()
                      .Concat(root.GetVisualDescendants().OfType<Control>()).Prepend(root).Distinct())
         {
-            if (control is AutoCompleteBox box) EditorAutoCompleteService.RefreshCatalogSuggestions(box);
+            if (Dependents.TryGetValue(control, out var refresh)) refresh();
+            if (control is AssetPathEditor asset) asset.RefreshCatalogSuggestions();
+            else if (control is AutoCompleteBox box) EditorAutoCompleteService.RefreshCatalogSuggestions(box);
             else if (control is StrictSearchableComboBox strict) strict.RefreshCatalogOptions();
         }
     }

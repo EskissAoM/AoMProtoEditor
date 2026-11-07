@@ -25,7 +25,8 @@ public sealed class TechnologyPass1SafetyRegressionTests
         Assert.Contains("string.IsNullOrWhiteSpace(stringId) && _initializingEffectDefaults", code, StringComparison.Ordinal);
         Assert.Contains("attribute == null && _initializingEffectDefaults", code, StringComparison.Ordinal);
         Assert.Contains("entries.Add(new XElement(childName, prereq.Value.Trim()))", code, StringComparison.Ordinal);
-        Assert.Contains("prereq.RemoveNodes();\n                    prereq.Add(activeEntry);", code.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("foreach (var text in prereq.Nodes().OfType<XText>().ToArray()) text.Remove();\n                    prereq.Add(activeEntry);", code.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.DoesNotContain("prereq.RemoveNodes();", code, StringComparison.Ordinal);
     }
 
     [Fact]

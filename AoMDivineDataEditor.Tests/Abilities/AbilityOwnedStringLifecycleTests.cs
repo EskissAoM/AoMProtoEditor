@@ -93,6 +93,9 @@ public sealed class AbilityOwnedStringLifecycleTests : IDisposable
                 Assert.Equal("New", XDocument.Load(general).Descendants("ability").Single().Nodes().OfType<XText>().Single().Value.Trim());
                 Assert.NotNull(AbilityBindingMetadataStore.Get(fixture.ProtoPath, "Owner", "New"));
                 Assert.DoesNotContain(table.Keys, key => key.StartsWith("STR_ABILITY_MIDDLE", StringComparison.Ordinal));
+                host.Call("EnsureAbilityCatalogLoadedForManager");
+                var choices = (List<string>)typeof(ProtoEditorWindow).GetField("_availableAbilityNames", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(host)!;
+                Assert.Contains("New", choices); Assert.DoesNotContain("Old", choices); Assert.DoesNotContain("Middle", choices);
             });
         }
         finally { AvaloniaTestHost.Run(host.DisposeFixtureWindow); }

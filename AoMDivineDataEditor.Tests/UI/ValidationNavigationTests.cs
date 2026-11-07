@@ -184,6 +184,8 @@ public sealed class ValidationNavigationTests
                 var point = asset.CompactPresenter.TranslatePoint(new Point(15, 15), window)!.Value;
                 window.MouseMove(point); window.MouseDown(point, Avalonia.Input.MouseButton.Left); window.MouseUp(point, Avalonia.Input.MouseButton.Left);
                 await Settle(window);
+                Assert.True(asset.Editor.IsVisible);
+                Assert.True(asset.Editor.IsKeyboardFocusWithin);
                 window.KeyTextInput("Corrected"); await Settle(window);
                 Assert.Equal("Corrected", asset.FullValue);
             }

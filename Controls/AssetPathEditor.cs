@@ -14,6 +14,7 @@ public sealed class AssetPathEditor : Grid
     private bool _editing;
     private bool _suppress;
     private Func<string, Task>? _changed;
+    private IEnumerable<string> _suggestionSource = [];
     private HashSet<string> _validFullValues = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>When enabled, non-empty free text is cleared when editing ends unless it matches the supplied catalog.</summary>
@@ -87,24 +88,19 @@ public sealed class AssetPathEditor : Grid
         };
         Editor.LostFocus += (_, _) => Dispatcher.UIThread.Post(() =>
         {
-            if (!Editor.IsFocused && !Editor.IsDropDownOpen) EndEdit();
+            // Moving focus into the AutoCompleteBox's inner text editor is
+            // still editing this field, even when an exact match closes its list.
+            if (!Editor.IsKeyboardFocusWithin && !Editor.IsDropDownOpen) EndEdit();
         });
     }
 
     public void Configure(string fullValue, IEnumerable<string> suggestions, Func<string, Task>? changed)
     {
-        var catalog = suggestions
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Select(value => value.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _validFullValues = catalog.ToHashSet(StringComparer.OrdinalIgnoreCase);
         FullValue = fullValue?.Trim() ?? ""; _changed = changed;
-        Suggestions = AssetPathDisplayService.CreateSuggestions(catalog.Append(FullValue));
-        Editor.ItemsSource = Suggestions;
         _suppress = true;
-        try { Editor.Text = FullValue; } finally { _suppress = false; }
-        Refresh();
+        try { Editor.SelectedItem = null; Editor.Text = FullValue; }
+        finally { _suppress = false; }
+        UpdateSuggestions(suggestions);
 
         // Always begin in compact mode, including for an empty path.  Automatically
         // leaving an empty AutoCompleteBox in edit mode creates a focus race after its
@@ -115,6 +111,34 @@ public sealed class AssetPathEditor : Grid
         Editor.IsVisible = false;
         CompactPresenter.IsVisible = true;
     }
+
+    /// <summary>Refresh catalog membership without changing the draft, callback or editing mode.</summary>
+    public void UpdateSuggestions(IEnumerable<string> suggestions)
+    {
+        _suggestionSource = suggestions;
+        var catalog = suggestions
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _validFullValues = catalog.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Suggestions = AssetPathDisplayService.CreateSuggestions(catalog.Append(FullValue));
+        var text = Editor.Text;
+        var selected = Editor.SelectedItem as PathSuggestion;
+        var suppress = _suppress;
+        _suppress = true;
+        try
+        {
+            Editor.ItemsSource = Suggestions;
+            Editor.SelectedItem = selected == null ? null : Suggestions.FirstOrDefault(item =>
+                item.FullValue.Equals(selected.FullValue, StringComparison.OrdinalIgnoreCase));
+            Editor.Text = text;
+        }
+        finally { _suppress = suppress; }
+        Refresh();
+    }
+
+    internal void RefreshCatalogSuggestions() => UpdateSuggestions(_suggestionSource);
 
     private async Task SetValueAsync(string? value)
     {

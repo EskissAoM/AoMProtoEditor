@@ -214,8 +214,7 @@ public sealed partial class UnitXmlEditingTests
         });
 
     [Theory]
-    [InlineData("rate")]
-    [InlineData("damagebonus")]
+    [MemberData(nameof(CatalogActionReferenceContractTests.UnitFieldTags), MemberType = typeof(CatalogActionReferenceContractTests))]
     public void RawRootRenameMigratesAnotherUnitsActionTargetOnGlobalSave(string field)
         => WithHost(async (fixture, host) =>
         {

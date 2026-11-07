@@ -1433,7 +1433,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             Width = 228,
             MinHeight = 30,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            PlaceholderText = "Select action...",
             IsEnabled = !_isReadOnly
         };
         var refreshing = false;
@@ -4227,7 +4226,8 @@ public partial class ProtoEditorWindow : SimpleWindow
             hasLinkedMinorGod: HasCustomMinorGodForTechnology,
             confirmLinkedMinorGodRemovalAsync: ConfirmLinkedMinorGodRemovalAsync,
             prepareMinorGodLifecycle: PrepareMinorGodTechnologyLifecycle,
-            externalStringReferenceProvider: FindTechnologyExternalStringReferences);
+            externalStringReferenceProvider: FindTechnologyExternalStringReferences,
+            unitTypeNames: GetKnownUnitTypeNames());
         _technologyView.PrepareDeletionChecks = (names, overrides) =>
             PrepareStagedDeletionChecks(names, overrides, null);
         _technologyView.PrepareStringCleanup = (candidates, proposed) =>
@@ -7657,22 +7657,45 @@ public partial class ProtoEditorWindow : SimpleWindow
             }
         }
 
+        names.UnionWith(GetTechnologyTacticsCatalog().Actions);
         return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private IReadOnlyList<string> GetTechnologyTacticDefinitionNames()
-    {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        => GetTechnologyTacticsCatalog().Tactics;
 
-        static void AddNames(XDocument document, HashSet<string> target)
+    private sealed record TechnologyTacticsCatalog(IReadOnlyList<string> Actions, IReadOnlyList<string> Tactics);
+    private TechnologyTacticsCatalog? _technologyTacticsCatalog;
+    private List<string>? _technologyTacticsMembership;
+    private (string? Base, string? Mod, object? Archive, string? ArchivePath)? _technologyTacticsContext;
+
+    private TechnologyTacticsCatalog GetTechnologyTacticsCatalog()
+    {
+        // The existing tactics mutation/source invalidation resets this membership
+        // identity. Share one metadata-only scan between global action and Tactic
+        // selectors, rather than reparsing the archive for each retained view.
+        _ = GetAvailableTacticsNames();
+        var context = (ResolveBaseGameplayDirectory(), _modFilePath, (object?)_protoDataBarFile, _protoDataBarPath);
+        if (_technologyTacticsCatalog != null && ReferenceEquals(_technologyTacticsMembership, _cachedTacticsNames) &&
+            _technologyTacticsContext == context) return _technologyTacticsCatalog;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var actions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var complete = true;
+
+        void AddNames(XDocument document)
         {
-            foreach (var tactic in document.Descendants().Where(element =>
-                         element.Name.LocalName.Equals("tactic", StringComparison.OrdinalIgnoreCase)))
+            if (document.Root?.Name != "tactics") { complete = false; return; }
+            foreach (var action in document.Root.Elements("action"))
+            {
+                var name = action.Element("name")?.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(name)) actions.Add(name);
+            }
+            foreach (var tactic in document.Root.Elements("tactic"))
             {
                 var name = tactic.Nodes().OfType<XText>()
                     .Select(node => node.Value.Trim())
                     .FirstOrDefault(value => value.Length > 0);
-                if (!string.IsNullOrWhiteSpace(name)) target.Add(name);
+                if (!string.IsNullOrWhiteSpace(name)) names.Add(name);
             }
         }
 
@@ -7686,11 +7709,14 @@ public partial class ProtoEditorWindow : SimpleWindow
                 try
                 {
                     var xml = ReadBarXmbXml(entry, stream);
-                    if (!string.IsNullOrWhiteSpace(xml)) AddNames(XDocument.Parse(xml), names);
+                    if (!string.IsNullOrWhiteSpace(xml)) AddNames(XDocument.Parse(xml));
+                    else complete = false;
                 }
                 catch
                 {
-                    // Keep tactic names already found if one BAR entry is malformed.
+                    // Suggestions can be partial; do not retain that failure as a
+                    // successful cache entry or change any persistence guard.
+                    complete = false;
                 }
             }
         }
@@ -7701,22 +7727,32 @@ public partial class ProtoEditorWindow : SimpleWindow
             var tacticsDirectory = Path.Combine(gameplayDirectory, "tactics");
             if (!Directory.Exists(tacticsDirectory)) return;
 
-            foreach (var path in Directory.GetFiles(tacticsDirectory, "*.tactics", SearchOption.AllDirectories))
+            foreach (var path in Directory.GetFiles(tacticsDirectory, "*", SearchOption.AllDirectories).Where(path =>
+                         path.EndsWith(".tactics", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".xmb", StringComparison.OrdinalIgnoreCase)))
             {
                 try
                 {
-                    AddNames(XDocument.Load(path), names);
+                    AddNames(ModReferenceDocumentReader.Load(path));
                 }
                 catch
                 {
-                    // Keep valid names from the remaining loose tactics files.
+                    complete = false;
                 }
             }
         }
 
         AddLooseTactics(ResolveBaseGameplayDirectory());
         AddLooseTactics(string.IsNullOrWhiteSpace(_modFilePath) ? null : Path.GetDirectoryName(_modFilePath));
-        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+        var result = new TechnologyTacticsCatalog(
+            actions.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(),
+            names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray());
+        if (complete)
+        {
+            _technologyTacticsMembership = _cachedTacticsNames;
+            _technologyTacticsContext = context;
+            _technologyTacticsCatalog = result;
+        }
+        return result;
     }
 
     private IReadOnlyList<string> GetTechnologyPrerequisiteUnitNames()
@@ -7957,7 +7993,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             var valueAcb = new AutoCompleteBox
             {
                 Text = entry.Value,
-                PlaceholderText = itemLabel,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 ItemsSource = suggestions,
                 IsEnabled = !_isReadOnly,
@@ -10711,8 +10746,14 @@ public partial class ProtoEditorWindow : SimpleWindow
             return GetProtoActionTypeOptions();
         }
 
-        if (attributeName.Equals("type", StringComparison.OrdinalIgnoreCase) ||
-            attributeName.Equals("unittype", StringComparison.OrdinalIgnoreCase))
+        if (attributeName.Equals("type", StringComparison.OrdinalIgnoreCase))
+        {
+            if (tag.Equals("damage", StringComparison.OrdinalIgnoreCase)) return [.. ProtoConstants.KnownDamageTypes];
+            return ProtoActionMetadataCatalog.GetFieldDefinition(tag).HasUnitTargetTypeAttribute
+                ? GetAvailableBuildLimitTargets() : null;
+        }
+
+        if (attributeName.Equals("unittype", StringComparison.OrdinalIgnoreCase))
         {
             return GetAvailableBuildLimitTargets();
         }
@@ -35880,9 +35921,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.ProtoUnitCommand, name, "Command", owner: owner));
         await manager.ShowDialog(this);
-        EnsureProtoUnitCommandCatalogLoaded(force: true);
-        _cachedCommandNames = null;
-        if (!string.IsNullOrWhiteSpace(_currentUnitName)) BuildEditorPanel(_currentUnitName, resetScroll: false);
+        RefreshEditorsAfterCommandManager();
     }
 
     private async Task OpenUnitTypeManagerAsync()
@@ -35920,18 +35959,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.UnitType, name, "Unit Type", owner: owner));
         await manager.ShowDialog(this);
-
-        _cachedUnitTypeDefinitions = null;
-        _cachedBuildLimitTargets = null;
-        RefreshTechnologyViewAfterTechTypeChanges();
-        RefreshRetainedSelectorCatalogs();
-        if (!string.IsNullOrWhiteSpace(_currentUnitName))
-        {
-            var tabIndex = _editorTabs.SelectedIndex;
-            BuildEditorPanel(_currentUnitName, resetScroll: false);
-            if (tabIndex >= 0)
-                _editorTabs.SelectedIndex = tabIndex;
-        }
+        RefreshEditorsAfterTypeManager(unitTypes: true);
     }
 
     private async Task OpenTechTypeManagerAsync()
@@ -35967,10 +35995,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.TechType, name, "Tech Type", owner: owner));
         await manager.ShowDialog(this);
-
-        _cachedTechTypeDefinitions = null;
-        RefreshTechnologyViewAfterTechTypeChanges();
-        RefreshRetainedSelectorCatalogs();
+        RefreshEditorsAfterTypeManager(unitTypes: false);
     }
 
     private async Task OpenCultureManagerAsync()
@@ -36018,8 +36043,6 @@ public partial class ProtoEditorWindow : SimpleWindow
             (owner, name) => EnsureIdentifierCanBeDeletedAsync(
                 GameIdentifierKind.Culture, name, "Culture", owner: owner));
         await manager.ShowDialog(this);
-        _cachedCultureDefinitions = null;
-        _cachedCultureNames = null;
         RefreshEditorsAfterCultureChanges();
     }
 
@@ -36487,6 +36510,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void RefreshEditorsAfterCultureChanges()
     {
+        _cachedCultureDefinitions = null;
+        _cachedCultureNames = null;
         var selectedGod = _majorGodView?.CurrentMajorGodName;
         var modifiedGods = _majorGodView?.IsModifiedMode == true;
         if (ReferenceEquals(_technologyHost.Content, _majorGodView))
@@ -37054,7 +37079,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 return moved;
             }, originalSources: _baseGameIconSources);
         await manager.ShowDialog(this);
-        LoadCurrentModAssetCatalogs();
+        ReloadIconCatalogsAfterManager();
         if ((_customIconPaths.Count != customCountBefore || assetMoved) && !string.IsNullOrWhiteSpace(_currentUnitName))
         {
             var tabIndex = _editorTabs.SelectedIndex;
@@ -38207,6 +38232,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             DeleteManagedTacticsFileAsync,
             ValidateManagedTacticsDeletionAsync);
         await window.ShowDialog(this);
+        RefreshEditorsAfterTacticsManager();
     }
 
     private async Task<bool> CommitPendingEntityDraftsAsync()
@@ -41435,7 +41461,6 @@ public partial class ProtoEditorWindow : SimpleWindow
                     weightTb = new TextBox
                     {
                         Text = string.IsNullOrWhiteSpace(entry?.Weight) ? "1" : entry!.Weight,
-                        PlaceholderText = "Weight",
                         IsEnabled = !_isReadOnly,
                         Margin = new Thickness(0)
                     };
@@ -42108,18 +42133,19 @@ public partial class ProtoEditorWindow : SimpleWindow
             return suggestions.ToList();
         }
 
-        AutoCompleteBox CreateOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? placeholder = null,
+        AutoCompleteBox CreateOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? fieldLabel = null,
             EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
         {
             var acb = new AutoCompleteBox
             {
                 Text = initialValue,
-                PlaceholderText = placeholder,
                 FilterMode = AutoCompleteFilterMode.Contains,
                 ItemsSource = MaterializeSuggestionItems(suggestions),
                 IsEnabled = !_isReadOnly
             };
             EditorTextFieldStyle.ConfigureSelector(acb, role);
+            if (!string.IsNullOrWhiteSpace(fieldLabel))
+                Avalonia.Automation.AutomationProperties.SetName(acb, fieldLabel);
             ConfigureUnitField(acb, role);
             EnableDropdownAutoComplete(acb, selectAllOnFirstClick: false);
             FreezeEditorScrollWhileDropDownIsOpen(acb, _editorScroll);
@@ -42127,7 +42153,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             return acb;
         }
 
-        AutoCompleteBox CreateValidatedOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? placeholder = null, bool allowCustom = false, bool suggestionsAlreadyNormalized = false)
+        AutoCompleteBox CreateValidatedOtherSuggestionBox(string initialValue, IEnumerable<string> suggestions, string? fieldLabel = null, bool allowCustom = false, bool suggestionsAlreadyNormalized = false)
         {
             var authoritativeSuggestions = (suggestionsAlreadyNormalized
                 ? MaterializeSuggestionItems(suggestions).ToList()
@@ -42147,7 +42173,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 suggestionList.Add(normalizedInitialValue);
             }
 
-            var acb = CreateOtherSuggestionBox(normalizedInitialValue, suggestionList, placeholder);
+            var acb = CreateOtherSuggestionBox(normalizedInitialValue, suggestionList, fieldLabel);
             string? selectedValue = suggestionList.FirstOrDefault(x => x.Equals(initialValue, StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrWhiteSpace(selectedValue))
                 acb.Text = selectedValue;
@@ -42195,14 +42221,14 @@ public partial class ProtoEditorWindow : SimpleWindow
 
                     SetStatsReferenceValidationError(
                         acb,
-                        $"{placeholder ?? "This reference"} must match an existing value.");
+                        $"{fieldLabel ?? "This reference"} must match an existing value.");
                 }, DispatcherPriority.Background);
             };
 
             if (!allowCustom)
             {
                 RegisterStatsStrictReferenceEditor(
-                    placeholder ?? "Reference",
+                    fieldLabel ?? "Reference",
                     acb,
                     () => acb.Text?.Trim() ?? "",
                     normalizedInitialValue,
@@ -53395,8 +53421,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             Width = 260,
             FilterMode = AutoCompleteFilterMode.Contains,
             ItemsSource = _isAbilityDefinitionEditorMode ? Array.Empty<string>() : _availableAbilityNames,
-            IsEnabled = !_isReadOnly,
-            PlaceholderText = "Existing or custom ability"
+            IsEnabled = !_isReadOnly
         };
         ConfigureUnitField(nameBox, EditorFieldWidthRole.SingleLineText);
         if (_isAbilityDefinitionEditorMode) _abilityDefinitionNameControl = nameBox;
@@ -53841,8 +53866,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         picker = new AutoCompleteBox
                         {
                             Width = 220,
-                            FilterMode = AutoCompleteFilterMode.Contains,
-                            PlaceholderText = "Unit type or proto unit"
+                            FilterMode = AutoCompleteFilterMode.Contains
                         };
                         ConfigureUnitField(picker, EditorFieldWidthRole.ChipSearch);
                         EditorAutoCompleteService.KeepDropDownAnchored(picker);
