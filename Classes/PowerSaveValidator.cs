@@ -201,13 +201,14 @@ public static class PowerSaveValidator
         sharedlos enemyattachprotounit
         """);
 
-    public static PowerSaveValidation Validate(XDocument document, PowerSaveCatalogs catalogs)
+    public static PowerSaveValidation Validate(XDocument document, PowerSaveCatalogs catalogs,
+        IReadOnlySet<string>? readOnlyAdditiveNames = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(catalogs);
 
         var errors = new LocatedValidationErrors();
-        var structural = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.Powers);
+        var structural = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.Powers, readOnlyAdditiveNames);
         errors.AddRange(structural.Errors.Select(issue => $"{issue.ObjectName}: {issue.Reason}"));
         if (!structural.IsSafeToEdit)
             return Result(errors);
@@ -215,6 +216,7 @@ public static class PowerSaveValidator
         var knownPowerTypes = catalogs.KnownPowerTypes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var power in document.Root!.Elements().Where(IsNamed("power")))
         {
+            if (readOnlyAdditiveNames?.Contains(PowerCatalog.GetName(power)) == true) continue;
             if (!PowerCatalog.IsModCatalogPower(power))
                 continue;
 

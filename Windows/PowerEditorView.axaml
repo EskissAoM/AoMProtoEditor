@@ -29,17 +29,22 @@
 
     <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
-        <Grid x:Name="_powerStructuredForm" Grid.RowSpan="2" RowDefinitions="Auto,*">
-        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+        <Grid x:Name="_powerStructuredForm" Grid.RowSpan="2" RowDefinitions="Auto,Auto,*">
+        <WrapPanel Orientation="Horizontal" Margin="0,0,0,10">
           <TextBlock Text="Power :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
-          <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
+          <TextBox x:Name="_nameBox" Width="380" MaxWidth="380" Margin="10,0,10,0"
                    HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold"
                    TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
-        </Grid>
-        <TabControl Grid.Row="1" x:Name="_powerTabs" SelectedIndex="0">
+          <TextBlock x:Name="_powerAdditiveSummary" IsVisible="False" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </WrapPanel>
+        <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
+          <TextBlock x:Name="_powerAdditiveDiagnostics" IsVisible="False" TextWrapping="Wrap"/>
+        </StackPanel>
+        <TabControl Grid.Row="2" x:Name="_powerTabs" SelectedIndex="0">
           <TabItem Classes="editorTab" Header="Properties">
             <ScrollViewer x:Name="_propertiesScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="10" Margin="0,12,15,0">
+                <StackPanel x:Name="_powerPropertyNotices" Spacing="4" IsVisible="False"/>
                 <TextBlock Text="──── Properties ────" FontWeight="Bold" FontSize="14"
                            Foreground="#C59A52" Margin="0,3,0,5"/>
                 <Grid>
@@ -510,6 +515,7 @@
             <ScrollViewer x:Name="_specificScroll" VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="10" Margin="0,12,15,0">
+                <StackPanel x:Name="_powerSpecificNotices" Spacing="4" IsVisible="False"/>
                 <Grid ColumnDefinitions="150,*" Margin="0,4,0,8">
                   <TextBlock Text="Power Type" VerticalAlignment="Center"/>
                   <AutoCompleteBox Grid.Column="1" x:Name="_powerTypeBox" Width="220" MaxWidth="220"

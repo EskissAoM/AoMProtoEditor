@@ -35,7 +35,7 @@ public partial class PowerEditorView : UserControl
     }
     private IReadOnlyList<ModDeletionInspection>? _immediateDeletionChecks;
     internal bool IsCurrentEntrySaved => _loadedModDocument != null && CurrentPowerName != null &&
-        PowerCatalog.Find(_loadedModDocument, _session.ReferenceNameForDeletion(CurrentPowerName)) != null;
+        FindPowerPatch(_loadedModDocument, _session.ReferenceNameForDeletion(CurrentPowerName)) != null;
     internal XDocument? CreateModifiedDocumentSnapshot()
         => CreatePowerXmlSnapshot();
     private static readonly string[] StringBackedTags = PowerCatalog.OwnedStringTags;
@@ -286,6 +286,7 @@ public partial class PowerEditorView : UserControl
         _baseEntries = composition.BaseDefinitions
             .GroupBy(definition => definition.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => new XElement(group.First().SourceElement), StringComparer.OrdinalIgnoreCase);
+        _basePowerCatalogAvailable = composition.BaseCatalogAvailable;
         _modPath = composition.ModPath;
         _modStringsPath = composition.ModStringsPath;
         _catalogs = composition.Catalogs;
@@ -969,7 +970,7 @@ public partial class PowerEditorView : UserControl
 
         if (!string.IsNullOrWhiteSpace(_modPath))
         {
-            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.Powers);
+            var prepared = LoadPowerSource();
             _modDocument = prepared.Document;
             _loadedFileState = prepared.LoadedState;
             _loadedModDocument = new XDocument(_modDocument);
@@ -986,8 +987,10 @@ public partial class PowerEditorView : UserControl
             return _baseEntries.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
         if (_modDocument?.Root == null)
             return [];
-        return PowerCatalog.ExtractDefinitions(_modDocument, isBuiltIn: false)
-            .Select(definition => definition.Name)
+        return _modDocument.Root.Elements(PowerCatalog.EntryName)
+            .Where(entry => _baseEntries.ContainsKey(PowerCatalog.GetName(entry)) || PowerCatalog.IsModCatalogPower(entry))
+            .Select(PowerCatalog.GetName).Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -1006,11 +1009,10 @@ public partial class PowerEditorView : UserControl
         EditorValidationNavigation.Clear(this);
         if (_commandGate.CurrentCount == 0 && !_allowSelectionDuringCommand)
             return;
+        ClearPowerAdditivePresentation();
         var entry = string.IsNullOrWhiteSpace(name)
             ? null
-            : IsModifiedMode
-                ? PowerCatalog.Find(_modDocument!, name)
-                : _baseEntries.GetValueOrDefault(name);
+            : ResolvePowerForReading(name);
         _session.Select(name, entry);
         _rawEditorDirty = CurrentPowerXmlDraft?.Session.IsDirty == true;
 
@@ -1021,7 +1023,7 @@ public partial class PowerEditorView : UserControl
             return;
         }
 
-        SetRawXml(PowerCatalog.FormatPreview(_currentEntry));
+        SetRawXml(PowerCatalog.FormatPreview(IsCurrentAdditivePower ? FindPowerPatch(_modDocument!, name!)! : _currentEntry));
         var generation = ++_populateGeneration;
         _populationTask = PopulatePropertiesSafelyAsync(_currentEntry, generation);
         _statusMessage.Text = IsModifiedMode
@@ -1128,9 +1130,9 @@ public partial class PowerEditorView : UserControl
                          _limitGlobalBox, _limitPlayerBox, _singleActivationCheck, _exclusiveCheck,
                          _activeTimeOnTargetCheck,
                          _exclusiveMessageBox })
-                control.IsEnabled = IsModifiedMode;
-            foreach (var control in ImplodeControls()) control.IsEnabled = IsModifiedMode;
-            foreach (var control in NewPowerControls()) control.IsEnabled = IsModifiedMode;
+                control.IsEnabled = IsEditablePower;
+            foreach (var control in ImplodeControls()) control.IsEnabled = IsEditablePower;
+            foreach (var control in NewPowerControls()) control.IsEnabled = IsEditablePower;
 
             foreach (var box in new[]
                      { _activeTimeBox, _buildUpBox, _shutDownBox, _shutDownFadeBox, _costBox, _repeatCostBox,
@@ -1278,13 +1280,14 @@ public partial class PowerEditorView : UserControl
                 await Task.Delay(25);
                 await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
                     static () => { }, Avalonia.Threading.DispatcherPriority.ApplicationIdle);
+                if (generation == _populateGeneration && ReferenceEquals(entry, _currentEntry)) PresentPowerAdditiveReading();
             }
         }
     }
 
     private bool CanEditProperties(XElement entry)
         => !_isPopulating && CurrentPowerXmlDraft?.Session.IsEditing != true &&
-           !_rawEditorDirty && IsModifiedMode && ReferenceEquals(entry, _currentEntry);
+           !_rawEditorDirty && IsEditablePower && ReferenceEquals(entry, _currentEntry);
 
     private (string Name, Grid Row, string[] Tags)[] OtherAttributeSpecs() =>
     [
@@ -1314,7 +1317,7 @@ public partial class PowerEditorView : UserControl
             StringComparer.OrdinalIgnoreCase));
 
     private bool OtherSelected(string name)
-        => !IsModifiedMode || _openOtherAttributes.Contains(name);
+        => !IsEditablePower || _openOtherAttributes.Contains(name);
 
     private (string Name, Grid Row, string[] Tags)[] SpecificAttributeSpecs() =>
     [
@@ -1539,7 +1542,7 @@ public partial class PowerEditorView : UserControl
             value.Equals(powerType, StringComparison.OrdinalIgnoreCase));
         _powerTypeBox.SelectedItem = knownPowerType;
         _powerTypeBox.Text = knownPowerType ?? powerType;
-        _powerTypeBox.IsEnabled = IsModifiedMode;
+        _powerTypeBox.IsEnabled = IsEditablePower;
         _openOtherSpecificAttributes.Clear();
         foreach (var (name, _, tags) in SpecificAttributeSpecs())
             if (HasOtherAttribute(entry, tags)) _openOtherSpecificAttributes.Add(name);
@@ -1650,8 +1653,8 @@ public partial class PowerEditorView : UserControl
             PowerCatalog.FindField(entry, "areaattackaction")?.Value);
         var useLargestGroup = PowerCatalog.FindField(entry, "uselargestgroupbelowminsize") != null;
         _meteorLargestGroupCheck.IsChecked = useLargestGroup;
-        _meteorLargestGroupCheck.IsVisible = IsModifiedMode || useLargestGroup;
-        _meteorLargestGroupCheck.IsEnabled = IsModifiedMode;
+        _meteorLargestGroupCheck.IsVisible = IsEditablePower || useLargestGroup;
+        _meteorLargestGroupCheck.IsEnabled = IsEditablePower;
         foreach (var box in new[] { _numberToTransformBox, _wallSegmentCountBox, _stayTimeBox,
                      _rootDurationBox, _slowHealMultiplierBox, _vibrantGenerateIntervalBox,
                      _vibrantRotateMinBox, _vibrantRotateMaxBox, _vibrantGrowthMinBox,
@@ -2270,7 +2273,7 @@ public partial class PowerEditorView : UserControl
             });
             var ageBox = ConfigurePowerFieldPresentation(new ComboBox
             {
-                Width = 150, ItemsSource = ageOptions, IsEnabled = IsModifiedMode,
+                Width = 150, ItemsSource = ageOptions, IsEnabled = IsEditablePower,
                 SelectedItem = ageOptions.FirstOrDefault(age => age.Equals(currentAge,
                     StringComparison.OrdinalIgnoreCase)), Margin = new Thickness(0, 0, 14, 0)
             }, EditorFieldWidthRole.LongEnum);
@@ -2284,11 +2287,11 @@ public partial class PowerEditorView : UserControl
             var numberBox = ConfigurePowerFieldPresentation(new TextBox
             {
                 Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(affectedNumber?.Value),
-                IsEnabled = IsModifiedMode
+                IsEnabled = IsEditablePower
             }, EditorFieldWidthRole.Numeric);
             EditorNumericInputBehavior.AttachRule(numberBox, ProtoUnitNumericKind.SignedInteger);
             row.Children.Add(numberBox);
-            if (IsModifiedMode)
+            if (IsEditablePower)
                 row.Children.Add(CreateTempUnitRemoveButton(() =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(adjustment);
@@ -2301,7 +2304,7 @@ public partial class PowerEditorView : UserControl
 
             ageBox.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string age ||
+                if (_isPopulating || !IsEditablePower || ageBox.SelectedItem is not string age ||
                     adjustment.Value.Trim().Equals(age, StringComparison.OrdinalIgnoreCase)) return;
                 adjustment.Value = age;
                 MarkCurrentDirty();
@@ -2311,7 +2314,7 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.Bind(numberBox, adjustment, "@affectedNumber");
             numberBox.TextChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode ||
+                if (_isPopulating || !IsEditablePower ||
                     !int.TryParse(numberBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture,
                         out _)) return;
                 var value = numberBox.Text!.Trim();
@@ -2326,18 +2329,18 @@ public partial class PowerEditorView : UserControl
             _foxCharmAgeFields.Add((ageBox, numberBox, adjustment));
         }
 
-        _addFoxCharmAgeButton.IsVisible = IsModifiedMode && adjustments.Count < StandardAges.Length;
+        _addFoxCharmAgeButton.IsVisible = IsEditablePower && adjustments.Count < StandardAges.Length;
         var hasVfx = new[] { "unitvfx", "targetunitvfx", "areavfx" }
             .Any(tag => PowerCatalog.FindField(entry, tag) != null);
         _foxCharmVfxOpen |= hasVfx;
-        _addFoxCharmVfxButton.IsVisible = IsModifiedMode && !_foxCharmVfxOpen;
+        _addFoxCharmVfxButton.IsVisible = IsEditablePower && !_foxCharmVfxOpen;
         _foxCharmVfxLabel.IsVisible = _foxCharmVfxOpen;
         _foxCharmVfxFields.IsVisible = _foxCharmVfxOpen;
-        _removeFoxCharmVfxButton.IsVisible = IsModifiedMode && _foxCharmVfxOpen;
-        _foxCharmUnitVfxFields.IsVisible = IsModifiedMode || PowerCatalog.FindField(entry, "unitvfx") != null;
-        _foxCharmTargetVfxFields.IsVisible = IsModifiedMode ||
+        _removeFoxCharmVfxButton.IsVisible = IsEditablePower && _foxCharmVfxOpen;
+        _foxCharmUnitVfxFields.IsVisible = IsEditablePower || PowerCatalog.FindField(entry, "unitvfx") != null;
+        _foxCharmTargetVfxFields.IsVisible = IsEditablePower ||
                                              PowerCatalog.FindField(entry, "targetunitvfx") != null;
-        _foxCharmAreaVfxFields.IsVisible = IsModifiedMode || PowerCatalog.FindField(entry, "areavfx") != null;
+        _foxCharmAreaVfxFields.IsVisible = IsEditablePower || PowerCatalog.FindField(entry, "areavfx") != null;
     }
 
     private static XAttribute? FindAttribute(XElement element, string name)
@@ -2408,23 +2411,23 @@ public partial class PowerEditorView : UserControl
         var selectedWolves = wolves.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(_fimbulWolfPicker, _protoUnitNames.Where(value => !selectedWolves.Contains(value)),
-            isVisible: () => IsModifiedMode && selectedWolves.Count < _protoUnitNames.Count);
+            isVisible: () => IsEditablePower && selectedWolves.Count < _protoUnitNames.Count);
         _fimbulWolfPicker.SelectedItem = null;
         _fimbulWolfPicker.Text = "";
-        _fimbulWolfPicker.IsVisible = IsModifiedMode && selectedWolves.Count < _protoUnitNames.Count;
-        _fimbulWolfUnitFields.IsVisible = IsModifiedMode || selectedWolves.Count > 0;
+        _fimbulWolfPicker.IsVisible = IsEditablePower && selectedWolves.Count < _protoUnitNames.Count;
+        _fimbulWolfUnitFields.IsVisible = IsEditablePower || selectedWolves.Count > 0;
         _fimbulWolfChips.Children.Clear();
         foreach (var wolf in wolves.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = wolf;
             _fimbulWolfChips.Children.Add(PowerEditorDynamicControls.CreateChip(wolf.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RefreshFimbulFields(entry);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
 
         PopulateStrictUnitOrTypeBox(_fimbulMainPackTargetBox,
@@ -2453,22 +2456,22 @@ public partial class PowerEditorView : UserControl
 
         var wolfVfxOpen = PowerCatalog.FindField(entry, "wolfvfx") != null;
         _fimbulWolfVfxFields.IsVisible = wolfVfxOpen &&
-            (IsModifiedMode || !string.IsNullOrWhiteSpace(PowerCatalog.FindField(entry, "wolfvfx")?.Value));
-        _addFimbulWolfVfxButton.IsVisible = IsModifiedMode && !wolfVfxOpen;
-        _removeFimbulWolfVfxButton.IsVisible = IsModifiedMode && wolfVfxOpen;
+            (IsEditablePower || !string.IsNullOrWhiteSpace(PowerCatalog.FindField(entry, "wolfvfx")?.Value));
+        _addFimbulWolfVfxButton.IsVisible = IsEditablePower && !wolfVfxOpen;
+        _removeFimbulWolfVfxButton.IsVisible = IsEditablePower && wolfVfxOpen;
 
         var extraSpawnsOpen = PowerCatalog.FindField(entry, "numextramainpackspawns") != null;
         _fimbulExtraSpawnsFields.IsVisible = extraSpawnsOpen &&
-            (IsModifiedMode || !string.IsNullOrWhiteSpace(
+            (IsEditablePower || !string.IsNullOrWhiteSpace(
                 PowerCatalog.FindField(entry, "numextramainpackspawns")?.Value));
-        _addFimbulExtraSpawnsButton.IsVisible = IsModifiedMode && !extraSpawnsOpen;
-        _removeFimbulExtraSpawnsButton.IsVisible = IsModifiedMode && extraSpawnsOpen;
+        _addFimbulExtraSpawnsButton.IsVisible = IsEditablePower && !extraSpawnsOpen;
+        _removeFimbulExtraSpawnsButton.IsVisible = IsEditablePower && extraSpawnsOpen;
 
         RefreshFimbulSnowDrifts(entry);
     }
 
     private void SetFimbulFieldVisibility(XElement entry, Control fields, params string[] tags)
-        => fields.IsVisible = IsModifiedMode || tags.Any(tag =>
+        => fields.IsVisible = IsEditablePower || tags.Any(tag =>
             !string.IsNullOrWhiteSpace(PowerCatalog.FindField(entry, tag)?.Value));
 
     private void FimbulWolfPicker_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -2528,8 +2531,8 @@ public partial class PowerEditorView : UserControl
         var open = drifts.Count > 0;
         _fimbulSnowDriftLabel.IsVisible = open;
         _fimbulSnowDriftRows.IsVisible = open;
-        _addFimbulSnowDriftOptionalButton.IsVisible = IsModifiedMode && !open;
-        _addFimbulSnowDriftButton.IsVisible = IsModifiedMode && open;
+        _addFimbulSnowDriftOptionalButton.IsVisible = IsEditablePower && !open;
+        _addFimbulSnowDriftButton.IsVisible = IsEditablePower && open;
         foreach (var drift in drifts) BuildFimbulSnowDriftEntry(drift);
     }
 
@@ -2537,7 +2540,7 @@ public partial class PowerEditorView : UserControl
     {
         var targetValue = element.Attribute("target")?.Value ?? "";
         var driftValue = element.Value;
-        if (!IsModifiedMode && string.IsNullOrWhiteSpace(targetValue) &&
+        if (!IsEditablePower && string.IsNullOrWhiteSpace(targetValue) &&
             string.IsNullOrWhiteSpace(driftValue))
             return;
         var row = new WrapPanel
@@ -2553,7 +2556,7 @@ public partial class PowerEditorView : UserControl
         var target = ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Width = 200, MaxWidth = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 0)
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 8, 0)
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(target, _unitOrTypeNames,
             targetValue, () => _isPopulating,
@@ -2575,7 +2578,7 @@ public partial class PowerEditorView : UserControl
         var drift = ConfigurePowerFieldPresentation(new AutoCompleteBox
         {
             Width = 200, MaxWidth = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(drift, _protoUnitNames, element.Value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
@@ -2588,9 +2591,9 @@ public partial class PowerEditorView : UserControl
         drift.Text = element.Value;
         EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(drift, _specificScroll);
         row.Children.Add(drift);
-        targetLabel.IsVisible = target.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(targetValue);
-        driftLabel.IsVisible = drift.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(driftValue);
-        if (IsModifiedMode)
+        targetLabel.IsVisible = target.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(targetValue);
+        driftLabel.IsVisible = drift.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(driftValue);
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.Click += (_, _) =>
@@ -2633,8 +2636,8 @@ public partial class PowerEditorView : UserControl
 
         _cageKillSimilarLabel.IsVisible = _cageKillSimilarOpen;
         _cageKillSimilarFields.IsVisible = _cageKillSimilarOpen;
-        _addCageKillSimilarButton.IsVisible = IsModifiedMode && !_cageKillSimilarOpen;
-        _removeCageKillSimilarButton.IsVisible = IsModifiedMode && _cageKillSimilarOpen;
+        _addCageKillSimilarButton.IsVisible = IsEditablePower && !_cageKillSimilarOpen;
+        _removeCageKillSimilarButton.IsVisible = IsEditablePower && _cageKillSimilarOpen;
 
         var similarTypes = PowerCatalog.FindField(entry, "similarunittypes")?.Elements()
             .Where(element => element.Name.LocalName.Equals("unittype", StringComparison.OrdinalIgnoreCase))
@@ -2642,17 +2645,17 @@ public partial class PowerEditorView : UserControl
         var selectedTypes = similarTypes.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(_cageSimilarTypePicker, _unitTypeNames.Where(value => !selectedTypes.Contains(value)),
-            isVisible: () => IsModifiedMode && selectedTypes.Count < _unitTypeNames.Count);
+            isVisible: () => IsEditablePower && selectedTypes.Count < _unitTypeNames.Count);
         _cageSimilarTypePicker.SelectedItem = null;
         _cageSimilarTypePicker.Text = "";
-        _cageSimilarTypePicker.IsVisible = IsModifiedMode && _cageKillSimilarOpen &&
+        _cageSimilarTypePicker.IsVisible = IsEditablePower && _cageKillSimilarOpen &&
                                            selectedTypes.Count < _unitTypeNames.Count;
         _cageSimilarTypeChips.Children.Clear();
         foreach (var type in similarTypes.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = type;
             _cageSimilarTypeChips.Children.Add(PowerEditorDynamicControls.CreateChip(type.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     var container = captured.Parent;
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
@@ -2660,14 +2663,14 @@ public partial class PowerEditorView : UserControl
                         PowerCatalog.SetField(entry, "killsimilartargetsinradius", "false");
                     RefreshCageFields(entry);
                     MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
         RefreshCageResourceMultipliers(entry);
 
         _cageVfxLabel.IsVisible = _cageVfxOpen;
         _cageVfxFields.IsVisible = _cageVfxOpen;
-        _addCageVfxButton.IsVisible = IsModifiedMode && !_cageVfxOpen;
-        _removeCageVfxButton.IsVisible = IsModifiedMode && _cageVfxOpen;
+        _addCageVfxButton.IsVisible = IsEditablePower && !_cageVfxOpen;
+        _removeCageVfxButton.IsVisible = IsEditablePower && _cageVfxOpen;
         foreach (var box in new[] { _cageVfxAreaBox, _cageVfxMainTargetBox,
                      _cageVfxMainImpactBox, _cageVfxMarkAnimBox, _cageVfxAdditionalImpactBox })
             PopulateStrictProtoBox(box, PowerCatalog.FindField(entry, NewPowerProtoTag(box))?.Value);
@@ -2689,8 +2692,8 @@ public partial class PowerEditorView : UserControl
 
         _cageSoundLabel.IsVisible = _cageSoundOpen;
         _cageSoundFields.IsVisible = _cageSoundOpen;
-        _addCageSoundButton.IsVisible = IsModifiedMode && !_cageSoundOpen;
-        _removeCageSoundButton.IsVisible = IsModifiedMode && _cageSoundOpen;
+        _addCageSoundButton.IsVisible = IsEditablePower && !_cageSoundOpen;
+        _removeCageSoundButton.IsVisible = IsEditablePower && _cageSoundOpen;
         _cageAdditionalImpactSoundBox.ItemsSource = GetSoundSetSuggestions();
         _cageAdditionalImpactSoundBox.Text =
             PowerCatalog.FindField(entry, "additionalimpactsoundset")?.Value ?? "";
@@ -2709,8 +2712,8 @@ public partial class PowerEditorView : UserControl
     {
         var open = tags.Any(tag => PowerCatalog.FindField(entry, tag) != null);
         fields.IsVisible = _cageVfxOpen && open;
-        add.IsVisible = IsModifiedMode && _cageVfxOpen && !open;
-        remove.IsVisible = IsModifiedMode && _cageVfxOpen && open;
+        add.IsVisible = IsEditablePower && _cageVfxOpen && !open;
+        remove.IsVisible = IsEditablePower && _cageVfxOpen && open;
     }
 
     private void ReorderCageVfxControls()
@@ -2814,7 +2817,7 @@ public partial class PowerEditorView : UserControl
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 8) };
             var resource = ConfigurePowerFieldPresentation(new ComboBox
             {
-                Width = 120, IsEnabled = IsModifiedMode,
+                Width = 120, IsEnabled = IsEditablePower,
                 ItemsSource = resourceOptions,
                 SelectedItem = resourceOptions.FirstOrDefault(value =>
                     value.Equals(current, StringComparison.OrdinalIgnoreCase))
@@ -2822,13 +2825,13 @@ public partial class PowerEditorView : UserControl
             var multiplier = ConfigurePowerFieldPresentation(new TextBox
             {
                 Text = EditorNumericFieldStyle.FormatDisplay(element.Value),
-                IsEnabled = IsModifiedMode, Margin = new Thickness(6, 0, 0, 0)
+                IsEnabled = IsEditablePower, Margin = new Thickness(6, 0, 0, 0)
             }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(multiplier);
             EditorValidationBindings.Bind(resource, element, "@resourcetype");
             resource.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || resource.SelectedItem is not string selected) return;
+                if (_isPopulating || !IsEditablePower || resource.SelectedItem is not string selected) return;
                 if (element.Attribute("resourcetype")?.Value.Equals(selected,
                         StringComparison.OrdinalIgnoreCase) == true) return;
                 element.SetAttributeValue("resourcetype", selected);
@@ -2838,7 +2841,7 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.BindXml(multiplier, element);
             multiplier.TextChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode ||
+                if (_isPopulating || !IsEditablePower ||
                     !double.TryParse(multiplier.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                         out var value) || !double.IsFinite(value)) return;
                 if (NumericTextEquals(element.Value, multiplier.Text!.Trim())) return;
@@ -2846,7 +2849,7 @@ public partial class PowerEditorView : UserControl
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             row.Children.Add(resource); row.Children.Add(multiplier);
-            if (IsModifiedMode)
+            if (IsEditablePower)
             {
                 var remove = PowerEditorDynamicControls.CreateRemoveButton();
                 remove.Click += (_, _) =>
@@ -2861,7 +2864,7 @@ public partial class PowerEditorView : UserControl
             EditorFormLayout.UseInlineRowLayout(row);
             _cageResourceMultiplierRows.Children.Add(row);
         }
-        _addCageResourceMultiplierButton.IsVisible = IsModifiedMode && _cageKillSimilarOpen &&
+        _addCageResourceMultiplierButton.IsVisible = IsEditablePower && _cageKillSimilarOpen &&
             ProtoConstants.KnownResourceTypes.Any(resource => !used.Contains(resource));
         if (_addCageResourceMultiplierButton.Parent is Panel oldParent) oldParent.Children.Remove(_addCageResourceMultiplierButton);
         _addCageResourceMultiplierButton.Margin = new Thickness(0, 0, 12, 8);
@@ -2973,7 +2976,7 @@ public partial class PowerEditorView : UserControl
         foreach (var effect in entry.Elements().Where(element =>
                      element.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
             BuildRainEffectCard(effect, _sharedEffectRows);
-        _addSharedEffectButton.IsVisible = IsModifiedMode;
+        _addSharedEffectButton.IsVisible = IsEditablePower;
     }
 
     private void RefreshProsperityTypes(XElement entry)
@@ -2983,21 +2986,21 @@ public partial class PowerEditorView : UserControl
         var selected = elements.Select(element => element.Value.Trim()).Where(value => value.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(_prosperityTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)),
-            isVisible: () => IsModifiedMode && selected.Count < _unitOrTypeNames.Count);
+            isVisible: () => IsEditablePower && selected.Count < _unitOrTypeNames.Count);
         _prosperityTypePicker.SelectedItem = null;
         _prosperityTypePicker.Text = "";
-        _prosperityTypePicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
+        _prosperityTypePicker.IsVisible = IsEditablePower && selected.Count < _unitOrTypeNames.Count;
         _prosperityTypeChips.Children.Clear();
         foreach (var element in elements.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = element;
             _prosperityTypeChips.Children.Add(PowerEditorDynamicControls.CreateChip(element.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RefreshProsperityTypes(entry);
                     MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
     }
 
@@ -3096,7 +3099,7 @@ public partial class PowerEditorView : UserControl
         foreach (var effect in entry.Elements().Where(element =>
                      element.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
             BuildRainEffectCard(effect, _rainEffectRows);
-        _addRainEffectButton.IsVisible = IsModifiedMode;
+        _addRainEffectButton.IsVisible = IsEditablePower;
     }
 
     private static bool IsEffectInAreaPower(XElement entry)
@@ -3108,14 +3111,14 @@ public partial class PowerEditorView : UserControl
 
         var repeatDelay = PowerCatalog.FindField(entry, "repeatdelay");
         _effectInAreaRepeatDelayFields.IsVisible = repeatDelay != null;
-        _addEffectInAreaRepeatDelayButton.IsVisible = IsModifiedMode && repeatDelay == null;
-        _removeEffectInAreaRepeatDelayButton.IsVisible = IsModifiedMode && repeatDelay != null;
+        _addEffectInAreaRepeatDelayButton.IsVisible = IsEditablePower && repeatDelay == null;
+        _removeEffectInAreaRepeatDelayButton.IsVisible = IsEditablePower && repeatDelay != null;
 
         _effectInAreaOnHitRows.Children.Clear();
         foreach (var effect in entry.Elements().Where(element =>
                      element.Name.LocalName.Equals("onhiteffect", StringComparison.OrdinalIgnoreCase)))
             BuildEffectInAreaOnHitCard(effect);
-        _addEffectInAreaOnHitButton.IsVisible = IsModifiedMode;
+        _addEffectInAreaOnHitButton.IsVisible = IsEditablePower;
     }
 
     private void AddEffectInAreaRepeatDelay_Click(object? sender, RoutedEventArgs e)
@@ -3159,15 +3162,15 @@ public partial class PowerEditorView : UserControl
             Text = typeValue,
             Width = 170,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditablePower
         }, EditorFieldWidthRole.LongEnum);
         var activeCheck = new CheckBox
         {
             IsChecked = effect.Attribute("active")?.Value.Trim() is not ("0" or "false"),
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             VerticalAlignment = VerticalAlignment.Center
         };
-        var card = new OnHitEffectEditor(typeBox, activeCheck, !IsModifiedMode, supported,
+        var card = new OnHitEffectEditor(typeBox, activeCheck, !IsEditablePower, supported,
             showActiveField: false);
         _effectInAreaOnHitRows.Children.Add(card);
         if (_invalidEffectTypes.Contains(effect) && string.IsNullOrWhiteSpace(typeValue)) typeBox.Classes.Add("invalid-field");
@@ -3268,7 +3271,7 @@ public partial class PowerEditorView : UserControl
         if (flag)
         {
             var check = new CheckBox { IsChecked = effect.Attribute(name) != null,
-                IsEnabled = IsModifiedMode, VerticalAlignment = VerticalAlignment.Center };
+                IsEnabled = IsEditablePower, VerticalAlignment = VerticalAlignment.Center };
             check.IsCheckedChanged += (_, _) =>
             {
                 if (_isPopulating || _currentEntry == null || !CanEditProperties(_currentEntry)) return;
@@ -3292,7 +3295,7 @@ public partial class PowerEditorView : UserControl
         };
         if (catalog != null)
         {
-            var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 180, Text = current, IsEnabled = IsModifiedMode,
+            var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 180, Text = current, IsEnabled = IsEditablePower,
                 FilterMode = AutoCompleteFilterMode.Contains }, PowerOnHitCatalogRole(name));
             EditorValidationBindings.Bind(box, effect, "@" + name);
             EditorAutoCompleteService.ConfigureStrict(box, catalog, current, () => _isPopulating,
@@ -3304,7 +3307,7 @@ public partial class PowerEditorView : UserControl
         else
         {
             var box = ConfigurePowerFieldPresentation(new TextBox { Width = 100, Text = EditorNumericFieldStyle.FormatDisplay(current),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorValidationBindings.Bind(box, effect, "@" + name);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             box.TextChanged += (_, _) => CommitEffectInAreaOnHitAttribute(effect, name, box.Text ?? "");
@@ -3344,7 +3347,7 @@ public partial class PowerEditorView : UserControl
             var damageTypeOptions = OptionsIncludingCurrent(ProtoConstants.KnownDamageTypes, currentDamageType);
             var type = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageTypeOptions,
                 SelectedItem = damageTypeOptions.FirstOrDefault(value => value.Equals(
-                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             EditorValidationBindings.Bind(type, damage, "@type");
             type.SelectionChanged += (_, _) =>
             {
@@ -3354,7 +3357,7 @@ public partial class PowerEditorView : UserControl
                 damage.SetAttributeValue("type", value); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             var amount = ConfigurePowerFieldPresentation(new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(damage.Value),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
             EditorValidationBindings.BindXml(amount, damage);
             amount.TextChanged += (_, _) =>
@@ -3366,7 +3369,7 @@ public partial class PowerEditorView : UserControl
                 damage.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             row.Children.Add(type); row.Children.Add(amount);
-            if (IsModifiedMode)
+            if (IsEditablePower)
             {
                 var remove = PowerEditorDynamicControls.CreateRemoveButton();
                 remove.Margin = new Thickness(2, 0, 0, 0);
@@ -3379,7 +3382,7 @@ public partial class PowerEditorView : UserControl
             }
             rows.Children.Add(row);
         }
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var add = PowerEditorDynamicControls.CreateOptionalButton("Add Damage");
             add.Margin = new Thickness(0, 0, 8, 4);
@@ -3421,7 +3424,7 @@ public partial class PowerEditorView : UserControl
         section.Children.Add(modifyRows);
         foreach (var modify in modifies)
             AddEffectInAreaModifyRow(modifyRows, effect, modify);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var add = PowerEditorDynamicControls.CreateOptionalButton("Add Modifier");
             add.Margin = new Thickness(0, 0, 8, 4);
@@ -3434,7 +3437,7 @@ public partial class PowerEditorView : UserControl
             modifyRows.Children.Add(add);
         }
 
-        if (ramps.Count > 0 || IsModifiedMode)
+        if (ramps.Count > 0 || IsEditablePower)
         {
             section.Children.Add(new TextBlock { Text = "Modifier Ramps", FontWeight = FontWeight.Bold,
                 Margin = new Thickness(0, 3, 0, 0) });
@@ -3442,7 +3445,7 @@ public partial class PowerEditorView : UserControl
             section.Children.Add(rampRows);
             foreach (var ramp in ramps)
                 AddEffectInAreaModifyRampRow(rampRows, effect, ramp);
-            if (IsModifiedMode)
+            if (IsEditablePower)
             {
                 var addRamp = PowerEditorDynamicControls.CreateOptionalButton("Add Modifier Ramp");
                 addRamp.Margin = new Thickness(0, 0, 8, 4);
@@ -3464,7 +3467,7 @@ public partial class PowerEditorView : UserControl
         var row = new WrapPanel { Margin = new Thickness(0, 0, 12, 4) };
         var typeValue = modify.Attribute("type")?.Value.Trim() ?? "";
         var type = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
-            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
+            IsEnabled = IsEditablePower, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
         var displayTypes = ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName).ToList();
         EditorValidationBindings.Bind(type, modify, "@type");
         EditorAutoCompleteService.ConfigureStrict(type, displayTypes, type.Text ?? "", () => _isPopulating,
@@ -3487,7 +3490,7 @@ public partial class PowerEditorView : UserControl
         var applyOptions = OptionsIncludingCurrent(["Multiply", "Add", "Set"], currentApply);
         var apply = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = applyOptions,
             SelectedItem = applyOptions.First(value => value.Equals(
-                currentApply, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode,
+                currentApply, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower,
             Tag = "applytype" }, EditorFieldWidthRole.ShortEnum);
         apply.SelectionChanged += (_, _) =>
         {
@@ -3509,7 +3512,7 @@ public partial class PowerEditorView : UserControl
             var damage = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageOptions,
                 SelectedItem = damageOptions.FirstOrDefault(value => value.Equals(
                     currentDamageType, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             EditorValidationBindings.Bind(damage, modify, "@dmgtype");
             damage.SelectionChanged += (_, _) =>
             {
@@ -3521,7 +3524,7 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(CreateEffectInAreaLabeledGroup("Damage Type", damage));
         }
         var amount = ConfigurePowerFieldPresentation(new TextBox { Width = 80, Text = EditorNumericFieldStyle.FormatDisplay(modify.Value),
-            IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+            IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
         EditorValidationBindings.BindXml(amount, modify);
         amount.TextChanged += (_, _) =>
@@ -3535,7 +3538,7 @@ public partial class PowerEditorView : UserControl
         };
         row.Children.Add(CreateEffectInAreaLabeledGroup("Value", amount));
         var stack = new CheckBox { Content = "Stack", IsChecked = modify.Attribute("stack") != null,
-            IsEnabled = IsModifiedMode, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            IsEnabled = IsEditablePower, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         EditorValidationBindings.Bind(stack, modify, "@stack");
         stack.IsCheckedChanged += (_, _) =>
         {
@@ -3544,7 +3547,7 @@ public partial class PowerEditorView : UserControl
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         };
         row.Children.Add(stack);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.Margin = new Thickness(2, 0, 0, 0);
@@ -3563,7 +3566,7 @@ public partial class PowerEditorView : UserControl
         var row = new WrapPanel { Margin = new Thickness(0, 0, 12, 4) };
         var typeValue = ramp.Attribute("type")?.Value.Trim() ?? "";
         var type = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 170, Text = ProtoConstants.GetModifyTypeDisplayName(typeValue),
-            IsEnabled = IsModifiedMode, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
+            IsEnabled = IsEditablePower, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.LongEnum);
         var displayTypes = ProtoConstants.KnownModifyTypes.Select(ProtoConstants.GetModifyTypeDisplayName).ToList();
         EditorValidationBindings.Bind(type, ramp, "@type");
         EditorAutoCompleteService.ConfigureStrict(type, displayTypes, type.Text ?? "", () => _isPopulating,
@@ -3588,7 +3591,7 @@ public partial class PowerEditorView : UserControl
             var damageOptions = OptionsIncludingCurrent(damageTypes, currentDamageType);
             var damage = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = damageOptions,
                 SelectedItem = damageOptions.FirstOrDefault(value => value.Equals(
-                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                    currentDamageType, StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             EditorValidationBindings.Bind(damage, ramp, "@dmgtype");
             damage.SelectionChanged += (_, _) =>
             {
@@ -3602,7 +3605,7 @@ public partial class PowerEditorView : UserControl
         foreach (var (label, attribute) in new[] { ("Init Value", "init"), ("Final Value", "final") })
         {
             var box = ConfigurePowerFieldPresentation(new TextBox { Width = 80,
-                Text = EditorNumericFieldStyle.FormatDisplay(ramp.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                Text = EditorNumericFieldStyle.FormatDisplay(ramp.Attribute(attribute)?.Value), IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             EditorValidationBindings.Bind(box, ramp, "@" + attribute);
             box.TextChanged += (_, _) =>
@@ -3619,7 +3622,7 @@ public partial class PowerEditorView : UserControl
             };
             row.Children.Add(CreateEffectInAreaLabeledGroup(label, box));
         }
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.Margin = new Thickness(2, 0, 0, 0);
@@ -3653,7 +3656,7 @@ public partial class PowerEditorView : UserControl
             .ToList();
         var pickerRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         pickerRow.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains }, EditorFieldWidthRole.ChipSearch);
             var selected = targets.Select(target => target.Attribute(attributeName)!.Value)
@@ -3680,12 +3683,12 @@ public partial class PowerEditorView : UserControl
         {
             var captured = target;
             chips.Children.Add(PowerEditorDynamicControls.CreateChip(target.Attribute(attributeName)!.Value,
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     if (_currentEntry == null) return;
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RefreshEffectInAreaFields(_currentEntry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
         host.Children.Add(chips); section.Children.Add(host);
     }
@@ -3722,8 +3725,8 @@ public partial class PowerEditorView : UserControl
 
         var timer = PowerCatalog.FindField(entry, "timerrolloverid");
         _switchingTimerRolloverFields.IsVisible = !hidden && timer != null;
-        _addSwitchingTimerRolloverButton.IsVisible = IsModifiedMode && !hidden && timer == null;
-        _removeSwitchingTimerRolloverButton.IsVisible = IsModifiedMode && !hidden && timer != null;
+        _addSwitchingTimerRolloverButton.IsVisible = IsEditablePower && !hidden && timer == null;
+        _removeSwitchingTimerRolloverButton.IsVisible = IsEditablePower && !hidden && timer != null;
         _switchingTimerRolloverBox.Tag = new SwitchingStringBinding
         {
             Owner = entry, Tag = "timerrolloverid",
@@ -3737,24 +3740,24 @@ public partial class PowerEditorView : UserControl
         var selected = targets.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _switchingVfxAttachOpen = _switchingVfxAttachOpen || targets.Count > 0;
-        _addSwitchingVfxAttachButton.IsVisible = IsModifiedMode && !_switchingVfxAttachOpen;
+        _addSwitchingVfxAttachButton.IsVisible = IsEditablePower && !_switchingVfxAttachOpen;
         _switchingVfxAttachLabel.IsVisible = _switchingVfxAttachOpen;
         _switchingVfxAttachFields.IsVisible = _switchingVfxAttachOpen;
-        _removeSwitchingVfxAttachButton.IsVisible = IsModifiedMode;
+        _removeSwitchingVfxAttachButton.IsVisible = IsEditablePower;
         EditorAutoCompleteService.SetCatalogSuggestions(_switchingVfxAttachPicker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
         _switchingVfxAttachPicker.SelectedItem = null;
         _switchingVfxAttachPicker.Text = "";
-        _switchingVfxAttachPicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
+        _switchingVfxAttachPicker.IsVisible = IsEditablePower && selected.Count < _unitOrTypeNames.Count;
         _switchingVfxAttachChips.Children.Clear();
         foreach (var target in targets.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = target;
             _switchingVfxAttachChips.Children.Add(PowerEditorDynamicControls.CreateChip(target.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RefreshSwitchingFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
 
         _switchingStringFields.Clear();
@@ -3764,7 +3767,7 @@ public partial class PowerEditorView : UserControl
         var tooltipIndex = 0;
         for (var index = 0; index < effects.Count; index++)
             BuildSwitchingEffectContainer(effects[index], index, ref tooltipIndex, tierType);
-        _addSwitchingEffectContainerButton.IsVisible = IsModifiedMode;
+        _addSwitchingEffectContainerButton.IsVisible = IsEditablePower;
         // The main population path resolves these fields after all controls have been built.
         // Only interaction-driven rebuilds need their own resolution pass.
         if (!_isPopulating)
@@ -3807,7 +3810,7 @@ public partial class PowerEditorView : UserControl
             foreach (var field in extras.Elements().Where(element =>
                          element.Name.LocalName.Equals("string", StringComparison.OrdinalIgnoreCase)).ToList())
                 AddSwitchingExtraTooltipField(extraTooltips, extras, field, tooltipIndex++);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var addExtra = PowerEditorDynamicControls.CreateOptionalButton("Extra Tooltips", container);
             addExtra.Margin = new Thickness(0, 0, 8, 4);
@@ -3836,7 +3839,7 @@ public partial class PowerEditorView : UserControl
                      element.Name.LocalName.Equals("effect", StringComparison.OrdinalIgnoreCase)))
             BuildRainEffectCard(effect, rows);
         effectSection.Children.Add(rows);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var add = PowerEditorDynamicControls.CreateOptionalButton("Add Effect", container);
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -3851,7 +3854,7 @@ public partial class PowerEditorView : UserControl
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(content);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton(container);
             remove.VerticalAlignment = VerticalAlignment.Top;
@@ -3869,12 +3872,12 @@ public partial class PowerEditorView : UserControl
         string expectedId, bool multiline = false, double width = 240)
     {
         var field = PowerCatalog.FindField(owner, tag);
-        if (field == null && !IsModifiedMode) return;
+        if (field == null && !IsEditablePower) return;
         var binding = new SwitchingStringBinding
             { Owner = owner, Tag = tag, ExpectedId = expectedId, Field = field };
         var box = new TextBox { Width = width, Tag = binding,
             Text = field == null ? "" : PendingOrId(field.Value.Trim()),
-            IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 4) };
+            IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 8, 4) };
         if (multiline)
         {
             EditorRolloverField.Configure(box);
@@ -3894,13 +3897,13 @@ public partial class PowerEditorView : UserControl
     private void AddSwitchingIconField(WrapPanel row, XElement owner)
     {
         var field = PowerCatalog.FindField(owner, "icon");
-        if (field == null && !IsModifiedMode) return;
+        if (field == null && !IsEditablePower) return;
         var current = IconCatalog.ToResourceRelativePath(field?.Value.Trim() ?? "");
         current = ProtoEditorWindow.NormalizeIconCatalogValue(current, _iconPaths);
         var editor = ConfigurePowerFieldPresentation(new AssetPathEditor
         {
             Width = 240,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 8, 4)
         }, EditorFieldWidthRole.AssetPath);
         editor.Configure(current, _iconPaths.Append(current), value =>
@@ -3921,7 +3924,7 @@ public partial class PowerEditorView : UserControl
     private void AddSwitchingSoundField(WrapPanel row, XElement owner)
     {
         var field = PowerCatalog.FindField(owner, "notificationsound");
-        if (field == null && !IsModifiedMode) return;
+        if (field == null && !IsEditablePower) return;
         var current = field?.Value.Trim() ?? "";
         var box = CreateRainStrictSelector(GetSoundSetSuggestions().Append(current), current, value =>
         {
@@ -3946,11 +3949,11 @@ public partial class PowerEditorView : UserControl
             var resource = ConfigurePowerFieldPresentation(new ComboBox { Width = 130, ItemsSource = resourceOptions,
                 SelectedItem = resourceOptions.First(value =>
                     value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.ShortEnum);
+                IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.ShortEnum);
             EditorValidationBindings.Bind(resource, owner, "resourcetierreq/@type");
             resource.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || resource.SelectedItem is not string value) return;
+                if (_isPopulating || !IsEditablePower || resource.SelectedItem is not string value) return;
                 if (field?.Attribute("type")?.Value.Equals(value,
                         StringComparison.OrdinalIgnoreCase) == true) return;
                 field ??= PowerCatalog.SetField(owner, "resourcetierreq", "0");
@@ -3972,13 +3975,13 @@ public partial class PowerEditorView : UserControl
     private TextBox CreateSwitchingIntegerBox(XElement owner, string tag, XElement? field)
     {
         var box = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(field?.Value),
-            IsEnabled = IsModifiedMode, Tag = field, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.Numeric);
+            IsEnabled = IsEditablePower, Tag = field, Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorValidationBindings.Bind(box, owner, tag);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
         box.TextChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || !box.IsVisible ||
+            if (_isPopulating || !IsEditablePower || !box.IsVisible ||
                 !int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value < 0)
                 return;
             if (NumericTextEquals(field?.Value, box.Text!.Trim())) return;
@@ -3993,7 +3996,7 @@ public partial class PowerEditorView : UserControl
         var binding = new SwitchingStringBinding { Owner = owner, Tag = "string",
             ExpectedId = SwitchingStringId(CurrentPowerName!, "TOOLTIP", index), Field = field };
         var box = new TextBox { Width = 220, Tag = binding, Text = PendingOrId(field.Value.Trim()),
-            IsEnabled = IsModifiedMode };
+            IsEnabled = IsEditablePower };
         EditorTextFieldStyle.ConfigureTextBox(box);
         ConfigurePowerFieldPresentation(box, EditorFieldWidthRole.ShortRollover);
         RegisterSwitchingStringField(box, binding);
@@ -4005,7 +4008,7 @@ public partial class PowerEditorView : UserControl
         group.Children.Add(new TextBlock { Text = "Extra Tooltip", VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0) });
         group.Children.Add(box);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton(field);
             remove.VerticalAlignment = VerticalAlignment.Center;
@@ -4029,7 +4032,7 @@ public partial class PowerEditorView : UserControl
     {
         if (sender is not TextBox { Tag: SwitchingStringBinding binding } box) return;
         if (ConsumeProgrammaticStringBoxChange(box)) return;
-        if (_isPopulating || !IsModifiedMode || _currentEntry == null) return;
+        if (_isPopulating || !IsEditablePower || _currentEntry == null) return;
         if (!box.IsVisible) return;
         if (binding.Tag.Equals("timerrolloverid", StringComparison.OrdinalIgnoreCase) &&
             PowerCatalog.FindField(_currentEntry, "hidewheelview") != null)
@@ -4359,16 +4362,16 @@ public partial class PowerEditorView : UserControl
         _modifyVfxBoneBox.Text = boneValue;
         PopulateStrictProtoBox(_modifyVfxBirthBox, birth?.Value);
 
-        _addModifyVfxButton.IsVisible = IsModifiedMode && !_modifyVfxOpen;
+        _addModifyVfxButton.IsVisible = IsEditablePower && !_modifyVfxOpen;
         _modifyVfxLabel.IsVisible = _modifyVfxOpen;
         _modifyVfxFields.IsVisible = _modifyVfxOpen;
         _modifyVfxTargetFields.IsVisible = targetOpen;
-        _addModifyVfxTargetButton.IsVisible = IsModifiedMode && !targetOpen;
+        _addModifyVfxTargetButton.IsVisible = IsEditablePower && !targetOpen;
         _modifyVfxBirthFields.IsVisible = !newMoon && birthOpen;
-        _addModifyVfxBirthButton.IsVisible = IsModifiedMode && !newMoon && !birthOpen;
-        _removeModifyVfxTargetButton.IsVisible = IsModifiedMode && targetOpen;
-        _removeModifyVfxBirthButton.IsVisible = IsModifiedMode && birthOpen;
-        _removeModifyVfxButton.IsVisible = IsModifiedMode;
+        _addModifyVfxBirthButton.IsVisible = IsEditablePower && !newMoon && !birthOpen;
+        _removeModifyVfxTargetButton.IsVisible = IsEditablePower && targetOpen;
+        _removeModifyVfxBirthButton.IsVisible = IsEditablePower && birthOpen;
+        _removeModifyVfxButton.IsVisible = IsEditablePower;
     }
 
     private void AddModifyVfx_Click(object? sender, RoutedEventArgs e)
@@ -4429,15 +4432,15 @@ public partial class PowerEditorView : UserControl
         try { _unitModifyKillOnEffectEndCheck.IsChecked = killOnEffectEnd; }
         finally { _isPopulating = wasPopulating; }
         _unitModifyKillOnEffectEndCheck.IsVisible = supportsKillOnEffectEnd &&
-                                                     (IsModifiedMode || killOnEffectEnd);
-        _unitModifyKillOnEffectEndCheck.IsEnabled = IsModifiedMode;
+                                                     (IsEditablePower || killOnEffectEnd);
+        _unitModifyKillOnEffectEndCheck.IsEnabled = IsEditablePower;
         if (isUnitModify)
         {
             foreach (var modify in entry.Elements().Where(element =>
                          element.Name.LocalName.Equals("unitmodify", StringComparison.OrdinalIgnoreCase)))
                 BuildUnitModifyCard(modify);
         }
-        _addUnitModifyButton.IsVisible = isUnitModify && IsModifiedMode;
+        _addUnitModifyButton.IsVisible = isUnitModify && IsEditablePower;
     }
 
     private void UnitModifyKillOnEffectEnd_Changed(object? sender, RoutedEventArgs e)
@@ -4471,11 +4474,11 @@ public partial class PowerEditorView : UserControl
         {
             Width = 130, ItemsSource = applyOptions, SelectedItem = applyOptions.FirstOrDefault(value =>
                 value.Equals(applyValue, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "apply"
+            IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 14, 4), Tag = "apply"
         }, EditorFieldWidthRole.ShortEnum);
         apply.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || apply.SelectedItem is not string value) return;
+            if (_isPopulating || !IsEditablePower || apply.SelectedItem is not string value) return;
             SetUnitModifyAttribute(modify, "apply", value);
         };
         fields.Children.Add(RainLabeledSegment("Apply", apply));
@@ -4516,14 +4519,14 @@ public partial class PowerEditorView : UserControl
         var amount = ConfigurePowerFieldPresentation(new TextBox
         {
             Text = EditorNumericFieldStyle.FormatDisplay(UnitModifyAttribute(modify, "amount")?.Value),
-            IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "amount"
+            IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 14, 4), Tag = "amount"
         }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
         EditorValidationBindings.Bind(amount, modify, "@amount");
         EditorValidationBindings.Bind(apply, modify, "@apply");
         amount.PropertyChanged += (_, args) =>
         {
-            if (args.Property != TextBox.TextProperty || !IsModifiedMode) return;
+            if (args.Property != TextBox.TextProperty || !IsEditablePower) return;
             SetUnitModifyAttribute(modify, "amount", amount.Text?.Trim() ?? "");
         };
         fields.Children.Add(RainLabeledSegment("Amount", amount));
@@ -4533,12 +4536,12 @@ public partial class PowerEditorView : UserControl
         var noStack = new CheckBox
         {
             Content = "No Stack", IsChecked = UnitModifyAttribute(modify, "nostack") != null,
-            IsEnabled = IsModifiedMode, VerticalAlignment = VerticalAlignment.Center,
+            IsEnabled = IsEditablePower, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 14, 4), Tag = "nostack"
         };
         noStack.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             SetUnitModifyPresenceAttribute(modify, "nostack", noStack.IsChecked == true);
         };
         fields.Children.Add(noStack);
@@ -4546,12 +4549,12 @@ public partial class PowerEditorView : UserControl
         var ignorePuid = new CheckBox
         {
             Content = "Ignore PU ID", IsChecked = UnitModifyAttribute(modify, "nostackignorepuid") != null,
-            IsEnabled = IsModifiedMode, VerticalAlignment = VerticalAlignment.Center,
+            IsEnabled = IsEditablePower, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 14, 4), Tag = "nostackignorepuid"
         };
         ignorePuid.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             SetUnitModifyPresenceAttribute(modify, "nostackignorepuid", ignorePuid.IsChecked == true);
         };
         fields.Children.Add(ignorePuid);
@@ -4559,7 +4562,7 @@ public partial class PowerEditorView : UserControl
         AddUnitModifyExcludeEditor(modify, fields);
         header.Children.Add(fields);
 
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton("unitmodify");
             remove.VerticalAlignment = VerticalAlignment.Top;
@@ -4590,12 +4593,12 @@ public partial class PowerEditorView : UserControl
         {
             Width = 120, ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "damagetype"
+            IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 14, 4), Tag = "damagetype"
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(combo, modify, "@damagetype");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string value) return;
+            if (_isPopulating || !IsEditablePower || combo.SelectedItem is not string value) return;
             SetUnitModifyAttribute(modify, "damagetype", value);
         };
         return combo;
@@ -4606,7 +4609,7 @@ public partial class PowerEditorView : UserControl
         var ageAttribute = UnitModifyAttribute(modify, "age");
         if (ageAttribute == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditablePower) return;
             var add = PowerEditorDynamicControls.CreateOptionalButton("Age");
             add.Margin = new Thickness(0, 0, 8, 4);
             add.Click += (_, _) =>
@@ -4630,16 +4633,16 @@ public partial class PowerEditorView : UserControl
         {
             Width = 150, ItemsSource = ages, SelectedItem = ages.FirstOrDefault(value =>
                 value.Equals(ageAttribute.Value.Trim(), StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedMode, Tag = "age"
+            IsEnabled = IsEditablePower, Tag = "age"
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(age, modify, "@age");
         age.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string value) return;
+            if (_isPopulating || !IsEditablePower || age.SelectedItem is not string value) return;
             SetUnitModifyAttribute(modify, "age", value);
         };
         group.Children.Add(age);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.Margin = new Thickness(2, 0, 0, 0);
@@ -4659,7 +4662,7 @@ public partial class PowerEditorView : UserControl
         var excludeAttribute = UnitModifyAttribute(modify, "excludetypes");
         if (excludeAttribute == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditablePower) return;
             var add = PowerEditorDynamicControls.CreateOptionalButton("Exclude Type");
             add.Margin = new Thickness(0, 0, 8, 4);
             add.Click += (_, _) =>
@@ -4681,7 +4684,7 @@ public partial class PowerEditorView : UserControl
             Text = "Exclude Type", VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 4)
         });
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var picker = CreateRainStrictSelector(_unitOrTypeNames.Where(value =>
                 !selected.Contains(value, StringComparer.OrdinalIgnoreCase)), "", value =>
@@ -4702,7 +4705,7 @@ public partial class PowerEditorView : UserControl
         foreach (var value in selected)
         {
             var captured = value;
-            group.Children.Add(PowerEditorDynamicControls.CreateChip(captured, IsModifiedMode ? () =>
+            group.Children.Add(PowerEditorDynamicControls.CreateChip(captured, IsEditablePower ? () =>
             {
                 var remaining = selected.Where(item =>
                     !item.Equals(captured, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -4710,9 +4713,9 @@ public partial class PowerEditorView : UserControl
                     refresh: false, preserveEmpty: true);
                 if (_currentEntry != null) RefreshUnitModifyFields(_currentEntry);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-            } : null, readOnly: !IsModifiedMode));
+            } : null, readOnly: !IsEditablePower));
         }
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton("excludetypes");
             remove.Margin = new Thickness(2, 0, 0, 4);
@@ -4811,7 +4814,7 @@ public partial class PowerEditorView : UserControl
         AddRainPresenceCheckBox(effect, headerFields, "Hide Tooltip", "hidetooltip");
         header.Children.Add(headerFields);
 
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.VerticalAlignment = VerticalAlignment.Top;
@@ -4886,14 +4889,14 @@ public partial class PowerEditorView : UserControl
                     ? RainRelativityToDisplay(currentRelativity)
                     : relativityDisplays[0],
                 Width = 132,
-                IsEnabled = IsModifiedMode,
+                IsEnabled = IsEditablePower,
                 Margin = new Thickness(0, 0, 14, 4),
                 Tag = "relativity"
             }, EditorFieldWidthRole.LongEnum);
             EditorValidationBindings.Bind(relativity, effect, "@relativity");
             relativity.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || relativity.SelectedItem is not string selected) return;
+                if (_isPopulating || !IsEditablePower || relativity.SelectedItem is not string selected) return;
                 SetRainAttribute(effect, "relativity", RainDisplayToRelativity(selected));
             };
             var amount = RainEffectUsesIntegerAmount(typeValue)
@@ -4913,12 +4916,12 @@ public partial class PowerEditorView : UserControl
     private void AddRainPresenceCheckBox(XElement effect, Panel row, string label, string attributeName)
     {
         var attribute = RainAttribute(effect, attributeName);
-        if (!IsModifiedMode && attribute == null) return;
+        if (!IsEditablePower && attribute == null) return;
         var checkBox = new CheckBox
         {
             Content = label,
             IsChecked = attribute != null,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 8, 4),
             Tag = attributeName
@@ -4926,7 +4929,7 @@ public partial class PowerEditorView : UserControl
         EditorValidationBindings.Bind(checkBox, effect, "@" + attributeName);
         checkBox.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             if (checkBox.IsChecked == true)
                 SetRainAttribute(effect, attributeName, "", refresh: false, preserveEmpty: true);
             else
@@ -4944,20 +4947,20 @@ public partial class PowerEditorView : UserControl
         var attribute = target?.Attributes().FirstOrDefault(item =>
             item.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase));
         if (!RainEffectSupportsIgnoreNature(type.ToLowerInvariant()) && attribute == null) return;
-        if (!IsModifiedMode && attribute == null) return;
+        if (!IsEditablePower && attribute == null) return;
 
         var checkBox = new CheckBox
         {
             Content = "Not Nature",
             IsChecked = attribute != null,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 8, 4),
             Tag = "ignoreNature"
         };
         checkBox.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             var current = EnsureRainUnitTarget(effect);
             var currentAttribute = current.Attributes().FirstOrDefault(item =>
                 item.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase));
@@ -4983,13 +4986,13 @@ public partial class PowerEditorView : UserControl
             ItemsSource = new[] { "Unit", "Tech" },
             SelectedItem = unitMode ? "Unit" : "Tech",
             Width = 90,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 8, 4),
             Tag = "targetKind"
         }, EditorFieldWidthRole.ShortEnum);
         kind.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || kind.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || kind.SelectedItem is not string selected) return;
             EnsureRainTypedTarget(effect, selected == "Unit" ? "ProtoUnit" : "Tech",
                 clearValueOnTypeChange: true);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -5029,7 +5032,7 @@ public partial class PowerEditorView : UserControl
         {
             Width = 90,
             Text = EditorNumericFieldStyle.FormatDisplay(RainAttribute(effect, attribute)?.Value),
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
         }, EditorFieldWidthRole.Numeric);
@@ -5038,7 +5041,7 @@ public partial class PowerEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.SignedFloat);
         box.TextChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             SetRainAttribute(effect, attribute, box.Text ?? "");
         };
         return box;
@@ -5056,7 +5059,7 @@ public partial class PowerEditorView : UserControl
         var attribute = RainAttribute(effect, "altamount");
         if (attribute == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditablePower) return;
             var add = PowerEditorDynamicControls.CreateOptionalButton("Alt Amount");
             add.Margin = new Thickness(0, 0, 8, 4);
             add.Click += (_, _) =>
@@ -5072,7 +5075,7 @@ public partial class PowerEditorView : UserControl
         var amount = CreateRainFloatAttributeBox(effect, "altamount");
         amount.Margin = new Thickness(0, 0, 2, 4);
         var segment = RainLabeledSegment("Alt Amount", amount);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.VerticalAlignment = VerticalAlignment.Center;
@@ -5199,13 +5202,13 @@ public partial class PowerEditorView : UserControl
             ItemsSource = new[] { "Enable", "Disable" },
             SelectedItem = RainAttribute(effect, "amount")?.Value.Trim() == "0" ? "Disable" : "Enable",
             Width = 100,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = "state"
         }, EditorFieldWidthRole.ShortEnum);
         state.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || state.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || state.SelectedItem is not string selected) return;
             SetRainAttribute(effect, "relativity", "Assign", refresh: false);
             SetRainAttribute(effect, "amount", selected == "Disable" ? "0" : "1", refresh: false);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -5232,13 +5235,13 @@ public partial class PowerEditorView : UserControl
             ItemsSource = new[] { "Unit", "Resource" },
             SelectedItem = resourceMode ? "Resource" : "Unit",
             Width = 100,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 8, 4),
             Tag = "forKind"
         }, EditorFieldWidthRole.ShortEnum);
         kind.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || kind.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || kind.SelectedItem is not string selected) return;
             if (selected == "Resource")
                 SetRainAttribute(effect, "unittype", ProtoConstants.KnownResourceTypes[0], refresh: false);
             else
@@ -5296,7 +5299,7 @@ public partial class PowerEditorView : UserControl
         var currentAttribute = RainAttribute(effect, attribute);
         if (currentAttribute == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditablePower) return;
             var add = PowerEditorDynamicControls.CreateOptionalButton(buttonLabel);
             add.Margin = new Thickness(0, 0, 8, 4);
             add.Click += (_, _) =>
@@ -5314,7 +5317,7 @@ public partial class PowerEditorView : UserControl
         EditorValidationBindings.Bind(selector, effect, "@" + attribute);
         selector.Margin = new Thickness(0, 0, 2, 4);
         var segment = RainLabeledSegment(fieldLabel, selector);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.VerticalAlignment = VerticalAlignment.Center;
@@ -5351,14 +5354,14 @@ public partial class PowerEditorView : UserControl
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
             Width = 130,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(combo, effect, "@" + attribute);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || combo.SelectedItem is not string selected) return;
             SetRainAttribute(effect, attribute, selected);
         };
         row.Children.Add(RainLabeledSegment(label, combo));
@@ -5376,14 +5379,14 @@ public partial class PowerEditorView : UserControl
             SelectedItem = options.FirstOrDefault(value =>
                 value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "All",
             Width = 130,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             Tag = attribute
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(combo, effect, "@" + attribute);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || combo.SelectedItem is not string selected) return;
             if (selected.Equals("All", StringComparison.OrdinalIgnoreCase))
                 RemoveRainAttribute(effect, attribute);
             else
@@ -5403,12 +5406,12 @@ public partial class PowerEditorView : UserControl
         {
             ItemsSource = componentOptions,
             SelectedItem = componentOptions.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            Width = 150, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 14, 4), Tag = "component"
+            Width = 150, IsEnabled = IsEditablePower, Margin = new Thickness(0, 0, 14, 4), Tag = "component"
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(combo, effect, "@component");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string selected) return;
+            if (_isPopulating || !IsEditablePower || combo.SelectedItem is not string selected) return;
             SetRainAttribute(effect, "component", selected, refresh: false);
             if (!selected.EndsWith("Specific", StringComparison.OrdinalIgnoreCase))
                 RemoveRainAttribute(effect, "resource");
@@ -5446,7 +5449,7 @@ public partial class PowerEditorView : UserControl
         {
             Content = "Add to tactics",
             IsChecked = !string.Equals(RainAttribute(effect, "addToTactics")?.Value, "0", StringComparison.OrdinalIgnoreCase),
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             VerticalAlignment = VerticalAlignment.Center,
             Tag = "addToTactics"
@@ -5454,7 +5457,7 @@ public partial class PowerEditorView : UserControl
         EditorValidationBindings.Bind(check, effect, "@addToTactics");
         check.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             if (check.IsChecked == false) SetRainAttribute(effect, "addToTactics", "0");
             else { RemoveRainAttribute(effect, "addToTactics"); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }
         };
@@ -5470,14 +5473,14 @@ public partial class PowerEditorView : UserControl
             Content = "Not Nature",
             IsChecked = target?.Attributes().Any(attribute =>
                 attribute.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase)) == true,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 14, 4),
             VerticalAlignment = VerticalAlignment.Center,
             Tag = "ignoreNature"
         };
         check.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             var current = EnsureRainUnitTarget(effect);
             var attribute = current.Attributes().FirstOrDefault(item =>
                 item.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase));
@@ -5494,7 +5497,7 @@ public partial class PowerEditorView : UserControl
     private AutoCompleteBox CreateRainStrictSelector(IEnumerable<string> values, string current,
         Action<string> commit, string tag, EditorFieldWidthRole role = EditorFieldWidthRole.Reference)
         => PowerEditorDynamicControls.CreateStrictSelector(
-            values, current, IsModifiedMode, () => _isPopulating, () => IsModifiedMode,
+            values, current, IsEditablePower, () => _isPopulating, () => IsEditablePower,
             commit, tag, _specificScroll, role);
 
     private static StackPanel RainLabeledSegment(string label, Control control)
@@ -5603,8 +5606,8 @@ public partial class PowerEditorView : UserControl
         }.Any(tag => PowerCatalog.FindField(entry, tag) != null);
         _earthMonsterRegurgitateLabel.IsVisible = regurgitateOpen;
         _earthMonsterRegurgitateFields.IsVisible = regurgitateOpen;
-        _addEarthMonsterRegurgitateButton.IsVisible = IsModifiedMode && !regurgitateOpen;
-        _removeEarthMonsterRegurgitateButton.IsVisible = IsModifiedMode && regurgitateOpen;
+        _addEarthMonsterRegurgitateButton.IsVisible = IsEditablePower && !regurgitateOpen;
+        _removeEarthMonsterRegurgitateButton.IsVisible = IsEditablePower && regurgitateOpen;
     }
 
     private void EarthMonsterSwallowRelation_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -5654,7 +5657,7 @@ public partial class PowerEditorView : UserControl
             foreach (var tier in container.Elements().Where(element =>
                          element.Name.LocalName.Equals("damagetier", StringComparison.OrdinalIgnoreCase)))
                 BuildDamageTierRow(tier);
-        _addDamageTierButton.IsVisible = IsModifiedMode;
+        _addDamageTierButton.IsVisible = IsEditablePower;
     }
 
     private void BuildDamageTierRow(XElement tier)
@@ -5669,19 +5672,19 @@ public partial class PowerEditorView : UserControl
         EditorNumericFieldStyle.ConfigureNumericTextBox(reduction);
         row.Children.Add(reduction);
         var remove = PowerEditorDynamicControls.CreateRemoveButton();
-        remove.IsVisible = IsModifiedMode;
+        remove.IsVisible = IsEditablePower;
         remove.Click += (_, _) => RemoveDamageTier(tier);
         row.Children.Add(remove);
         segment.TextChanged += (_, _) => UpdateDamageTier(tier, segment, reduction);
         reduction.TextChanged += (_, _) => UpdateDamageTier(tier, segment, reduction);
-        segment.IsEnabled = reduction.IsEnabled = IsModifiedMode;
+        segment.IsEnabled = reduction.IsEnabled = IsEditablePower;
         _damageTierFields.Add((segment, reduction, tier));
         _damageTierRows.Children.Add(row);
     }
 
     private void UpdateDamageTier(XElement tier, TextBox segment, TextBox reduction)
     {
-        if (_isPopulating || !IsModifiedMode || _currentEntry == null) return;
+        if (_isPopulating || !IsEditablePower || _currentEntry == null) return;
         if (!int.TryParse(segment.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
             !double.TryParse(reduction.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
             !double.IsFinite(value)) return;
@@ -5720,7 +5723,7 @@ public partial class PowerEditorView : UserControl
         foreach (var damage in entry.Elements().Where(element =>
                      element.Name.LocalName.Equals("rooteddamage", StringComparison.OrdinalIgnoreCase)))
             BuildRootDamageRow(damage);
-        _addRootDamageButton.IsVisible = IsModifiedMode;
+        _addRootDamageButton.IsVisible = IsEditablePower;
     }
 
     private void BuildRootDamageRow(XElement damage)
@@ -5733,7 +5736,7 @@ public partial class PowerEditorView : UserControl
             preserveUnknownInitialValue: false, allowEmpty: false, selectAllOnFirstClick: false,
             valueCommitted: value =>
             {
-                if (!IsModifiedMode || value.Length == 0) return;
+                if (!IsEditablePower || value.Length == 0) return;
                 if (damage.Value.Trim().Equals(value, StringComparison.OrdinalIgnoreCase)) return;
                 damage.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             });
@@ -5749,7 +5752,7 @@ public partial class PowerEditorView : UserControl
         EditorValidationBindings.Bind(amount, damage, "@damage");
         amount.TextChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode ||
+            if (_isPopulating || !IsEditablePower ||
                 !double.TryParse(amount.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                 !double.IsFinite(value) || value < 0) return;
             if (double.TryParse(damage.Attribute("damage")?.Value, NumberStyles.Float,
@@ -5758,7 +5761,7 @@ public partial class PowerEditorView : UserControl
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         };
         row.Children.Add(amount);
-        var remove = PowerEditorDynamicControls.CreateRemoveButton(); remove.IsVisible = IsModifiedMode;
+        var remove = PowerEditorDynamicControls.CreateRemoveButton(); remove.IsVisible = IsEditablePower;
         remove.Click += (_, _) =>
         {
             XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(damage);
@@ -5766,7 +5769,7 @@ public partial class PowerEditorView : UserControl
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         };
         row.Children.Add(remove);
-        type.IsEnabled = amount.IsEnabled = IsModifiedMode;
+        type.IsEnabled = amount.IsEnabled = IsEditablePower;
         _rootDamageFields.Add((type, amount, damage));
         _rootDamageRows.Children.Add(row);
     }
@@ -5809,37 +5812,37 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.Bind(destination, swap, "@swapto");
             destination.Margin = new Thickness(0, 0, 8, 4);
             row.Children.Add(destination);
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(swap);
                 RefreshSwapFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             }));
             _swapEntryRows.Children.Add(row);
         }
-        _addSwapEntryButton.IsVisible = IsModifiedMode;
+        _addSwapEntryButton.IsVisible = IsEditablePower;
 
         var minMax = PowerCatalog.FindField(entry, "convertusingminmax");
         _swapMinMaxFields.IsVisible = minMax != null;
-        _addSwapMinMaxButton.IsVisible = IsModifiedMode && minMax == null;
-        _removeSwapMinMaxButton.IsVisible = IsModifiedMode && minMax != null;
+        _addSwapMinMaxButton.IsVisible = IsEditablePower && minMax == null;
+        _removeSwapMinMaxButton.IsVisible = IsEditablePower && minMax != null;
         _swapMinAmountBox.Text = minMax?.Attribute("minswapamount")?.Value ?? "";
         _swapMaxAmountBox.Text = minMax?.Attribute("maxswapamount")?.Value ?? "";
 
         RefreshSwapOptions(entry);
         var selectedFlags = SwapFlags.Where(flag => PowerCatalog.FindField(entry, flag.XmlName) != null).ToList();
-        _swapFlagPicker.IsVisible = IsModifiedMode && selectedFlags.Count < SwapFlags.Length;
+        _swapFlagPicker.IsVisible = IsEditablePower && selectedFlags.Count < SwapFlags.Length;
         _swapFlagPicker.ItemsSource = SwapFlags.Where(flag => !selectedFlags.Contains(flag))
             .Select(flag => flag.Label).ToList();
         _swapFlagPicker.SelectedItem = null;
         _swapFlagPicker.Text = "";
         _swapFlagChips.Children.Clear();
         foreach (var flag in selectedFlags)
-            _swapFlagChips.Children.Add(PowerEditorDynamicControls.CreateChip(flag.Label, IsModifiedMode ? () =>
+            _swapFlagChips.Children.Add(PowerEditorDynamicControls.CreateChip(flag.Label, IsEditablePower ? () =>
             {
                 var element = PowerCatalog.FindField(entry, flag.XmlName);
                 if (element != null) XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshSwapFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-            } : null, readOnly: !IsModifiedMode));
+            } : null, readOnly: !IsEditablePower));
     }
 
     private AutoCompleteBox CreateStrictSpecificBox(IEnumerable<string> choices, string value,
@@ -5848,12 +5851,12 @@ public partial class PowerEditorView : UserControl
         var items = choices.ToList();
         var committedValue = value.Trim();
         var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, MaxWidth = 200,
-            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+            FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(box, items, value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: committed =>
             {
-                if (!IsModifiedMode || committed.Equals(committedValue, StringComparison.OrdinalIgnoreCase))
+                if (!IsEditablePower || committed.Equals(committedValue, StringComparison.OrdinalIgnoreCase))
                     return;
                 committedValue = committed;
                 commit(committed);
@@ -5887,27 +5890,27 @@ public partial class PowerEditorView : UserControl
             else
             {
                 var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value),
-                    IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                    IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
                 EditorValidationBindings.Bind(box, element);
                 EditorNumericFieldStyle.ConfigureNumericTextBox(box);
                 box.PropertyChanged += (_, change) =>
                 {
                     if (change.Property != TextBox.TextProperty) return;
-                    if (_isPopulating || !IsModifiedMode ||
+                    if (_isPopulating || !IsEditablePower ||
                         !double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ||
                         !double.IsFinite(number) || number < 0 || (option.Kind == "chance" && number > 1)) return;
                     element.Value = box.Text!.Trim(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 };
                 group.Children.Add(box);
             }
-            if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshSwapFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             }));
             _swapOptionalFields.Children.Add(group);
         }
-        if (!IsModifiedMode) return;
+        if (!IsEditablePower) return;
         foreach (var option in new[] { ("Delay", "swapdelay", "0"), ("Chance", "overallchance", "1"),
                      ("VFX", "vfxproto", "") })
             if (PowerCatalog.FindField(entry, option.Item2) == null)
@@ -5971,23 +5974,23 @@ public partial class PowerEditorView : UserControl
         var selected = attractTypes.Select(element => element.Value.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(_lureAttractTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
-        _lureAttractTypePicker.IsVisible = IsModifiedMode && selected.Count < _unitOrTypeNames.Count;
+        _lureAttractTypePicker.IsVisible = IsEditablePower && selected.Count < _unitOrTypeNames.Count;
         _lureAttractTypePicker.SelectedItem = null;
         _lureAttractTypePicker.Text = "";
         _lureAttractTypeChips.Children.Clear();
         foreach (var element in attractTypes)
             _lureAttractTypeChips.Children.Add(PowerEditorDynamicControls.CreateChip(element.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                     RefreshLureFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
 
         var hasSpawn = PowerCatalog.FindField(entry, "spawnproto") != null ||
                        PowerCatalog.FindField(entry, "spawnvfx") != null;
-        _addLureSpawnButton.IsVisible = IsModifiedMode && !hasSpawn;
+        _addLureSpawnButton.IsVisible = IsEditablePower && !hasSpawn;
         _lureSpawnFields.IsVisible = hasSpawn;
-        _removeLureSpawnButton.IsVisible = IsModifiedMode && hasSpawn;
+        _removeLureSpawnButton.IsVisible = IsEditablePower && hasSpawn;
         RefreshLureAgeInfo(entry);
     }
 
@@ -6048,7 +6051,7 @@ public partial class PowerEditorView : UserControl
             var ageBox = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(selectedAgeOption,
                     StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(ageBox);
             row.Children.Add(new TextBlock { Text = "Max Food", VerticalAlignment = VerticalAlignment.Center });
             var maxFood = CreateLureAgeIntegerBox(element.Attribute("maxfood")?.Value);
@@ -6059,7 +6062,7 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.BindXml(ageBox, element);
             ageBox.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string selectedAge) return;
+                if (_isPopulating || !IsEditablePower || ageBox.SelectedItem is not string selectedAge) return;
                 var selectedIndex = Array.IndexOf(StandardAges, selectedAge);
                 if (selectedIndex < 0) return;
                 element.Value = (selectedIndex + 1).ToString(CultureInfo.InvariantCulture);
@@ -6075,7 +6078,7 @@ public partial class PowerEditorView : UserControl
                 if (change.Property == TextBox.TextProperty)
                     CommitLureAgeInteger(element, "numspawns", spawnAmount.Text);
             };
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshLureAgeInfo(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -6086,12 +6089,12 @@ public partial class PowerEditorView : UserControl
         var usedAges = elements.Select(element => int.TryParse(element.Value.Trim(),
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out var age) ? age : 0)
             .Where(age => age is >= 1 and <= 5).Distinct().Count();
-        _addLureAgeInfoButton.IsVisible = IsModifiedMode && usedAges < StandardAges.Length;
+        _addLureAgeInfoButton.IsVisible = IsEditablePower && usedAges < StandardAges.Length;
     }
 
     private TextBox CreateLureAgeIntegerBox(string? value)
     {
-        var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = value ?? "", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = value ?? "", IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
         return box;
@@ -6099,7 +6102,7 @@ public partial class PowerEditorView : UserControl
 
     private void CommitLureAgeInteger(XElement element, string attribute, string? text)
     {
-        if (_isPopulating || !IsModifiedMode || !int.TryParse(text, NumberStyles.Integer,
+        if (_isPopulating || !IsEditablePower || !int.TryParse(text, NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var value) || value < 0) return;
         element.SetAttributeValue(attribute, text!.Trim()); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
     }
@@ -6142,17 +6145,17 @@ public partial class PowerEditorView : UserControl
                 element.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             });
             row.Children.Add(target);
-            var instantKill = new CheckBox { Content = "Instant kill", IsEnabled = IsModifiedMode,
+            var instantKill = new CheckBox { Content = "Instant kill", IsEnabled = IsEditablePower,
                 IsChecked = element.Attribute("instantkill") != null, VerticalAlignment = VerticalAlignment.Center };
             EditorValidationBindings.Bind(instantKill, element, "@instantkill");
             instantKill.IsCheckedChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode) return;
+                if (_isPopulating || !IsEditablePower) return;
                 element.SetAttributeValue("instantkill", instantKill.IsChecked == true ? "1" : null);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             row.Children.Add(instantKill);
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshUndermineTargets(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -6160,7 +6163,7 @@ public partial class PowerEditorView : UserControl
             _undermineTargetRows.Children.Add(row);
             _undermineTargetFields.Add((target, instantKill, element));
         }
-        _addUndermineTargetButton.IsVisible = IsModifiedMode;
+        _addUndermineTargetButton.IsVisible = IsEditablePower;
     }
 
     private void AddUndermineTarget_Click(object? sender, RoutedEventArgs e)
@@ -6176,48 +6179,48 @@ public partial class PowerEditorView : UserControl
         PopulateStrictActionBox(_tempestAreaAttackActionBox,
             PowerCatalog.FindField(entry, "areaattackaction")?.Value);
         _tempestRadialTargetingCheck.IsChecked = PowerCatalog.FindField(entry, "radialtargeting") != null;
-        _tempestRadialTargetingCheck.IsEnabled = IsModifiedMode;
+        _tempestRadialTargetingCheck.IsEnabled = IsEditablePower;
         _tempestStrikeSoundBox.ItemsSource = GetSoundSetSuggestions();
         _tempestStrikeSoundBox.Text = PowerCatalog.FindField(entry, "strikesoundset")?.Value ?? "";
         var lightning = entry.Attribute("type")?.Value.Trim()
             .Equals("LightningStorm", StringComparison.OrdinalIgnoreCase) == true;
         var strikeSoundOpen = PowerCatalog.FindField(entry, "strikesoundset") != null;
-        _addTempestSoundButton.IsVisible = lightning && IsModifiedMode && !strikeSoundOpen;
+        _addTempestSoundButton.IsVisible = lightning && IsEditablePower && !strikeSoundOpen;
         _tempestSoundLabel.IsVisible = !lightning || strikeSoundOpen;
         _tempestSoundFields.IsVisible = !lightning || strikeSoundOpen;
-        _removeTempestSoundButton.IsVisible = lightning && IsModifiedMode && strikeSoundOpen;
+        _removeTempestSoundButton.IsVisible = lightning && IsEditablePower && strikeSoundOpen;
         _tempestLargeSoundBox.ItemsSource = GetSoundSetSuggestions();
         _tempestLargeSoundBox.Text = PowerCatalog.FindField(entry, "largestrikesoundset")?.Value ?? "";
 
         var largeOpen = PowerCatalog.FindField(entry, "largestrikeproto") != null;
-        _addTempestLargeStrikeButton.IsVisible = IsModifiedMode && !largeOpen;
-        _tempestLargeStrikeRow.IsVisible = IsModifiedMode || largeOpen;
+        _addTempestLargeStrikeButton.IsVisible = IsEditablePower && !largeOpen;
+        _tempestLargeStrikeRow.IsVisible = IsEditablePower || largeOpen;
         _tempestLargeStrikeLabel.IsVisible = largeOpen;
         _tempestLargeStrikeFields.IsVisible = largeOpen;
-        _removeTempestLargeStrikeButton.IsVisible = IsModifiedMode && largeOpen;
+        _removeTempestLargeStrikeButton.IsVisible = IsEditablePower && largeOpen;
         _tempestLargeTimingRow.IsVisible = largeOpen;
         _tempestLargeOptionsRow.IsVisible = largeOpen;
         RefreshTempestLargeTimings(entry);
         var selectedAvoids = TempestAvoids.Where(item => PowerCatalog.FindField(entry, item.XmlName) != null).ToList();
-        _tempestAvoidPicker.IsVisible = IsModifiedMode && largeOpen && selectedAvoids.Count < TempestAvoids.Length;
+        _tempestAvoidPicker.IsVisible = IsEditablePower && largeOpen && selectedAvoids.Count < TempestAvoids.Length;
         _tempestAvoidPicker.ItemsSource = TempestAvoids.Where(item => !selectedAvoids.Contains(item))
             .Select(item => item.Label).ToList();
         _tempestAvoidPicker.SelectedItem = null; _tempestAvoidPicker.Text = "";
         _tempestAvoidChips.Children.Clear();
         foreach (var item in selectedAvoids)
-            _tempestAvoidChips.Children.Add(PowerEditorDynamicControls.CreateChip(item.Label, IsModifiedMode ? () =>
+            _tempestAvoidChips.Children.Add(PowerEditorDynamicControls.CreateChip(item.Label, IsEditablePower ? () =>
             {
                 var field = PowerCatalog.FindField(entry, item.XmlName);
                 if (field != null) XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(field);
                 RefreshTempestFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-            } : null, readOnly: !IsModifiedMode));
+            } : null, readOnly: !IsEditablePower));
 
         var attackOpen = PowerCatalog.FindField(entry, "areaattackaction") != null ||
                          PowerCatalog.FindField(entry, "radialtargeting") != null;
-        _addTempestAttackButton.IsVisible = IsModifiedMode && !attackOpen;
+        _addTempestAttackButton.IsVisible = IsEditablePower && !attackOpen;
         _tempestAttackLabel.IsVisible = attackOpen;
         _tempestAttackFields.IsVisible = attackOpen;
-        _removeTempestAttackButton.IsVisible = IsModifiedMode && attackOpen;
+        _removeTempestAttackButton.IsVisible = IsEditablePower && attackOpen;
 
         RefreshTempestVfx(entry);
         RefreshTempestOptionalGroup(entry, _addTempestCloudsButton, _tempestCloudFields,
@@ -6246,17 +6249,17 @@ public partial class PowerEditorView : UserControl
             _tempestPeriodMaxBox.Text = EditorNumericFieldStyle.FormatDisplay(
                 PowerCatalog.FindField(entry, "treebendperiodmax")?.Value);
         }
-        _tempestAmplitudeHost.IsVisible = !legacyTreeBend && (IsModifiedMode ||
+        _tempestAmplitudeHost.IsVisible = !legacyTreeBend && (IsEditablePower ||
             PowerCatalog.FindField(entry, "treebendminamplitude") != null ||
             PowerCatalog.FindField(entry, "treebendmaxamplitude") != null);
-        _tempestAngleHost.IsVisible = !legacyTreeBend && (IsModifiedMode ||
+        _tempestAngleHost.IsVisible = !legacyTreeBend && (IsEditablePower ||
             PowerCatalog.FindField(entry, "treebendangleoffset") != null);
-        _tempestTreeDurationHost.IsVisible = !legacyTreeBend && (IsModifiedMode ||
+        _tempestTreeDurationHost.IsVisible = !legacyTreeBend && (IsEditablePower ||
             PowerCatalog.FindField(entry, "treebendingduration") != null);
         var treeBendIsDefault = legacyTreeBend ||
                                 treeBendPowerType?.Equals("Typhoon", StringComparison.OrdinalIgnoreCase) == true;
         if (treeBendIsDefault)
-            _tempestTreeBendRow.IsVisible = IsModifiedMode || legacyTreeBend ||
+            _tempestTreeBendRow.IsVisible = IsEditablePower || legacyTreeBend ||
                 new[] { "treebendminstrength", "treebendmaxstrength", "treebendminperiod", "treebendmaxperiod",
                     "treebendminamplitude", "treebendmaxamplitude", "treebendangleoffset", "treebendingduration" }
                 .Any(tag => PowerCatalog.FindField(entry, tag) != null);
@@ -6306,7 +6309,7 @@ public partial class PowerEditorView : UserControl
             (Tag: "scorchvfxproto", Host: (Control)_lightningScorchHost)
         };
         foreach (var item in required)
-            item.Host.IsVisible = IsModifiedMode || PowerCatalog.FindField(entry, item.Tag) != null;
+            item.Host.IsVisible = IsEditablePower || PowerCatalog.FindField(entry, item.Tag) != null;
 
         RefreshLightningOptionalVfx(entry, "rainvfxproto", _lightningRainVfxHost,
             _addLightningRainVfxButton, _removeLightningRainVfxButton);
@@ -6321,8 +6324,8 @@ public partial class PowerEditorView : UserControl
     {
         var present = PowerCatalog.FindField(entry, tag) != null;
         host.IsVisible = present;
-        add.IsVisible = IsModifiedMode && !present;
-        remove.IsVisible = IsModifiedMode && present;
+        add.IsVisible = IsEditablePower && !present;
+        remove.IsVisible = IsEditablePower && present;
     }
 
     private void ResetTempestOptionalFlow()
@@ -6405,10 +6408,10 @@ public partial class PowerEditorView : UserControl
 
         var dustOpen = new[] { "dustsmallvfxproto", "dustmediumvfxproto", "dustlargevfxproto" }
             .Any(tag => PowerCatalog.FindField(entry, tag) != null);
-        _addEarthquakeDustVfxButton.IsVisible = IsModifiedMode && !dustOpen;
+        _addEarthquakeDustVfxButton.IsVisible = IsEditablePower && !dustOpen;
         _earthquakeDustVfxLabel.IsVisible = dustOpen;
         _earthquakeDustVfxFields.IsVisible = dustOpen;
-        _removeEarthquakeDustVfxButton.IsVisible = IsModifiedMode && dustOpen;
+        _removeEarthquakeDustVfxButton.IsVisible = IsEditablePower && dustOpen;
         SetSpecificFieldVisibility(_earthquakeDustSmallHost, "dustsmallvfxproto", entry);
         SetSpecificFieldVisibility(_earthquakeDustMediumHost, "dustmediumvfxproto", entry);
         SetSpecificFieldVisibility(_earthquakeDustLargeHost, "dustlargevfxproto", entry);
@@ -6416,7 +6419,7 @@ public partial class PowerEditorView : UserControl
 
     private void RefreshThunderBurstFields(XElement entry)
     {
-        var amountVisible = IsModifiedMode || PowerCatalog.FindField(entry, "amount") != null;
+        var amountVisible = IsEditablePower || PowerCatalog.FindField(entry, "amount") != null;
         _thunderBurstAmountLabel.IsVisible = amountVisible;
         _thunderBurstAmountBox.IsVisible = amountVisible;
         SetSpecificFieldVisibility(_thunderBurstDelayHost, "delay", entry);
@@ -6431,7 +6434,7 @@ public partial class PowerEditorView : UserControl
     {
         if (entry.Attribute("type")?.Value.Trim().Equals("Typhoon", StringComparison.OrdinalIgnoreCase) != true)
             return;
-        var dragonVisible = IsModifiedMode || PowerCatalog.FindField(entry, "dragonprotounit") != null;
+        var dragonVisible = IsEditablePower || PowerCatalog.FindField(entry, "dragonprotounit") != null;
         _typhoonDragonLabel.IsVisible = dragonVisible;
         _typhoonDragonUnitBox.IsVisible = dragonVisible;
         SetSpecificFieldVisibility(_typhoonDragonSpawnDelayHost, "dragonspawndelayseconds", entry);
@@ -6440,11 +6443,11 @@ public partial class PowerEditorView : UserControl
         SetSpecificFieldVisibility(_typhoonSpawnDelayHost, "typhoonspawndelayseconds", entry);
         var rainUnitOpen = PowerCatalog.FindField(entry, "rainprotounit") != null;
         _typhoonRainUnitFields.IsVisible = rainUnitOpen;
-        _addTyphoonRainUnitButton.IsVisible = IsModifiedMode && !rainUnitOpen;
-        _removeTyphoonRainUnitButton.IsVisible = IsModifiedMode && rainUnitOpen;
+        _addTyphoonRainUnitButton.IsVisible = IsEditablePower && !rainUnitOpen;
+        _removeTyphoonRainUnitButton.IsVisible = IsEditablePower && rainUnitOpen;
         SetSpecificFieldVisibility(_typhoonAttackDelayHost, "typhoonattackdelayseconds", entry);
         SetSpecificFieldVisibility(_typhoonAttackIntervalHost, "typhoonattackinterval", entry);
-        _typhoonRadiusHost.IsVisible = IsModifiedMode || new[]
+        _typhoonRadiusHost.IsVisible = IsEditablePower || new[]
         {
             "typhoonradiusstart", "typhoonradiusend", "typhoonradiusexpansionseconds"
         }.Any(tag => PowerCatalog.FindField(entry, tag) != null);
@@ -6487,18 +6490,18 @@ public partial class PowerEditorView : UserControl
         SetSpecificFieldVisibility(_frostExpansionHost, "freezeexpansiontime", entry);
         SetSpecificFieldVisibility(_frostTransitionHost, "freezetransitiontime", entry);
         SetSpecificFieldVisibility(_frostDurationHost, "freezeholdtime", entry);
-        _frostStrikeIntervalHost.IsVisible = IsModifiedMode ||
+        _frostStrikeIntervalHost.IsVisible = IsEditablePower ||
             PowerCatalog.FindField(entry, "fasteststriketime") != null ||
             PowerCatalog.FindField(entry, "sloweststriketime") != null;
-        _frostStrikeMinBox.IsVisible = IsModifiedMode ||
+        _frostStrikeMinBox.IsVisible = IsEditablePower ||
             PowerCatalog.FindField(entry, "fasteststriketime") != null;
-        _frostStrikeMaxBox.IsVisible = IsModifiedMode ||
+        _frostStrikeMaxBox.IsVisible = IsEditablePower ||
             PowerCatalog.FindField(entry, "sloweststriketime") != null;
 
         var armorOpen = PowerCatalog.FindField(entry, "armoramount") != null;
         _frostArmorHost.IsVisible = armorOpen;
-        _addFrostArmorButton.IsVisible = IsModifiedMode && !armorOpen;
-        _removeFrostArmorButton.IsVisible = IsModifiedMode && armorOpen;
+        _addFrostArmorButton.IsVisible = IsEditablePower && !armorOpen;
+        _removeFrostArmorButton.IsVisible = IsEditablePower && armorOpen;
 
         SetSpecificFieldVisibility(_frostStormHost, "stormprotounit", entry);
         SetSpecificFieldVisibility(_frostSnowDriftHost, "snowdriftprotounit", entry);
@@ -6506,11 +6509,11 @@ public partial class PowerEditorView : UserControl
                         PowerCatalog.FindField(entry, "fastestdrifttime") != null;
         _frostDriftHost.IsVisible = driftOpen;
         _frostDriftLabel.IsVisible = driftOpen;
-        _addFrostDriftButton.IsVisible = IsModifiedMode && !driftOpen;
-        _removeFrostDriftButton.IsVisible = IsModifiedMode && driftOpen;
-        _frostSlowestDriftHost.IsVisible = IsModifiedMode ||
+        _addFrostDriftButton.IsVisible = IsEditablePower && !driftOpen;
+        _removeFrostDriftButton.IsVisible = IsEditablePower && driftOpen;
+        _frostSlowestDriftHost.IsVisible = IsEditablePower ||
             PowerCatalog.FindField(entry, "slowestdrifttime") != null;
-        _frostFastestDriftHost.IsVisible = IsModifiedMode ||
+        _frostFastestDriftHost.IsVisible = IsEditablePower ||
             PowerCatalog.FindField(entry, "fastestdrifttime") != null;
     }
 
@@ -6582,27 +6585,27 @@ public partial class PowerEditorView : UserControl
         var killTypes = entry.Elements().Where(element =>
             element.Name.LocalName.Equals("killunittype", StringComparison.OrdinalIgnoreCase)).ToList();
         var killOpen = _witherKillTypesOpen || killTypes.Count > 0;
-        _addWitherKillTypesButton.IsVisible = IsModifiedMode && !killOpen;
+        _addWitherKillTypesButton.IsVisible = IsEditablePower && !killOpen;
         _witherKillTypesLabel.IsVisible = killOpen;
         _witherKillTypesFields.IsVisible = killOpen;
-        _removeWitherKillTypesButton.IsVisible = IsModifiedMode && killOpen;
+        _removeWitherKillTypesButton.IsVisible = IsEditablePower && killOpen;
         _witherKillTypeChips.Children.Clear();
         var selected = killTypes.Select(element => element.Value.Trim())
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(_witherKillTypePicker, _unitOrTypeNames.Where(value => !selected.Contains(value)),
-            isVisible: () => IsModifiedMode && killOpen && selected.Count < _unitOrTypeNames.Count);
+            isVisible: () => IsEditablePower && killOpen && selected.Count < _unitOrTypeNames.Count);
         _witherKillTypePicker.SelectedItem = null;
         _witherKillTypePicker.Text = "";
-        _witherKillTypePicker.IsVisible = IsModifiedMode && killOpen && selected.Count < _unitOrTypeNames.Count;
+        _witherKillTypePicker.IsVisible = IsEditablePower && killOpen && selected.Count < _unitOrTypeNames.Count;
         foreach (var element in killTypes.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = element;
             _witherKillTypeChips.Children.Add(PowerEditorDynamicControls.CreateChip(element.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RefreshWitherFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
 
         RefreshWitherOptionalField(entry, "damagepercentofmaxhp", _addWitherDamageButton,
@@ -6616,10 +6619,10 @@ public partial class PowerEditorView : UserControl
         Button remove, TextBlock label)
     {
         var present = PowerCatalog.FindField(entry, tag) != null;
-        add.IsVisible = IsModifiedMode && !present;
+        add.IsVisible = IsEditablePower && !present;
         label.IsVisible = present;
         fields.IsVisible = present;
-        remove.IsVisible = IsModifiedMode && present;
+        remove.IsVisible = IsEditablePower && present;
     }
 
     private void AddWitherKillTypes_Click(object? sender, RoutedEventArgs e)
@@ -6707,8 +6710,8 @@ public partial class PowerEditorView : UserControl
         SetSpecificFieldVisibility(_arcadianBlockerDurationHost, "blockerradius", entry);
         var vfxOpen = PowerCatalog.FindField(entry, "vfxproto") != null;
         _arcadianVfxHost.IsVisible = vfxOpen;
-        _addArcadianVfxButton.IsVisible = IsModifiedMode && !vfxOpen;
-        _removeArcadianVfxButton.IsVisible = IsModifiedMode && vfxOpen;
+        _addArcadianVfxButton.IsVisible = IsEditablePower && !vfxOpen;
+        _removeArcadianVfxButton.IsVisible = IsEditablePower && vfxOpen;
         RefreshArcadianGrass(entry);
     }
 
@@ -6744,17 +6747,17 @@ public partial class PowerEditorView : UserControl
             group.Children.Add(proto);
             group.Children.Add(new TextBlock { Text = "r", VerticalAlignment = VerticalAlignment.Center });
             var radius = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("r")?.Value),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(radius);
             group.Children.Add(radius);
             group.Children.Add(new TextBlock { Text = "theta", VerticalAlignment = VerticalAlignment.Center });
             var theta = ConfigurePowerFieldPresentation(new TextBox { Text = EditorNumericFieldStyle.FormatDisplay(grass.Attribute("theta")?.Value),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(theta);
             group.Children.Add(theta);
             void CommitAttribute(TextBox box, string attribute)
             {
-                if (_isPopulating || !IsModifiedMode ||
+                if (_isPopulating || !IsEditablePower ||
                     !double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ||
                     !double.IsFinite(number)) return;
                 if (double.TryParse(grass.Attribute(attribute)?.Value, NumberStyles.Float,
@@ -6763,7 +6766,7 @@ public partial class PowerEditorView : UserControl
             }
             radius.TextChanged += (_, _) => CommitAttribute(radius, "r");
             theta.TextChanged += (_, _) => CommitAttribute(theta, "theta");
-            if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(grass);
                 RefreshArcadianGrass(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -6771,7 +6774,7 @@ public partial class PowerEditorView : UserControl
             _arcadianGrassFields.Add((proto, radius, theta, grass));
             _arcadianGrassRows.Children.Add(group);
         }
-        _addArcadianGrassButton.IsVisible = IsModifiedMode;
+        _addArcadianGrassButton.IsVisible = IsEditablePower;
     }
 
     private void AddArcadianGrass_Click(object? sender, RoutedEventArgs e)
@@ -6825,17 +6828,17 @@ public partial class PowerEditorView : UserControl
 
         var onlyIfOpen = PowerCatalog.FindField(entry, "onlyapplydurationtecheffectiftechactive") != null;
         _underworldOnlyIfTechFields.IsVisible = onlyIfOpen;
-        _addUnderworldOnlyIfTechButton.IsVisible = IsModifiedMode && !onlyIfOpen;
-        _removeUnderworldOnlyIfTechButton.IsVisible = IsModifiedMode && onlyIfOpen;
+        _addUnderworldOnlyIfTechButton.IsVisible = IsEditablePower && !onlyIfOpen;
+        _removeUnderworldOnlyIfTechButton.IsVisible = IsEditablePower && onlyIfOpen;
     }
 
     private void RefreshUnderworldOptionalGroup(XElement entry, Button add, Control fields,
         Button remove, TextBlock? label, string[] tags)
     {
         var open = tags.Any(tag => PowerCatalog.FindField(entry, tag) != null);
-        add.IsVisible = IsModifiedMode && !open;
+        add.IsVisible = IsEditablePower && !open;
         fields.IsVisible = open;
-        remove.IsVisible = IsModifiedMode && open;
+        remove.IsVisible = IsEditablePower && open;
         if (label != null) label.IsVisible = open;
     }
 
@@ -6909,12 +6912,12 @@ public partial class PowerEditorView : UserControl
         var slot = PowerCatalog.FindField(entry, "powerslot")?.Value.Trim() ?? "";
         _powerCloneSlotBox.SelectedItem = Enumerable.Range(1, 5).Select(value => value.ToString())
             .FirstOrDefault(value => value == slot);
-        _powerCloneSlotBox.IsVisible = IsModifiedMode || slot.Length > 0;
+        _powerCloneSlotBox.IsVisible = IsEditablePower || slot.Length > 0;
 
         var cost = PowerCatalog.FindField(entry, "cost");
         var repeatCost = PowerCatalog.FindField(entry, "repeatcost");
-        _powerCloneCopyCostCheck.IsVisible = IsModifiedMode || cost?.Attribute("copycostoftargetpower") != null;
-        _powerCloneCopyRepeatCostCheck.IsVisible = IsModifiedMode ||
+        _powerCloneCopyCostCheck.IsVisible = IsEditablePower || cost?.Attribute("copycostoftargetpower") != null;
+        _powerCloneCopyRepeatCostCheck.IsVisible = IsEditablePower ||
             repeatCost?.Attribute("copyrepeatcostoftargetpower") != null;
         var wasPopulating = _isPopulating;
         _isPopulating = true;
@@ -6932,7 +6935,7 @@ public partial class PowerEditorView : UserControl
         _isPopulating = true;
         try { _powerCloneSeededCheck.IsChecked = seeded; }
         finally { _isPopulating = wasPopulating; }
-        _powerCloneSeededCheck.IsVisible = IsModifiedMode || seeded;
+        _powerCloneSeededCheck.IsVisible = IsEditablePower || seeded;
         var targets = replacement?.Elements().Where(element =>
             element.Name.LocalName.Equals("target", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
         var selected = targets.Select(element => element.Value.Trim())
@@ -6943,18 +6946,18 @@ public partial class PowerEditorView : UserControl
         _powerCloneReplacementPicker.ItemsSource = powerNames.Where(value => !selected.Contains(value)).ToList();
         _powerCloneReplacementPicker.SelectedItem = null;
         _powerCloneReplacementPicker.Text = "";
-        _powerCloneReplacementPicker.IsVisible = IsModifiedMode && selected.Count < powerNames.Count;
+        _powerCloneReplacementPicker.IsVisible = IsEditablePower && selected.Count < powerNames.Count;
         _powerCloneReplacementChips.Children.Clear();
         foreach (var target in targets.Where(element => !string.IsNullOrWhiteSpace(element.Value)))
         {
             var captured = target;
             _powerCloneReplacementChips.Children.Add(PowerEditorDynamicControls.CreateChip(target.Value.Trim(),
-                IsModifiedMode ? () =>
+                IsEditablePower ? () =>
                 {
                     XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(captured);
                     RemoveEmptyPowerCloneReplacement(entry);
                     RefreshPowerCloneFields(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
         }
     }
 
@@ -7030,15 +7033,15 @@ public partial class PowerEditorView : UserControl
     }
 
     private void SetSpecificFieldVisibility(Control control, string tag, XElement entry)
-        => control.IsVisible = IsModifiedMode || PowerCatalog.FindField(entry, tag) != null;
+        => control.IsVisible = IsEditablePower || PowerCatalog.FindField(entry, tag) != null;
 
     private void RefreshTempestOptionalGroup(XElement entry, Button add, Control fields, Button remove,
         TextBlock label, string[] tags)
     {
         var open = tags.Any(tag => PowerCatalog.FindField(entry, tag) != null);
-        add.IsVisible = IsModifiedMode && !open; fields.IsVisible = open;
+        add.IsVisible = IsEditablePower && !open; fields.IsVisible = open;
         label.IsVisible = open;
-        remove.IsVisible = IsModifiedMode && open;
+        remove.IsVisible = IsEditablePower && open;
     }
 
     private void RefreshTempestVfx(XElement entry)
@@ -7056,14 +7059,14 @@ public partial class PowerEditorView : UserControl
         };
         var any = fields.Any(item => PowerCatalog.FindField(entry, item.Tag) != null);
         var open = any || _tempestVfxOpen;
-        _addTempestVfxButton.IsVisible = IsModifiedMode && !open;
+        _addTempestVfxButton.IsVisible = IsEditablePower && !open;
         _tempestVfxLabel.IsVisible = open;
         _tempestVfxFields.IsVisible = open;
         foreach (var item in fields)
         {
             var present = PowerCatalog.FindField(entry, item.Tag) != null;
-            item.Host.IsVisible = present; item.Add.IsVisible = IsModifiedMode && !present;
-            item.Remove.IsVisible = IsModifiedMode && present;
+            item.Host.IsVisible = present; item.Add.IsVisible = IsEditablePower && !present;
+            item.Remove.IsVisible = IsEditablePower && present;
         }
     }
 
@@ -7077,17 +7080,17 @@ public partial class PowerEditorView : UserControl
             var group = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 0, 14, 4) };
             var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(time.Value),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             box.PropertyChanged += (_, change) =>
             {
                 if (change.Property != TextBox.TextProperty) return;
-                if (_isPopulating || !IsModifiedMode || !double.TryParse(box.Text, NumberStyles.Float,
+                if (_isPopulating || !IsEditablePower || !double.TryParse(box.Text, NumberStyles.Float,
                     CultureInfo.InvariantCulture, out var value) || !double.IsFinite(value)) return;
                 time.Value = box.Text!.Trim(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             group.Children.Add(box);
-            if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(time);
                 if (container != null && !container.Elements().Any())
@@ -7096,7 +7099,7 @@ public partial class PowerEditorView : UserControl
             }));
             _tempestLargeTimingRows.Children.Add(group);
         }
-        _addTempestLargeTimingButton.IsVisible = IsModifiedMode && PowerCatalog.FindField(entry, "largestrikeproto") != null;
+        _addTempestLargeTimingButton.IsVisible = IsEditablePower && PowerCatalog.FindField(entry, "largestrikeproto") != null;
     }
 
     private void AddTempestLargeStrike_Click(object? sender, RoutedEventArgs e)
@@ -7313,8 +7316,8 @@ public partial class PowerEditorView : UserControl
             .Equals("ThunderBurst", StringComparison.OrdinalIgnoreCase) == true;
         var sizeLimit = PowerCatalog.FindField(entry, "throwsizelimit");
         _throwSizeLimitHost.IsVisible = thunderBurst && sizeLimit != null;
-        _addThrowSizeLimitButton.IsVisible = thunderBurst && IsModifiedMode && sizeLimit == null;
-        _removeThrowSizeLimitButton.IsVisible = thunderBurst && IsModifiedMode && sizeLimit != null;
+        _addThrowSizeLimitButton.IsVisible = thunderBurst && IsEditablePower && sizeLimit == null;
+        _removeThrowSizeLimitButton.IsVisible = thunderBurst && IsEditablePower && sizeLimit != null;
     }
 
     private void AddThrowSizeLimit_Click(object? sender, RoutedEventArgs e)
@@ -7339,21 +7342,21 @@ public partial class PowerEditorView : UserControl
         var elements = entry.Elements().Where(element =>
             element.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
         var open = requestedOpen || elements.Count > 0;
-        host.IsVisible = open && (IsModifiedMode || elements.Count > 0);
-        add.IsVisible = IsModifiedMode && !open;
-        remove.IsVisible = IsModifiedMode && open;
+        host.IsVisible = open && (IsEditablePower || elements.Count > 0);
+        add.IsVisible = IsEditablePower && !open;
+        remove.IsVisible = IsEditablePower && open;
         var selected = elements.Select(element => element.Value.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         EditorAutoCompleteService.SetCatalogSuggestions(picker, _unitOrTypeNames.Where(value => !selected.Contains(value)));
-        picker.IsVisible = IsModifiedMode && open && selected.Count < _unitOrTypeNames.Count;
+        picker.IsVisible = IsEditablePower && open && selected.Count < _unitOrTypeNames.Count;
         picker.SelectedItem = null; picker.Text = "";
         chips.Children.Clear();
         foreach (var element in elements)
-            chips.Children.Add(PowerEditorDynamicControls.CreateChip(element.Value.Trim(), IsModifiedMode ? () =>
+            chips.Children.Add(PowerEditorDynamicControls.CreateChip(element.Value.Trim(), IsEditablePower ? () =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshThrowExclusions(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-            } : null, readOnly: !IsModifiedMode));
+            } : null, readOnly: !IsEditablePower));
     }
 
     private void AddThrowExcludePull_Click(object? sender, RoutedEventArgs e)
@@ -7409,8 +7412,8 @@ public partial class PowerEditorView : UserControl
             element.Name.LocalName.Equals("createagespecificunit", StringComparison.OrdinalIgnoreCase)).ToList();
         foreach (var create in ageSpecificCreates)
             BuildTempUnitCreateRow(create, _freyrsGiftCreateRows, ageSpecific: true);
-        _addTempUnitCreateButton.IsVisible = IsModifiedMode;
-        _addFreyrsGiftCreateButton.IsVisible = IsModifiedMode &&
+        _addTempUnitCreateButton.IsVisible = IsEditablePower;
+        _addFreyrsGiftCreateButton.IsVisible = IsEditablePower &&
             entry.Attribute("type")?.Value.Trim().Equals("FreyrsGift", StringComparison.OrdinalIgnoreCase) == true &&
             ageSpecificCreates.Count < StandardAges.Length &&
             ageSpecificCreates.Select(create => create.Attribute("age")?.Value.Trim())
@@ -7425,10 +7428,10 @@ public partial class PowerEditorView : UserControl
         foreach (var check in new[] { _tempUnitSmoothRotationCheck, _tempUnitForcePlacementCheck,
                      _tempUnitForceOrientationCheck })
         {
-            check.IsEnabled = IsModifiedMode;
-            check.IsVisible = IsModifiedMode || check.IsChecked == true;
+            check.IsEnabled = IsEditablePower;
+            check.IsVisible = IsEditablePower || check.IsChecked == true;
         }
-        if (!IsModifiedMode)
+        if (!IsEditablePower)
             foreach (var button in Descendants(_tempUnitCreateRows).OfType<Button>().Where(button =>
                          button.Classes.Contains("remove-button")))
                 button.IsVisible = false;
@@ -7453,7 +7456,7 @@ public partial class PowerEditorView : UserControl
         var subjectRow = new WrapPanel();
         var hasSelection = _tempUnitSelectionEntries.Contains(create) || create.Value.Contains('|');
         var mode = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = TempUnitCreateModes,
-            SelectedItem = hasSelection ? "Selection" : "Unit", IsEnabled = IsModifiedMode,
+            SelectedItem = hasSelection ? "Selection" : "Unit", IsEnabled = IsEditablePower,
             Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.ShortEnum);
         subjectRow.Children.Add(mode);
         var host = new WrapPanel {
@@ -7475,12 +7478,12 @@ public partial class PowerEditorView : UserControl
                 ageOptions.Add(currentAge);
             var age = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = ageOptions,
                 SelectedItem = ageOptions.FirstOrDefault(value => value.Equals(currentAge,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode,
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower,
                 Margin = new Thickness(0, 0, 8, 4) }, EditorFieldWidthRole.LongEnum);
             EditorValidationBindings.Bind(age, create, "@age");
             age.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string selected) return;
+                if (_isPopulating || !IsEditablePower || age.SelectedItem is not string selected) return;
                 create.SetAttributeValue("age", selected);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 RefreshAfterSelectorEvent(create, () => RefreshTempUnitFields(_currentEntry!));
@@ -7488,7 +7491,7 @@ public partial class PowerEditorView : UserControl
             subjectRow.Children.Add(age);
         }
         top.Children.Add(subjectRow);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.VerticalAlignment = VerticalAlignment.Top;
@@ -7524,7 +7527,7 @@ public partial class PowerEditorView : UserControl
         }
         mode.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             var selection = (mode.SelectedItem as string)?.Equals("Selection",
                 StringComparison.OrdinalIgnoreCase) == true;
             if (selection) _tempUnitSelectionEntries.Add(create);
@@ -7539,13 +7542,13 @@ public partial class PowerEditorView : UserControl
     private void BuildTempUnitUnitEditor(Panel host, XElement create)
     {
         var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
         EditorValidationBindings.Bind(unit, create);
         EditorAutoCompleteService.ConfigureStrict(unit, _protoUnitNames, create.Value.Trim(), () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
             {
-                if (!IsModifiedMode || (value.Length > 0 &&
+                if (!IsEditablePower || (value.Length > 0 &&
                     !_protoUnitNames.Contains(value, StringComparer.OrdinalIgnoreCase))) return;
                 if (create.Value.Trim().Equals(value, StringComparison.OrdinalIgnoreCase)) return;
                 create.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -7555,7 +7558,7 @@ public partial class PowerEditorView : UserControl
         host.Children.Add(unit);
         var waterAttribute = create.Attribute("waterprotoid");
         var water = waterAttribute?.Value ?? "";
-        if (waterAttribute != null || IsModifiedMode)
+        if (waterAttribute != null || IsEditablePower)
         {
             if (waterAttribute == null)
             {
@@ -7582,7 +7585,7 @@ public partial class PowerEditorView : UserControl
     private void BuildTempUnitSelectionEditor(Panel host, XElement create)
     {
         var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ChipSearch);
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.ChipSearch);
         var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
         EditorValidationBindings.Bind(picker, create);
         void Refresh()
@@ -7592,12 +7595,12 @@ public partial class PowerEditorView : UserControl
             foreach (var value in values)
             {
                 var captured = value;
-                chips.Children.Add(PowerEditorDynamicControls.CreateChip(captured, IsModifiedMode ? () =>
+                chips.Children.Add(PowerEditorDynamicControls.CreateChip(captured, IsEditablePower ? () =>
                 {
                     create.Value = string.Join('|', SplitTempUnitSelection(create.Value).Where(item =>
                         !item.Equals(captured, StringComparison.OrdinalIgnoreCase)));
                     Refresh(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower));
             }
             EditorAutoCompleteService.SetCatalogSuggestions(picker, _protoUnitNames.Where(name =>
                 !values.Contains(name, StringComparer.OrdinalIgnoreCase)));
@@ -7606,7 +7609,7 @@ public partial class PowerEditorView : UserControl
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
             {
-                if (!IsModifiedMode || value.Length == 0) return;
+                if (!IsEditablePower || value.Length == 0) return;
                 var values = SplitTempUnitSelection(create.Value);
                 if (!values.Contains(value, StringComparer.OrdinalIgnoreCase)) values.Add(value);
                 create.Value = string.Join('|', values);
@@ -7624,7 +7627,7 @@ public partial class PowerEditorView : UserControl
     {
         var committedValue = value.Trim();
         var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(box, _protoUnitNames, value, () => _isPopulating,
             preserveUnknownInitialValue: false, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: committed =>
@@ -7645,7 +7648,7 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(0, 0, 14, 4) };
         group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(
-            create.Attribute(attribute)?.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+            create.Attribute(attribute)?.Value), IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorValidationBindings.Bind(box, create, "@" + attribute);
         if (integer)
@@ -7653,7 +7656,7 @@ public partial class PowerEditorView : UserControl
                 ? ProtoUnitNumericKind.UnsignedInteger : ProtoUnitNumericKind.SignedInteger);
         box.TextChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             var text = box.Text?.Trim() ?? "";
             var valid = integer
                 ? int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue) &&
@@ -7684,7 +7687,7 @@ public partial class PowerEditorView : UserControl
         var min = create.Attribute("minradius"); var max = create.Attribute("maxradius");
         if (simple == null && min == null && max == null)
         {
-            if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton("Radius", () =>
+            if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton("Radius", () =>
             {
                 create.SetAttributeValue("radius", "0"); RefreshCurrentTempUnit(create);
             }));
@@ -7694,7 +7697,7 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(0, 0, 14, 4) };
         group.Children.Add(new TextBlock { Text = "Radius", VerticalAlignment = VerticalAlignment.Center });
         var mode = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = TempUnitRadiusModes,
-            SelectedItem = min != null || max != null ? "Min/Max" : "Simple", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+            SelectedItem = min != null || max != null ? "Min/Max" : "Simple", IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
         group.Children.Add(mode);
         if ((mode.SelectedItem as string) == "Min/Max")
         {
@@ -7704,7 +7707,7 @@ public partial class PowerEditorView : UserControl
         else AddTempUnitNumber(group, "", create, "radius");
         mode.SelectionChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             if ((mode.SelectedItem as string) == "Min/Max")
             {
                 var value = create.Attribute("radius")?.Value ?? "0";
@@ -7719,7 +7722,7 @@ public partial class PowerEditorView : UserControl
             }
             RefreshCurrentTempUnit(create);
         };
-        if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+        if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
         {
             create.SetAttributeValue("radius", null); create.SetAttributeValue("minradius", null);
             create.SetAttributeValue("maxradius", null); create.SetAttributeValue("pattern", null);
@@ -7736,18 +7739,18 @@ public partial class PowerEditorView : UserControl
             patternGroup.Children.Add(new TextBlock { Text = "Pattern", VerticalAlignment = VerticalAlignment.Center });
             var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = patternOptions,
                 SelectedItem = patternOptions.FirstOrDefault(value => value.Equals(pattern,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             combo.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || combo.SelectedItem is not string value) return;
+                if (_isPopulating || !IsEditablePower || combo.SelectedItem is not string value) return;
                 SetTempUnitAttribute(create, "pattern", value.ToLowerInvariant());
             };
             patternGroup.Children.Add(combo);
-            if (IsModifiedMode) patternGroup.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) patternGroup.Children.Add(CreateTempUnitRemoveButton(() =>
             { create.SetAttributeValue("pattern", null); RefreshCurrentTempUnit(create); }));
             host.Children.Add(patternGroup);
         }
-        else if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton("Pattern", () =>
+        else if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton("Pattern", () =>
         { create.SetAttributeValue("pattern", "simple"); RefreshCurrentTempUnit(create); }));
     }
 
@@ -7756,12 +7759,12 @@ public partial class PowerEditorView : UserControl
         var lifespan = create.Attribute("lifespan")?.Value;
         if (lifespan == null)
         {
-            if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton("Lifespan", () =>
+            if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton("Lifespan", () =>
             { create.SetAttributeValue("lifespan", "0"); RefreshCurrentTempUnit(create); }));
             return;
         }
         AddTempUnitNumber(host, "Lifespan", create, "lifespan");
-        if (IsModifiedMode) host.Children.Add(CreateTempUnitRemoveButton(() =>
+        if (IsEditablePower) host.Children.Add(CreateTempUnitRemoveButton(() =>
         {
             create.SetAttributeValue("lifespan", null); create.SetAttributeValue("lifespantype", null);
             create.SetAttributeValue("removesilentlyatlifespanend", null); RefreshCurrentTempUnit(create);
@@ -7775,24 +7778,24 @@ public partial class PowerEditorView : UserControl
             group.Children.Add(new TextBlock { Text = "Lifespan Type", VerticalAlignment = VerticalAlignment.Center });
             var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 110, ItemsSource = lifespanOptions,
                 SelectedItem = lifespanOptions.FirstOrDefault(value => value.Equals(lifespanType,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             combo.SelectionChanged += (_, _) =>
             { if (combo.SelectedItem is string value) SetTempUnitAttribute(create, "lifespantype", value); };
             group.Children.Add(combo);
-            if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
             { create.SetAttributeValue("lifespantype", null); RefreshCurrentTempUnit(create); }));
             host.Children.Add(group);
         }
-        else if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton("Lifespan Type", () =>
+        else if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton("Lifespan Type", () =>
         { create.SetAttributeValue("lifespantype", "Relative"); RefreshCurrentTempUnit(create); }));
-        var removeAtEnd = new CheckBox { Content = "Remove at lifespan end", IsEnabled = IsModifiedMode,
+        var removeAtEnd = new CheckBox { Content = "Remove at lifespan end", IsEnabled = IsEditablePower,
             IsChecked = create.Attribute("removesilentlyatlifespanend") != null,
-            IsVisible = IsModifiedMode || create.Attribute("removesilentlyatlifespanend") != null,
+            IsVisible = IsEditablePower || create.Attribute("removesilentlyatlifespanend") != null,
             Margin = new Thickness(0, 0, 14, 4) };
         EditorValidationBindings.Bind(removeAtEnd, create, "@removesilentlyatlifespanend");
         removeAtEnd.IsCheckedChanged += (_, _) =>
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             create.SetAttributeValue("removesilentlyatlifespanend", removeAtEnd.IsChecked == true ? "1" : null);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         };
@@ -7806,7 +7809,7 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(0, 0, 8, 4) });
         var selected = TempUnitFlags.Where(flag => create.Attributes().Any(attribute =>
             attribute.Name.LocalName.Equals(flag.XmlName, StringComparison.OrdinalIgnoreCase))).ToList();
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0, ItemsSource = TempUnitFlags.Where(flag => !selected.Contains(flag))
@@ -7824,11 +7827,11 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(picker);
         }
         foreach (var flag in selected)
-            row.Children.Add(PowerEditorDynamicControls.CreateChip(flag.Label, IsModifiedMode ? () =>
+            row.Children.Add(PowerEditorDynamicControls.CreateChip(flag.Label, IsEditablePower ? () =>
             {
                 create.SetAttributeValue(flag.XmlName, null); RefreshCurrentTempUnit(create);
-            } : null, readOnly: !IsModifiedMode));
-        if (IsModifiedMode || selected.Count > 0) card.Children.Add(row);
+            } : null, readOnly: !IsEditablePower));
+        if (IsEditablePower || selected.Count > 0) card.Children.Add(row);
     }
 
     private void BuildTempUnitSoundControls(StackPanel card, XElement create)
@@ -7837,7 +7840,7 @@ public partial class PowerEditorView : UserControl
         var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         if (value == null)
         {
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitAddButton("Soundset", () =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitAddButton("Soundset", () =>
             { create.SetAttributeValue("createunitsoundset", ""); RefreshCurrentTempUnit(create); }));
         }
         else
@@ -7845,16 +7848,16 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(new TextBlock { Text = "On creation", VerticalAlignment = VerticalAlignment.Center });
             var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 240, ItemsSource = GetSoundSetSuggestions(),
                 Text = value, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0,
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.AssetPath);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.AssetPath);
             EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating, selectAllOnFirstClick: false);
             EditorAutoCompleteService.FreezeOwnerScrollWhileDropDownIsOpen(box, _specificScroll);
             box.PropertyChanged += (_, change) =>
             {
-                if (change.Property == AutoCompleteBox.TextProperty && IsModifiedMode)
+                if (change.Property == AutoCompleteBox.TextProperty && IsEditablePower)
                     SetTempUnitAttribute(create, "createunitsoundset", box.Text?.Trim() ?? "");
             };
             row.Children.Add(box);
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             { create.SetAttributeValue("createunitsoundset", null); RefreshCurrentTempUnit(create); }));
         }
         if (row.Children.Count > 0) card.Children.Add(row);
@@ -7876,7 +7879,7 @@ public partial class PowerEditorView : UserControl
 
     private void SetTempUnitAttribute(XElement create, string name, string value)
     {
-        if (_isPopulating || !IsModifiedMode) return;
+        if (_isPopulating || !IsEditablePower) return;
         if (string.Equals(create.Attribute(name)?.Value, value, StringComparison.OrdinalIgnoreCase)) return;
         create.SetAttributeValue(name, value); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
     }
@@ -7928,8 +7931,8 @@ public partial class PowerEditorView : UserControl
         _stampedeFullLengthCheck.IsChecked = PowerCatalog.FindField(entry, "fulllength") != null;
         foreach (var control in new Control[] { _stampedeUnitBox, _stampedeScaleBox,
                      _stampedeAnimRateBox, _stampedeAttackActionBox, _stampedeAttackIntervalBox })
-            control.IsEnabled = IsModifiedMode;
-        _stampedeFullLengthCheck.IsEnabled = IsModifiedMode;
+            control.IsEnabled = IsEditablePower;
+        _stampedeFullLengthCheck.IsEnabled = IsEditablePower;
     }
 
     private XElement? GetOrCreateStampede()
@@ -7997,7 +8000,7 @@ public partial class PowerEditorView : UserControl
         var attach = PowerCatalog.FindField(entry, "attachproto");
         if (attach == null)
         {
-            if (IsModifiedMode) _tempUnitAttachHost.Children.Add(CreateTempUnitAddButton("Attach Unit", () =>
+            if (IsEditablePower) _tempUnitAttachHost.Children.Add(CreateTempUnitAddButton("Attach Unit", () =>
             {
                 PowerCatalog.SetField(entry, "attachproto", ""); RefreshTempUnitFields(entry);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -8006,9 +8009,9 @@ public partial class PowerEditorView : UserControl
         }
         _tempUnitAttachHost.Children.Add(CreateTempUnitProtoBox(attach.Value, value =>
         {
-            if (!IsModifiedMode) return; attach.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
+            if (!IsEditablePower) return; attach.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
         }));
-        if (IsModifiedMode) _tempUnitAttachHost.Children.Add(CreateTempUnitRemoveButton(() =>
+        if (IsEditablePower) _tempUnitAttachHost.Children.Add(CreateTempUnitRemoveButton(() =>
         {
             XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(attach); RefreshTempUnitFields(entry);
             MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -8038,13 +8041,13 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(new TextBlock { Text = "Age", VerticalAlignment = VerticalAlignment.Center });
             var age = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = ageOptions,
                 SelectedItem = ageOptions.FirstOrDefault(value => value.Equals(currentAge,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(age);
             row.Children.Add(new TextBlock { Text = isDwarvenMine ? "Gold Amount" : "Quantity",
                 VerticalAlignment = VerticalAlignment.Center });
             var quantityAttribute = isDwarvenMine ? "goldamount" : "quantityaddon";
             var quantity = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = adjustment.Attribute(quantityAttribute)?.Value ?? "",
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorValidationBindings.Bind(quantity, adjustment, "@" + quantityAttribute);
             EditorNumericFieldStyle.ConfigureNumericTextBox(quantity);
             row.Children.Add(quantity);
@@ -8055,13 +8058,13 @@ public partial class PowerEditorView : UserControl
                     VerticalAlignment = VerticalAlignment.Center });
                 gatherRate = ConfigurePowerFieldPresentation(new TextBox { Width = 90,
                     Text = adjustment.Attribute("gatherratemultiplier")?.Value ?? "",
-                    IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                    IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
                 EditorNumericFieldStyle.ConfigureNumericTextBox(gatherRate);
                 row.Children.Add(gatherRate);
                 EditorValidationBindings.Bind(gatherRate, adjustment, "@gatherratemultiplier");
                 gatherRate.TextChanged += (_, _) =>
                 {
-                    if (_isPopulating || !IsModifiedMode || !double.TryParse(gatherRate.Text,
+                    if (_isPopulating || !IsEditablePower || !double.TryParse(gatherRate.Text,
                         NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                         !double.IsFinite(value)) return;
                     if (NumericTextEquals(adjustment.Attribute("gatherratemultiplier")?.Value,
@@ -8070,14 +8073,14 @@ public partial class PowerEditorView : UserControl
                     MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 };
             }
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(adjustment);
                 RefreshTempUnitAges(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             }));
             quantity.TextChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode) return;
+                if (_isPopulating || !IsEditablePower) return;
                 var valid = isDwarvenMine
                     ? double.TryParse(quantity.Text, NumberStyles.Float, CultureInfo.InvariantCulture,
                         out var value) && double.IsFinite(value)
@@ -8093,14 +8096,14 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.BindXml(age, adjustment);
             age.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || age.SelectedItem is not string value) return;
+                if (_isPopulating || !IsEditablePower || age.SelectedItem is not string value) return;
                 if (adjustment.Value.Trim().Equals(value, StringComparison.OrdinalIgnoreCase)) return;
                 adjustment.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
                 RefreshAfterSelectorEvent(adjustment, () => RefreshTempUnitAges(entry));
             };
             _tempUnitAgeRows.Children.Add(row); _tempUnitAgeFields.Add((quantity, age, adjustment));
         }
-        _addTempUnitAgeButton.IsVisible = IsModifiedMode && adjustments.Count < StandardAges.Length;
+        _addTempUnitAgeButton.IsVisible = IsEditablePower && adjustments.Count < StandardAges.Length;
     }
 
     private void AddTempUnitAge_Click(object? sender, RoutedEventArgs e)
@@ -8152,11 +8155,11 @@ public partial class PowerEditorView : UserControl
                 Margin = new Thickness(0, 0, 8, 4) };
             var box = CreateTempUnitProtoBox(element.Value.Trim(), value =>
             {
-                if (!IsModifiedMode) return;
+                if (!IsEditablePower) return;
                 element.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             });
             group.Children.Add(box);
-            if (IsModifiedMode) group.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) group.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element);
                 RefreshVibrantTreeUnits(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -8164,7 +8167,7 @@ public partial class PowerEditorView : UserControl
             _vibrantTreeUnitsHost.Children.Add(group);
             _vibrantTreeUnitFields.Add((box, element));
         }
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             if (elements.Count == 0)
             {
@@ -8188,7 +8191,7 @@ public partial class PowerEditorView : UserControl
     {
         _droughtTerrainCreepHost.Children.Clear();
         var creep = PowerCatalog.FindField(entry, "terraincreep");
-        _addTerrainCreepButton.IsVisible = IsModifiedMode && creep == null;
+        _addTerrainCreepButton.IsVisible = IsEditablePower && creep == null;
         _terrainCreepLabel.IsVisible = creep != null;
         if (creep == null)
             return;
@@ -8202,7 +8205,7 @@ public partial class PowerEditorView : UserControl
         var topRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(core, 0);
         topRow.Children.Add(core);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
             remove.HorizontalAlignment = HorizontalAlignment.Right;
@@ -8232,7 +8235,7 @@ public partial class PowerEditorView : UserControl
                 Margin = new Thickness(0, 0, 12, 4) };
             group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
             var box = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = creep.Attribute(attribute)?.Value ?? "0",
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(box);
             // Initial TextChanged can arrive after population. A displayed default
             // is not an edit and must not introduce an absent XML attribute.
@@ -8242,7 +8245,7 @@ public partial class PowerEditorView : UserControl
             {
                 if (string.Equals(previousText, box.Text, StringComparison.Ordinal)) return;
                 previousText = box.Text;
-                if (_isPopulating || !IsModifiedMode || !double.TryParse(box.Text,
+                if (_isPopulating || !IsEditablePower || !double.TryParse(box.Text,
                     NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
                     !double.IsFinite(value) || value < 0) return;
                 if (double.TryParse(creep.Attribute(attribute)?.Value, NumberStyles.Float,
@@ -8258,7 +8261,7 @@ public partial class PowerEditorView : UserControl
                 Margin = new Thickness(0, 0, 12, 4) };
             group.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
             var box = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-                MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+                MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
             if (strict) EditorAutoCompleteService.ConfigureStrict(box, values, creep.Attribute(attribute)?.Value ?? "",
                 () => _isPopulating, preserveUnknownInitialValue: true, allowEmpty: true,
                 commitEmptyAsValid: true, selectAllOnFirstClick: false, valueCommitted: value =>
@@ -8276,7 +8279,7 @@ public partial class PowerEditorView : UserControl
         {
             if (creep.Attribute(attribute) == null)
             {
-                if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton(label, () =>
+                if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton(label, () =>
                 { creep.SetAttributeValue(attribute, "0"); RefreshDroughtTerrainCreep(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }));
                 return;
             }
@@ -8286,7 +8289,7 @@ public partial class PowerEditorView : UserControl
         {
             if (creep.Attribute(attribute) == null)
             {
-                if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton(label, () =>
+                if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton(label, () =>
                 { creep.SetAttributeValue(attribute, values[0].ToLowerInvariant()); RefreshDroughtTerrainCreep(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }));
                 return;
             }
@@ -8294,7 +8297,7 @@ public partial class PowerEditorView : UserControl
             var options = OptionsIncludingCurrent(values, current);
             var combo = ConfigurePowerFieldPresentation(new ComboBox { Width = 160, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(current,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode, Margin = new Thickness(0,0,8,4) }, EditorFieldWidthRole.LongEnum);
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower, Margin = new Thickness(0,0,8,4) }, EditorFieldWidthRole.LongEnum);
             combo.SelectionChanged += (_, _) => { if (combo.SelectedItem is string value) SetTerrainAttribute(attribute, value.ToLowerInvariant()); };
             host.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,6,4) });
             host.Children.Add(combo);
@@ -8303,7 +8306,7 @@ public partial class PowerEditorView : UserControl
         {
             if (creep.Attribute(attribute) == null)
             {
-                if (IsModifiedMode) host.Children.Add(CreateTempUnitAddButton(label, () =>
+                if (IsEditablePower) host.Children.Add(CreateTempUnitAddButton(label, () =>
                 { creep.SetAttributeValue(attribute, ""); RefreshDroughtTerrainCreep(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }));
                 return;
             }
@@ -8311,7 +8314,7 @@ public partial class PowerEditorView : UserControl
         }
         void SetTerrainAttribute(string attribute, string value)
         {
-            if (_isPopulating || !IsModifiedMode) return;
+            if (_isPopulating || !IsEditablePower) return;
             if (string.Equals(creep.Attribute(attribute)?.Value, value,
                     StringComparison.OrdinalIgnoreCase)) return;
             creep.SetAttributeValue(attribute, value); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -8320,7 +8323,7 @@ public partial class PowerEditorView : UserControl
 
     private void AddTerrainCreep_Click(object? sender, RoutedEventArgs e)
     {
-        if (_currentEntry == null || !IsModifiedMode ||
+        if (_currentEntry == null || !IsEditablePower ||
             PowerCatalog.FindField(_currentEntry, "terraincreep") != null) return;
         var creep = PowerCatalog.SetField(_currentEntry, "terraincreep", "");
         foreach (var (name, value) in new[] { ("creep", ""), ("maxradius", "0"),
@@ -8339,7 +8342,7 @@ public partial class PowerEditorView : UserControl
         row.Children.Add(new TextBlock { Text = "Flags", VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0,0,8,4) });
         var selected = MajorGodCatalog.TerrainCreepFlags.Where(flag => creep.Attribute(flag.Attribute) != null).ToList();
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var picker = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 50, FilterMode = AutoCompleteFilterMode.Contains,
                 MinimumPrefixLength = 0, ItemsSource = MajorGodCatalog.TerrainCreepFlags.Except(selected)
@@ -8357,10 +8360,10 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(picker);
         }
         foreach (var flag in selected) row.Children.Add(PowerEditorDynamicControls.CreateChip(flag.Label,
-            IsModifiedMode ? () => { creep.SetAttributeValue(flag.Attribute, null); if (_currentEntry != null)
+            IsEditablePower ? () => { creep.SetAttributeValue(flag.Attribute, null); if (_currentEntry != null)
                 RefreshDroughtTerrainCreep(_currentEntry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); } : null,
-            readOnly: !IsModifiedMode));
-        if (IsModifiedMode || selected.Count > 0) host.Children.Add(row);
+            readOnly: !IsEditablePower));
+        if (IsEditablePower || selected.Count > 0) host.Children.Add(row);
     }
 
     private void RefreshDroughtInitialDamages(XElement entry)
@@ -8368,7 +8371,7 @@ public partial class PowerEditorView : UserControl
         _droughtInitialDamageRows.Children.Clear(); _droughtDamageFields.Clear();
         foreach (var element in entry.Elements().Where(element => element.Name.LocalName.Equals("initialdamage",
                      StringComparison.OrdinalIgnoreCase))) BuildDroughtInitialDamage(entry, element);
-        _addDroughtInitialDamageButton.IsVisible = IsModifiedMode;
+        _addDroughtInitialDamageButton.IsVisible = IsEditablePower;
     }
 
     private void BuildDroughtInitialDamage(XElement entry, XElement element)
@@ -8376,7 +8379,7 @@ public partial class PowerEditorView : UserControl
         var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Unit", VerticalAlignment = VerticalAlignment.Center });
         var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, element.Value, () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
@@ -8387,7 +8390,7 @@ public partial class PowerEditorView : UserControl
         unit.Text = element.Value;
         row.Children.Add(unit); row.Children.Add(new TextBlock { Text = "Factor", VerticalAlignment = VerticalAlignment.Center });
         var factor = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = element.Attribute("fraction")?.Value ?? "0",
-            IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric); EditorNumericFieldStyle.ConfigureNumericTextBox(factor);
+            IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric); EditorNumericFieldStyle.ConfigureNumericTextBox(factor);
         EditorValidationBindings.Bind(factor, element, "@fraction");
         factor.TextChanged += (_, _) => { if (double.TryParse(factor.Text, NumberStyles.Float,
             CultureInfo.InvariantCulture, out var value) && double.IsFinite(value))
@@ -8397,7 +8400,7 @@ public partial class PowerEditorView : UserControl
                 element.SetAttributeValue("fraction", factor.Text!.Trim()); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             } };
         row.Children.Add(factor);
-        if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+        if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
         { XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element); RefreshDroughtInitialDamages(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }));
         _droughtInitialDamageRows.Children.Add(row); _droughtDamageFields.Add((unit, factor, element));
     }
@@ -8415,7 +8418,7 @@ public partial class PowerEditorView : UserControl
         _greatFloodDamageCapRows.Children.Clear(); _greatFloodDamageCapFields.Clear();
         foreach (var element in entry.Elements().Where(element => element.Name.LocalName.Equals("damagecap",
                      StringComparison.OrdinalIgnoreCase))) BuildGreatFloodDamageCap(entry, element);
-        _addGreatFloodDamageCapButton.IsVisible = IsModifiedMode;
+        _addGreatFloodDamageCapButton.IsVisible = IsEditablePower;
     }
 
     private void BuildGreatFloodDamageCap(XElement entry, XElement element)
@@ -8423,7 +8426,7 @@ public partial class PowerEditorView : UserControl
         var row = new WrapPanel { Orientation = Orientation.Horizontal, };
         row.Children.Add(new TextBlock { Text = "Unit", VerticalAlignment = VerticalAlignment.Center });
         var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, FilterMode = AutoCompleteFilterMode.Contains,
-            MinimumPrefixLength = 0, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Reference);
+            MinimumPrefixLength = 0, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Reference);
         var initial = element.Attribute("unittype")?.Value ?? "";
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, initial, () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
@@ -8435,7 +8438,7 @@ public partial class PowerEditorView : UserControl
             });
         unit.Text = initial;
         row.Children.Add(unit); row.Children.Add(new TextBlock { Text = "Cap", VerticalAlignment = VerticalAlignment.Center });
-        var cap = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = element.Value, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        var cap = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = element.Value, IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(cap);
         EditorValidationBindings.BindXml(cap, element);
         cap.TextChanged += (_, _) => { if (double.TryParse(cap.Text, NumberStyles.Float,
@@ -8446,7 +8449,7 @@ public partial class PowerEditorView : UserControl
                 element.Value = cap.Text!.Trim(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             } };
         row.Children.Add(cap);
-        if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+        if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
         { XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element); RefreshGreatFloodDamageCaps(entry); MarkCurrentDirty(); RefreshRawXmlFromCurrent(); }));
         _greatFloodDamageCapRows.Children.Add(row); _greatFloodDamageCapFields.Add((unit, cap, element));
     }
@@ -8465,7 +8468,7 @@ public partial class PowerEditorView : UserControl
         foreach (var armor in entry.Elements().Where(element =>
                      element.Name.LocalName.Equals("armor", StringComparison.OrdinalIgnoreCase)))
             BuildBronzeArmor(entry, armor);
-        _addBronzeArmorButton.IsVisible = IsModifiedMode;
+        _addBronzeArmorButton.IsVisible = IsEditablePower;
     }
 
     private void BuildBronzeArmor(XElement entry, XElement armor)
@@ -8476,13 +8479,13 @@ public partial class PowerEditorView : UserControl
             Margin = new Thickness(0, 0, 6, 4) });
         var abstractType = armor.Elements().FirstOrDefault(element =>
             element.Name.LocalName.Equals("abstracttype", StringComparison.OrdinalIgnoreCase));
-        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, MaxWidth = 200, IsEnabled = IsModifiedMode,
+        var unit = ConfigurePowerFieldPresentation(new AutoCompleteBox { Width = 200, MaxWidth = 200, IsEnabled = IsEditablePower,
             FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 14, 4) }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.ConfigureStrict(unit, _unitOrTypeNames, abstractType?.Value ?? "", () => _isPopulating,
             preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true,
             selectAllOnFirstClick: false, valueCommitted: value =>
             {
-                if (!IsModifiedMode) return;
+                if (!IsEditablePower) return;
                 if (string.Equals(abstractType?.Value.Trim(), value,
                         StringComparison.OrdinalIgnoreCase) || abstractType == null && value.Length == 0) return;
                 if (abstractType == null) { abstractType = new XElement("abstracttype"); armor.AddFirst(abstractType); }
@@ -8513,23 +8516,23 @@ public partial class PowerEditorView : UserControl
                     ? [] : [current]).ToList();
             var type = ConfigurePowerFieldPresentation(new ComboBox { Width = 120, ItemsSource = choices,
                 SelectedItem = choices.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.ShortEnum);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.ShortEnum);
             EditorValidationBindings.BindXml(type, armorType);
             type.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || type.SelectedItem is not string value) return;
+                if (_isPopulating || !IsEditablePower || type.SelectedItem is not string value) return;
                 if (armorType.Value.Trim().Equals(value, StringComparison.OrdinalIgnoreCase)) return;
                 armorType.Value = value; MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             row.Children.Add(type);
             row.Children.Add(new TextBlock { Text = "Delta", VerticalAlignment = VerticalAlignment.Center });
             var valueBox = ConfigurePowerFieldPresentation(new TextBox { Width = 90,
-                Text = armorType.Attribute("vulnerabilitypercentdelta")?.Value ?? "", IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+                Text = armorType.Attribute("vulnerabilitypercentdelta")?.Value ?? "", IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(valueBox);
             EditorValidationBindings.Bind(valueBox, armorType, "@vulnerabilitypercentdelta");
             valueBox.TextChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || !double.TryParse(valueBox.Text,
+                if (_isPopulating || !IsEditablePower || !double.TryParse(valueBox.Text,
                     NumberStyles.Float, CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number)) return;
                 if (double.TryParse(armorType.Attribute("vulnerabilitypercentdelta")?.Value,
                         NumberStyles.Float, CultureInfo.InvariantCulture, out var original) &&
@@ -8538,7 +8541,7 @@ public partial class PowerEditorView : UserControl
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
             row.Children.Add(valueBox);
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(armorType);
                 PowerCatalog.NormalizeNestedElementIndentation(armor); RefreshBronzeArmors(entry);
@@ -8550,7 +8553,7 @@ public partial class PowerEditorView : UserControl
         var usedArmorTypes = armor.Elements().Where(element => element.Name.LocalName.Equals("armortype",
             StringComparison.OrdinalIgnoreCase)).Select(element => element.Value.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (IsModifiedMode && ProtoConstants.KnownArmorTypes.Any(value => !usedArmorTypes.Contains(value)))
+        if (IsEditablePower && ProtoConstants.KnownArmorTypes.Any(value => !usedArmorTypes.Contains(value)))
             content.Children.Add(CreateTempUnitAddButton("Add Armor Type", () =>
         {
             var used = armor.Elements().Where(element => element.Name.LocalName.Equals("armortype",
@@ -8567,7 +8570,7 @@ public partial class PowerEditorView : UserControl
             Padding = new Thickness(10), HorizontalAlignment = HorizontalAlignment.Stretch };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(content);
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             var remove = CreateTempUnitRemoveButton(() =>
             {
@@ -8615,15 +8618,15 @@ public partial class PowerEditorView : UserControl
             row.Children.Add(new TextBlock { Text = "Age", VerticalAlignment = VerticalAlignment.Center });
             var ageBox = ConfigurePowerFieldPresentation(new ComboBox { Width = 140, ItemsSource = options,
                 SelectedItem = options.FirstOrDefault(value => value.Equals(selectedAgeOption,
-                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+                    StringComparison.OrdinalIgnoreCase)), IsEnabled = IsEditablePower }, EditorFieldWidthRole.LongEnum);
             row.Children.Add(ageBox);
             row.Children.Add(new TextBlock { Text = "Food", VerticalAlignment = VerticalAlignment.Center });
-            var food = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value), IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+            var food = ConfigurePowerFieldPresentation(new TextBox { Width = 90, Text = EditorNumericFieldStyle.FormatDisplay(element.Value), IsEnabled = IsEditablePower }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(food); row.Children.Add(food);
             EditorValidationBindings.Bind(ageBox, element, "@age");
             ageBox.SelectionChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || ageBox.SelectedItem is not string selected) return;
+                if (_isPopulating || !IsEditablePower || ageBox.SelectedItem is not string selected) return;
                 var selectedIndex = Array.IndexOf(StandardAges, selected);
                 if (selectedIndex < 0) return;
                 var age = selectedIndex + 1;
@@ -8635,12 +8638,12 @@ public partial class PowerEditorView : UserControl
             EditorValidationBindings.BindXml(food, element);
             food.TextChanged += (_, _) =>
             {
-                if (_isPopulating || !IsModifiedMode || !double.TryParse(food.Text, NumberStyles.Float,
+                if (_isPopulating || !IsEditablePower || !double.TryParse(food.Text, NumberStyles.Float,
                     CultureInfo.InvariantCulture, out var value) || !double.IsFinite(value)) return;
                 if (NumericTextEquals(element.Value, food.Text!.Trim())) return;
                 element.Value = food.Text!.Trim(); MarkCurrentDirty(); RefreshRawXmlFromCurrent();
             };
-            if (IsModifiedMode) row.Children.Add(CreateTempUnitRemoveButton(() =>
+            if (IsEditablePower) row.Children.Add(CreateTempUnitRemoveButton(() =>
             {
                 XmlTriviaPreserver.RemoveElementAndAdjacentWhitespace(element); RefreshGreatHuntMaxFoods(entry);
                 MarkCurrentDirty(); RefreshRawXmlFromCurrent();
@@ -8650,7 +8653,7 @@ public partial class PowerEditorView : UserControl
         var usedAges = elements.Select(element => int.TryParse(element.Attribute("age")?.Value,
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out var age) ? age : 0)
             .Where(age => age is >= 1 and <= 5).Distinct().Count();
-        _addGreatHuntMaxFoodButton.IsVisible = IsModifiedMode && usedAges < StandardAges.Length;
+        _addGreatHuntMaxFoodButton.IsVisible = IsEditablePower && usedAges < StandardAges.Length;
     }
 
     private void AddGreatHuntMaxFood_Click(object? sender, RoutedEventArgs e)
@@ -8675,7 +8678,7 @@ public partial class PowerEditorView : UserControl
             => IsDefaultSpecificAttribute(powerType, spec.Name) ||
                (spec.Name.Equals("Tree Bend", StringComparison.OrdinalIgnoreCase) &&
                 powerType?.Equals("Tempest", StringComparison.OrdinalIgnoreCase) == true &&
-                !IsModifiedMode && _currentEntry != null &&
+                !IsEditablePower && _currentEntry != null &&
                 HasOtherAttribute(_currentEntry,
                     ["treebendstrengthmin", "treebendstrengthmax", "treebendperiodmin", "treebendperiodmax"]));
         var defaultTags = specs.Where(IsEffectiveDefault)
@@ -8688,7 +8691,7 @@ public partial class PowerEditorView : UserControl
             var present = !shadowedByDefault && !typeOnlyAttribute && _currentEntry != null &&
                           HasOtherAttribute(_currentEntry, spec.Tags);
             var visible = _currentEntry != null && !shadowedByDefault && !typeOnlyAttribute &&
-                (isDefault ? IsModifiedMode || present :
+                (isDefault ? IsEditablePower || present :
                     _openOtherSpecificAttributes.Contains(spec.Name) || present);
             return (IsDefault: isDefault, Visible: visible);
         }, StringComparer.OrdinalIgnoreCase);
@@ -8715,7 +8718,7 @@ public partial class PowerEditorView : UserControl
                 continue;
             }
 
-            var generatedRemoveNames = IsModifiedMode
+            var generatedRemoveNames = IsEditablePower
                 ? visibleSpecs.Select(spec => spec.Name)
                     .Where(name => !HasInlineSpecificRemoveButton(row, name)).ToList()
                 : [];
@@ -8751,9 +8754,9 @@ public partial class PowerEditorView : UserControl
             _otherSpecificAttributeRows.Children.Add(wrapper);
         }
 
-        _removeCracksSoundButton.IsVisible = IsModifiedMode && states["Cracks Sound"].Visible &&
+        _removeCracksSoundButton.IsVisible = IsEditablePower && states["Cracks Sound"].Visible &&
                                               !states["Cracks Sound"].IsDefault;
-        _removeTimeFactorButton.IsVisible = IsModifiedMode && states["Time Factor"].Visible &&
+        _removeTimeFactorButton.IsVisible = IsEditablePower && states["Time Factor"].Visible &&
                                              !states["Time Factor"].IsDefault;
         var stunVisible = states["Stun lenght"].Visible;
         var shockwaveVfxVisible = states["Shockwave VFX"].Visible;
@@ -8762,23 +8765,23 @@ public partial class PowerEditorView : UserControl
         _stunLengthFields.IsVisible = stunVisible;
         _shockwaveVfxFields.IsVisible = shockwaveVfxVisible;
         _shockwaveVfxInlineLabel.IsVisible = stunVisible && shockwaveVfxVisible;
-        _removeStunLengthButton.IsVisible = IsModifiedMode && states["Stun lenght"].Visible &&
+        _removeStunLengthButton.IsVisible = IsEditablePower && states["Stun lenght"].Visible &&
                                              !states["Stun lenght"].IsDefault;
-        _removeShockwaveVfxButton.IsVisible = IsModifiedMode && states["Shockwave VFX"].Visible &&
+        _removeShockwaveVfxButton.IsVisible = IsEditablePower && states["Shockwave VFX"].Visible &&
                                                !states["Shockwave VFX"].IsDefault;
-        _removeThrowPropertiesButton.IsVisible = IsModifiedMode && states["Throw properties"].Visible &&
+        _removeThrowPropertiesButton.IsVisible = IsEditablePower && states["Throw properties"].Visible &&
                                                   !states["Throw properties"].IsDefault;
 
         _boltStrikeUnitFields.IsVisible = states["Strike Unit"].Visible;
         _boltSparksVfxFields.IsVisible = states["Bolt VFX"].Visible;
         _boltScorchVfxFields.IsVisible = states["Bolt VFX"].Visible;
-        _pestilenceRofFields.IsVisible = IsModifiedMode || (_currentEntry != null &&
+        _pestilenceRofFields.IsVisible = IsEditablePower || (_currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "rofpercentpenalty") != null);
-        _pestilenceTrainRateFields.IsVisible = IsModifiedMode || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "trainratepenalty") != null);
-        _pestilenceScanFields.IsVisible = IsModifiedMode || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "rescaninterval") != null);
-        var huntSpawnVisible = IsModifiedMode || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "spawnproto") != null);
-        var huntFoodVisible = IsModifiedMode || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "spawnfoodratio") != null);
-        var huntVfxVisible = IsModifiedMode || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "vfxproto") != null);
+        _pestilenceTrainRateFields.IsVisible = IsEditablePower || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "trainratepenalty") != null);
+        _pestilenceScanFields.IsVisible = IsEditablePower || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "rescaninterval") != null);
+        var huntSpawnVisible = IsEditablePower || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "spawnproto") != null);
+        var huntFoodVisible = IsEditablePower || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "spawnfoodratio") != null);
+        var huntVfxVisible = IsEditablePower || (_currentEntry != null && PowerCatalog.FindField(_currentEntry, "vfxproto") != null);
         _greatHuntSpawnFields.IsVisible = huntSpawnVisible;
         _greatHuntFoodFields.IsVisible = huntFoodVisible;
         _greatHuntVfxFields.IsVisible = huntVfxVisible;
@@ -8794,8 +8797,8 @@ public partial class PowerEditorView : UserControl
         _treeUnitFields.IsVisible = treeUnitVisible;
         _treeAmountFields.IsVisible = treeAmountVisible;
         _treeAmountInlineLabel.IsVisible = treeUnitVisible && treeAmountVisible;
-        _removeTreeUnitButton.IsVisible = IsModifiedMode && treeUnitVisible && !states["Tree Unit"].IsDefault;
-        _removeTreeAmountButton.IsVisible = IsModifiedMode && treeAmountVisible && !states["Tree amount"].IsDefault;
+        _removeTreeUnitButton.IsVisible = IsEditablePower && treeUnitVisible && !states["Tree Unit"].IsDefault;
+        _removeTreeAmountButton.IsVisible = IsEditablePower && treeAmountVisible && !states["Tree amount"].IsDefault;
 
         var treeSpawnVisible = states["Tree Spawn Interval"].Visible;
         var treeEffectVisible = states["Tree Effect VFX"].Visible;
@@ -8804,31 +8807,31 @@ public partial class PowerEditorView : UserControl
         _treeSpawnIntervalFields.IsVisible = treeSpawnVisible;
         _treeEffectVfxFields.IsVisible = treeEffectVisible;
         _treeEffectVfxInlineLabel.IsVisible = treeSpawnVisible && treeEffectVisible;
-        _removeTreeSpawnIntervalButton.IsVisible = IsModifiedMode && treeSpawnVisible &&
+        _removeTreeSpawnIntervalButton.IsVisible = IsEditablePower && treeSpawnVisible &&
                                                     !states["Tree Spawn Interval"].IsDefault;
-        _removeTreeEffectVfxButton.IsVisible = IsModifiedMode && treeEffectVisible &&
+        _removeTreeEffectVfxButton.IsVisible = IsEditablePower && treeEffectVisible &&
                                                !states["Tree Effect VFX"].IsDefault;
-        _removeGrowthRadiusButton.IsVisible = IsModifiedMode && states["Growth radius"].Visible &&
+        _removeGrowthRadiusButton.IsVisible = IsEditablePower && states["Growth radius"].Visible &&
                                                !states["Growth radius"].IsDefault;
-        _removeEffectVfxButton.IsVisible = IsModifiedMode && states["Effect VFX"].Visible &&
+        _removeEffectVfxButton.IsVisible = IsEditablePower && states["Effect VFX"].Visible &&
                                             !states["Effect VFX"].IsDefault;
-        _removeDamagePercentConversionButton.IsVisible = IsModifiedMode &&
+        _removeDamagePercentConversionButton.IsVisible = IsEditablePower &&
             states["Damage Percent on Conversion"].Visible &&
             !states["Damage Percent on Conversion"].IsDefault;
-        _removeVfxProtoButton.IsVisible = IsModifiedMode && states["VFX Proto"].Visible &&
+        _removeVfxProtoButton.IsVisible = IsEditablePower && states["VFX Proto"].Visible &&
                                            !states["VFX Proto"].IsDefault;
-        _removeEffectTimeButton.IsVisible = IsModifiedMode && states["Effect time"].Visible &&
+        _removeEffectTimeButton.IsVisible = IsEditablePower && states["Effect time"].Visible &&
                                              !states["Effect time"].IsDefault;
         var unitEffectTimePresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "uniteffecttimeseconds") != null;
         var sharedEffectTimePresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "sharedeffecttimeseconds") != null;
         _unitEffectTimeLabel.IsVisible = _unitEffectTimeSecondsBox.IsVisible =
-            IsModifiedMode || unitEffectTimePresent;
+            IsEditablePower || unitEffectTimePresent;
         _sharedEffectTimeLabel.IsVisible = _sharedEffectTimeSecondsBox.IsVisible =
-            IsModifiedMode || sharedEffectTimePresent;
+            IsEditablePower || sharedEffectTimePresent;
 
-        _removeSpiderPropertiesButton.IsVisible = IsModifiedMode && states["Spider properties"].Visible &&
+        _removeSpiderPropertiesButton.IsVisible = IsEditablePower && states["Spider properties"].Visible &&
                                                    !states["Spider properties"].IsDefault;
         SetSpecificGroupVisibility(_spiderUnitFields, "spiderproto");
         SetSpecificGroupVisibility(_spiderEggUnitFields, "spidereggproto");
@@ -8844,21 +8847,21 @@ public partial class PowerEditorView : UserControl
         _numberToCreateFields.IsVisible = numberVisible;
         _separationDistanceFields.IsVisible = separationVisible;
         _separationDistanceInlineLabel.IsVisible = numberVisible && separationVisible;
-        _removeNumberToCreateButton.IsVisible = IsModifiedMode && numberVisible &&
+        _removeNumberToCreateButton.IsVisible = IsEditablePower && numberVisible &&
                                                  !states["Number to create"].IsDefault;
-        _removeSeparationDistanceButton.IsVisible = IsModifiedMode && separationVisible &&
+        _removeSeparationDistanceButton.IsVisible = IsEditablePower && separationVisible &&
                                                      !states["Separation Distance"].IsDefault;
 
-        _removeHatchPropertiesButton.IsVisible = IsModifiedMode && states["Hatch properties"].Visible &&
+        _removeHatchPropertiesButton.IsVisible = IsEditablePower && states["Hatch properties"].Visible &&
                                                   !states["Hatch properties"].IsDefault;
         SetSpecificGroupVisibility(_hatchTimeFields, "hatchtime");
         var hatchMinPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "hatchintervalmin") != null;
         var hatchMaxPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "hatchintervalmax") != null;
-        _hatchIntervalFields.IsVisible = IsModifiedMode || hatchMinPresent || hatchMaxPresent;
-        _hatchIntervalMinLabel.IsVisible = _hatchIntervalMinBox.IsVisible = IsModifiedMode || hatchMinPresent;
-        _hatchIntervalMaxLabel.IsVisible = _hatchIntervalMaxBox.IsVisible = IsModifiedMode || hatchMaxPresent;
+        _hatchIntervalFields.IsVisible = IsEditablePower || hatchMinPresent || hatchMaxPresent;
+        _hatchIntervalMinLabel.IsVisible = _hatchIntervalMinBox.IsVisible = IsEditablePower || hatchMinPresent;
+        _hatchIntervalMaxLabel.IsVisible = _hatchIntervalMaxBox.IsVisible = IsEditablePower || hatchMaxPresent;
 
         var warnTimeVisible = states["Warn time"].Visible;
         var initialDelayVisible = states["Initial Delay"].Visible;
@@ -8874,16 +8877,16 @@ public partial class PowerEditorView : UserControl
                                                (warnTimeVisible || initialDelayVisible);
         _unitEffectTimeFields.Margin = warnTimeVisible || initialDelayVisible
             ? new Thickness(12, 0, 0, 0) : new Thickness(0);
-        _removeWarnTimeButton.IsVisible = IsModifiedMode && warnTimeVisible &&
+        _removeWarnTimeButton.IsVisible = IsEditablePower && warnTimeVisible &&
                                            !states["Warn time"].IsDefault;
-        _removeInitialDelayButton.IsVisible = IsModifiedMode && initialDelayVisible &&
+        _removeInitialDelayButton.IsVisible = IsEditablePower && initialDelayVisible &&
                                               !states["Initial Delay"].IsDefault;
-        _removeUnitEffectTimeButton.IsVisible = IsModifiedMode && unitEffectTimeVisible &&
+        _removeUnitEffectTimeButton.IsVisible = IsEditablePower && unitEffectTimeVisible &&
                                                  !states["Unit Effect Time"].IsDefault;
-        _removeHumanDeathSoundButton.IsVisible = IsModifiedMode && states["Human Death Sound"].Visible &&
+        _removeHumanDeathSoundButton.IsVisible = IsEditablePower && states["Human Death Sound"].Visible &&
                                                   !states["Human Death Sound"].IsDefault;
 
-        _removeVortexPropertiesButton.IsVisible = IsModifiedMode && states["Vortex properties"].Visible &&
+        _removeVortexPropertiesButton.IsVisible = IsEditablePower && states["Vortex properties"].Visible &&
                                                    !states["Vortex properties"].IsDefault;
         SetSpecificGroupVisibility(_vortexLandVfxFields, "vortexlandingproto");
         SetSpecificGroupVisibility(_vortexStartVfxFields, "vortexstartproto");
@@ -8897,18 +8900,18 @@ public partial class PowerEditorView : UserControl
         _dropIntervalFields.IsVisible = dropIntervalVisible;
         _maxRetryFields.IsVisible = maxRetryVisible;
         _maxRetryInlineLabel.IsVisible = dropIntervalVisible && maxRetryVisible;
-        _removeDropIntervalButton.IsVisible = IsModifiedMode && dropIntervalVisible &&
+        _removeDropIntervalButton.IsVisible = IsEditablePower && dropIntervalVisible &&
                                                !states["Drop Interval"].IsDefault;
-        _removeMaxRetryButton.IsVisible = IsModifiedMode && maxRetryVisible &&
+        _removeMaxRetryButton.IsVisible = IsEditablePower && maxRetryVisible &&
                                            !states["Max Retry"].IsDefault;
         var dropMinPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "dropintervalmin") != null;
         var dropMaxPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "dropintervalmax") != null;
-        _dropIntervalMinLabel.IsVisible = _dropIntervalMinBox.IsVisible = IsModifiedMode || dropMinPresent;
-        _dropIntervalMaxLabel.IsVisible = _dropIntervalMaxBox.IsVisible = IsModifiedMode || dropMaxPresent;
+        _dropIntervalMinLabel.IsVisible = _dropIntervalMinBox.IsVisible = IsEditablePower || dropMinPresent;
+        _dropIntervalMaxLabel.IsVisible = _dropIntervalMaxBox.IsVisible = IsEditablePower || dropMaxPresent;
 
-        _removeMaxUnitHeightButton.IsVisible = IsModifiedMode && states["Max Unit Height"].Visible &&
+        _removeMaxUnitHeightButton.IsVisible = IsEditablePower && states["Max Unit Height"].Visible &&
                                                 !states["Max Unit Height"].IsDefault;
         var liftSoundVisible = states["Lift Sound"].Visible;
         var landSoundVisible = states["Land Sound"].Visible;
@@ -8917,9 +8920,9 @@ public partial class PowerEditorView : UserControl
         _liftSoundFields.IsVisible = liftSoundVisible;
         _landSoundFields.IsVisible = landSoundVisible;
         _landSoundInlineLabel.IsVisible = liftSoundVisible && landSoundVisible;
-        _removeLiftSoundButton.IsVisible = IsModifiedMode && liftSoundVisible &&
+        _removeLiftSoundButton.IsVisible = IsEditablePower && liftSoundVisible &&
                                             !states["Lift Sound"].IsDefault;
-        _removeLandSoundButton.IsVisible = IsModifiedMode && landSoundVisible &&
+        _removeLandSoundButton.IsVisible = IsEditablePower && landSoundVisible &&
                                             !states["Land Sound"].IsDefault;
 
         var spawnVisible = states["Spawn Proto"].Visible;
@@ -8929,18 +8932,18 @@ public partial class PowerEditorView : UserControl
         _spawnFields.IsVisible = spawnVisible;
         _maxSpawnNumberFields.IsVisible = maxSpawnVisible;
         _maxSpawnNumberInlineLabel.IsVisible = spawnVisible && maxSpawnVisible;
-        _removeSpawnButton.IsVisible = IsModifiedMode && spawnVisible && !states["Spawn Proto"].IsDefault;
-        _removeMaxSpawnNumberButton.IsVisible = IsModifiedMode && maxSpawnVisible &&
+        _removeSpawnButton.IsVisible = IsEditablePower && spawnVisible && !states["Spawn Proto"].IsDefault;
+        _removeMaxSpawnNumberButton.IsVisible = IsEditablePower && maxSpawnVisible &&
                                                  !states["Max Spawn Amount"].IsDefault;
 
-        _removeTartarianGateButton.IsVisible = IsModifiedMode && states["Tartarian Gate"].Visible &&
+        _removeTartarianGateButton.IsVisible = IsEditablePower && states["Tartarian Gate"].Visible &&
                                                 !states["Tartarian Gate"].IsDefault;
         SetSpecificGroupVisibility(_tartarianGateUnitFields, "tartariangateproto");
         SetSpecificGroupVisibility(_tartarianGateBirthFields, "gatebirthproto");
         SetSpecificGroupVisibility(_tartarianGateFlameFields, "gateflameproto");
         SetSpecificGroupVisibility(_sinkHoleTimeFields, "sinkholetime");
         SetSpecificGroupVisibility(_sinkHoleShakeFields, "sinkholeshakestrength");
-        _removeRumbleTimeButton.IsVisible = IsModifiedMode && states["Rumble Time"].Visible &&
+        _removeRumbleTimeButton.IsVisible = IsEditablePower && states["Rumble Time"].Visible &&
                                              !states["Rumble Time"].IsDefault;
 
         var firstSpawnDelayVisible = states["First Spawn delay"].Visible;
@@ -8950,18 +8953,18 @@ public partial class PowerEditorView : UserControl
         _firstSpawnDelayFields.IsVisible = firstSpawnDelayVisible;
         _spawnIntervalFields.IsVisible = spawnIntervalVisible;
         _spawnIntervalInlineLabel.IsVisible = firstSpawnDelayVisible && spawnIntervalVisible;
-        _removeFirstSpawnDelayButton.IsVisible = IsModifiedMode && firstSpawnDelayVisible &&
+        _removeFirstSpawnDelayButton.IsVisible = IsEditablePower && firstSpawnDelayVisible &&
                                                   !states["First Spawn delay"].IsDefault;
-        _removeSpawnIntervalButton.IsVisible = IsModifiedMode && spawnIntervalVisible &&
+        _removeSpawnIntervalButton.IsVisible = IsEditablePower && spawnIntervalVisible &&
                                                 !states["Spawn interval"].IsDefault;
         var spawnIntervalMinPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "spawnintervalmin") != null;
         var spawnIntervalMaxPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "spawnintervalmax") != null;
         _spawnIntervalMinLabel.IsVisible = _spawnIntervalMinBox.IsVisible =
-            IsModifiedMode || spawnIntervalMinPresent;
+            IsEditablePower || spawnIntervalMinPresent;
         _spawnIntervalMaxLabel.IsVisible = _spawnIntervalMaxBox.IsVisible =
-            IsModifiedMode || spawnIntervalMaxPresent;
+            IsEditablePower || spawnIntervalMaxPresent;
 
         var farmProtoVisible = states["Farm Proto"].Visible;
         var numberTransformVisible = states["Number to Transform"].Visible;
@@ -8969,11 +8972,11 @@ public partial class PowerEditorView : UserControl
         _farmProtoFields.IsVisible = farmProtoVisible;
         _numberToTransformFields.IsVisible = numberTransformVisible;
         _numberToTransformInlineLabel.IsVisible = farmProtoVisible && numberTransformVisible;
-        _removeNumberToTransformButton.IsVisible = IsModifiedMode && numberTransformVisible &&
+        _removeNumberToTransformButton.IsVisible = IsEditablePower && numberTransformVisible &&
                                                     !states["Number to Transform"].IsDefault;
-        _removeStealthLevelButton.IsVisible = IsModifiedMode && states["Stealth Level"].Visible &&
+        _removeStealthLevelButton.IsVisible = IsEditablePower && states["Stealth Level"].Visible &&
                                                !states["Stealth Level"].IsDefault;
-        _addDamageTierButton.IsVisible = IsModifiedMode && states["Damage Tiers"].Visible;
+        _addDamageTierButton.IsVisible = IsEditablePower && states["Damage Tiers"].Visible;
 
         var rootedVfxVisible = states["Rooted enemy VFX"].Visible;
         var treeAreaVisible = states["Tree Area VFX"].Visible;
@@ -8981,7 +8984,7 @@ public partial class PowerEditorView : UserControl
         _rootedEnemyVfxFields.IsVisible = rootedVfxVisible;
         _treeAreaVfxFields.IsVisible = treeAreaVisible;
         _treeVfxFields.IsVisible = treeVfxVisible;
-        _removeForestTreeVfxButton.IsVisible = IsModifiedMode && treeVfxVisible &&
+        _removeForestTreeVfxButton.IsVisible = IsEditablePower && treeVfxVisible &&
                                                 !states["Tree VFX"].IsDefault;
         var stayTimeVisible = states["Stay Time"].Visible;
         var rootDurationVisible = states["Root duration"].Visible;
@@ -8989,9 +8992,9 @@ public partial class PowerEditorView : UserControl
         _stayTimeFields.IsVisible = stayTimeVisible;
         _rootDurationFields.IsVisible = rootDurationVisible;
         _rootDurationInlineLabel.IsVisible = stayTimeVisible && rootDurationVisible;
-        _removeStayTimeButton.IsVisible = IsModifiedMode && stayTimeVisible &&
+        _removeStayTimeButton.IsVisible = IsEditablePower && stayTimeVisible &&
                                            !states["Stay Time"].IsDefault;
-        _addRootDamageButton.IsVisible = IsModifiedMode && states["Root damage"].Visible;
+        _addRootDamageButton.IsVisible = IsEditablePower && states["Root damage"].Visible;
         var healSpeedVisible = states["Heal speed"].Visible;
         var slowHealVisible = states["Slow Heal Multiplier"].Visible;
         var scanVisible = states["Scan interval"].Visible;
@@ -9002,7 +9005,7 @@ public partial class PowerEditorView : UserControl
         _slowHealFields.IsVisible = slowHealVisible;
         _slowHealInlineLabel.IsVisible = healSpeedVisible;
         _restorationScanFields.IsVisible = scanVisible;
-        _removeSlowHealMultiplierButton.IsVisible = IsModifiedMode && slowHealVisible &&
+        _removeSlowHealMultiplierButton.IsVisible = IsEditablePower && slowHealVisible &&
                                                      !states["Slow Heal Multiplier"].IsDefault;
 
         var droughtLandVisible = states["Land VFX"].Visible;
@@ -9021,9 +9024,9 @@ public partial class PowerEditorView : UserControl
 
         SetSpecificGroupVisibility(_shiftingSandsStartPortalFields, "inportalprotounit");
         SetSpecificGroupVisibility(_shiftingSandsDestinationPortalFields, "outportalprotounit");
-        var fadeTimeVisible = IsModifiedMode || HasSpecificField("unitfadetime");
-        var spawnTimeVisible = IsModifiedMode || HasSpecificField("outportalspawntime");
-        var scanIntervalVisible = IsModifiedMode || HasSpecificField("scaninterval");
+        var fadeTimeVisible = IsEditablePower || HasSpecificField("unitfadetime");
+        var spawnTimeVisible = IsEditablePower || HasSpecificField("outportalspawntime");
+        var scanIntervalVisible = IsEditablePower || HasSpecificField("scaninterval");
         _shiftingSandsTimingMainLabel.Text = fadeTimeVisible ? "Fade Time" :
             spawnTimeVisible ? "Spawn time" : "Scan Interval";
         _shiftingSandsFadeTimeFields.IsVisible = fadeTimeVisible;
@@ -9040,11 +9043,11 @@ public partial class PowerEditorView : UserControl
         var cracks = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "cracksoundset");
         var min = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "crackintervalmin");
         var max = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "crackintervalmax");
-        _cracksSoundBox.IsVisible = IsModifiedMode || cracks != null;
-        _crackMinLabel.IsVisible = IsModifiedMode || min != null;
-        _crackIntervalMinBox.IsVisible = IsModifiedMode || min != null;
-        _crackMaxLabel.IsVisible = IsModifiedMode || max != null;
-        _crackIntervalMaxBox.IsVisible = IsModifiedMode || max != null;
+        _cracksSoundBox.IsVisible = IsEditablePower || cracks != null;
+        _crackMinLabel.IsVisible = IsEditablePower || min != null;
+        _crackIntervalMinBox.IsVisible = IsEditablePower || min != null;
+        _crackMaxLabel.IsVisible = IsEditablePower || max != null;
+        _crackIntervalMaxBox.IsVisible = IsEditablePower || max != null;
 
         SetThrowPairVisibility(_throwDistanceLabel,
             _minThrowDistanceLabel, _minThrowDistanceBox,
@@ -9056,9 +9059,9 @@ public partial class PowerEditorView : UserControl
             _minThrowVelocityLabel, _minThrowVelocityBox,
             _maxThrowVelocityLabel, _maxThrowVelocityBox);
 
-        _otherSpecificPickerRow.IsVisible = _currentEntry != null && IsModifiedMode;
+        _otherSpecificPickerRow.IsVisible = _currentEntry != null && IsEditablePower;
         _otherSpecificHeader.IsVisible = _otherSpecificAttributeRows.Children.Count > 0;
-        _otherSpecificAttributePicker.IsVisible = _otherSpecificAttributePickerOpen && IsModifiedMode;
+        _otherSpecificAttributePicker.IsVisible = _otherSpecificAttributePickerOpen && IsEditablePower;
         _otherSpecificAttributePicker.ItemsSource = SpecificAttributeSpecs()
             .Select(spec => spec.Name)
             .Where(name => !PowerSchemaRegistry.TypeOnlySpecificGroups.Contains(name) &&
@@ -9088,15 +9091,15 @@ public partial class PowerEditorView : UserControl
             PowerCatalog.FindField(_currentEntry, (string)minBox.Tag!) != null;
         var maxPresent = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, (string)maxBox.Tag!) != null;
-        var groupVisible = IsModifiedMode || minPresent || maxPresent;
+        var groupVisible = IsEditablePower || minPresent || maxPresent;
         if (groupLabel.Parent is Control group) group.IsVisible = groupVisible;
         groupLabel.IsVisible = groupVisible;
-        minLabel.IsVisible = minBox.IsVisible = IsModifiedMode || minPresent;
-        maxLabel.IsVisible = maxBox.IsVisible = IsModifiedMode || maxPresent;
+        minLabel.IsVisible = minBox.IsVisible = IsEditablePower || minPresent;
+        maxLabel.IsVisible = maxBox.IsVisible = IsEditablePower || maxPresent;
     }
 
     private void SetSpecificGroupVisibility(Control group, string tag)
-        => group.IsVisible = IsModifiedMode || (_currentEntry != null &&
+        => group.IsVisible = IsEditablePower || (_currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, tag) != null);
 
     private static int GetSpecificAttributeOrder(string? powerType, string name, int fallback)
@@ -9416,8 +9419,8 @@ public partial class PowerEditorView : UserControl
             StringComparison.OrdinalIgnoreCase) == true;
         var open = isTartarianGate && PowerCatalog.FindField(entry, "revealerproto") != null;
         _tartarianRevealerRow.IsVisible = open;
-        _addTartarianRevealerButton.IsVisible = isTartarianGate && IsModifiedMode && !open;
-        _removeTartarianRevealerButton.IsVisible = IsModifiedMode && open;
+        _addTartarianRevealerButton.IsVisible = isTartarianGate && IsEditablePower && !open;
+        _removeTartarianRevealerButton.IsVisible = IsEditablePower && open;
     }
 
     private void AddTartarianRevealer_Click(object? sender, RoutedEventArgs e)
@@ -9564,8 +9567,8 @@ public partial class PowerEditorView : UserControl
 
     private void RefreshOtherAttributeRows()
     {
-        _otherAttributesPickerRow.IsVisible = _currentEntry != null && IsModifiedMode;
-        _otherAttributePicker.IsVisible = _otherAttributePickerOpen && IsModifiedMode;
+        _otherAttributesPickerRow.IsVisible = _currentEntry != null && IsEditablePower;
+        _otherAttributePicker.IsVisible = _otherAttributePickerOpen && IsEditablePower;
         _otherAttributePicker.ItemsSource = OtherAttributeSpecs()
             .Select(spec => spec.Name)
             .Where(name => name != "Range Indicator Proto" && !_openOtherAttributes.Contains(name))
@@ -9574,10 +9577,10 @@ public partial class PowerEditorView : UserControl
         foreach (var (name, row, tags) in OtherAttributeSpecs())
         {
             var visible = _currentEntry != null &&
-                (IsModifiedMode ? _openOtherAttributes.Contains(name) :
+                (IsEditablePower ? _openOtherAttributes.Contains(name) :
                     row.IsVisible && HasOtherAttribute(_currentEntry, tags));
             row.IsVisible = visible;
-            _removeOtherAttributeButtons[name].IsVisible = visible && IsModifiedMode;
+            _removeOtherAttributeButtons[name].IsVisible = visible && IsEditablePower;
             anyVisible |= visible;
         }
         _otherAttributesRows.IsVisible = anyVisible;
@@ -9682,19 +9685,19 @@ public partial class PowerEditorView : UserControl
         var camera = PowerCatalog.FindField(_currentEntry, "camerashake");
         var terrain = PowerCatalog.FindField(_currentEntry, "terrainrumbling");
         _cameraShakeRow.IsVisible = OtherSelected("Camera Shake") &&
-                                    (IsModifiedMode || camera?.HasAttributes == true);
+                                    (IsEditablePower || camera?.HasAttributes == true);
         _terrainRumblingRow.IsVisible = OtherSelected("Terrain Rumbling") &&
-                                        (IsModifiedMode || terrain?.HasAttributes == true);
-        _cameraDurationField.IsVisible = IsModifiedMode || FindPlacementFlag(camera, "duration") != null;
-        _cameraStrengthField.IsVisible = IsModifiedMode || FindPlacementFlag(camera, "strength") != null;
-        _cameraRangeField.IsVisible = (IsModifiedMode && _cameraRangeOpen) ||
+                                        (IsEditablePower || terrain?.HasAttributes == true);
+        _cameraDurationField.IsVisible = IsEditablePower || FindPlacementFlag(camera, "duration") != null;
+        _cameraStrengthField.IsVisible = IsEditablePower || FindPlacementFlag(camera, "strength") != null;
+        _cameraRangeField.IsVisible = (IsEditablePower && _cameraRangeOpen) ||
                                       FindPlacementFlag(camera, "range") != null;
-        _addCameraRangeButton.IsVisible = IsModifiedMode && !_cameraRangeField.IsVisible;
-        _removeCameraRangeButton.IsVisible = IsModifiedMode;
+        _addCameraRangeButton.IsVisible = IsEditablePower && !_cameraRangeField.IsVisible;
+        _removeCameraRangeButton.IsVisible = IsEditablePower;
         foreach (var (field, tag) in new[]
                  { (_terrainHeightField, "height"), (_terrainWidthField, "width"),
                    (_terrainSpeedField, "speed"), (_terrainFadeTimeField, "fadetime") })
-            field.IsVisible = IsModifiedMode || FindPlacementFlag(terrain, tag) != null;
+            field.IsVisible = IsEditablePower || FindPlacementFlag(terrain, tag) != null;
     }
 
     private void RefreshSoundSets()
@@ -9702,9 +9705,9 @@ public partial class PowerEditorView : UserControl
         _soundSetRows.Children.Clear();
         _soundNumericBoxes.Clear();
         _soundSetsSection.IsVisible = _currentEntry != null && OtherSelected("Sound set") &&
-            (IsModifiedMode || _currentEntry.Elements().Any(element =>
+            (IsEditablePower || _currentEntry.Elements().Any(element =>
                 element.Name.LocalName.Equals("soundset", StringComparison.OrdinalIgnoreCase)));
-        _addSoundSetButton.IsVisible = IsModifiedMode;
+        _addSoundSetButton.IsVisible = IsEditablePower;
         if (_currentEntry == null) return;
         var suggestions = GetSoundSetSuggestions();
         foreach (var sound in _currentEntry.Elements().Where(element =>
@@ -9763,13 +9766,13 @@ public partial class PowerEditorView : UserControl
                    (_lightingRow, "Lighting", "lighting"),
                    (_resetAbilityChargeRow, "Reset Ability Charge for", "abstractpowerresetsabilitychargetype") })
             row.IsVisible = OtherSelected(name) &&
-                            (IsModifiedMode || !string.IsNullOrWhiteSpace(PowerCatalog.FindField(_currentEntry, tag)?.Value));
+                            (IsEditablePower || !string.IsNullOrWhiteSpace(PowerCatalog.FindField(_currentEntry, tag)?.Value));
         var reveal = PowerCatalog.FindField(_currentEntry, "reveallos");
-        _revealLosRow.IsVisible = OtherSelected("Reveal LOS") && (IsModifiedMode || reveal != null);
-        _revealRadiusField.IsVisible = IsModifiedMode || FindPlacementFlag(reveal, "radius") != null;
-        _revealUnitField.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(reveal?.Value);
+        _revealLosRow.IsVisible = OtherSelected("Reveal LOS") && (IsEditablePower || reveal != null);
+        _revealRadiusField.IsVisible = IsEditablePower || FindPlacementFlag(reveal, "radius") != null;
+        _revealUnitField.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(reveal?.Value);
         _playsBattleMusicRow.IsVisible = OtherSelected("Plays battle Music") &&
-                                         (IsModifiedMode || PowerCatalog.FindField(_currentEntry, "playsbattlemusic") != null);
+                                         (IsEditablePower || PowerCatalog.FindField(_currentEntry, "playsbattlemusic") != null);
     }
 
     private static bool NumericTextEquals(string? existing, string candidate)
@@ -9936,6 +9939,7 @@ public partial class PowerEditorView : UserControl
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         _soundSetRows.Children.Add(row);
+        AdditiveChangePresentation.Bind(row, sound);
 
         StackPanel Field(string label, Control control)
         {
@@ -9975,11 +9979,12 @@ public partial class PowerEditorView : UserControl
             var choices = current != null && !options.Contains(current, StringComparer.OrdinalIgnoreCase)
                 ? options.Append(current).ToArray() : options;
             var box = ConfigurePowerFieldPresentation(new ComboBox { Width = width, MaxWidth = width, ItemsSource = choices,
-                IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+                IsEnabled = IsEditablePower }, EditorFieldWidthRole.LongEnum);
             box.SelectedItem = choices.FirstOrDefault(option =>
                 option.Equals(current, StringComparison.OrdinalIgnoreCase));
+            EditorValidationBindings.Bind(box, sound, "@" + name);
             var field = Field(label, box);
-            field.IsVisible = IsModifiedMode || current != null;
+            field.IsVisible = IsEditablePower || current != null;
             box.SelectionChanged += (_, _) =>
             {
                 if (box.SelectedItem is string selected) ChangeAttribute(name, selected);
@@ -9993,11 +9998,12 @@ public partial class PowerEditorView : UserControl
             Text = sound.Value,
             ItemsSource = suggestions,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditablePower
         }, EditorFieldWidthRole.AssetPath));
         ConfigurePowerFieldPresentation(soundBox, EditorFieldWidthRole.AssetPath);
         EditorAutoCompleteService.EnableDropdown(soundBox, () => _isPopulating, selectAllOnFirstClick: false);
-        Field("Sound", soundBox).IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(sound.Value);
+        EditorValidationBindings.Bind(soundBox, sound);
+        Field("Sound", soundBox).IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(sound.Value);
         void CommitSound()
         {
             if (_currentEntry == null || !CanEditProperties(_currentEntry) || sound.Parent != _currentEntry) return;
@@ -10018,20 +10024,20 @@ public partial class PowerEditorView : UserControl
         {
             var existing = FindPlacementFlag(sound, name);
             var button = PowerEditorDynamicControls.CreateOptionalButton(label);
-            button.IsVisible = IsModifiedMode && existing == null;
+            button.IsVisible = IsEditablePower && existing == null;
             button.Margin = new Thickness(0, 0, 6, 4);
             row.Children.Add(button);
             var box = EditorNumericFieldStyle.ConfigureNumericTextBox(ConfigurePowerFieldPresentation(new TextBox
             {
                 Text = EditorNumericFieldStyle.FormatDisplay(existing?.Value),
-                IsEnabled = IsModifiedMode
+                IsEnabled = IsEditablePower
             }, EditorFieldWidthRole.Numeric));
             _soundNumericBoxes.Add((box, sound));
             EditorValidationBindings.Bind(box, sound, "@" + name);
             var field = Field(label, box);
             field.IsVisible = existing != null;
             var remove = PowerEditorDynamicControls.CreateRemoveButton();
-            remove.IsVisible = IsModifiedMode;
+            remove.IsVisible = IsEditablePower;
             field.Children.Add(remove);
             button.Click += (_, _) => { button.IsVisible = false; field.IsVisible = true; box.Focus(); };
             remove.Click += (_, _) =>
@@ -10062,15 +10068,15 @@ public partial class PowerEditorView : UserControl
             {
                 Content = label,
                 IsChecked = FindPlacementFlag(sound, name) != null,
-                IsEnabled = IsModifiedMode,
-                IsVisible = IsModifiedMode || FindPlacementFlag(sound, name) != null,
+                IsEnabled = IsEditablePower,
+                IsVisible = IsEditablePower || FindPlacementFlag(sound, name) != null,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 12, 4)
             };
             check.IsCheckedChanged += (_, _) => ChangeAttribute(name, check.IsChecked == true ? "" : null);
             row.Children.Add(check);
         }
-        if (!IsModifiedMode) return;
+        if (!IsEditablePower) return;
         var delete = PowerEditorDynamicControls.CreateRemoveButton();
         delete.Margin = new Thickness(0, 0, 0, 4);
         delete.Click += (_, _) =>
@@ -10167,21 +10173,21 @@ public partial class PowerEditorView : UserControl
         var useLimit = _isUseLimitOpen || PowerCatalog.FindField(_currentEntry, "limitglobal") != null ||
                        PowerCatalog.FindField(_currentEntry, "limitplayer") != null;
         _orderHintRow.IsVisible = orderHint;
-        _addOrderHintButton.IsVisible = IsModifiedMode && !orderHint;
-        _removeOrderHintButton.IsVisible = IsModifiedMode && orderHint;
+        _addOrderHintButton.IsVisible = IsEditablePower && !orderHint;
+        _removeOrderHintButton.IsVisible = IsEditablePower && orderHint;
         _buildUpRow.IsVisible = buildUp;
-        _addBuildUpButton.IsVisible = IsModifiedMode && !buildUp;
-        _removeBuildUpButton.IsVisible = IsModifiedMode && buildUp;
+        _addBuildUpButton.IsVisible = IsEditablePower && !buildUp;
+        _removeBuildUpButton.IsVisible = IsEditablePower && buildUp;
         _shutDownRow.IsVisible = shutDown;
-        _addShutDownButton.IsVisible = IsModifiedMode && !shutDown;
-        _removeShutDownButton.IsVisible = IsModifiedMode && shutDown;
+        _addShutDownButton.IsVisible = IsEditablePower && !shutDown;
+        _removeShutDownButton.IsVisible = IsEditablePower && shutDown;
         _useLimitRow.IsVisible = useLimit;
-        _addUseLimitButton.IsVisible = IsModifiedMode && !useLimit;
-        _removeUseLimitButton.IsVisible = IsModifiedMode && useLimit;
+        _addUseLimitButton.IsVisible = IsEditablePower && !useLimit;
+        _removeUseLimitButton.IsVisible = IsEditablePower && useLimit;
         _limitLabel.IsVisible = useLimit;
-        _singleActivationCheck.IsVisible = IsModifiedMode || _singleActivationCheck.IsChecked == true;
-        _exclusiveCheck.IsVisible = IsModifiedMode || _exclusiveCheck.IsChecked == true;
-        _activeTimeOnTargetCheck.IsVisible = IsModifiedMode || _activeTimeOnTargetCheck.IsChecked == true;
+        _singleActivationCheck.IsVisible = IsEditablePower || _singleActivationCheck.IsChecked == true;
+        _exclusiveCheck.IsVisible = IsEditablePower || _exclusiveCheck.IsChecked == true;
+        _activeTimeOnTargetCheck.IsVisible = IsEditablePower || _activeTimeOnTargetCheck.IsChecked == true;
         _exclusiveMessageRow.IsVisible = PowerCatalog.FindField(_currentEntry, "exclusive") != null;
     }
 
@@ -10196,47 +10202,47 @@ public partial class PowerEditorView : UserControl
                                !string.IsNullOrWhiteSpace(selfCast?.Value) ||
                                !string.IsNullOrWhiteSpace(alert?.Value) || displayAlerts;
         _notificationsSection.IsVisible = OtherSelected("Notification") &&
-                                          ((IsModifiedMode && _notificationsOpen) || hasNotifications);
-        _addNotificationsButton.IsVisible = IsModifiedMode && !_notificationsSection.IsVisible;
-        _removeNotificationsButton.IsVisible = IsModifiedMode;
-        _castMessageRow.IsVisible = (IsModifiedMode && _castMessageOpen) ||
+                                          ((IsEditablePower && _notificationsOpen) || hasNotifications);
+        _addNotificationsButton.IsVisible = IsEditablePower && !_notificationsSection.IsVisible;
+        _removeNotificationsButton.IsVisible = IsEditablePower;
+        _castMessageRow.IsVisible = (IsEditablePower && _castMessageOpen) ||
                                     !string.IsNullOrWhiteSpace(cast?.Value);
-        _castSelfMessageRow.IsVisible = (IsModifiedMode && _castSelfMessageOpen) ||
+        _castSelfMessageRow.IsVisible = (IsEditablePower && _castSelfMessageOpen) ||
                                         !string.IsNullOrWhiteSpace(selfCast?.Value);
-        _alertPlayerRow.IsVisible = (IsModifiedMode && _alertPlayerOpen) ||
+        _alertPlayerRow.IsVisible = (IsEditablePower && _alertPlayerOpen) ||
                                     !string.IsNullOrWhiteSpace(alert?.Value);
-        _addCastMessageButton.IsVisible = IsModifiedMode && !_castMessageRow.IsVisible;
-        _addCastSelfMessageButton.IsVisible = IsModifiedMode && !_castSelfMessageRow.IsVisible;
-        _addAlertPlayerButton.IsVisible = IsModifiedMode && !_alertPlayerRow.IsVisible;
-        _removeCastMessageButton.IsVisible = IsModifiedMode;
-        _removeCastSelfMessageButton.IsVisible = IsModifiedMode;
-        _removeAlertPlayerButton.IsVisible = IsModifiedMode;
-        _displayAlertsCheck.IsVisible = IsModifiedMode || displayAlerts;
+        _addCastMessageButton.IsVisible = IsEditablePower && !_castMessageRow.IsVisible;
+        _addCastSelfMessageButton.IsVisible = IsEditablePower && !_castSelfMessageRow.IsVisible;
+        _addAlertPlayerButton.IsVisible = IsEditablePower && !_alertPlayerRow.IsVisible;
+        _removeCastMessageButton.IsVisible = IsEditablePower;
+        _removeCastSelfMessageButton.IsVisible = IsEditablePower;
+        _removeAlertPlayerButton.IsVisible = IsEditablePower;
+        _displayAlertsCheck.IsVisible = IsEditablePower || displayAlerts;
 
         var minimap = PowerCatalog.FindField(_currentEntry, "minimapeventtime");
         var recipient = FindPlacementFlag(minimap, "sendalertto")?.Value;
         var hasMinimap = !string.IsNullOrWhiteSpace(recipient) ||
                          !string.IsNullOrWhiteSpace(minimap?.Value);
         _minimapNotificationsSection.IsVisible = OtherSelected("Minimap Notification") &&
-                                                 ((IsModifiedMode && _minimapNotificationsOpen) || hasMinimap);
-        _addMinimapNotificationsButton.IsVisible = IsModifiedMode && !_minimapNotificationsSection.IsVisible;
-        _removeMinimapNotificationsButton.IsVisible = IsModifiedMode;
-        _minimapSendToLabel.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(recipient);
+                                                 ((IsEditablePower && _minimapNotificationsOpen) || hasMinimap);
+        _addMinimapNotificationsButton.IsVisible = IsEditablePower && !_minimapNotificationsSection.IsVisible;
+        _removeMinimapNotificationsButton.IsVisible = IsEditablePower;
+        _minimapSendToLabel.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(recipient);
         _minimapSendToBox.IsVisible = _minimapSendToLabel.IsVisible;
-        _minimapDurationLabel.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(minimap?.Value);
+        _minimapDurationLabel.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(minimap?.Value);
         _minimapDurationBox.IsVisible = _minimapDurationLabel.IsVisible;
 
         var list = PowerCatalog.FindField(_currentEntry, "activelistvisibility");
         var hidden = PowerCatalog.FindField(_currentEntry, "hideonactivegplist") != null;
         _activeVisibilitySection.IsVisible = OtherSelected("Active Power Visibility") &&
-            ((IsModifiedMode && _activeVisibilityOpen) || !string.IsNullOrWhiteSpace(list?.Value) || hidden);
-        _addActiveVisibilityButton.IsVisible = IsModifiedMode && !_activeVisibilitySection.IsVisible;
-        _removeActiveVisibilityButton.IsVisible = IsModifiedMode;
-        _activeListVisibilityFields.IsVisible = (IsModifiedMode && _activeListVisibilityOpen) ||
+            ((IsEditablePower && _activeVisibilityOpen) || !string.IsNullOrWhiteSpace(list?.Value) || hidden);
+        _addActiveVisibilityButton.IsVisible = IsEditablePower && !_activeVisibilitySection.IsVisible;
+        _removeActiveVisibilityButton.IsVisible = IsEditablePower;
+        _activeListVisibilityFields.IsVisible = (IsEditablePower && _activeListVisibilityOpen) ||
                                                 !string.IsNullOrWhiteSpace(list?.Value);
-        _addActiveListVisibilityButton.IsVisible = IsModifiedMode && !_activeListVisibilityFields.IsVisible;
-        _removeActiveListVisibilityButton.IsVisible = IsModifiedMode;
-        _hideOnActiveListCheck.IsVisible = IsModifiedMode || hidden;
+        _addActiveListVisibilityButton.IsVisible = IsEditablePower && !_activeListVisibilityFields.IsVisible;
+        _removeActiveListVisibilityButton.IsVisible = IsEditablePower;
+        _hideOnActiveListCheck.IsVisible = IsEditablePower || hidden;
         _addNotificationSectionsRow.IsVisible = false;
     }
 
@@ -10559,8 +10565,8 @@ public partial class PowerEditorView : UserControl
         foreach (var flag in selected)
         {
             var captured = flag;
-            _placementFlagChips.Children.Add(PowerEditorDynamicControls.CreateChip(captured,
-                IsModifiedMode ? () =>
+            _placementFlagChips.Children.Add(BindPowerPlacementFlagChip(PowerEditorDynamicControls.CreateChip(captured,
+                IsEditablePower ? () =>
                 {
                     if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
                     if (GetStandalonePlacementFlagTag(captured) is { } tag)
@@ -10574,7 +10580,7 @@ public partial class PowerEditorView : UserControl
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     RefreshPlacementFlags();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditablePower), captured));
         }
         _placementFlagPicker.ItemsSource = PlacementFlags
             .Where(flag => !selected.Contains(flag, StringComparer.OrdinalIgnoreCase) &&
@@ -10582,8 +10588,8 @@ public partial class PowerEditorView : UserControl
                            (!flag.Equals("notOverlapSelfOrAlly", StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(_placementBox.SelectedItem as string, "Overlap", StringComparison.OrdinalIgnoreCase)))
             .ToList();
-        _placementFlagPicker.IsVisible = IsModifiedMode;
-        _placementFlagsRow.IsVisible = IsModifiedMode || selected.Count > 0;
+        _placementFlagPicker.IsVisible = IsEditablePower;
+        _placementFlagsRow.IsVisible = IsEditablePower || selected.Count > 0;
     }
 
     private static XAttribute? FindPlacementFlag(XElement? placement, string flag)
@@ -10640,10 +10646,10 @@ public partial class PowerEditorView : UserControl
     {
         RefreshTypeChips("abstractplacementtargettype", _targetTypePicker, _targetTypeChips);
         RefreshTypeChips("explicitlyrestrictedplacementtargettype", _excludeTypePicker, _excludeTypeChips);
-        _targetTypeLabel.IsVisible = IsModifiedMode || _targetTypeChips.Children.Count > 0;
-        _excludeTypeLabel.IsVisible = IsModifiedMode || _excludeTypeChips.Children.Count > 0;
+        _targetTypeLabel.IsVisible = IsEditablePower || _targetTypeChips.Children.Count > 0;
+        _excludeTypeLabel.IsVisible = IsEditablePower || _excludeTypeChips.Children.Count > 0;
         _placementTypesRow.IsVisible = _currentEntry != null &&
-            (IsModifiedMode || _targetTypeChips.Children.Count > 0 || _excludeTypeChips.Children.Count > 0);
+            (IsEditablePower || _targetTypeChips.Children.Count > 0 || _excludeTypeChips.Children.Count > 0);
     }
 
     private void RefreshAttackTypes()
@@ -10651,10 +10657,10 @@ public partial class PowerEditorView : UserControl
         RefreshTypeChips("abstractattacktargettype", _attackTargetTypePicker, _attackTargetTypeChips);
         RefreshTypeChips("explicitlyrestrictedattacktargettype", _attackExcludeTypePicker,
             _attackExcludeTypeChips);
-        _attackTargetTypeLabel.IsVisible = IsModifiedMode || _attackTargetTypeChips.Children.Count > 0;
-        _attackExcludeTypeLabel.IsVisible = IsModifiedMode || _attackExcludeTypeChips.Children.Count > 0;
+        _attackTargetTypeLabel.IsVisible = IsEditablePower || _attackTargetTypeChips.Children.Count > 0;
+        _attackExcludeTypeLabel.IsVisible = IsEditablePower || _attackExcludeTypeChips.Children.Count > 0;
         _attackTargetRow.IsVisible = _currentEntry != null && OtherSelected("Attack target") &&
-            (IsModifiedMode || _attackTargetTypeChips.Children.Count > 0 ||
+            (IsEditablePower || _attackTargetTypeChips.Children.Count > 0 ||
              _attackExcludeTypeChips.Children.Count > 0);
     }
 
@@ -10668,7 +10674,7 @@ public partial class PowerEditorView : UserControl
         foreach (var value in values)
         {
             var captured = value;
-            chips.Children.Add(PowerEditorDynamicControls.CreateChip(captured, IsModifiedMode ? () =>
+            chips.Children.Add(BindPowerTypeChip(PowerEditorDynamicControls.CreateChip(captured, IsEditablePower ? () =>
             {
                 if (_currentEntry == null || !CanEditProperties(_currentEntry)) return;
                 var field = _currentEntry.Elements().FirstOrDefault(element =>
@@ -10680,11 +10686,11 @@ public partial class PowerEditorView : UserControl
                 RefreshRawXmlFromCurrent();
                 RefreshPlacementTypes();
                 RefreshAttackTypes();
-            } : null, readOnly: !IsModifiedMode));
+            } : null, readOnly: !IsEditablePower), tag, captured));
         }
         EditorAutoCompleteService.SetCatalogSuggestions(picker, _unitOrTypeNames
             .Where(value => !values.Contains(value, StringComparer.OrdinalIgnoreCase)));
-        picker.IsVisible = IsModifiedMode;
+        picker.IsVisible = IsEditablePower;
     }
 
     private void PlacementTypePicker_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -10743,11 +10749,11 @@ public partial class PowerEditorView : UserControl
     {
         var placement = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "placement");
         _placementDetailsHost.IsVisible = _currentEntry != null &&
-            (!IsModifiedMode || !string.Equals(_placementBox.SelectedItem as string, "Skip",
+            (!IsEditablePower || !string.Equals(_placementBox.SelectedItem as string, "Skip",
                 StringComparison.OrdinalIgnoreCase));
         _placementFlagsRow.IsVisible = _currentEntry != null &&
-            (IsModifiedMode || _placementFlagChips.Children.Count > 0) &&
-            (!IsModifiedMode || !string.Equals(_placementBox.SelectedItem as string, "Skip",
+            (IsEditablePower || _placementFlagChips.Children.Count > 0) &&
+            (!IsEditablePower || !string.Equals(_placementBox.SelectedItem as string, "Skip",
                 StringComparison.OrdinalIgnoreCase));
         SetPlacementOptionVisibility(_losProtoUnitRow, _losProtoUnitLabel, _addLosProtoUnitButton,
             _losProtoUnitFields, _removeLosProtoUnitButton, _losProtoUnitOpen ||
@@ -10768,7 +10774,7 @@ public partial class PowerEditorView : UserControl
         if (_addLosProtoUnitButton.IsVisible) orderedOptions.Add(_addLosProtoUnitButton);
         if (_addRestrictPlacementButton.IsVisible) orderedOptions.Add(_addRestrictPlacementButton);
         if (_addOverlapTypeButton.IsVisible) orderedOptions.Add(_addOverlapTypeButton);
-        _addPlacementRestrictionButton.IsVisible = IsModifiedMode && _placementDetailsHost.IsVisible;
+        _addPlacementRestrictionButton.IsVisible = IsEditablePower && _placementDetailsHost.IsVisible;
         if (_addPlacementRestrictionButton.Parent is Panel previousRestrictionHost)
             previousRestrictionHost.Children.Remove(_addPlacementRestrictionButton);
         if (_addPlacementRestrictionButton.IsVisible)
@@ -10783,7 +10789,7 @@ public partial class PowerEditorView : UserControl
         foreach (var option in orderedOptions)
             _placementOptionsFlow.Children.Add(option);
         _placementOptionButtonsRow.IsVisible = _placementDetailsHost.IsVisible &&
-            (IsModifiedMode || _losProtoUnitRow.IsVisible || _restrictPlacementRow.IsVisible ||
+            (IsEditablePower || _losProtoUnitRow.IsVisible || _restrictPlacementRow.IsVisible ||
              _overlapTypeRow.IsVisible || _placementRestrictionRows.IsVisible);
     }
 
@@ -10809,7 +10815,7 @@ public partial class PowerEditorView : UserControl
             {
                 Width = 200, MaxWidth = 200, ItemsSource = _unitOrTypeNames,
                 FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0,
-                Text = restriction.Value.Trim(), IsEnabled = IsModifiedMode
+                Text = restriction.Value.Trim(), IsEnabled = IsEditablePower
             }, EditorFieldWidthRole.Reference);
             EditorAutoCompleteService.EnableDropdown(type, () => _isPopulating, selectAllOnFirstClick: false);
             type.SelectionChanged += (_, _) => CommitPlacementRestrictionType(restriction, type);
@@ -10820,7 +10826,7 @@ public partial class PowerEditorView : UserControl
             {
                 Width = 110, MaxWidth = 110,
                 Text = EditorNumericFieldStyle.FormatDisplay(FindPlacementFlag(restriction, "radius")?.Value),
-                IsEnabled = IsModifiedMode
+                IsEnabled = IsEditablePower
             }, EditorFieldWidthRole.Numeric);
             EditorNumericFieldStyle.ConfigureNumericTextBox(radius);
             radius.PropertyChanged += (_, change) =>
@@ -10829,7 +10835,7 @@ public partial class PowerEditorView : UserControl
                     CommitPlacementRestrictionRadius(restriction, radius);
             };
             row.Children.Add(radius);
-            if (IsModifiedMode)
+            if (IsEditablePower)
             {
                 var remove = PowerEditorDynamicControls.CreateRemoveButton();
                 remove.Click += (_, _) =>
@@ -10900,9 +10906,9 @@ public partial class PowerEditorView : UserControl
     {
         row.IsVisible = _currentEntry != null && open;
         label.IsVisible = open;
-        addButton.IsVisible = IsModifiedMode && !open;
+        addButton.IsVisible = IsEditablePower && !open;
         fields.IsVisible = open;
-        removeButton.IsVisible = IsModifiedMode && open;
+        removeButton.IsVisible = IsEditablePower && open;
     }
 
     private void AddPlacementOption_Click(object? sender, RoutedEventArgs e)
@@ -11030,30 +11036,30 @@ public partial class PowerEditorView : UserControl
         var hasIndicator = !string.IsNullOrWhiteSpace(indicator?.Value) || indicator?.HasAttributes == true;
         var hasDecal = !string.IsNullOrWhiteSpace(decal?.Value);
         _rangeIndicatorRow.IsVisible = _currentEntry != null && OtherSelected("Range Indicator") &&
-                                       (IsModifiedMode || hasIndicator || hasDecal);
+                                       (IsEditablePower || hasIndicator || hasDecal);
         _rangeIndicatorProtoRow.IsVisible = _currentEntry != null &&
             PowerCatalog.FindField(_currentEntry, "rangeindicatorprotoid") != null;
-        _rangeIndicatorBox.IsVisible = IsModifiedMode || !string.IsNullOrWhiteSpace(indicator?.Value);
+        _rangeIndicatorBox.IsVisible = IsEditablePower || !string.IsNullOrWhiteSpace(indicator?.Value);
         SetIndicatorNumberVisibility(_indicatorRangeLabel, _indicatorRangeBox, indicator,
-            IsModifiedMode && shape != null, allowed: true);
+            IsEditablePower && shape != null, allowed: true);
         SetIndicatorNumberVisibility(_indicatorWidthLabel, _indicatorWidthBox, indicator,
-            IsModifiedMode && arrow, allowed: arrow);
+            IsEditablePower && arrow, allowed: arrow);
         SetIndicatorNumberVisibility(_indicatorSpeedLabel, _indicatorSpeedBox, indicator,
-            IsModifiedMode && circle, allowed: circle);
-        _rangeDecalFields.IsVisible = hasDecal || (IsModifiedMode && _isRangeDecalOpen);
-        _addRangeDecalButton.IsVisible = IsModifiedMode && shape != null && !_rangeDecalFields.IsVisible;
-        _removeRangeDecalButton.IsVisible = IsModifiedMode && _rangeDecalFields.IsVisible;
+            IsEditablePower && circle, allowed: circle);
+        _rangeDecalFields.IsVisible = hasDecal || (IsEditablePower && _isRangeDecalOpen);
+        _addRangeDecalButton.IsVisible = IsEditablePower && shape != null && !_rangeDecalFields.IsVisible;
+        _removeRangeDecalButton.IsVisible = IsEditablePower && _rangeDecalFields.IsVisible;
 
         var radius = _currentEntry == null ? null : PowerCatalog.FindField(_currentEntry, "radius");
         var hasRadius = !string.IsNullOrWhiteSpace(radius?.Value);
         var hasGlobal = _currentEntry != null && PowerCatalog.FindField(_currentEntry, "global") != null;
         _radiusRow.IsVisible = _currentEntry != null && OtherSelected("Radius") &&
-                               (IsModifiedMode || hasRadius || hasGlobal);
-        _radiusLabel.IsVisible = IsModifiedMode || hasRadius || hasGlobal;
-        _radiusBox.IsVisible = _globalCheck.IsChecked != true && (IsModifiedMode || hasRadius);
-        _globalCheck.IsVisible = IsModifiedMode || hasGlobal;
+                               (IsEditablePower || hasRadius || hasGlobal);
+        _radiusLabel.IsVisible = IsEditablePower || hasRadius || hasGlobal;
+        _radiusBox.IsVisible = _globalCheck.IsChecked != true && (IsEditablePower || hasRadius);
+        _globalCheck.IsVisible = IsEditablePower || hasGlobal;
         _powerPlayerRelationRow.IsVisible = _currentEntry != null && OtherSelected("Power Player Relation") &&
-            (IsModifiedMode || !string.IsNullOrWhiteSpace(
+            (IsEditablePower || !string.IsNullOrWhiteSpace(
                 PowerCatalog.FindField(_currentEntry, "powerplayerrelation")?.Value));
     }
 
@@ -11193,13 +11199,18 @@ public partial class PowerEditorView : UserControl
     {
         var present = _currentEntry != null && PowerCatalog.FindField(_currentEntry, "activepowerrolloverid") != null;
         _activeRolloverRow.IsVisible = present;
-        _addActiveRolloverButton.IsVisible = IsModifiedMode && _currentEntry != null && !present;
-        _removeActiveRolloverButton.IsVisible = IsModifiedMode && present;
+        _addActiveRolloverButton.IsVisible = IsEditablePower && _currentEntry != null && !present;
+        _removeActiveRolloverButton.IsVisible = IsEditablePower && present;
     }
 
     private void RefreshRawXmlFromCurrent()
     {
         FinalizePowerPresentation();
+        if (IsCurrentAdditivePower)
+        {
+            if (FindPowerPatch(_modDocument!, CurrentPowerName!) is { } authored) SetRawXml(PowerCatalog.FormatPreview(authored));
+            return;
+        }
         if (_currentEntry != null && !_rawEditorDirty)
         {
             var preview = new XElement(_currentEntry);
@@ -11207,7 +11218,7 @@ public partial class PowerEditorView : UserControl
             var saved = _loadedModDocument == null ? null : PowerCatalog.Find(_loadedModDocument, currentName);
             // Some form callbacks refresh preview immediately before marking dirty.
             // Compare the record too so the first edit already shows save order.
-            if (IsModifiedMode && (_session.IsPowerDirty(currentName) || !XNode.DeepEquals(_currentEntry, saved)) &&
+            if (IsEditablePower && (_session.IsPowerDirty(currentName) || !XNode.DeepEquals(_currentEntry, saved)) &&
                 CurrentPowerXmlDraft?.Session.IsEditing != true && !EditorXmlOrderPolicy.HasProtectedContent(_currentEntry))
                 PowerXmlFieldOrder.NormalizeForEditor(preview);
             SetRawXml(EditorXmlOrderPolicy.HasProtectedContent(_currentEntry)
@@ -12185,6 +12196,7 @@ public partial class PowerEditorView : UserControl
         PowerXmlDraft? rawDraft = null, XmlEditSession.Snapshot? rawSnapshot = null)
     {
         var entry = rawName == null ? _currentEntry : PowerCatalog.Find(_modDocument!, rawName);
+        if (rawName == null && IsCurrentAdditivePower) return true;
         var raw = rawSnapshot != null;
         if (entry == null || (rawName == null && !IsModifiedMode))
             return true;
@@ -12362,6 +12374,7 @@ public partial class PowerEditorView : UserControl
 
     private async Task AddPowerCoreAsync(bool duplicateSelected)
     {
+        if (!CanModifyPowerDocument || duplicateSelected && IsCurrentAdditivePower) return;
         if (_modDocument?.Root == null)
         {
             if (GetDialogOwner() is { } owner)
@@ -12446,11 +12459,12 @@ public partial class PowerEditorView : UserControl
     }
 
     public Task DeleteCurrentPowerAsync()
-        => ImmediateDeletionRequestedAsync?.Invoke() ?? RunNonReentrantCommandAsync("delete Power", DeleteCurrentPowerCoreAsync);
+        => !IsEditablePower ? Task.CompletedTask : ImmediateDeletionRequestedAsync?.Invoke() ?? RunNonReentrantCommandAsync("delete Power", DeleteCurrentPowerCoreAsync);
 
     internal Task DeleteAndSaveCurrentPowerAsync()
         => RunNonReentrantCommandAsync("delete Power", async () =>
         {
+            if (!IsEditablePower) return;
             if (_currentEntry == null || CurrentPowerName == null || _modDocument == null || _modPath == null)
                 return;
             var name = CurrentPowerName;
@@ -12490,7 +12504,7 @@ public partial class PowerEditorView : UserControl
 
     private async Task DeleteCurrentPowerCoreAsync()
     {
-        if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentPowerName))
+        if (!IsEditablePower || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentPowerName))
             return;
         var currentName = CurrentPowerName;
         var referenceName = _session.ReferenceNameForDeletion(currentName);
@@ -12550,7 +12564,7 @@ public partial class PowerEditorView : UserControl
             return null;
         try
         {
-            var saved = PowerCatalog.Find(PowerCatalog.LoadOrCreateModDocument(_modPath), name);
+            var saved = FindPowerPatch(LoadPowerSource().Document, name);
             return saved == null ? null : new XElement(saved);
         }
         catch
@@ -12564,6 +12578,7 @@ public partial class PowerEditorView : UserControl
 
     public void DiscardPowerChanges(string name, XElement? savedElement)
     {
+        if (GetPowerEntryKind(name) != AdditiveEntryKind.Custom && !_powerXmlDrafts.ContainsKey(name)) return;
         if (_modDocument?.Root == null)
             return;
         var current = FindAnyModPower(name);
@@ -12625,6 +12640,7 @@ public partial class PowerEditorView : UserControl
     public void ValidateReferenceMigration(XDocument? proposedDocument)
     {
         if (proposedDocument == null || _loadedModDocument == null || _modDocument == null) return;
+        if (ReadOnlyPowerChangeError(proposedDocument) is { } readOnlyError) throw new InvalidOperationException(readOnlyError);
         var merge = NamedXmlExternalDocumentMergePolicy.Merge(
             _loadedModDocument, _modDocument, proposedDocument, PowerCatalog.EntryName, PowerCatalog.GetName);
         if (merge.ReplacedEditorChanges.Count > 0)
@@ -12636,7 +12652,7 @@ public partial class PowerEditorView : UserControl
         if (_modDocument == null || _loadedModDocument == null ||
             string.IsNullOrWhiteSpace(_modPath) || !File.Exists(_modPath))
             return;
-        var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.Powers);
+        var prepared = LoadPowerSource();
         if (prepared.LoadedState == _loadedFileState)
             return;
         var merge = NamedXmlExternalDocumentMergePolicy.Merge(
@@ -12657,7 +12673,7 @@ public partial class PowerEditorView : UserControl
         _loadedModDocument = new XDocument(prepared.Document);
         _loadedFileState = prepared.LoadedState;
         ReloadChangedCleanPowerXmlDrafts();
-        if (!string.IsNullOrWhiteSpace(selectedName) && PowerCatalog.Find(_modDocument, selectedName) != null)
+        if (!string.IsNullOrWhiteSpace(selectedName) && HasReadablePower(selectedName))
             SelectPowerFromCommand(selectedName);
     }
 
@@ -12669,6 +12685,11 @@ public partial class PowerEditorView : UserControl
 
     private async Task<bool> SaveCoreAsync()
     {
+        if (_powerDocumentSafetyError != null)
+        {
+            ReportSaveFeedback(EditorSaveOutcome.Blocked);
+            await ShowCommandErrorAsync("Power save blocked", _powerDocumentSafetyError); return false;
+        }
         if (!await PreparePowerXmlCoreAsync()) return false;
         if (!await CommitCurrentPowerCoreAsync())
             return false;
@@ -12693,6 +12714,7 @@ public partial class PowerEditorView : UserControl
         {
             var xmlSaves = CapturePreparedPowerXmlSaves();
             var sessionSnapshot = _session.CreateCommitSnapshot();
+            var preparationBefore = new XDocument(_modDocument);
             var savePreparation = PowerSavePreparation.Prepare(
                 _modDocument,
                 sessionSnapshot.DirtyNames,
@@ -12700,6 +12722,13 @@ public partial class PowerEditorView : UserControl
                 sessionSnapshot.StringUpdates,
                 sessionSnapshot.StringRemovals,
                 xmlSaves.Select(saved => saved.Name).ToHashSet(StringComparer.OrdinalIgnoreCase));
+            if (ReadOnlyPowerChangeError(_modDocument) is { } readOnlyError)
+            {
+                foreach (var before in preparationBefore.Root!.Elements(PowerCatalog.EntryName).Where(entry =>
+                             GetPowerEntryKind(PowerCatalog.GetName(entry)) != AdditiveEntryKind.Custom))
+                    FindPowerPatch(_modDocument, PowerCatalog.GetName(before))?.ReplaceWith(new XElement(before));
+                throw new InvalidOperationException(readOnlyError);
+            }
             var renamesToSave = savePreparation.Renames;
             var migration = renamesToSave.Count > 0
                 ? _prepareReferenceMigration?.Invoke(renamesToSave)
@@ -12732,7 +12761,7 @@ public partial class PowerEditorView : UserControl
                 Path.GetFullPath(_modPath),
                 ModXmlDocumentKind.Powers,
                 _modDocument,
-                _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath));
+                _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath), ReadOnlyPowerNames(_modDocument));
             expected[Path.GetFullPath(_modPath)] = prepared.LoadedState;
             cleanup.Inspection.MergeExpectedStatesInto(expected);
             var deletedNames = ModDeletionSafety.FindDeletedNames(
@@ -12784,7 +12813,7 @@ public partial class PowerEditorView : UserControl
         if (_modDocument == null) return true;
         var invalid = _modDocument.Descendants().Where(element =>
                 element.Name.LocalName.Equals(PowerCatalog.EntryName, StringComparison.OrdinalIgnoreCase) &&
-                PowerCatalog.IsModCatalogPower(element) &&
+                PowerCatalog.IsModCatalogPower(element) && CanEditPower(PowerCatalog.GetName(element)) &&
                 PowerTypes.Contains(element.Attribute("type")?.Value.Trim() ?? "",
                     StringComparer.OrdinalIgnoreCase))
             .SelectMany(entry => entry.Descendants().Where(element =>
@@ -12831,7 +12860,7 @@ public partial class PowerEditorView : UserControl
         if (_modDocument == null)
             return true;
         BindPowerValidationFields();
-        var validation = PowerSaveValidator.Validate(
+        var validation = ValidatePowerCandidate(
             CreatePowerXmlSnapshot()!,
             CreatePowerSaveCatalogs());
         if (validation.IsValid)
@@ -12911,7 +12940,7 @@ public partial class PowerEditorView : UserControl
 
         try
         {
-            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.Powers);
+            var prepared = LoadPowerSource();
             var external = prepared.Document;
             var merge = NamedXmlExternalDocumentMergePolicy.Merge(
                 _loadedModDocument,
@@ -12938,7 +12967,7 @@ public partial class PowerEditorView : UserControl
             ReloadChangedCleanPowerXmlDrafts();
             SetDirty(_session.HasDirtyRecords);
             var selectedName = CurrentPowerName;
-            if (!string.IsNullOrWhiteSpace(selectedName) && PowerCatalog.Find(_modDocument, selectedName) != null)
+            if (!string.IsNullOrWhiteSpace(selectedName) && HasReadablePower(selectedName))
                 SelectPowerFromCommand(selectedName);
             else
                 ShowEmpty();
@@ -12978,6 +13007,7 @@ public partial class PowerEditorView : UserControl
 
     private void ShowEmpty()
     {
+        ClearPowerAdditivePresentation();
         _populateGeneration++;
         _isPopulating = true;
         _openOtherAttributes.Clear();

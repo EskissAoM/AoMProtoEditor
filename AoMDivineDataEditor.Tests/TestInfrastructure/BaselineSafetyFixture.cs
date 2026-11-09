@@ -45,6 +45,8 @@ internal sealed class BaselineSafetyFixture : IDisposable
         GameRoot = Workspace.CreateDirectory("IsolatedGame");
         // Resolve only into the fixture, never the user's settings or installed archive.
         Workspace.WriteText("IsolatedGame/data/Data.bar", "isolated unavailable archive");
+        Workspace.WriteXml("IsolatedGame/data/gameplay/god_powers/fixture.godpowers", "<powers/>");
+        Workspace.WriteXml("IsolatedGame/data/gameplay/major_gods.xml", "<civs/>");
     }
 
     public BaselineHost CreateHost() => CreateHost(selectGod: true);
@@ -52,6 +54,8 @@ internal sealed class BaselineSafetyFixture : IDisposable
     public BaselineHost CreateHost(bool selectGod)
     {
         var host = new BaselineHost(new FixtureGameData(GameRoot));
+        host.Set("_barXmlRoot", new XElement("proto"));
+        host.Set("_cachedBaseTechtreeDocuments", new List<XDocument> { new(new XElement("techtree")) });
         host.Set("_modFilePath", ProtoPath);
         host.Call("AdoptSavedProtoDocument", XDocument.Load(ProtoPath, LoadOptions.PreserveWhitespace));
         host.Call("EnsureMajorGodView");

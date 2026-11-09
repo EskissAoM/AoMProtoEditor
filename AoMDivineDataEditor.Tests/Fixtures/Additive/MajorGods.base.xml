@@ -1,0 +1,153 @@
+<civs>
+  <defaultpoplimit>1000</defaultpoplimit>
+  <defaultrepairfactor>0.5</defaultrepairfactor>
+  <storymodetech>StoryModeGeneral</storymodetech>
+  <ludicrousmodetech>LudicrousModeGeneral</ludicrousmodetech>
+  <lightningtech>LightningGeneral</lightningtech>
+  <deathmatchtech>DeathMatchGeneral</deathmatchtech>
+  <deathmatchpowergrantdelay>
+    <archaicage>80</archaicage>
+    <classicalage>140</classicalage>
+    <heroicage>200</heroicage>
+    <mythicage>260</mythicage>
+  </deathmatchpowergrantdelay>
+  <civ>
+    <name>Zeus</name>
+    <statsid>SP</statsid>
+    <key>G</key>
+    <culture>Greek</culture>
+    <displaynameid>STR_CIV_ZEUS</displaynameid>
+    <rollovernameid>STR_CIV_ZEUS_LR</rollovernameid>
+    <titleid>STR_CIV_ZEUS_T</titleid>
+    <agetech age="ArchaicAge">
+      <tech>ArchaicAgeZeus</tech>
+    </agetech>
+    <deathmatchtech>DeathMatchGreek</deathmatchtech>
+    <buildingefficiency>0.6</buildingefficiency>
+    <extrabuildingefficiency>0.3</extrabuildingefficiency>
+    <startingunits>
+      <unit count="4" delay="2.00" x="0.00" y="0.00" z="-5.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="6.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingunits mode="deathmatch">
+      <unit count="9" delay="2.00" x="0.00" y="0.00" z="0.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="-12.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingqueue>
+      <unit autotrain="true">VillagerGreek</unit>
+    </startingqueue>
+    <startingqueue mode="deathmatch">
+      <unit autotrain="true">VillagerGreek</unit>
+      <unit prequeue="true">Jason</unit>
+    </startingqueue>
+    <startingresources>
+      <food>200</food>
+      <wood>250</wood>
+      <gold>50</gold>
+      <favor>10</favor>
+    </startingresources>
+    <startingresources mode="deathmatch">
+      <food>18000</food>
+      <wood>18000</wood>
+      <gold>18000</gold>
+      <favor>110</favor>
+    </startingresources>
+    <icon>resources\greek\static_color\major_gods\zeus_icon.png</icon>
+    <portrait>resources\greek\static_color\major_gods\zeus_portrait.png</portrait>
+    <breakoutportrait>resources\greek\static_color\major_gods\zeus_breakoutportrait.png</breakoutportrait>
+    <minimapborderimage>ui\ingame\minimap\grk_min_panel</minimapborderimage>
+    <backgroundscenario>backgrounds\\background_greek.mythscn</backgroundscenario>
+  </civ>
+  <civ>
+    <name>Hades</name>
+    <statsid>SP</statsid>
+    <key>G</key>
+    <culture>Greek</culture>
+    <displaynameid>STR_CIV_HADES</displaynameid>
+    <rollovernameid>STR_CIV_HADES_LR</rollovernameid>
+    <titleid>STR_CIV_HADES_T</titleid>
+    <agetech age="ArchaicAge">
+      <tech>ArchaicAgeHades</tech>
+    </agetech>
+    <deathmatchtech>DeathMatchGreek</deathmatchtech>
+    <shades>
+      <protounit>HadesShade</protounit>
+      <targetunit>HumanSoldier</targetunit>
+      <chance>0.2</chance>
+      <delay>10.0</delay>
+      <maxqueued>50</maxqueued>
+    </shades>
+    <buildingefficiency>0.6</buildingefficiency>
+    <extrabuildingefficiency>0.3</extrabuildingefficiency>
+    <startingunits>
+      <unit count="4" delay="2.00" x="0.00" y="0.00" z="-5.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="6.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingunits mode="deathmatch">
+      <unit count="9" delay="2.00" x="0.00" y="0.00" z="0.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="-12.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingqueue>
+      <unit autotrain="true">VillagerGreek</unit>
+    </startingqueue>
+    <startingresources>
+      <food>200</food>
+      <wood>250</wood>
+      <gold>50</gold>
+    </startingresources>
+    <startingresources mode="deathmatch">
+      <food>18000</food>
+      <wood>18000</wood>
+      <gold>18000</gold>
+      <favor>100</favor>
+    </startingresources>
+    <icon>resources\greek\static_color\major_gods\hades_icon.png</icon>
+    <portrait>resources\greek\static_color\major_gods\hades_portrait.png</portrait>
+    <breakoutportrait>resources\greek\static_color\major_gods\hades_breakoutportrait.png</breakoutportrait>
+    <minimapborderimage>ui\ingame\minimap\grk_min_panel</minimapborderimage>
+    <backgroundscenario>backgrounds\\background_greek.mythscn</backgroundscenario>
+  </civ>
+  <civ>
+    <name>Poseidon</name>
+    <statsid>SP</statsid>
+    <key>G</key>
+    <culture>Greek</culture>
+    <displaynameid>STR_CIV_POSEIDON</displaynameid>
+    <rollovernameid>STR_CIV_POSEIDON_LR</rollovernameid>
+    <titleid>STR_CIV_POSEIDON_T</titleid>
+    <agetech age="ArchaicAge">
+      <tech>ArchaicAgePoseidon</tech>
+    </agetech>
+    <deathmatchtech>DeathMatchGreek</deathmatchtech>
+    <partisans>1</partisans>
+    <buildingefficiency>0.6</buildingefficiency>
+    <extrabuildingefficiency>0.3</extrabuildingefficiency>
+    <startingunits>
+      <unit count="4" delay="2.00" x="0.00" y="0.00" z="-5.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="6.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingunits mode="deathmatch">
+      <unit count="9" delay="2.00" x="0.00" y="0.00" z="0.00">VillagerGreek</unit>
+      <unit count="1" delay="4.00" x="-12.00" y="0.00" z="0.00">Kataskopos</unit>
+    </startingunits>
+    <startingqueue>
+      <unit autotrain="true">VillagerGreek</unit>
+    </startingqueue>
+    <startingresources>
+      <food>200</food>
+      <wood>250</wood>
+      <gold>50</gold>
+    </startingresources>
+    <startingresources mode="deathmatch">
+      <food>18000</food>
+      <wood>18000</wood>
+      <gold>18000</gold>
+      <favor>100</favor>
+    </startingresources>
+    <icon>resources\greek\static_color\major_gods\poseidon_icon.png</icon>
+    <portrait>resources\greek\static_color\major_gods\poseidon_portrait.png</portrait>
+    <breakoutportrait>resources\greek\static_color\major_gods\poseidon_breakoutportrait.png</breakoutportrait>
+    <minimapborderimage>ui\ingame\minimap\grk_min_panel</minimapborderimage>
+    <backgroundscenario>backgrounds\\background_greek.mythscn</backgroundscenario>
+  </civ>
+</civs>

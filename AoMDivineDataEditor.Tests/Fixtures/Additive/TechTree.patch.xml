@@ -1,0 +1,59 @@
+<techtreemods>
+  <tech name="ArchaicAgeEgyptian">
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Hoplite</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeNorse">
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute" mergeMode="add">
+        <target type="ProtoUnit">Hoplite</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="VaultsOfErebus">
+    <effects>
+      <effect type="Data" amount="1.76" subtype="ResourceTrickleRate" resource="Gold" relativity="Absolute">
+        <target type="Player" />
+      </effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeAtlantean">
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute" mergeMode="remove">
+        <target type="ProtoUnit">Oracle</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="TheseusEnable">
+    <effects mergeMode="replace">
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Ajax</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="GraciousHospitality">
+    <effects>
+      <effect type="Data" amount="2.00" subtype="BuildLimit" relativity="Absolute" mergeMode="remove">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="3.00" subtype="BuildLimit" relativity="Absolute" mergeMode="add">
+        <target type="ProtoUnit">House</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="OrpheusEnable">
+    <effects>
+      <effect type="Data" amount="0.00" subtype="Enable" relativity="Absolute" mergeMode="replace">
+        <target type="ProtoUnit">Orpheus</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeChinese">
+    <effects>
+      <effect type="TechStatus" status="obtainable" mergeMode="remove">HandAxe</effect>
+    </effects>
+  </tech>
+</techtreemods>

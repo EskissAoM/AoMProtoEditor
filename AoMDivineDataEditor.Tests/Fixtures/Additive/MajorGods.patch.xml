@@ -1,0 +1,32 @@
+<civsmods>
+    <civ>
+        <name>Zeus</name>
+        <buildingefficiency>0.75</buildingefficiency>
+        <deathmatchtech mergeMode="remove"/>
+        <startingunits>
+            <unit count="6">VillagerGreek</unit>
+            <unit mergeMode="remove">Kataskopos</unit>
+        </startingunits>
+        <startingresources>
+            <food mergeMode="replace">300</food>
+        </startingresources>
+    </civ>
+    <civ>
+        <name>Hades</name>
+        <shades>
+            <chance>0.35</chance>
+            <targetunit mergeMode="remove">HumanSoldier</targetunit>
+        </shades>
+    </civ>
+    <civ>
+        <name>Poseidon</name>
+        <partisans mergeMode="remove"/>
+    </civ>
+    <civ>
+        <name>ADM_Additive_CustomGod</name>
+        <statsid>SP</statsid>
+        <key>Q</key>
+        <culture>Greek</culture>
+        <buildingefficiency>1</buildingefficiency>
+    </civ>
+</civsmods>

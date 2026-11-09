@@ -1,0 +1,79 @@
+<powers>
+  <power name="Restoration" type="Restoration" godpower="">
+    <displaynameid>STR_POWER_RESTORATION</displaynameid>
+    <rolloverid>STR_POWER_RESTORATION_LR</rolloverid>
+    <icon>greek\static_color\god_powers\restoration_icon.png</icon>
+    <minimapeventtime sendalertto="All">10.0</minimapeventtime>
+    <placement>Full</placement>
+    <rangeindicator range="25.0" speed="0.2">Circle</rangeindicator>
+    <reveallos radius="25.0">Revealer</reveallos>
+    <soundset type="StartSound" listenertype="AllExceptCaster">GodPowerStart</soundset>
+    <soundset type="StartSound" listenertype="IfOnScreenAll">RestorationBirth</soundset>
+    <soundset type="EndSound" listenertype="All">GodPowerEnd</soundset>
+    <activetime>6</activetime>
+    <radius>25.0</radius>
+    <powerplayerrelation>Ally</powerplayerrelation>
+    <abstractattacktargettype>LogicalTypeAffectedByRestoration</abstractattacktargettype>
+    <cost>125.0</cost>
+    <repeatcost>25.0</repeatcost>
+    <healvfx>VFXHealing</healvfx>
+    <areavfx>VFXHealingArea</areavfx>
+    <healspeed>50.0</healspeed>
+    <slowhealmultiplier>0.50</slowhealmultiplier>
+    <scaninterval>0.25</scaninterval>
+  </power>
+  <power name="CeaseFire" type="CeaseFire" godpower="">
+    <displaynameid>STR_POWER_CEASE_FIRE</displaynameid>
+    <rolloverid>STR_POWER_CEASE_FIRE_LR</rolloverid>
+    <icon>greek\static_color\god_powers\ceasefire_icon.png</icon>
+    <placement>Skip</placement>
+    <soundset type="StartSound" listenertype="AllExceptCaster">GodPowerStart</soundset>
+    <soundset type="StartSound" listenertype="All">CeaseFireBirth</soundset>
+    <soundset type="ExistSound" listenertype="All" playdelay="12.0">CeaseFireExists</soundset>
+    <soundset type="EndSound" listenertype="All">GodPowerEnd</soundset>
+    <activetime>30.0</activetime>
+    <exclusive />
+    <cost>75.0</cost>
+    <repeatcost>25.0</repeatcost>
+    <vfxproto>VFXDoves</vfxproto>
+    <attachvfxto>AbstractSettlement</attachvfxto>
+    <effect type="BuildPoints" relativity="BasePercent" amount="2.00">
+      <target type="ProtoUnit">LogicalTypeAffectedByCeaseFireBuildingSlow</target>
+    </effect>
+  </power>
+  <power name="Bronze" type="Bronze" godpower="">
+    <displaynameid>STR_POWER_BRONZE</displaynameid>
+    <rolloverid>STR_POWER_BRONZE_LR</rolloverid>
+    <icon>greek\static_color\god_powers\bronze_icon.png</icon>
+    <placement>Full</placement>
+    <minimapeventtime sendalertto="All">10.0</minimapeventtime>
+    <rangeindicator range="30.0" speed="0.2">Circle</rangeindicator>
+    <soundset type="StartSound" listenertype="AllExceptCaster">GodPowerStart</soundset>
+    <soundset type="StartSound" listenertype="IfOnScreenAll">BronzeBirth</soundset>
+    <soundset type="EndSound" listenertype="All">GodPowerEnd</soundset>
+    <activetime>40.0</activetime>
+    <radius>30.0</radius>
+    <powerplayerrelation>Player</powerplayerrelation>
+    <cost>150</cost>
+    <repeatcost>25.0</repeatcost>
+    <armor>
+      <abstracttype>HumanSoldier</abstracttype>
+      <armortype vulnerabilitypercentdelta="-0.35">Hack</armortype>
+      <armortype vulnerabilitypercentdelta="-0.35">Pierce</armortype>
+      <vfxproto>VFXArmorGlowSmall</vfxproto>
+    </armor>
+    <armor>
+      <abstracttype>AbstractWarship</abstracttype>
+      <armortype vulnerabilitypercentdelta="-0.35">Hack</armortype>
+      <armortype vulnerabilitypercentdelta="-0.35">Pierce</armortype>
+      <armortype vulnerabilitypercentdelta="-0.35">Crush</armortype>
+      <vfxproto>VFXArmorGlowSmall</vfxproto>
+    </armor>
+    <armor>
+      <abstracttype>LogicalTypeMythUnitNotTitan</abstracttype>
+      <armortype vulnerabilitypercentdelta="-0.35">Hack</armortype>
+      <armortype vulnerabilitypercentdelta="-0.35">Pierce</armortype>
+      <vfxproto>VFXArmorGlowSmall</vfxproto>
+    </armor>
+  </power>
+</powers>

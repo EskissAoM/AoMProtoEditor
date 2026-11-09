@@ -162,8 +162,8 @@ public sealed partial class UnitXmlEditingTests
             "<command row='0' column='3'>MilitaryCampToTower</command></unit>";
         WithHost(async (fixture, host) =>
         {
-            host.Set("_barData", new ProtoBarData { UnitNames = [sourceName, "MilitaryTower"] });
-            host.Set("_barXmlRoot", XElement.Parse("<proto>" + sourceXml + "<unit name='MilitaryTower'/></proto>"));
+            host.Set("_barData", new ProtoBarData { UnitNames = originalSource ? [sourceName, "MilitaryTower"] : ["MilitaryTower"] });
+            host.Set("_barXmlRoot", XElement.Parse("<proto>" + (originalSource ? sourceXml : "") + "<unit name='MilitaryTower'/></proto>"));
             host.Call("BuildEditorPanel", sourceName, true); await RoleSettle(host);
             host.Set("_suppressEditorChangeTracking", false);
             var sourceTree = originalSource ? Field<XElement>(host, "_barXmlRoot") : Field<XElement>(host, "_modXmlRoot");

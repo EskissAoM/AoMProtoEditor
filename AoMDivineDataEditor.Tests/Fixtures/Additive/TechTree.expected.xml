@@ -1,0 +1,538 @@
+<techtree version="6">
+  <tech name="VaultsOfErebus">
+    <displaynameid>STR_TECH_VAULTS_OF_EREBUS_NAME</displaynameid>
+    <rollovertextid>STR_TECH_VAULTS_OF_EREBUS_LR</rollovertextid>
+    <cost resourcetype="Wood">200.0000</cost>
+    <cost resourcetype="Favor">15.0000</cost>
+    <researchpoints>40.0000</researchpoints>
+    <status>UNOBTAINABLE</status>
+    <icon>resources\greek\static_color\technologies\vaults_of_erebus_icon.png</icon>
+    <flag>CountsTowardEconomicScore</flag>
+    <flag>MythTech</flag>
+    <effects>
+      <effect type="Data" amount="1.75" subtype="ResourceTrickleRate" resource="Gold" relativity="Absolute">
+        <target type="Player" />
+      </effect>
+      <effect type="Data" amount="1.76" subtype="ResourceTrickleRate" resource="Gold" relativity="Absolute">
+        <target type="Player" />
+      </effect>
+    </effects>
+  </tech>
+  <tech name="TheseusEnable">
+    <researchpoints>0.0000</researchpoints>
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <prereqs>
+      <typecount unit="AbstractTemple" count="1.00" state="aliveState" operator="gte" />
+    </prereqs>
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Ajax</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeEgyptian">
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <flag>AgeTech</flag>
+    <effects>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="550.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="550.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="Data" amount="550.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Granary</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="50.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="200.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">SentryTower</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">SentryTower</target>
+      </effect>
+      <effect type="Data" amount="70.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">Farm</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Farm</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Armory</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Market</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="cost" resource="Wood" relativity="Override">
+        <target type="ProtoUnit">Wonder</target>
+      </effect>
+      <effect type="Data" amount="7500.00" subtype="cost" resource="Gold" relativity="Override">
+        <target type="ProtoUnit">Wonder</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Hoplite</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Mercenary</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">FishingShipEgyptian</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Obelisk</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="CommandAdd" command="MoveNearbyPriestToUnit" row="3" column="4" relativity="Assign">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">LumberCamp</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">MiningCamp</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Granary</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallShort</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallMedium</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallLong</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallConnector</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallGate</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Farm</target>
+      </effect>
+      <effect type="Data" amount="50.0" subtype="Cost" resource="Wood" relativity="Override">
+        <target type="Tech">WatchTower</target>
+      </effect>
+      <effect type="Data" amount="100.0" subtype="Cost" resource="Gold" relativity="Override">
+        <target type="Tech">WatchTower</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dryad</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="ModifyReplacement" replacementtype="Build" proto="TitanBird" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="TechStatus" status="obtainable">PriestEnableReal</effect>
+      <effect type="TechStatus" status="obtainable">PharaohFirstSpawn</effect>
+      <effect type="TechStatus" status="obtainable">HandsOfThePharaoh</effect>
+      <effect type="TechStatus" status="obtainable">Husbandry</effect>
+      <effect type="TechStatus" status="obtainable">HandAxe</effect>
+      <effect type="TechStatus" status="obtainable">Pickaxe</effect>
+      <effect type="TechStatus" status="obtainable">MonumentToVillagersShadow</effect>
+      <effect type="TechStatus" status="obtainable">MonumentToSoldiersShadow</effect>
+      <effect type="TechStatus" status="obtainable">MonumentToPriestsShadow</effect>
+      <effect type="TechStatus" status="obtainable">MonumentToPharaohsShadow</effect>
+      <effect type="TechStatus" status="obtainable">MonumentToGodsShadow</effect>
+      <effect type="TechStatus" status="obtainable">EnableRelicPickup</effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="ShieldPoints" relativity="Assign">
+        <target type="ProtoUnit">Building</target>
+      </effect>
+      <effect type="TechStatus" status="active">QilinPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="active">OcelotlWarriorPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="obtainable">ShinbokuRespawnEnable</effect>
+      <effect type="TechStatus" status="active">SPCYasukoSunbeamShadow</effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeNorse">
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <flag>AgeTech</flag>
+    <effects>
+      <effect type="Data" amount="45.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="405.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="90.0" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="1440.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="135.0" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1080.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="135.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Market</target>
+      </effect>
+      <effect type="Data" amount="1080.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">Market</target>
+      </effect>
+      <effect type="Data" amount="135.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Armory</target>
+      </effect>
+      <effect type="Data" amount="1080.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">Armory</target>
+      </effect>
+      <effect type="Data" amount="135.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">SentryTower</target>
+      </effect>
+      <effect type="Data" amount="540.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">SentryTower</target>
+      </effect>
+      <effect type="Data" amount="4500.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Wonder</target>
+      </effect>
+      <effect type="Data" amount="9000.0" subtype="Hitpoints" relativity="Assign">
+        <target type="ProtoUnit">Wonder</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillagerNorse</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillagerDwarf</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">OxCart</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Berserk</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Hersir</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">FishingShipNorse</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">OxCartBuilding</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="30.0" subtype="BuildPoints" relativity="Override">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="25.0" subtype="BuildPoints" relativity="Override">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallShort</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallMedium</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallLong</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallConnector</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallGate</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dryad</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="ModifyReplacement" replacementtype="Build" proto="TitanYmir" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="TechStatus" status="obtainable">Husbandry</effect>
+      <effect type="TechStatus" status="obtainable">HandAxe</effect>
+      <effect type="TechStatus" status="obtainable">Pickaxe</effect>
+      <effect type="TechStatus" status="active">VillagerDwarfToBerserk</effect>
+      <effect type="TechStatus" status="active">VillagerNorseToBerserk</effect>
+      <effect type="TechStatus" status="obtainable">EnableRelicPickup</effect>
+      <effect type="TechStatus" status="obtainable">UllrHuskarlShadow</effect>
+      <effect type="TechStatus" status="obtainable">AsgardianBastionShadowHeroic</effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="ShieldPoints" relativity="Assign">
+        <target type="ProtoUnit">Building</target>
+      </effect>
+      <effect type="TechStatus" status="active">QilinPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="active">OcelotlWarriorPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="obtainable">ShinbokuRespawnEnable</effect>
+      <effect type="TechStatus" status="active">SPCYasukoSunbeamShadow</effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Hoplite</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeAtlantean">
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <flag>AgeTech</flag>
+    <effects>
+      <effect type="Data" amount="125.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="150.00" subtype="cost" resource="Wood" relativity="Assign">
+        <target type="ProtoUnit">Farm</target>
+      </effect>
+      <effect type="Data" amount="2.00" subtype="Hitpoints" relativity="BasePercent">
+        <target type="ProtoUnit">Farm</target>
+      </effect>
+      <effect type="Data" amount="0.75" subtype="cost" resource="Food" relativity="Percent">
+        <target type="Tech">HeavyCavalry</target>
+      </effect>
+      <effect type="Data" amount="0.75" subtype="cost" resource="Gold" relativity="Percent">
+        <target type="Tech">HeavyCavalry</target>
+      </effect>
+      <effect type="Data" amount="0.75" subtype="cost" resource="Food" relativity="Percent">
+        <target type="Tech">ChampionCavalry</target>
+      </effect>
+      <effect type="Data" amount="0.75" subtype="cost" resource="Gold" relativity="Percent">
+        <target type="Tech">ChampionCavalry</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Oracle</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">FishingShipAtlantean</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Manor</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">EconomicGuild</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallShort</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallMedium</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallLong</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallConnector</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallGate</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dryad</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="ModifyReplacement" replacementtype="Build" proto="TitanAtlantean" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="TechStatus" status="obtainable">Husbandry</effect>
+      <effect type="TechStatus" status="obtainable">HandAxe</effect>
+      <effect type="TechStatus" status="obtainable">Pickaxe</effect>
+      <effect type="TechStatus" status="active">VillagerAtlanteanToHero</effect>
+      <effect type="TechStatus" status="active">OracleToHero</effect>
+      <effect type="TechStatus" status="active">KatapeltesToHero</effect>
+      <effect type="TechStatus" status="active">TurmaToHero</effect>
+      <effect type="TechStatus" status="active">MurmilloToHero</effect>
+      <effect type="TechStatus" status="active">ContariusToHero</effect>
+      <effect type="TechStatus" status="active">ArcusToHero</effect>
+      <effect type="TechStatus" status="active">DestroyerToHero</effect>
+      <effect type="TechStatus" status="active">FanaticToHero</effect>
+      <effect type="TechStatus" status="active">CheiroballistaToHero</effect>
+      <effect type="TechStatus" status="obtainable">EnableRelicPickup</effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="Data" amount="0.00" subtype="ShieldPoints" relativity="Assign">
+        <target type="ProtoUnit">Building</target>
+      </effect>
+      <effect type="TechStatus" status="active">QilinPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="active">OcelotlWarriorPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="obtainable">ShinbokuRespawnEnable</effect>
+      <effect type="TechStatus" status="active">SPCYasukoSunbeamShadow</effect>
+    </effects>
+  </tech>
+  <tech name="ArchaicAgeChinese" orderhint="0">
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <flag>AgeTech</flag>
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillagerChinese</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">SkyLantern</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Pioneer</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Kuafu</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">FishingShipChinese</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">House</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Temple</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Silo</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dock</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">TownCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">VillageCenter</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallShort</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallMedium</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallLong</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallConnector</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">WallGate</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Dryad</target>
+      </effect>
+      <effect type="Data" amount="1.00" subtype="ModifyReplacement" replacementtype="Build" proto="TitanXingTian" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="Data" amount="3.00" subtype="ObstructionRadiusX" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="Data" amount="3.00" subtype="ObstructionRadiusZ" relativity="Absolute">
+        <target type="ProtoUnit">TitanGate</target>
+      </effect>
+      <effect type="Data" amount="3.00" subtype="ObstructionRadiusX" relativity="Absolute">
+        <target type="ProtoUnit">TitanGatePreview</target>
+      </effect>
+      <effect type="Data" amount="3.00" subtype="ObstructionRadiusZ" relativity="Absolute">
+        <target type="ProtoUnit">TitanGatePreview</target>
+      </effect>
+      <effect type="TechStatus" status="obtainable">DivineLight</effect>
+      <effect type="TechStatus" status="obtainable">Husbandry</effect>
+      <effect type="TechStatus" status="obtainable">Pickaxe</effect>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">CitadelCenter</target>
+      </effect>
+      <effect type="TechStatus" status="active">QilinPassiveAbilityShadow</effect>
+      <effect type="TechStatus" status="active">OcelotlWarriorPassiveAbilityShadow</effect>
+      <effect type="Data" subtype="BuildingChainEffect" unittype="TerracottaRider" effecttype="InRange" modifytype="RegenRate" amount="0.500" relativity="Percent">
+        <target type="Player" />
+      </effect>
+      <effect type="TechStatus" status="active">TerracottaRiders</effect>
+      <effect type="Data" subtype="DamageShading" shadingtype="Burning" threshold="0.70" time="100" amount="0.05" relativity="Percent">
+        <target type="ProtoUnit">LogicalTypeDamageShading</target>
+      </effect>
+      <effect type="TechStatus" status="obtainable">ShinbokuRespawnEnable</effect>
+      <effect type="TechStatus" status="active">SPCYasukoSunbeamShadow</effect>
+    </effects>
+  </tech>
+  <tech name="OrpheusEnable" orderhint="4">
+    <researchpoints>0.0000</researchpoints>
+    <status>UNOBTAINABLE</status>
+    <flag>HideAllNotifications</flag>
+    <prereqs>
+      <typecount unit="AbstractTemple" count="1.00" state="aliveState" operator="gte" />
+    </prereqs>
+    <effects>
+      <effect type="Data" amount="1.00" subtype="Enable" relativity="Absolute">
+        <target type="ProtoUnit">Orpheus</target>
+      </effect>
+    </effects>
+  </tech>
+  <tech name="GraciousHospitality" orderhint="4">
+    <displaynameid>STR_TECH_GRACIOUS_HOSPITALITY_NAME</displaynameid>
+    <rollovertextid>STR_TECH_GRACIOUS_HOSPITALITY_LR</rollovertextid>
+    <cost resourcetype="Gold">275.0000</cost>
+    <cost resourcetype="Favor">22.0000</cost>
+    <researchpoints>40.0000</researchpoints>
+    <status>UNOBTAINABLE</status>
+    <icon>resources\greek_demeter\static_color\technologies\gracious_hospitality_icon.png</icon>
+    <flag>CountsTowardMilitaryScore</flag>
+    <flag>MythTech</flag>
+    <effects>
+      <effect type="Data" amount="3.00" subtype="BuildLimit" relativity="Absolute">
+        <target type="ProtoUnit">House</target>
+      </effect>
+    </effects>
+  </tech>
+</techtree>

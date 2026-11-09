@@ -36,11 +36,11 @@ public partial class MajorGodEditorView
         try
         {
             await _populationTask;
-            if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(_modPath)) return false;
+            if (!IsEditableMajorGod || _currentEntry == null || string.IsNullOrWhiteSpace(_modPath)) return false;
             if (!await CommitCurrentMajorGodAsync()) return false;
             await _populationTask;
             RefreshRawXmlFromCurrent();
-            return IsModifiedMode && _currentEntry != null;
+            return IsEditableMajorGod && _currentEntry != null;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         { await ShowMajorGodXmlErrorAsync("XML editing unavailable", exception.Message); return false; }
@@ -56,7 +56,7 @@ public partial class MajorGodEditorView
             return;
         }
         XmlEditSession session;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             if (!_majorGodXmlDrafts.TryGetValue(_loadedEntryName, out var draft))
             {
@@ -112,6 +112,7 @@ public partial class MajorGodEditorView
 
     private XElement ParseMajorGodXml(string name, MajorGodXmlDraft draft, string text)
     {
+        if (!CanEditMajorGod(name)) throw new InvalidDataException($"Major God '{name}' is read-only in this checkpoint.");
         var candidate = XElement.Parse(text, LoadOptions.PreserveWhitespace);
         if (candidate.Name != MajorGodCatalog.EntryName)
             throw new InvalidDataException("Raw XML must have one <civ> root element without a namespace.");
@@ -146,9 +147,10 @@ public partial class MajorGodEditorView
             var newName = MajorGodCatalog.GetName(candidate);
             if (!name.Equals(newName, StringComparison.OrdinalIgnoreCase)) renames.Add(new(name, newName));
         }
-        var safety = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.MajorGods);
+        var safety = ModXmlDocumentSafety.Validate(document, ModXmlDocumentKind.MajorGods, ReadOnlyMajorGodNames(document));
         if (!safety.IsSafeToEdit) throw new InvalidDataException(string.Join(Environment.NewLine, safety.Errors.Select(error => error.Reason)));
         ApplyMajorGodOwnerRenames(document, renames);
+        RequireUnchangedMajorGodPatches(document);
         return document;
     }
 
@@ -277,6 +279,6 @@ public partial class MajorGodEditorView
         _rawEditorDirty = CurrentMajorGodXmlDraft?.Session.IsDirty == true;
         SetDirty(_dirtyNames.Count > 0 || _pendingStringUpdates.Count > 0 || _pendingStringRemovals.Count > 0 ||
                  _majorGodXmlDrafts.Values.Any(draft => draft.Session.IsDirty));
-        if (_currentEntry != null) SetRawXml(FormatMajorGodPreview(_currentEntry));
+        if (_currentEntry != null) SetRawXml(FormatMajorGodPreview(MajorGodPreviewEntry(_currentEntry)));
     }
 }

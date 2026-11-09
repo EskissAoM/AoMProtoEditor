@@ -60,9 +60,10 @@ public partial class TechnologyEditorView
             _technologyXmlController.Bind(null, false);
             return;
         }
-        preview ??= FormatTechnologyXmlPreview(_current);
+        preview ??= FormatTechnologyXmlPreview(IsCurrentAdditiveTechnology
+            ? _modified[_currentOriginalName] : _current);
         XmlEditSession session;
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             if (!_technologyXmlDrafts.TryGetValue(_currentOriginalName, out var draft))
             {
@@ -99,6 +100,7 @@ public partial class TechnologyEditorView
 
     private XElement ParseTechnologyXml(string name, string text)
     {
+        if (!CanEditTechnology(name)) throw new InvalidDataException($"Technology '{name}' is read-only in this checkpoint.");
         XElement candidate;
         try { candidate = XElement.Parse(text, LoadOptions.PreserveWhitespace); }
         catch (System.Xml.XmlException exception)
@@ -163,7 +165,7 @@ public partial class TechnologyEditorView
             // Validate all raw buffers on a copy before staging any record. This
             // also exposes pending references to ordinary document validation.
             var validationDocument = CreateTechnologyXmlSnapshot();
-            var shape = TechnologyDocumentSafety.ValidateModDocument(validationDocument);
+            var shape = ValidateTechnologySourceStructure(validationDocument);
             if (!shape.IsValid) throw new InvalidDataException(shape.ToDisplayMessage(_modTechtreePath ?? "Technology draft"));
             var catalogs = CreateSaveValidationCatalogs() with
             {
@@ -172,7 +174,7 @@ public partial class TechnologyEditorView
                     .Select(element => GetCaseInsensitiveAttribute(element, "name")?.Value ?? ""))
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList()
             };
-            var validation = TechnologySaveValidator.Validate(validationDocument, catalogs);
+            var validation = ValidateTechnologySaveCandidate(validationDocument, catalogs);
             if (!validation.IsValid) { await ShowSaveValidationErrorsAsync(validation.Errors, validation.Issues); return false; }
 
             foreach (var item in pending)

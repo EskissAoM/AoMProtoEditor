@@ -1,0 +1,18 @@
+<protomods>
+  <unit name="Hoplite">
+    <flag mergeMode="remove">CreateUnitGroupAutomatically</flag>
+    <protoaction>
+      <name>HandAttack</name>
+      <rof>1.5</rof>
+      <damagebonus type="AbstractCavalry" mergeMode="remove" />
+      <minrange>0.5</minrange>
+      <handlogic>0</handlogic>
+    </protoaction>
+  </unit>
+  <unit name="VillagerGreek">
+    <protoaction>
+      <name>Gather</name>
+      <rate type="WoodResource">0.321</rate>
+    </protoaction>
+  </unit>
+</protomods>

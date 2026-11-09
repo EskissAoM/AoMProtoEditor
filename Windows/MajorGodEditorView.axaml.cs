@@ -140,7 +140,8 @@ public partial class MajorGodEditorView : UserControl
             prepareReferenceMigration = null,
         Action<GameIdentifierReferenceMigrationPlan>? adoptReferenceMigration = null,
         Func<Window, string, Task<bool>>? ensureCanDeleteAsync = null,
-        Window? dialogOwner = null)
+        Window? dialogOwner = null,
+        bool baseCatalogAvailable = true)
     {
         InitializeComponent();
         EditorXmlPreviewPane.Configure(_mainGrid, 0, 1, 2, _xmlPreviewContent, _previewSplitter, _xmlPreviewToggleButton);
@@ -153,6 +154,7 @@ public partial class MajorGodEditorView : UserControl
             definition => definition.Name,
             definition => new XElement(definition.SourceElement),
             StringComparer.OrdinalIgnoreCase);
+        _baseCatalogAvailable = baseCatalogAvailable;
         _modPath = modPath;
         _modStringsPath = modStringsPath;
         _resolveStringAsync = resolveStringAsync;
@@ -201,7 +203,7 @@ public partial class MajorGodEditorView : UserControl
 
         if (!string.IsNullOrWhiteSpace(_modPath))
         {
-            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.MajorGods);
+            var prepared = LoadMajorGodSource();
             _modDocument = prepared.Document;
             _loadedFileState = prepared.LoadedState;
             _loadedModDocument = new XDocument(_modDocument);
@@ -308,6 +310,7 @@ public partial class MajorGodEditorView : UserControl
 
     public void SelectMajorGod(string? name)
     {
+        ClearMajorGodAdditivePresentation();
         EditorValidationNavigation.Clear(this);
         if (!IsModifiedMode && _baseSharedData != null &&
             name?.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase) == true)
@@ -321,9 +324,7 @@ public partial class MajorGodEditorView : UserControl
         _loadedEntryName = name;
         _currentEntry = string.IsNullOrWhiteSpace(name)
             ? null
-            : IsModifiedMode
-                ? MajorGodCatalog.Find(_modDocument!, name)
-                : _baseEntries.GetValueOrDefault(name);
+            : ResolveMajorGodForReading(name);
         _rawEditorDirty = CurrentMajorGodXmlDraft?.Session.IsDirty == true;
 
         if (_currentEntry == null)
@@ -332,7 +333,7 @@ public partial class MajorGodEditorView : UserControl
             return;
         }
 
-        SetRawXml(FormatMajorGodPreview(_currentEntry));
+        SetRawXml(FormatMajorGodPreview(MajorGodPreviewEntry(_currentEntry)));
         _statusMessage.Text = IsModifiedMode
             ? ""
             : "Original Data.bar entry (read-only).";
@@ -341,6 +342,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void ShowSharedData()
     {
+        ClearMajorGodAdditivePresentation();
         if (_baseSharedData == null)
             return;
 
@@ -394,7 +396,7 @@ public partial class MajorGodEditorView : UserControl
         _isPopulating = true;
         try
         {
-            var editable = IsModifiedMode;
+            var editable = IsEditableMajorGod;
             _nameBox.Text = MajorGodCatalog.GetName(entry);
             _keyBox.Text = ReadValue(entry, "key");
 
@@ -455,6 +457,7 @@ public partial class MajorGodEditorView : UserControl
             if (generation == _populateGeneration)
             {
                 FinalizeMajorGodPresentation();
+                PresentMajorGodAdditiveReading();
                 _isPopulating = false;
             }
         }
@@ -488,7 +491,7 @@ public partial class MajorGodEditorView : UserControl
         var initial = ProtoEditorWindow.NormalizeIconCatalogValue(ReadValue(entry, tag), _iconPaths);
         editor.Configure(initial, _iconPaths, value =>
         {
-            if (_isPopulating || !IsModifiedMode || !ReferenceEquals(entry, _currentEntry))
+            if (_isPopulating || !IsEditableMajorGod || !ReferenceEquals(entry, _currentEntry))
                 return Task.CompletedTask;
             SetEntryValue(tag, value);
             RefreshIconPreview();
@@ -515,7 +518,7 @@ public partial class MajorGodEditorView : UserControl
 
     private async Task<bool> CommitMajorGodAsync(bool validateContent)
     {
-        if (!IsModifiedMode || _currentEntry == null)
+        if (!IsEditableMajorGod || _currentEntry == null)
             return true;
         // Retain raw text on navigation. Only Save parses/validates it, so
         // invalid XML cannot prevent reaching the host's discard decision.
@@ -748,6 +751,7 @@ public partial class MajorGodEditorView : UserControl
 
     public async Task AddMajorGodAsync(bool duplicateSelected = false)
     {
+        if (!CanModifyMajorGodDocument || (duplicateSelected && IsCurrentAdditiveMajorGod)) return;
         if (duplicateSelected && CurrentMajorGodName?.Equals(
                 MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase) == true)
             return;
@@ -807,10 +811,11 @@ public partial class MajorGodEditorView : UserControl
     }
 
     public Task DeleteCurrentMajorGodAsync()
-        => ImmediateDeletionRequestedAsync?.Invoke() ?? DeleteCurrentMajorGodCoreAsync();
+        => !IsEditableMajorGod ? Task.CompletedTask : ImmediateDeletionRequestedAsync?.Invoke() ?? DeleteCurrentMajorGodCoreAsync();
 
     internal async Task DeleteAndSaveCurrentMajorGodAsync(Window owner)
     {
+        if (!IsEditableMajorGod) return;
         if (_currentEntry == null || CurrentMajorGodName == null || _modDocument == null || _modPath == null)
             return;
         var name = CurrentMajorGodName;
@@ -850,7 +855,7 @@ public partial class MajorGodEditorView : UserControl
 
     private async Task DeleteCurrentMajorGodCoreAsync()
     {
-        if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentMajorGodName))
+        if (!IsEditableMajorGod || _currentEntry == null || string.IsNullOrWhiteSpace(CurrentMajorGodName))
             return;
         var currentName = CurrentMajorGodName;
         var referenceName = _pendingRenames.LastOrDefault(rename =>
@@ -906,6 +911,7 @@ public partial class MajorGodEditorView : UserControl
 
     public void DiscardMajorGodChanges(string name, XElement? savedElement)
     {
+        if (GetMajorGodEntryKind(name) != AdditiveEntryKind.Custom && !_majorGodXmlDrafts.ContainsKey(name)) return;
         var current = MajorGodCatalog.Find(_modDocument!, name);
         var restored = savedElement == null ? null : new XElement(savedElement);
         var restoredName = restored == null ? "" : MajorGodCatalog.GetName(restored);
@@ -974,6 +980,9 @@ public partial class MajorGodEditorView : UserControl
 
     private async Task<bool> SaveCoreAsync()
     {
+        if (!CanModifyMajorGodDocument) return false;
+        try { if (_modDocument != null) RequireUnchangedMajorGodPatches(_modDocument); }
+        catch (InvalidDataException error) { _statusMessage.Text = error.Message; return false; }
         if (!await PrepareMajorGodXmlForSaveAsync()) return false;
         if (!await CommitCurrentMajorGodAsync())
             return false;
@@ -1000,10 +1009,15 @@ public partial class MajorGodEditorView : UserControl
                 if (MajorGodCatalog.Find(_modDocument, name) is { } edited)
                     MajorGodCatalog.NormalizeEditorFieldOrder(edited);
             var renamesToSave = _pendingRenames.ToList();
+            var renameCandidate = new XDocument(_modDocument);
+            ApplyMajorGodOwnerRenames(renameCandidate, renamesToSave);
+            RequireUnchangedMajorGodPatches(renameCandidate);
             ApplyMajorGodOwnerRenames(_modDocument, renamesToSave);
             var referenceMigration = renamesToSave.Count > 0
                 ? _prepareReferenceMigration?.Invoke(renamesToSave)
                 : null;
+            if (referenceMigration?.GetDocument(Path.GetFullPath(_modPath)) is { } migratedMajorGods)
+                RequireUnchangedMajorGodPatches(migratedMajorGods);
             var stringUpdates = new Dictionary<string, string>(_pendingStringUpdates, StringComparer.OrdinalIgnoreCase);
             var originalOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in _loadedModDocument?.Root?.Elements(MajorGodCatalog.EntryName) ?? [])
@@ -1041,7 +1055,7 @@ public partial class MajorGodEditorView : UserControl
                 Path.GetFullPath(_modPath),
                 ModXmlDocumentKind.MajorGods,
                 _modDocument,
-                _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath));
+                _loadedFileState ?? FileIntegrityTransaction.CaptureState(_modPath), ReadOnlyMajorGodNames(_modDocument));
             expectedStates[Path.GetFullPath(_modPath)] = preparedMajorGods.LoadedState;
             cleanup.Inspection.MergeExpectedStatesInto(expectedStates);
             var deletedNames = ModDeletionSafety.FindDeletedNames(
@@ -1167,7 +1181,7 @@ public partial class MajorGodEditorView : UserControl
 
         try
         {
-            var prepared = ModDocumentPersistence.Prepare(_modPath, ModXmlDocumentKind.MajorGods);
+            var prepared = LoadMajorGodSource();
             var externalDocument = prepared.Document;
             var stateAfterRead = prepared.LoadedState;
 
@@ -1232,7 +1246,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void KeyBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_isPopulating || !IsModifiedMode)
+        if (_isPopulating || !IsEditableMajorGod)
             return;
         var raw = _keyBox.Text ?? "";
         var normalized = raw.Length == 0 || !char.IsLetter(raw[0])
@@ -1361,7 +1375,7 @@ public partial class MajorGodEditorView : UserControl
         var hasTeamTech = _currentEntry != null &&
                           MajorGodCatalog.FindDirectChild(_currentEntry, "teamtech") != null;
         _teamTechRow.IsVisible = hasTeamTech;
-        _addTeamTechButton.IsVisible = IsModifiedMode && _currentEntry != null && !hasTeamTech;
+        _addTeamTechButton.IsVisible = IsEditableMajorGod && _currentEntry != null && !hasTeamTech;
     }
 
     private void RebuildEconomicEditor()
@@ -1384,7 +1398,7 @@ public partial class MajorGodEditorView : UserControl
             var repairFactor = MajorGodCatalog.FindDirectChild(_currentEntry, "buildingrepairfactor");
             if (repairFactor == null)
             {
-                if (IsModifiedMode)
+                if (IsEditableMajorGod)
                 {
                     var addRepair = CreateEconomicOptionalButton("Repair Factor");
                     addRepair.Click += (_, _) =>
@@ -1402,7 +1416,7 @@ public partial class MajorGodEditorView : UserControl
             {
                 efficiencyRow.Children.Add(CreateInlineLabel("Repair Factor"));
                 efficiencyRow.Children.Add(CreateEconomicValueBox("buildingrepairfactor"));
-                if (IsModifiedMode)
+                if (IsEditableMajorGod)
                     efficiencyRow.Children.Add(CreateEconomicRemoveButton(repairFactor));
             }
             _economicPanel.Children.Add(efficiencyRow);
@@ -1410,7 +1424,7 @@ public partial class MajorGodEditorView : UserControl
             var secondaryPrayer = MajorGodCatalog.FindDirectChild(_currentEntry, "secondaryprayerefficiency");
             if (secondaryPrayer == null)
             {
-                if (IsModifiedMode)
+                if (IsEditableMajorGod)
                 {
                     var addSecondary = CreateEconomicOptionalButton("Secondary Prayer Efficiency");
                     addSecondary.Click += (_, _) =>
@@ -1434,7 +1448,7 @@ public partial class MajorGodEditorView : UserControl
             prayerRow.Children.Add(CreateEconomicAttributeBox(secondaryPrayer, "v"));
             prayerRow.Children.Add(CreateInlineLabel("Modifier"));
             prayerRow.Children.Add(CreateEconomicAttributeBox(secondaryPrayer, "z"));
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
                 prayerRow.Children.Add(CreateEconomicRemoveButton(secondaryPrayer));
             _economicPanel.Children.Add(prayerRow);
         }
@@ -1492,7 +1506,7 @@ public partial class MajorGodEditorView : UserControl
             Text = value,
             Width = 70,
             MaxWidth = 70,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             HorizontalAlignment = HorizontalAlignment.Left
         }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
@@ -1605,11 +1619,11 @@ public partial class MajorGodEditorView : UserControl
             var hasDevotionCommands = MajorGodCatalog.FindDirectChild(_currentEntry, "devotioncommands") != null;
             _partisansCheckBox.IsChecked = hasPartisans;
             _devotionCommandsCheckBox.IsChecked = hasDevotionCommands;
-            _partisansCheckBox.IsEnabled = IsModifiedMode;
-            _devotionCommandsCheckBox.IsEnabled = IsModifiedMode;
-            _partisansCheckBox.IsVisible = IsModifiedMode || hasPartisans;
-            _devotionCommandsCheckBox.IsVisible = IsModifiedMode || hasDevotionCommands;
-            _specialMechanicToggleRow.IsVisible = IsModifiedMode || hasPartisans || hasDevotionCommands;
+            _partisansCheckBox.IsEnabled = IsEditableMajorGod;
+            _devotionCommandsCheckBox.IsEnabled = IsEditableMajorGod;
+            _partisansCheckBox.IsVisible = IsEditableMajorGod || hasPartisans;
+            _devotionCommandsCheckBox.IsVisible = IsEditableMajorGod || hasDevotionCommands;
+            _specialMechanicToggleRow.IsVisible = IsEditableMajorGod || hasPartisans || hasDevotionCommands;
 
             var usedTags = _currentEntry.Elements()
                 .Select(element => element.Name.LocalName)
@@ -1623,8 +1637,8 @@ public partial class MajorGodEditorView : UserControl
             _specialMechanicSelector.ItemsSource = availableLabels;
             _specialMechanicSelector.SelectedItem = null;
             _specialMechanicSelector.Text = "";
-            _specialMechanicAddRow.IsVisible = IsModifiedMode && availableLabels.Count > 0;
-            _specialMechanicSelector.IsEnabled = IsModifiedMode;
+            _specialMechanicAddRow.IsVisible = IsEditableMajorGod && availableLabels.Count > 0;
+            _specialMechanicSelector.IsEnabled = IsEditableMajorGod;
 
             var mechanicElements = _currentEntry.Elements()
                 .Where(element => usedTags.Contains(element.Name.LocalName))
@@ -1663,6 +1677,7 @@ public partial class MajorGodEditorView : UserControl
                     Classes = { "editor-card" },
                     IsVisible = definition.Tag.Equals(_selectedSpecialMechanicTag, StringComparison.OrdinalIgnoreCase)
                 };
+                AdditiveChangePresentation.BindContainer(card, element);
                 var system = new StackPanel { Spacing = 4 };
                 card.Child = system;
                 var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -1683,7 +1698,7 @@ public partial class MajorGodEditorView : UserControl
                 if (definition.Tag.Equals("bountyresourceearning", StringComparison.OrdinalIgnoreCase))
                     headerContent.Children.Add(CreateBountyActiveCheckBox(element));
                 header.Children.Add(headerContent);
-                if (IsModifiedMode)
+                if (IsEditableMajorGod)
                 {
                     var nextSelectedTag = mechanicIndex + 1 < mechanicElements.Count
                         ? mechanicElements[mechanicIndex + 1].Name.LocalName
@@ -1849,7 +1864,7 @@ public partial class MajorGodEditorView : UserControl
         var maxQueued = MajorGodCatalog.FindDirectChild(shades, "maxqueued");
         if (maxQueued == null)
         {
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var add = CreateAddButton("Max Queue");
                 add.Click += (_, _) =>
@@ -1865,12 +1880,12 @@ public partial class MajorGodEditorView : UserControl
         {
             numericFields.Children.Add(CreateInlineLabel("Max Queue"));
             numericFields.Children.Add(CreateSpecialElementNumberBox(maxQueued, "1", ProtoUnitNumericKind.PositiveInteger));
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
                 numericFields.Children.Add(CreateSpecialChildRemoveButton(maxQueued));
         }
 
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox
             {
@@ -1903,13 +1918,13 @@ public partial class MajorGodEditorView : UserControl
             foreach (var target in targets)
             {
                 var captured = target;
-                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsModifiedMode ? () =>
+                chips.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsEditableMajorGod ? () =>
                 {
                     MajorGodCatalog.RemoveElementAndAdjacentWhitespace(captured);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     RenderTargets();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), captured));
             }
             if (picker != null)
             {
@@ -1941,7 +1956,7 @@ public partial class MajorGodEditorView : UserControl
         for (var index = 0; index < creeps.Count; index++)
         {
             var creep = creeps[index];
-            var body = AddBonusSubcontainer(host, $"Terrain Creep {index + 1}", IsModifiedMode ? () =>
+            var body = AddBonusSubcontainer(host, $"Terrain Creep {index + 1}", IsEditableMajorGod ? () =>
             {
                 MajorGodCatalog.RemoveElementAndAdjacentWhitespace(creep);
                 MarkAndRebuildSpecialMechanics();
@@ -1990,7 +2005,7 @@ public partial class MajorGodEditorView : UserControl
             BuildTerrainCreepGenerators(body, creep);
         }
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var add = CreateAddButton("Add terrain creep");
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2009,7 +2024,7 @@ public partial class MajorGodEditorView : UserControl
         var attribute = FindAttribute(creep, attributeName);
         if (attribute == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton(label);
             add.Margin = new Thickness(0, 0, 4, 4);
             add.Click += (_, _) =>
@@ -2024,7 +2039,7 @@ public partial class MajorGodEditorView : UserControl
 
         var value = CreateSpecialAttributeNumberBox(creep, attributeName, "0", ProtoUnitNumericKind.UnsignedFloat);
         var fields = EditorFormLayout.LabeledGroup(label, value);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) =>
@@ -2043,7 +2058,7 @@ public partial class MajorGodEditorView : UserControl
     {
         var row = CreateBountyWrappingRow();
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox
             {
@@ -2071,13 +2086,13 @@ public partial class MajorGodEditorView : UserControl
             foreach (var definition in selected)
             {
                 var captured = definition;
-                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Label, IsModifiedMode ? () =>
+                chips.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Label, IsEditableMajorGod ? () =>
                 {
                     RemoveAttribute(creep, captured.Attribute);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     Render();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), FindAttribute(creep, captured.Attribute)));
             }
             if (picker != null)
             {
@@ -2103,7 +2118,7 @@ public partial class MajorGodEditorView : UserControl
             };
         }
         Render();
-        if (IsModifiedMode || chips.Children.Count > 0)
+        if (IsEditableMajorGod || chips.Children.Count > 0)
             host.Children.Add(row);
     }
 
@@ -2112,7 +2127,7 @@ public partial class MajorGodEditorView : UserControl
         var buildability = FindAttribute(creep, "buildability");
         if (buildability == null)
         {
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var add = CreateAddButton("Buildability");
                 add.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
@@ -2137,7 +2152,7 @@ public partial class MajorGodEditorView : UserControl
                 ItemsSource = options,
                 SelectedItem = options.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
                 Width = 160,
-                IsEnabled = IsModifiedMode
+                IsEnabled = IsEditableMajorGod
             }, EditorFieldWidthRole.LongEnum);
             EditorValidationBindings.Bind(combo, creep, "@buildability");
             combo.SelectionChanged += (_, _) =>
@@ -2148,7 +2163,7 @@ public partial class MajorGodEditorView : UserControl
                 RefreshRawXmlFromCurrent();
             };
             var fields = EditorFormLayout.LabeledGroup("Buildability", combo);
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var remove = EditorRemoveButtons.Field();
                 remove.Click += (_, _) =>
@@ -2166,7 +2181,7 @@ public partial class MajorGodEditorView : UserControl
         var preventPlacement = FindAttribute(creep, "preventplacement");
         if (preventPlacement == null)
         {
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var add = CreateAddButton("Prevent placement");
                 add.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
@@ -2184,7 +2199,7 @@ public partial class MajorGodEditorView : UserControl
         {
             var selector = CreateSpecialAttributeAutoComplete(creep, "preventplacement", _unitOrTypeNames);
             var fields = EditorFormLayout.LabeledGroup("Prevent Placement of", selector);
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var remove = EditorRemoveButtons.Field();
                 remove.Click += (_, _) =>
@@ -2204,7 +2219,7 @@ public partial class MajorGodEditorView : UserControl
     {
         var row = CreateBountyWrappingRow();
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox
             {
@@ -2233,13 +2248,13 @@ public partial class MajorGodEditorView : UserControl
             foreach (var generator in generators)
             {
                 var captured = generator;
-                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsModifiedMode ? () =>
+                chips.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsEditableMajorGod ? () =>
                 {
                     MajorGodCatalog.RemoveElementAndAdjacentWhitespace(captured);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     Render();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), captured));
             }
             if (picker != null)
             {
@@ -2281,11 +2296,11 @@ public partial class MajorGodEditorView : UserControl
             row.Children.Add(CreateSpecialAttributeNumberBox(unit, "costratio", "0", ProtoUnitNumericKind.UnsignedFloat));
             row.Children.Add(CreateInlineLabel("Time Ratio"));
             row.Children.Add(CreateSpecialAttributeNumberBox(unit, "timeratio", "0", ProtoUnitNumericKind.UnsignedFloat));
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
                 row.Children.Add(CreateSpecialChildRemoveButton(unit));
             host.Children.Add(row);
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var add = CreateAddButton("Add unit");
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2326,7 +2341,7 @@ public partial class MajorGodEditorView : UserControl
                 tierRow.Children.Add(CreateResourceComboBox(tier, "resource"));
                 tierRow.Children.Add(CreateInlineLabel("When number of tiles >"));
                 tierRow.Children.Add(CreateSpecialAttributeNumberBox(tier, "mintiles", "0", ProtoUnitNumericKind.UnsignedInteger));
-                if (IsModifiedMode)
+                if (IsEditableMajorGod)
                 {
                     var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
                     remove.Click += (_, _) =>
@@ -2342,7 +2357,7 @@ public partial class MajorGodEditorView : UserControl
                 host.Children.Add(tierRow);
             }
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var addRate = CreateAddButton("Add rate tier");
             addRate.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2366,11 +2381,11 @@ public partial class MajorGodEditorView : UserControl
             buildingRow.Children.Add(CreateSpecialAttributeNumberBox(building, "chainradius", "0", ProtoUnitNumericKind.UnsignedFloat));
             buildingRow.Children.Add(CreateInlineLabel("Generates"));
             buildingRow.Children.Add(CreateResourceComboBox(building, "generationresource"));
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
                 buildingRow.Children.Add(CreateSpecialChildRemoveButton(building));
             host.Children.Add(buildingRow);
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var addBuilding = CreateAddButton("Add building");
             addBuilding.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2393,7 +2408,7 @@ public partial class MajorGodEditorView : UserControl
         var vfxGroup = MajorGodCatalog.FindDirectChild(buildingChain, tag);
         if (vfxGroup == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton(label);
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -2416,7 +2431,7 @@ public partial class MajorGodEditorView : UserControl
             row.Children.Add(CreateInlineLabel(sizeLabel));
             row.Children.Add(CreateSpecialAttributeAutoComplete(vfxGroup, attribute, _protoUnitNames));
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
             row.Children.Add(CreateSpecialChildRemoveButton(vfxGroup));
         host.Children.Add(row);
     }
@@ -2443,12 +2458,12 @@ public partial class MajorGodEditorView : UserControl
             segment.Children.Add(CreateInlineLabel($"Tier {index + 1}"));
             var tierValue = CreateSpecialElementNumberBox(tier, "0", ProtoUnitNumericKind.UnsignedInteger);
             segment.Children.Add(tierValue);
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
                 segment.Children.Add(CreateSpecialChildRemoveButton(tier));
             tierRows.Children.Add(segment);
         }
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var add = CreateAddButton("Add tier");
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2471,7 +2486,7 @@ public partial class MajorGodEditorView : UserControl
         {
             Content = "Active",
             IsChecked = active == null || !active.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase),
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0)
         };
@@ -2510,7 +2525,7 @@ public partial class MajorGodEditorView : UserControl
         var goals = bonus.Elements().Where(IsBonusGoal).ToList();
         foreach (var goal in goals)
         {
-            var body = AddBonusSubcontainer(host, "Goal", IsModifiedMode ? () =>
+            var body = AddBonusSubcontainer(host, "Goal", IsEditableMajorGod ? () =>
             {
                 ScheduleBonusDisplayStringRemoval(goal);
                 MajorGodCatalog.RemoveElementAndAdjacentWhitespace(goal);
@@ -2526,7 +2541,7 @@ public partial class MajorGodEditorView : UserControl
             BuildBonusGoalFlags(body, goal);
             BuildBonusDisplayInfo(body, goal);
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var add = CreateAddButton("Add goal");
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2586,7 +2601,7 @@ public partial class MajorGodEditorView : UserControl
             Text = FindAttribute(goal, "name")?.Value ?? "",
             Width = 150,
             MaxWidth = 150,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.SingleLineText);
         EditorValidationBindings.Bind(name, goal, "@name");
@@ -2610,7 +2625,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = new[] { "Damage", "Death", "Resource" },
             SelectedItem = BonusGoalType(goal),
             Width = 100,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.ShortEnum);
         type.SelectionChanged += (_, _) =>
@@ -2667,7 +2682,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = trackingValues,
             SelectedItem = trackingValues.FirstOrDefault(value => value.Equals(rawTracking, StringComparison.OrdinalIgnoreCase)) ?? "Single",
             Width = 150,
-            IsEnabled = IsModifiedMode && goalType != "Resource",
+            IsEnabled = IsEditableMajorGod && goalType != "Resource",
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(tracking, goal, "@rewardtracking");
@@ -2684,7 +2699,7 @@ public partial class MajorGodEditorView : UserControl
         {
             Content = "Active",
             IsChecked = activeElement == null || !activeElement.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase),
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 4)
         };
@@ -2718,7 +2733,7 @@ public partial class MajorGodEditorView : UserControl
         var costs = goal.Elements().Where(child => child.Name.LocalName.Equals("rewardpointcost", StringComparison.OrdinalIgnoreCase)).ToList();
         if (costs.Count == 0)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton("Reward Point Cost");
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -2735,12 +2750,12 @@ public partial class MajorGodEditorView : UserControl
         foreach (var resource in ProtoConstants.KnownResourceTypes)
         {
             var cost = costs.FirstOrDefault(item => (FindAttribute(item, "resourcetype")?.Value ?? "").Equals(resource, StringComparison.OrdinalIgnoreCase));
-            if (cost == null && !IsModifiedMode) continue;
+            if (cost == null && !IsEditableMajorGod) continue;
             cost ??= new XElement("rewardpointcost", new XAttribute("resourcetype", resource), "0");
             row.Children.Add(CreateBonusFieldPair(resource,
                 CreateBonusElementNumberBox(goal, cost, "0", ProtoUnitNumericKind.UnsignedFloat)));
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(0, 0, 4, 4) };
             remove.Click += (_, _) =>
@@ -2771,7 +2786,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = values,
             SelectedItem = values.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? current,
             Width = 150,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(type, spawn, "@type");
@@ -2814,7 +2829,7 @@ public partial class MajorGodEditorView : UserControl
             var mode = ConfigureMajorGodField(new ComboBox
             {
                 ItemsSource = contributorModes, SelectedItem = usesResource ? "Resource" : usesUnit ? "Unit" : "Unit type",
-                Width = 115, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4)
+                Width = 115, IsEnabled = IsEditableMajorGod, Margin = new Thickness(0, 0, 4, 4)
             }, EditorFieldWidthRole.ShortEnum);
             mode.SelectionChanged += (_, _) =>
             {
@@ -2832,10 +2847,10 @@ public partial class MajorGodEditorView : UserControl
             else
                 row.Children.Add(CreateSpecialAttributeAutoComplete(contributor, usesUnit ? "unit" : "type", usesUnit ? _protoUnitNames : _unitTypeNames));
             row.Children.Add(CreateBountyNumberBox(contributor));
-            if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(contributor, MarkAndRebuildBonusUnitSpawning));
+            if (IsEditableMajorGod) row.Children.Add(CreateSpecialChildRemoveButton(contributor, MarkAndRebuildBonusUnitSpawning));
             host.Children.Add(row);
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var add = CreateAddButton("Add contributor");
             add.HorizontalAlignment = HorizontalAlignment.Left;
@@ -2858,7 +2873,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = ProtoConstants.KnownResourceTypes,
             SelectedItem = selected,
             Width = 100,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(box, contributor, "@resource");
@@ -2875,10 +2890,10 @@ public partial class MajorGodEditorView : UserControl
     private void BuildBonusGoalFlags(Panel host, XElement goal)
     {
         var activeFlags = GetActiveBonusGoalFlags(goal);
-        if (!IsModifiedMode && activeFlags.Count == 0) return;
+        if (!IsEditableMajorGod && activeFlags.Count == 0) return;
         var row = CreateBountyWrappingRow();
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox
             {
@@ -2910,14 +2925,14 @@ public partial class MajorGodEditorView : UserControl
                 var captured = flag;
                 var displayInfoLocksFlag = captured.Tag.Equals("displayonhud", StringComparison.OrdinalIgnoreCase) &&
                                            MajorGodCatalog.FindDirectChild(goal, "displayinfo") != null;
-                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Label, IsModifiedMode && !displayInfoLocksFlag ? () =>
+                chips.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Label, IsEditableMajorGod && !displayInfoLocksFlag ? () =>
                 {
                     var element = MajorGodCatalog.FindDirectChild(goal, captured.Tag);
                     if (element != null) MajorGodCatalog.RemoveElementAndAdjacentWhitespace(element);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     Render();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), MajorGodCatalog.FindDirectChild(goal, captured.Tag)));
             }
             if (picker != null)
                 picker.ItemsSource = BonusGoalFlags.Where(flag => activeFlags.All(active =>
@@ -2959,7 +2974,7 @@ public partial class MajorGodEditorView : UserControl
         var displayOnHud = MajorGodCatalog.FindDirectChild(goal, "displayonhud");
         if (displayInfo == null && displayOnHud == null)
         {
-            if (!IsModifiedMode || BonusGoalType(goal) != "Resource") return;
+            if (!IsEditableMajorGod || BonusGoalType(goal) != "Resource") return;
             var add = CreateAddButton("Display info");
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -2974,7 +2989,7 @@ public partial class MajorGodEditorView : UserControl
         }
         if (displayInfo == null) return;
 
-        var body = AddBonusSubcontainer(host, "Display info", IsModifiedMode ? () =>
+        var body = AddBonusSubcontainer(host, "Display info", IsEditableMajorGod ? () =>
         {
             ScheduleBonusDisplayStringRemoval(goal);
             MajorGodCatalog.RemoveElementAndAdjacentWhitespace(displayInfo);
@@ -3013,7 +3028,7 @@ public partial class MajorGodEditorView : UserControl
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag);
         var id = element.Value.Trim();
-        var box = new TextBox { Text = _pendingStringUpdates.GetValueOrDefault(id) ?? id, Width = width, MaxWidth = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) };
+        var box = new TextBox { Text = _pendingStringUpdates.GetValueOrDefault(id) ?? id, Width = width, MaxWidth = width, IsEnabled = IsEditableMajorGod, Margin = new Thickness(0, 0, 4, 4) };
         if (tag.Equals("rolloverid", StringComparison.OrdinalIgnoreCase))
             EditorRolloverField.Configure(box);
         if (tag.Equals("displaynameid", StringComparison.OrdinalIgnoreCase))
@@ -3144,7 +3159,7 @@ public partial class MajorGodEditorView : UserControl
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag, values[0]);
         var current = values.FirstOrDefault(value => value.Equals(element.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? element.Value.Trim();
-        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = current, Width = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.LongEnum);
+        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = current, Width = width, IsEnabled = IsEditableMajorGod, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(box, displayInfo, tag);
         box.SelectionChanged += (_, _) =>
         {
@@ -3166,11 +3181,11 @@ public partial class MajorGodEditorView : UserControl
             Width = 200,
             MinWidth = 200,
             MaxWidth = 200,
-            IsEnabled = IsModifiedMode,
-            Opacity = IsModifiedMode ? 1.0 : 0.55
+            IsEnabled = IsEditableMajorGod,
+            Opacity = IsEditableMajorGod ? 1.0 : 0.55
         }, EditorFieldWidthRole.AssetPath);
         EditorValidationBindings.Bind(editor, displayInfo, "icon");
-        editor.CompactPresenter.Background = Brush.Parse(IsModifiedMode ? "#0E1110" : "#202220");
+        editor.CompactPresenter.Background = Brush.Parse(IsEditableMajorGod ? "#0E1110" : "#202220");
         editor.Configure(initial, _iconPaths, value =>
         {
             if (!CanEditCurrent()) return Task.CompletedTask;
@@ -3190,7 +3205,7 @@ public partial class MajorGodEditorView : UserControl
     private TextBox CreateBonusDisplayTextBox(XElement displayInfo, string tag, double width)
     {
         var element = MajorGodCatalog.FindDirectChild(displayInfo, tag) ?? new XElement(tag);
-        var box = ConfigureMajorGodField(new TextBox { Text = element.Value, Width = width, MaxWidth = width, IsEnabled = IsModifiedMode, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.AssetPath);
+        var box = ConfigureMajorGodField(new TextBox { Text = element.Value, Width = width, MaxWidth = width, IsEnabled = IsEditableMajorGod, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.AssetPath);
         EditorValidationBindings.Bind(box, displayInfo, tag);
         box.TextChanged += (_, _) =>
         {
@@ -3206,7 +3221,7 @@ public partial class MajorGodEditorView : UserControl
     private void BuildBonusChipEditor(Panel host, XElement goal, string tag, string label)
     {
         var values = goal.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (!IsModifiedMode && values.Count == 0) return;
+        if (!IsEditableMajorGod && values.Count == 0) return;
         var row = CreateBountyWrappingRow();
         AddBonusChips(row, goal, tag, label, _unitOrTypeNames);
         host.Children.Add(row);
@@ -3215,7 +3230,7 @@ public partial class MajorGodEditorView : UserControl
     private void AddBonusChips(Panel row, XElement goal, string tag, string label, IReadOnlyList<string> catalog)
     {
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox { Width = 50, MaxWidth = 50, ItemsSource = catalog, FilterMode = AutoCompleteFilterMode.Contains, MinimumPrefixLength = 0, Margin = new Thickness(0, 0, 4, 4) }, EditorFieldWidthRole.ChipSearch);
             EditorValidationBindings.Bind(picker, goal, tag, repeated: true);
@@ -3239,13 +3254,13 @@ public partial class MajorGodEditorView : UserControl
             foreach (var element in elements)
             {
                 var captured = element;
-                chips.Children.Add(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsModifiedMode ? () =>
+                chips.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsEditableMajorGod ? () =>
                 {
                     MajorGodCatalog.RemoveElementAndAdjacentWhitespace(captured);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     Render();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), captured));
             }
             if (picker != null)
             {
@@ -3328,7 +3343,7 @@ public partial class MajorGodEditorView : UserControl
         var element = MajorGodCatalog.FindDirectChild(bounty, tag);
         if (element == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton(label);
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -3344,7 +3359,7 @@ public partial class MajorGodEditorView : UserControl
         var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel(label));
         row.Children.Add(CreateSpecialElementNumberBox(element, "0", kind));
-        if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(element));
+        if (IsEditableMajorGod) row.Children.Add(CreateSpecialChildRemoveButton(element));
         host.Children.Add(row);
     }
 
@@ -3359,7 +3374,7 @@ public partial class MajorGodEditorView : UserControl
         var elements = definitions.Select(definition => MajorGodCatalog.FindDirectChild(bounty, definition.Tag)).ToList();
         if (elements.All(element => element == null))
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton("Favor Bounty Reduction");
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -3381,7 +3396,7 @@ public partial class MajorGodEditorView : UserControl
             var element = elements[index] ?? new XElement(definitions[index].Tag);
             row.Children.Add(CreateSpecialElementNumberBox(element, "0", definitions[index].Kind));
         }
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             remove.Click += (_, _) =>
@@ -3401,7 +3416,7 @@ public partial class MajorGodEditorView : UserControl
         var vfx = MajorGodCatalog.FindDirectChild(bounty, "vfx");
         if (vfx == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton("VFX");
             add.HorizontalAlignment = HorizontalAlignment.Left;
             add.Click += (_, _) =>
@@ -3416,7 +3431,7 @@ public partial class MajorGodEditorView : UserControl
         var row = new WrapPanel();
         row.Children.Add(CreateInlineLabel("VFX"));
         row.Children.Add(CreateSpecialValueAutoComplete(vfx, _protoUnitNames));
-        if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(vfx));
+        if (IsEditableMajorGod) row.Children.Add(CreateSpecialChildRemoveButton(vfx));
         host.Children.Add(row);
     }
 
@@ -3428,11 +3443,11 @@ public partial class MajorGodEditorView : UserControl
         IReadOnlyList<string> catalog)
     {
         var chips = bounty.Elements().Where(child => child.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (!IsModifiedMode && chips.Count == 0) return;
+        if (!IsEditableMajorGod && chips.Count == 0) return;
         var row = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(CreateInlineLabel(label));
         AutoCompleteBox? picker = null;
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             picker = ConfigureMajorGodField(new AutoCompleteBox
             {
@@ -3456,13 +3471,13 @@ public partial class MajorGodEditorView : UserControl
             foreach (var chipElement in chips)
             {
                 var captured = chipElement;
-                chipHost.Children.Add(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsModifiedMode ? () =>
+                chipHost.Children.Add(BindMajorGodChip(EditorChipService.CreateBlueChip(captured.Value.Trim(), IsEditableMajorGod ? () =>
                 {
                     MajorGodCatalog.RemoveElementAndAdjacentWhitespace(captured);
                     MarkCurrentDirty();
                     RefreshRawXmlFromCurrent();
                     Render();
-                } : null, readOnly: !IsModifiedMode));
+                } : null, readOnly: !IsEditableMajorGod), captured));
             }
             if (picker != null)
             {
@@ -3511,7 +3526,7 @@ public partial class MajorGodEditorView : UserControl
             {
                 Content = "% Unit Cost",
                 IsChecked = FindAttribute(reward, "multiplybyunitcost")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-                IsEnabled = IsModifiedMode,
+                IsEnabled = IsEditableMajorGod,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 4, 4)
             };
@@ -3526,7 +3541,7 @@ public partial class MajorGodEditorView : UserControl
             };
             row.Children.Add(multiply);
             AddBountyOptionalAttributeSelector(row, reward, "asspawnedunit", "Spawned as", _protoUnitNames);
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var removeReward = CreateSpecialChildRemoveButton(reward);
                 removeReward.VerticalAlignment = VerticalAlignment.Center;
@@ -3562,7 +3577,7 @@ public partial class MajorGodEditorView : UserControl
                 AddBountyOptionalAttributeSelector(row, multiplier, "attackertype", "If Attacker is", _unitOrTypeNames);
                 AddBountyOptionalRelativity(row, multiplier);
             }
-            if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(multiplier));
+            if (IsEditableMajorGod) row.Children.Add(CreateSpecialChildRemoveButton(multiplier));
             body.Children.Add(row);
         }
         AddBountyEntryButton(body, bounty, "bountytargetmultiplier", "Add target multiplier");
@@ -3593,7 +3608,7 @@ public partial class MajorGodEditorView : UserControl
                 row.Children.Add(CreateBountyInlineLabel("For"));
             row.Children.Add(CreateBountyResourceComboBox(entry,
                 includeCombatXp: !tag.Equals("researchcostmultiplier", StringComparison.OrdinalIgnoreCase)));
-            if (IsModifiedMode) row.Children.Add(CreateSpecialChildRemoveButton(entry));
+            if (IsEditableMajorGod) row.Children.Add(CreateSpecialChildRemoveButton(entry));
             body.Children.Add(row);
         }
         AddBountyEntryButton(body, bounty, tag, addLabel);
@@ -3640,7 +3655,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = new[] { "Damage", "Destroy" },
             SelectedItem = condition.Equals("Destroy", StringComparison.OrdinalIgnoreCase) ? "Destroy" : "Damage",
             Width = 106,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(conditionBox, entry, "@condition");
@@ -3663,7 +3678,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = new[] { "Unit", "Unit type" },
             SelectedItem = usesProtoUnit ? "Unit" : "Unit type",
             Width = 100,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.ShortEnum);
         targetMode.SelectionChanged += (_, _) =>
@@ -3697,7 +3712,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = resources,
             SelectedItem = selected,
             Width = 105,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4)
         }, EditorFieldWidthRole.ShortEnum);
         box.SelectionChanged += (_, _) =>
@@ -3728,7 +3743,7 @@ public partial class MajorGodEditorView : UserControl
     {
         if (FindAttribute(entry, attributeName) == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton(label);
             add.Click += (_, _) =>
             {
@@ -3755,7 +3770,7 @@ public partial class MajorGodEditorView : UserControl
         var selector = CreateSpecialAttributeAutoComplete(entry, attributeName, catalog);
         selector.Margin = new Thickness(0);
         pair.Children.Add(selector);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = EditorRemoveButtons.Field();
             remove.Click += (_, _) =>
@@ -3774,7 +3789,7 @@ public partial class MajorGodEditorView : UserControl
         var relativity = FindAttribute(entry, "relativity");
         if (relativity == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var add = CreateAddButton("Relativity");
             add.Click += (_, _) =>
             {
@@ -3788,7 +3803,7 @@ public partial class MajorGodEditorView : UserControl
         row.Children.Add(CreateBountyInlineLabel("Relativity"));
         var values = new[] { "Absolute", "BasePercent", "Percent" };
         var selected = values.FirstOrDefault(value => value.Equals(relativity.Value, StringComparison.OrdinalIgnoreCase)) ?? "Absolute";
-        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = selected, Width = 115, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.LongEnum);
+        var box = ConfigureMajorGodField(new ComboBox { ItemsSource = values, SelectedItem = selected, Width = 115, IsEnabled = IsEditableMajorGod }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(box, entry, "@relativity");
         box.SelectionChanged += (_, _) =>
         {
@@ -3798,7 +3813,7 @@ public partial class MajorGodEditorView : UserControl
             RefreshRawXmlFromCurrent();
         };
         row.Children.Add(box);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             remove.Click += (_, _) =>
@@ -3822,7 +3837,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = values,
             Width = 170,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             Margin = new Thickness(0, 0, 4, 4),
             ItemTemplate = new FuncDataTemplate<string>((item, _) => new TextBlock
             {
@@ -3846,7 +3861,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void AddBountyEntryButton(Panel body, XElement bounty, string tag, string label)
     {
-        if (!IsModifiedMode) return;
+        if (!IsEditableMajorGod) return;
         var add = CreateAddButton(label);
         add.HorizontalAlignment = HorizontalAlignment.Left;
         add.Click += (_, _) =>
@@ -3891,7 +3906,7 @@ public partial class MajorGodEditorView : UserControl
             Width = 200,
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating);
         EditorValidationBindings.Bind(box, element);
@@ -3921,7 +3936,7 @@ public partial class MajorGodEditorView : UserControl
             Width = 200,
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(box, () => _isPopulating);
         EditorValidationBindings.Bind(box, element, "@" + attributeName);
@@ -3951,7 +3966,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = options,
             SelectedItem = selected,
             Width = 90,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.ShortEnum);
         EditorValidationBindings.Bind(box, element, "@" + attributeName);
         box.SelectionChanged += (_, _) =>
@@ -3973,7 +3988,7 @@ public partial class MajorGodEditorView : UserControl
 
     private TextBox CreateSpecialElementNumberBox(XElement element, string defaultValue, ProtoUnitNumericKind kind)
     {
-        var box = ConfigureMajorGodField(new TextBox { Text = element.Parent == null ? defaultValue : element.Value, Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        var box = ConfigureMajorGodField(new TextBox { Text = element.Parent == null ? defaultValue : element.Value, Width = 60, MaxWidth = 60, IsEnabled = IsEditableMajorGod }, EditorFieldWidthRole.Numeric);
         EditorValidationBindings.Bind(box, element);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorNumericInputBehavior.AttachRule(box, kind);
@@ -4582,8 +4597,8 @@ public partial class MajorGodEditorView : UserControl
                 _startingUnitsPanel.Children.Add(CreateStartingUnitsGroupEditor(group));
 
             var usedModes = groups.Select(GetStartingUnitsMode).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            _addStartingUnitsGroupButton.IsVisible = IsModifiedMode && usedModes.Count < 3;
-            _addStartingUnitsGroupButton.IsEnabled = IsModifiedMode;
+            _addStartingUnitsGroupButton.IsVisible = IsEditableMajorGod && usedModes.Count < 3;
+            _addStartingUnitsGroupButton.IsEnabled = IsEditableMajorGod;
         }
         finally
         {
@@ -4603,7 +4618,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             HorizontalAlignment = HorizontalAlignment.Left
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(modeBox, group, "@mode");
@@ -4621,7 +4636,7 @@ public partial class MajorGodEditorView : UserControl
         };
         modeRow.Children.Add(modeBox);
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var removeGroup = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             removeGroup.Click += (_, _) =>
@@ -4640,7 +4655,7 @@ public partial class MajorGodEditorView : UserControl
                      element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)).ToList())
             container.Children.Add(CreateStartingUnitRow(group, unit));
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var addUnit = new Button
             {
@@ -4660,7 +4675,7 @@ public partial class MajorGodEditorView : UserControl
             };
             container.Children.Add(addUnit);
         }
-        return CreateStartingGroupCard(container);
+        return AdditiveChangePresentation.BindContainer(CreateStartingGroupCard(container), group);
     }
 
     private Control CreateStartingUnitRow(XElement group, XElement unit)
@@ -4674,10 +4689,11 @@ public partial class MajorGodEditorView : UserControl
             Width = 200,
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(unitBox, () => _isPopulating);
         EditorValidationBindings.Bind(unitBox, unit);
+        AdditiveChangePresentation.BindValue(unitBox, unit);
         unitBox.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4699,7 +4715,7 @@ public partial class MajorGodEditorView : UserControl
         var delay = FindAttribute(unit, "delay");
         if (delay == null)
         {
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var addDelay = new Button
                 {
@@ -4723,7 +4739,7 @@ public partial class MajorGodEditorView : UserControl
         {
             row.Children.Add(CreateInlineLabel("Delay"));
             row.Children.Add(CreateStartingUnitNumberBox(unit, "delay", "1", ProtoUnitNumericKind.PositiveFloat));
-            if (IsModifiedMode)
+            if (IsEditableMajorGod)
             {
                 var removeDelay = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
                 removeDelay.Click += (_, _) =>
@@ -4738,7 +4754,7 @@ public partial class MajorGodEditorView : UserControl
             }
         }
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var removeUnit = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             removeUnit.Click += (_, _) =>
@@ -4765,7 +4781,7 @@ public partial class MajorGodEditorView : UserControl
             Text = FindAttribute(unit, attributeName)?.Value ?? defaultValue,
             Width = 55,
             MaxWidth = 55,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.Numeric);
         EditorNumericFieldStyle.ConfigureNumericTextBox(box);
         EditorValidationBindings.Bind(box, unit, "@" + attributeName);
@@ -4834,8 +4850,8 @@ public partial class MajorGodEditorView : UserControl
             foreach (var group in groups)
                 _startingQueuePanel.Children.Add(CreateStartingQueueGroupEditor(group));
             var usedModes = groups.Select(GetStartingUnitsMode).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            _addStartingQueueGroupButton.IsVisible = IsModifiedMode && usedModes.Count < StartingModes.Length;
-            _addStartingQueueGroupButton.IsEnabled = IsModifiedMode;
+            _addStartingQueueGroupButton.IsVisible = IsEditableMajorGod && usedModes.Count < StartingModes.Length;
+            _addStartingQueueGroupButton.IsEnabled = IsEditableMajorGod;
         }
         finally
         {
@@ -4855,7 +4871,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(modeBox, group, "@mode");
         modeBox.SelectionChanged += (_, _) =>
@@ -4868,7 +4884,7 @@ public partial class MajorGodEditorView : UserControl
             RebuildStartingQueueEditor();
         };
         modeRow.Children.Add(modeBox);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var removeGroup = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             removeGroup.Click += (_, _) =>
@@ -4887,7 +4903,7 @@ public partial class MajorGodEditorView : UserControl
                      element.Name.LocalName.Equals("unit", StringComparison.OrdinalIgnoreCase)).ToList())
             container.Children.Add(CreateStartingQueueUnitRow(group, unit));
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var addUnit = new Button
             {
@@ -4907,7 +4923,7 @@ public partial class MajorGodEditorView : UserControl
             };
             container.Children.Add(addUnit);
         }
-        return CreateStartingGroupCard(container);
+        return AdditiveChangePresentation.BindContainer(CreateStartingGroupCard(container), group);
     }
 
     private Control CreateStartingQueueUnitRow(XElement group, XElement unit)
@@ -4921,10 +4937,11 @@ public partial class MajorGodEditorView : UserControl
             Width = 200,
             MaxWidth = 200,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.Reference);
         EditorAutoCompleteService.EnableDropdown(unitBox, () => _isPopulating);
         EditorValidationBindings.Bind(unitBox, unit);
+        AdditiveChangePresentation.BindValue(unitBox, unit);
         unitBox.TextChanged += (_, _) =>
         {
             if (!CanEditCurrent()) return;
@@ -4941,7 +4958,7 @@ public partial class MajorGodEditorView : UserControl
         {
             Content = "Auto train",
             IsChecked = !hasCount && FindAttribute(unit, "autotrain")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-            IsEnabled = IsModifiedMode && !hasCount,
+            IsEnabled = IsEditableMajorGod && !hasCount,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
@@ -4959,7 +4976,7 @@ public partial class MajorGodEditorView : UserControl
         {
             Content = "Prequeue",
             IsChecked = !hasCount && FindAttribute(unit, "prequeue")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-            IsEnabled = IsModifiedMode && !hasCount,
+            IsEnabled = IsEditableMajorGod && !hasCount,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)
         };
@@ -4973,7 +4990,7 @@ public partial class MajorGodEditorView : UserControl
             RefreshRawXmlFromCurrent();
         };
         row.Children.Add(prequeue);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var removeUnit = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             removeUnit.Click += (_, _) =>
@@ -4999,7 +5016,7 @@ public partial class MajorGodEditorView : UserControl
     {
         if (FindAttribute(unit, attributeName) == null)
         {
-            if (!IsModifiedMode) return;
+            if (!IsEditableMajorGod) return;
             var addButton = new Button
             {
                 Content = label,
@@ -5025,7 +5042,7 @@ public partial class MajorGodEditorView : UserControl
         row.Children.Add(CreateInlineLabel(label));
         var box = CreateStartingUnitNumberBox(unit, attributeName, defaultValue, numericKind);
         row.Children.Add(box);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var remove = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             remove.Click += (_, _) =>
@@ -5114,8 +5131,8 @@ public partial class MajorGodEditorView : UserControl
                 _startingResourcesPanel.Children.Add(CreateStartingResourcesGroupEditor(group));
 
             var usedModes = groups.Select(GetStartingUnitsMode).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            _addStartingResourcesGroupButton.IsVisible = IsModifiedMode && usedModes.Count < StartingModes.Length;
-            _addStartingResourcesGroupButton.IsEnabled = IsModifiedMode;
+            _addStartingResourcesGroupButton.IsVisible = IsEditableMajorGod && usedModes.Count < StartingModes.Length;
+            _addStartingResourcesGroupButton.IsEnabled = IsEditableMajorGod;
         }
         finally
         {
@@ -5134,7 +5151,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = modeOptions,
             SelectedItem = modeOptions.First(value => value.Equals(mode, StringComparison.OrdinalIgnoreCase)),
             Width = 140,
-            IsEnabled = IsModifiedMode,
+            IsEnabled = IsEditableMajorGod,
             HorizontalAlignment = HorizontalAlignment.Left
         }, EditorFieldWidthRole.LongEnum);
         EditorValidationBindings.Bind(modeBox, group, "@mode");
@@ -5155,7 +5172,7 @@ public partial class MajorGodEditorView : UserControl
                      ProtoConstants.KnownResourceTypes.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase)).ToList())
             row.Children.Add(CreateStartingResourceSegment(group, resource));
 
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var usedResources = group.Elements().Select(element => element.Name.LocalName)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -5191,7 +5208,7 @@ public partial class MajorGodEditorView : UserControl
             };
             row.Children.Add(removeGroup);
         }
-        return CreateStartingGroupCard(row);
+        return AdditiveChangePresentation.BindContainer(CreateStartingGroupCard(row), group);
     }
 
     private Control CreateStartingResourceSegment(XElement group, XElement resource)
@@ -5210,7 +5227,7 @@ public partial class MajorGodEditorView : UserControl
             ItemsSource = resourceOptions,
             SelectedItem = currentType,
             Width = 90,
-            IsEnabled = IsModifiedMode
+            IsEnabled = IsEditableMajorGod
         }, EditorFieldWidthRole.ShortEnum);
         resourceBox.SelectionChanged += (_, _) =>
         {
@@ -5221,7 +5238,7 @@ public partial class MajorGodEditorView : UserControl
             RebuildStartingResourcesEditor();
         };
         segment.Children.Add(resourceBox);
-        var amount = ConfigureMajorGodField(new TextBox { Text = resource.Value.Trim(), Width = 60, MaxWidth = 60, IsEnabled = IsModifiedMode }, EditorFieldWidthRole.Numeric);
+        var amount = ConfigureMajorGodField(new TextBox { Text = resource.Value.Trim(), Width = 60, MaxWidth = 60, IsEnabled = IsEditableMajorGod }, EditorFieldWidthRole.Numeric);
         EditorValidationBindings.Bind(amount, resource);
         EditorNumericFieldStyle.ConfigureNumericTextBox(amount);
         EditorNumericInputBehavior.AttachRule(amount, ProtoUnitNumericKind.UnsignedFloat);
@@ -5233,7 +5250,7 @@ public partial class MajorGodEditorView : UserControl
             RefreshRawXmlFromCurrent();
         };
         segment.Children.Add(amount);
-        if (IsModifiedMode)
+        if (IsEditableMajorGod)
         {
             var removeResource = new Button { Classes = { "remove-button" }, Margin = new Thickness(4, 0, 0, 0) };
             removeResource.Click += (_, _) =>
@@ -5368,7 +5385,7 @@ public partial class MajorGodEditorView : UserControl
     }
 
     private bool CanEditCurrent()
-        => !_isPopulating && IsModifiedMode && _currentEntry != null &&
+        => !_isPopulating && IsEditableMajorGod && _currentEntry != null &&
            CurrentMajorGodXmlDraft?.Session.IsEditing != true;
 
     private void SetEntryValue(string tag, string value)
@@ -5384,6 +5401,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void MarkCurrentDirty()
     {
+        if (!IsEditableMajorGod) return;
         var name = _loadedEntryName ?? CurrentMajorGodName ?? (_currentEntry == null ? "" : MajorGodCatalog.GetName(_currentEntry));
         // Routed control events can arrive after population finishes. Reapplying
         // an unchanged value must not manufacture a draft or clear real drafts.
@@ -5401,10 +5419,15 @@ public partial class MajorGodEditorView : UserControl
     {
         FinalizeMajorGodPresentation();
         if (_currentEntry == null) return;
+        if (IsCurrentAdditiveMajorGod && _modDocument != null && CurrentMajorGodName != null)
+        {
+            SetRawXml(FormatMajorGodPreview(FindMajorGodPatch(_modDocument, CurrentMajorGodName) ?? _currentEntry));
+            return;
+        }
         var preview = new XElement(_currentEntry);
         var saved = _loadedModDocument == null ? null : MajorGodCatalog.Find(_loadedModDocument, MajorGodCatalog.GetName(_currentEntry));
         var protectedContent = EditorXmlOrderPolicy.HasProtectedContent(_currentEntry);
-        if (IsModifiedMode && CurrentMajorGodXmlDraft?.Session.IsEditing != true && !protectedContent &&
+        if (IsEditableMajorGod && CurrentMajorGodXmlDraft?.Session.IsEditing != true && !protectedContent &&
             (_dirtyNames.Contains(MajorGodCatalog.GetName(_currentEntry)) || !XNode.DeepEquals(_currentEntry, saved)))
             MajorGodCatalog.NormalizeEditorFieldOrder(preview);
         SetRawXml(protectedContent ? preview.ToString(SaveOptions.DisableFormatting) : FormatMajorGodPreview(preview));
@@ -5440,6 +5463,7 @@ public partial class MajorGodEditorView : UserControl
 
     private void ShowEmpty()
     {
+        ClearMajorGodAdditivePresentation();
         _populateGeneration++;
         _isPopulating = true;
         try

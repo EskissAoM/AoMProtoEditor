@@ -245,6 +245,11 @@ public partial class ProtoEditorWindow : SimpleWindow
         public string? UnitName { get; } = unitName;
         public string DisplayName { get; } = displayName;
         public FontWeight FontWeight { get; } = isEmphasized ? FontWeight.Bold : FontWeight.Normal;
+        public AdditiveEntryKind? GroupKind { get; init; }
+        public bool IsExpanded { get; init; } = true;
+        public string GroupToggleText => (IsExpanded ? "▾ " : "▸ ") + DisplayName;
+        public bool IsHeader => UnitName == null;
+        public bool IsEntry => !IsHeader;
         public override string ToString() => DisplayName;
     }
 
@@ -3398,7 +3403,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 EditorEntityKind.Powers => "Power",
                 _ => "Entity"
             };
-            var source = tab.IsModified ? "Custom" : "Original";
+            var source = GetDocumentTabSource(tab);
             var target = string.IsNullOrWhiteSpace(tab.EntityName)
                 ? tab.IsMain ? "Main" : kind
                 : $"{kind}: {tab.EntityName} ({source})";
@@ -3959,7 +3964,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             names.AddRange(_powerView.GetPowerNames(modified: selectedIndex == 1));
         }
-        else if (_barData == null)
+        else if (_barData == null && _barXmlRoot == null)
         {
             return;
         }
@@ -3972,12 +3977,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         }
         else // Original
         {
-            names.AddRange(_barData.UnitNames);
-            if (_modXmlRoot != null)
-            {
-                var modNames = new HashSet<string>(ProtoXmlHandler.GetUnitNames(_modXmlRoot), StringComparer.OrdinalIgnoreCase);
-                names.RemoveAll(n => modNames.Contains(n));
-            }
+            if (_barData != null) names.AddRange(_barData.UnitNames);
+            else names.AddRange(ProtoXmlHandler.GetUnitNames(_barXmlRoot!));
+
         }
 
         _allCurrentNames = _activeEntityKind == EditorEntityKind.MajorGods && selectedIndex == 0
@@ -3999,7 +4001,22 @@ public partial class ProtoEditorWindow : SimpleWindow
             name.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase)));
         if (query.Length > 0)
             items = items.Where(item => item.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
-        _filteredUnitNames.AddItems(items);
+        if (_activeEntityKind is EditorEntityKind.Units or EditorEntityKind.Technologies or EditorEntityKind.Powers or EditorEntityKind.MajorGods && _unitTabs.SelectedIndex == 1)
+        {
+            var grouped = items.GroupBy(item => _activeEntityKind == EditorEntityKind.Technologies
+                    ? _technologyView?.GetTechnologyEntryKind(item.UnitName!) ?? AdditiveEntryKind.Unresolved
+                    : _activeEntityKind == EditorEntityKind.Powers ? _powerView?.GetPowerEntryKind(item.UnitName!) ?? AdditiveEntryKind.Unresolved
+                    : _activeEntityKind == EditorEntityKind.MajorGods ? _majorGodView?.GetMajorGodEntryKind(item.UnitName!) ?? AdditiveEntryKind.Unresolved
+                    : AdditiveXmlReader.Classify(_barXmlRoot, item.UnitName!, true))
+                .OrderBy(group => group.Key == AdditiveEntryKind.Custom ? 0 : group.Key == AdditiveEntryKind.Modified ? 1 : 2);
+            foreach (var group in grouped)
+            {
+                var expanded = !CurrentCollapsedAdditiveGroups.Contains(group.Key);
+                _filteredUnitNames.Add(new UnitListItem(null, group.Key.ToString(), isEmphasized: true) { GroupKind = group.Key, IsExpanded = expanded });
+                if (expanded) _filteredUnitNames.AddItems(group);
+            }
+        }
+        else _filteredUnitNames.AddItems(items);
     }
 
     private void RestoreEntityBrowserSelection()
@@ -4014,6 +4031,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (string.IsNullOrWhiteSpace(selectedName))
             return;
 
+        if (_activeEntityKind == EditorEntityKind.Technologies)
+            _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && _technologyView?.CanEditTechnology(selectedName) == true;
+        else if (_activeEntityKind == EditorEntityKind.Powers)
+            _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && _powerView?.CanEditPower(selectedName) == true;
+        else if (_activeEntityKind == EditorEntityKind.MajorGods)
+            _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && _majorGodView?.CanEditMajorGod(selectedName) == true;
         _suppressUnitListSelectionChange = true;
         try
         {
@@ -4131,6 +4154,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         _powersEntityButton.Classes.Set("active", showPowers);
         var documentModificationsAllowed = showTechnologies
             ? _technologyView!.CanModifyTechnologyDocument
+            : showPowers ? _powerView!.CanModifyPowerDocument
+            : showMajorGods ? _majorGodView!.CanModifyMajorGodDocument
             : entityKind != EditorEntityKind.Units || _modDocumentSafetyError == null;
         _entityAddButton.IsEnabled = documentModificationsAllowed;
         _entityDeleteButton.IsEnabled = _unitTabs.SelectedIndex == 1 && documentModificationsAllowed;
@@ -4198,8 +4223,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             return;
         }
 
+        var originalTechnologies = GetBaseTechtreeDocumentsFromLoadedBar();
         _technologyView = new TechnologyEditorView(
-            GetBaseTechtreeDocumentsFromLoadedBar(),
+            originalTechnologies.Count > 0 ? originalTechnologies : null,
             ResolveBaseGameplayDirectory(),
             GetCurrentModGameplayFilePath("techtree_mods.xml"),
             ResolveDisplayStringAsync,
@@ -4775,6 +4801,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var baseDefinitions = MajorGodCatalog.ExtractBaseDefinitionsFromBar(_protoDataBarFile, _protoDataBarPath);
         var sharedData = MajorGodCatalog.ExtractSharedDataFromBar(_protoDataBarFile, _protoDataBarPath);
+        var baseCatalogAvailable = baseDefinitions.Count > 0 || sharedData != null;
         if (baseDefinitions.Count == 0)
         {
             var loosePath = ResolveBaseGameplayXmlPath("major_gods.xml");
@@ -4785,6 +4812,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     var looseDocument = XDocument.Load(loosePath, LoadOptions.PreserveWhitespace);
                     baseDefinitions = MajorGodCatalog.ExtractDefinitions(looseDocument, isBuiltIn: true);
                     sharedData ??= MajorGodCatalog.ExtractSharedData(looseDocument);
+                    baseCatalogAvailable = true;
                 }
                 catch
                 {
@@ -4812,7 +4840,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             PrepareMajorGodReferenceMigration,
             AdoptMajorGodReferenceMigration,
             EnsureMajorGodCanBeDeletedAsync,
-            this);
+            this, baseCatalogAvailable);
         _majorGodView.PrepareDeletionChecks = (names, overrides) =>
             PrepareStagedDeletionChecks(names, overrides, GameIdentifierKind.MajorGod);
         _majorGodView.PrepareStringCleanup = (candidates, proposed) =>
@@ -4929,8 +4957,9 @@ public partial class ProtoEditorWindow : SimpleWindow
                 // Keep catalogs already decoded from the primary Data.bar.
             }
         }
+        var loosePowerDocuments = PowerCatalog.LoadLooseBaseDocuments(ResolveBaseGameplayDirectory());
         AddDefinitions(PowerCatalog.ExtractDefinitions(
-            PowerCatalog.LoadLooseBaseDocuments(ResolveBaseGameplayDirectory()),
+            loosePowerDocuments,
             isBuiltIn: true));
 
         var powerCatalogs = CreatePowerSelectorCatalogs();
@@ -4947,7 +4976,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             GetCurrentModGameplayFilePath(PowerCatalog.ModFileName),
             GetCurrentModStringsPath(),
             powerCatalogs,
-            powerHostServices));
+            powerHostServices, baseCatalogAvailable: definitions.Count > 0 || loosePowerDocuments.Count > 0));
         _powerView.PrepareDeletionChecks = (names, overrides) =>
             PrepareStagedDeletionChecks(names, overrides, GameIdentifierKind.Ability);
         _powerView.PrepareStringCleanup = (candidates, proposed) =>
@@ -5341,6 +5370,12 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var container = sourceVisual.FindAncestorOfType<ListBoxItem>(includeSelf: true);
         var item = container?.Content as UnitListItem ?? container?.DataContext as UnitListItem;
+        if (item is { IsHeader: true, GroupKind: { } group })
+        {
+            e.Handled = true;
+            ToggleUnitGroup(group);
+            return;
+        }
         if (item?.UnitName is not { } entityName)
             return;
 
@@ -5455,12 +5490,18 @@ public partial class ProtoEditorWindow : SimpleWindow
 
         var technologyModificationsAllowed = entityKind != EditorEntityKind.Technologies ||
                                              _technologyView?.CanModifyTechnologyDocument == true;
-        if (entityKind == EditorEntityKind.Units && _modDocumentSafetyError != null)
+        if (entityKind == EditorEntityKind.Powers) technologyModificationsAllowed = _powerView?.CanModifyPowerDocument == true;
+        if (entityKind == EditorEntityKind.MajorGods) technologyModificationsAllowed = _majorGodView?.CanModifyMajorGodDocument == true;
+        if (entityKind == EditorEntityKind.Units && (_modDocumentSafetyError != null ||
+            AdditiveXmlReader.Classify(_barXmlRoot, entityName, isModified) is AdditiveEntryKind.Modified or AdditiveEntryKind.Unresolved))
             technologyModificationsAllowed = false;
         var copyItem = new MenuItem
         {
             Header = "Copy",
             IsEnabled = technologyModificationsAllowed &&
+                        !(entityKind == EditorEntityKind.Technologies && isModified && _technologyView?.CanEditTechnology(entityName) != true) &&
+                        !(entityKind == EditorEntityKind.Powers && isModified && _powerView?.CanEditPower(entityName) != true) &&
+                        !(entityKind == EditorEntityKind.MajorGods && isModified && _majorGodView?.CanEditMajorGod(entityName) != true) &&
                         !(entityKind == EditorEntityKind.MajorGods &&
                           entityName.Equals(MajorGodCatalog.SharedDataDisplayName, StringComparison.OrdinalIgnoreCase))
         };
@@ -5489,7 +5530,10 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             Header = "Delete",
             Foreground = Brushes.OrangeRed,
-            IsEnabled = isModified && technologyModificationsAllowed
+            IsEnabled = isModified && technologyModificationsAllowed &&
+                (entityKind != EditorEntityKind.Technologies || _technologyView?.CanEditTechnology(entityName) == true) &&
+                (entityKind != EditorEntityKind.Powers || _powerView?.CanEditPower(entityName) == true) &&
+                (entityKind != EditorEntityKind.MajorGods || _majorGodView?.CanEditMajorGod(entityName) == true)
         };
         deleteItem.Click += async (_, _) =>
         {
@@ -5604,6 +5648,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             _powerView?.SetModifiedMode(selectedModified);
         var technologyModificationsAllowed = _activeEntityKind != EditorEntityKind.Technologies ||
                                              _technologyView?.CanModifyTechnologyDocument == true;
+        if (_activeEntityKind == EditorEntityKind.Powers) technologyModificationsAllowed = _powerView?.CanModifyPowerDocument == true;
         if (_activeEntityKind == EditorEntityKind.Units && _modDocumentSafetyError != null)
             technologyModificationsAllowed = false;
         if (_entityAddButton != null)
@@ -5667,6 +5712,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     RestoreEntityBrowserSelection();
                     return;
                 }
+                ResetAdditiveCardsForBrowserEntry(EditorEntityKind.Technologies, _unitTabs.SelectedIndex == 1, selectedName);
                 SetMainDocumentTarget(EditorEntityKind.Technologies, _unitTabs.SelectedIndex == 1, selectedName);
                 _technologyView?.SelectTechnology(selectedName);
                 RestoreEntityBrowserSelection();
@@ -5680,6 +5726,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     RestoreEntityBrowserSelection();
                     return;
                 }
+                ResetAdditiveCardsForBrowserEntry(EditorEntityKind.MajorGods, _unitTabs.SelectedIndex == 1, selectedName);
                 SetMainDocumentTarget(EditorEntityKind.MajorGods, _unitTabs.SelectedIndex == 1, selectedName);
                 _majorGodView?.SelectMajorGod(selectedName);
                 RestoreEntityBrowserSelection();
@@ -5693,6 +5740,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                     RestoreEntityBrowserSelection();
                     return;
                 }
+                ResetAdditiveCardsForBrowserEntry(EditorEntityKind.Powers, _unitTabs.SelectedIndex == 1, selectedName);
                 SetMainDocumentTarget(EditorEntityKind.Powers, _unitTabs.SelectedIndex == 1, selectedName);
                 _powerView?.SelectPower(selectedName);
                 RestoreEntityBrowserSelection();
@@ -5725,6 +5773,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
             try
             {
+                ResetAdditiveCardsForBrowserEntry(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
                 SetMainDocumentTarget(EditorEntityKind.Units, _unitTabs.SelectedIndex == 1, selectedName);
                 // Keep the existing item container and scroll offset stable. The
                 // browser is refreshed by add/delete/rename/filter operations;
@@ -5957,7 +6006,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var modUnit = _modXmlRoot != null && !string.IsNullOrWhiteSpace(_currentUnitName)
             ? ProtoXmlHandler.GetUnitElement(_modXmlRoot, _currentUnitName)
             : null;
-        var sourceUnit = modUnit ?? (!string.IsNullOrWhiteSpace(_currentUnitName) && _barXmlRoot != null
+        var sourceUnit = (UsesUnitAdditiveReader && _unitAdditiveKind == AdditiveEntryKind.Original ? null : modUnit) ?? (!string.IsNullOrWhiteSpace(_currentUnitName) && _barXmlRoot != null
             ? ProtoXmlHandler.GetUnitElement(_barXmlRoot, _currentUnitName)
             : null);
         var canEditRawXml = modUnit != null && !_isReadOnly;
@@ -5984,7 +6033,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (!_showStoredRawXml && !_isReadOnly && _modXmlRoot != null)
             ApplyCurrentEdits(previewUnit);
 
-        RefreshTacticsOnlyActionTabMarkers(previewUnit);
+        RefreshTacticsOnlyActionTabMarkers(_unitAdditiveRead?.Effective.Element("unit") ?? previewUnit);
         BindUnitXmlPreview(previewUnit, canEditRawXml);
     }
 
@@ -11794,8 +11843,9 @@ public partial class ProtoEditorWindow : SimpleWindow
         var showsCoreMaxRange = ShouldShowProtoActionHardcodedField(state, effectiveAction, actionType, "maxrange");
         if (IsAttackActionType(actionType))
         {
-            showsCoreRof = state.SelectedFlagTags.Contains("handlogic") || state.SelectedFlagTags.Contains("rangedlogic");
-            showsCoreMaxRange = showsCoreRof;
+            var usesCombatMode = state.SelectedFlagTags.Contains("handlogic") || state.SelectedFlagTags.Contains("rangedlogic");
+            showsCoreRof = usesCombatMode || KeepAdditiveActionFieldVisible(effectiveAction, "rof");
+            showsCoreMaxRange = usesCombatMode || KeepAdditiveActionFieldVisible(effectiveAction, "maxrange");
         }
         if (state.CustomValues.GetValueOrDefault("additional.rof") != "1" && showsCoreRof)
             usedTags.Add("rof");
@@ -11952,8 +12002,8 @@ public partial class ProtoEditorWindow : SimpleWindow
         if (IsAttackActionType(actionType))
         {
             var usesCombatRanges = state.SelectedFlagTags.Contains("handlogic") || state.SelectedFlagTags.Contains("rangedlogic");
-            showRof = usesCombatRanges && state.CustomValues.GetValueOrDefault("additional.rof") != "1";
-            showMaxRange = usesCombatRanges && state.CustomValues.GetValueOrDefault("additional.maxrange") != "1";
+            showRof = (usesCombatRanges || KeepAdditiveActionFieldVisible(effectiveAction, "rof")) && state.CustomValues.GetValueOrDefault("additional.rof") != "1";
+            showMaxRange = (usesCombatRanges || KeepAdditiveActionFieldVisible(effectiveAction, "maxrange")) && state.CustomValues.GetValueOrDefault("additional.maxrange") != "1";
         }
         state.CoreFieldsGrid.IsVisible = showRof || showMaxRange ||
                                          ShouldShowCoreMinRange(state, effectiveAction, actionType);
@@ -11970,9 +12020,9 @@ public partial class ProtoEditorWindow : SimpleWindow
             Grid.SetColumn(state.MaxRangeTb, 1);
         }
         state.MaxRangeLabel.Margin = new Thickness(
-            showMaxRange && !showRof && !showCoreMinRange ? 0 : 18,
+            showMaxRange && !showRof && !showCoreMinRange ? 0 : EditorFormLayout.GroupGap,
             0,
-            10,
+            EditorFormLayout.LabelGap,
             0);
         EnsureJumpAttackCoreLayout(state, effectiveAction, actionType);
 
@@ -12393,7 +12443,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
                 state.JumpAttackMinRangeTb.IsVisible = true;
                 state.JumpAttackMinRangeTb.Width = 90;
-                state.JumpAttackMinRangeTb.Margin = new Thickness(0, 0, 8, 0);
+                state.JumpAttackMinRangeTb.Margin = new Thickness(0);
             if (state.JumpAttackMinRangeLabel != null)
                 state.JumpAttackMinRangeLabel.IsVisible = true;
             AddAttackMinRangeRemoveButton();
@@ -12404,7 +12454,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             Text = "Min Range:",
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(18, 0, 10, 0)
+            Margin = new Thickness(EditorFormLayout.GroupGap, 0, EditorFormLayout.LabelGap, 0)
         };
         Grid.SetColumn(minRangeLabel, isWaterTornado ? 0 : 2);
         state.CoreFieldsGrid.Children.Add(minRangeLabel);
@@ -12415,7 +12465,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             Text = string.IsNullOrWhiteSpace(initialMinRange) && state.IsNewCustomAction ? "0" : initialMinRange,
             IsEnabled = !_isReadOnly,
             Width = 90,
-            Margin = new Thickness(0, 0, 8, 0)
+            Margin = new Thickness(0)
         };
         AttachProtoActionDecimalBehavior(minRangeTb);
         minRangeTb.TextChanged += async (_, _) =>
@@ -12664,6 +12714,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         ArrangeProtoActionDamageOptionButtons(state);
         FinalizeProtoActionFieldRoles(state);
         RefreshProtoActionSourceMarkers(state);
+        DecorateAdditiveActionFields(state);
         }
         finally
         {
@@ -29168,7 +29219,10 @@ public partial class ProtoEditorWindow : SimpleWindow
                             rowGrid.Children.Add(removeModifyButton);
                         }
 
-                        EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6, 7, 8, 9]);
+                        if (currentSupportedType.Equals("StatModify", StringComparison.OrdinalIgnoreCase))
+                            EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6], [7, 8, 9]);
+                        else
+                            EditorFormLayout.WrapFlowingGridColumns(rowGrid, [0, 1], [2], [3, 4], [5, 6, 7, 8, 9]);
                         modifyRowsHost.Children.Add(rowGrid);
                     }
 
@@ -30964,6 +31018,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshProtoActionMetadataPanels(state);
                     }
                 }, flagSource, tacticsFlagValue);
+                DecorateAdditiveActionChip(chip, state, tag);
                 flagsWrap.Children.Add(chip);
             }
 
@@ -38320,7 +38375,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         {
             EditorEntityKind.Technologies => _technologyView?.IsModifiedMode == true,
             EditorEntityKind.Powers => _powerView?.IsModifiedMode == true,
-            EditorEntityKind.MajorGods => _majorGodView?.IsModifiedMode == true,
+            EditorEntityKind.MajorGods => _majorGodView?.IsModifiedMode == true && _majorGodView.CurrentMajorGodName is { } godName && _majorGodView.CanEditMajorGod(godName),
             _ => false
         };
         var name = CurrentName();
@@ -39524,6 +39579,7 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ClearEditorPanels()
     {
+        ClearUnitSectionNotices();
         _unitXmlController.Bind(null, false);
         _statsEditorPanel.Children.Clear();
         _actionsEditorPanel.Children.Clear();
@@ -39603,26 +39659,17 @@ public partial class ProtoEditorWindow : SimpleWindow
         _veterancyRankRows.Clear();
         _veterancyBonusRows.Clear();
 
-        XElement? unit = null;
-        if (_modXmlRoot != null)
-        {
-            unit = ProtoXmlHandler.GetUnitElement(_modXmlRoot, unitName);
-        }
-
-        if (unit == null && _barXmlRoot != null)
-        {
-            unit = ProtoXmlHandler.GetUnitElement(_barXmlRoot, unitName);
-            _isReadOnly = true;
-        }
-        else
-        {
-            _isReadOnly = _modDocumentSafetyError != null || (_isAbilityDefinitionEditorMode
-                ? _abilityDefinitionEditorReadOnly
-                : _protoActionHostAdapter.Context.UsesStandaloneDocumentLifecycle && _tacticsEditorSession?.IsReadOnly == true);
-        }
+        var unit = ResolveUnitForReading(unitName);
+        _isReadOnly = _modDocumentSafetyError != null || (UsesUnitAdditiveReader
+            ? _unitAdditiveKind is AdditiveEntryKind.Original or AdditiveEntryKind.Modified or AdditiveEntryKind.Unresolved
+            : (_isAbilityDefinitionEditorMode ? _abilityDefinitionEditorReadOnly
+                : _tacticsEditorSession?.IsReadOnly == true));
 
         if (unit == null)
         {
+            if (_unitAdditiveRead != null)
+                _statsEditorPanel.Children.Add(new TextBlock { Text = "This patch removes the original or creates duplicate identities. Inspect the authored XML; editing is unavailable.", TextWrapping = TextWrapping.Wrap });
+            _currentUnitName = unitName;
             _pageSearchTargets.Clear();
             _pageSearchMatches.Clear();
             ClearPageSearchHighlights();
@@ -46406,6 +46453,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RenderOtherSpecificAddControls();
                     }
                 });
+                DecorateAdditiveChip(chip, t, "unittype");
                 typesWrap.Children.Add(chip);
             }
 
@@ -46497,6 +46545,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                         RefreshFlagsDisplay();
                     }
                 });
+                DecorateAdditiveChip(chip, f, "flag");
                 flagsWrap.Children.Add(chip);
             }
 
@@ -48241,6 +48290,7 @@ public partial class ProtoEditorWindow : SimpleWindow
                 if (buildGeneration != _editorBuildGeneration)
                     return;
 
+                PresentUnitAdditiveReading();
                 _isPopulating = false;
                 if (!_showStoredRawXml)
                     UpdateXmlPreview();
@@ -48741,12 +48791,12 @@ public partial class ProtoEditorWindow : SimpleWindow
         bodyStack.Children.Add(state.AbductPostCoreOptionsContainer);
         bodyStack.Children.Add(state.LinearAreaAttackOptionsContainer);
 
-        var rofLabel = new TextBlock { Text = "Rate of Fire:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+        var rofLabel = new TextBlock { Text = "Rate of Fire:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, EditorFormLayout.LabelGap, 0) };
         state.RofLabel = rofLabel;
         Grid.SetColumn(rofLabel, 0);
         fieldsGrid.Children.Add(rofLabel);
 
-        var rofTb = new TextBox { Text = GetProtoActionDefaultSimpleValue("rof", effectiveAction.Rof), IsEnabled = !_isReadOnly, Margin = new Thickness(0, 0, 10, 0) };
+        var rofTb = new TextBox { Text = GetProtoActionDefaultSimpleValue("rof", effectiveAction.Rof), IsEnabled = !_isReadOnly, Margin = new Thickness(0) };
         AttachProtoActionDecimalBehavior(rofTb);
         rofTb.TextChanged += async (s, e) =>
         {
@@ -48764,7 +48814,7 @@ public partial class ProtoEditorWindow : SimpleWindow
         var maxRangeValueColumn = 3;
         if (showInitialCoreMinRange)
         {
-            var minRangeLabel = new TextBlock { Text = "Min Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(18, 0, 10, 0) };
+            var minRangeLabel = new TextBlock { Text = "Min Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(EditorFormLayout.GroupGap, 0, EditorFormLayout.LabelGap, 0) };
             Grid.SetColumn(minRangeLabel, 2);
             fieldsGrid.Children.Add(minRangeLabel);
 
@@ -48773,7 +48823,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             {
             Text = string.IsNullOrWhiteSpace(initialMinRange) && isNewCustomAction ? "0" : initialMinRange,
                 IsEnabled = !_isReadOnly,
-                Margin = new Thickness(0, 0, 10, 0)
+                Margin = new Thickness(0)
             };
             AttachProtoActionDecimalBehavior(minRangeTb);
             minRangeTb.TextChanged += async (_, _) =>
@@ -48793,7 +48843,7 @@ public partial class ProtoEditorWindow : SimpleWindow
             maxRangeValueColumn = 5;
         }
 
-        var mrLabel = new TextBlock { Text = "Max Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(18, 0, 10, 0) };
+        var mrLabel = new TextBlock { Text = "Max Range:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(EditorFormLayout.GroupGap, 0, EditorFormLayout.LabelGap, 0) };
         state.MaxRangeLabel = mrLabel;
         Grid.SetColumn(mrLabel, maxRangeLabelColumn);
         fieldsGrid.Children.Add(mrLabel);
@@ -49255,6 +49305,8 @@ public partial class ProtoEditorWindow : SimpleWindow
 
     private void ApplyCurrentEdits(XElement? targetUnit = null)
     {
+        // Phase 2 is read-only for imported original patches, including programmatic callers.
+        if (UsesUnitAdditiveReader && _unitAdditiveKind is AdditiveEntryKind.Modified or AdditiveEntryKind.Unresolved) return;
         if (string.IsNullOrEmpty(_currentUnitName)) return;
 
         var unit = targetUnit;

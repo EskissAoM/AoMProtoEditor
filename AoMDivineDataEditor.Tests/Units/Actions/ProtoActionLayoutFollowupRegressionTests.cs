@@ -23,7 +23,7 @@ public sealed class ProtoActionLayoutFollowupRegressionTests
         Assert.Contains("if (showMaxRange && !showRof && !showCoreMinRange)", source, StringComparison.Ordinal);
         Assert.Contains("Grid.SetColumn(state.MaxRangeLabel, 0);", source, StringComparison.Ordinal);
         Assert.Contains("Grid.SetColumn(state.MaxRangeTb, 1);", source, StringComparison.Ordinal);
-        Assert.Contains("showMaxRange && !showRof && !showCoreMinRange ? 0 : 18", source, StringComparison.Ordinal);
+        Assert.Contains("showMaxRange && !showRof && !showCoreMinRange ? 0 : EditorFormLayout.GroupGap", source, StringComparison.Ordinal);
         Assert.Contains("var showRof = state.RofLabel.IsVisible;", source, StringComparison.Ordinal);
     }
 

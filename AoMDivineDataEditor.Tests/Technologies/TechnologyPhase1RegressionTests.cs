@@ -24,7 +24,7 @@ public sealed class TechnologyPhase1RegressionTests
         var xaml = XDocument.Load(Path.Combine(root, "Windows", "TechnologyEditorView.axaml"));
 
         Assert.Contains(xaml.Descendants(), e => e.Name.LocalName == "TabStripItem" && e.Value.Trim() == "Original");
-        Assert.Contains(xaml.Descendants(), e => e.Name.LocalName == "TabStripItem" && e.Value.Trim() == "Modified");
+        Assert.Contains(xaml.Descendants(), e => e.Name.LocalName == "TabStripItem" && e.Value.Trim() == "Mod");
         Assert.Contains(xaml.Descendants(), e => e.Name.LocalName == "TabItem" && (string?)e.Attribute("Header") == "Properties");
         Assert.Contains(xaml.Descendants(), e => e.Name.LocalName == "TabItem" && (string?)e.Attribute("Header") == "Effects");
         Assert.Contains(xaml.Descendants(), e => (string?)e.Attribute("Name") == "_xmlPreview" || (string?)e.Attribute(XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "_xmlPreview");
@@ -447,7 +447,7 @@ public sealed class TechnologyPhase1RegressionTests
 
         Assert.DoesNotContain("NormalizeTechnologyChildOrder", techCode, StringComparison.Ordinal);
         Assert.Contains("NormalizeChangedEffectAttributeOrder", techCode, StringComparison.Ordinal);
-        Assert.Contains("if (IsModifiedTab || hideTooltipAttribute != null)", techCode, StringComparison.Ordinal);
+        Assert.Contains("if (CanEditModifiedDocument || hideTooltipAttribute != null)", techCode, StringComparison.Ordinal);
         Assert.Contains("TechnologyEffectCatalogInventory.IsStructuredEffectType", techCode, StringComparison.Ordinal);
         Assert.Contains("AddSetNameEffectEditorAsync", techCode, StringComparison.Ordinal);
         Assert.Contains("AddTextOutputEffectEditorAsync", techCode, StringComparison.Ordinal);

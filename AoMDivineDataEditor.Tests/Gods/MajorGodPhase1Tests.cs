@@ -480,7 +480,7 @@ public sealed class MajorGodPhase1Tests
         Assert.Contains("AddOptionalQueueNumber(row, unit, \"delay\"", code, StringComparison.Ordinal);
         Assert.Contains("\"Delay (ms)\"", code, StringComparison.Ordinal);
         Assert.Contains("AddOptionalQueueNumber(row, unit, \"count\"", code, StringComparison.Ordinal);
-        Assert.Contains("IsEnabled = IsModifiedMode && !hasCount", code, StringComparison.Ordinal);
+        Assert.Contains("IsEnabled = IsEditableMajorGod && !hasCount", code, StringComparison.Ordinal);
         Assert.Contains("MajorGodCatalog.SetStartingQueueCount", code, StringComparison.Ordinal);
         Assert.Contains("Content = \"Auto train\"", code, StringComparison.Ordinal);
         Assert.Contains("Content = \"Prequeue\"", code, StringComparison.Ordinal);

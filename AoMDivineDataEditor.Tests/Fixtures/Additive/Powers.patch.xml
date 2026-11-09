@@ -1,0 +1,12 @@
+<powersmod>
+  <power name="Restoration">
+    <soundset type="EndSound" listenertype="All" mergeMode="remove">GodPowerEnd</soundset>
+    <soundset type="EndSound" listenertype="Caster" mergeMode="add">GodPowerEnd</soundset>
+  </power>
+  <power name="CeaseFire">
+    <soundset type="EndSound" listenertype="Caster">GodPowerEnd</soundset>
+  </power>
+  <power name="Bronze">
+    <soundset type="EndSound" listenertype="Caster" mergeMode="replace">GodPowerEnd</soundset>
+  </power>
+</powersmod>

@@ -162,6 +162,8 @@ public partial class ProtoEditorWindow
         {
             foreach (var (name, draft) in keys.Where(entry => entry.Value.Session.IsEditing))
             {
+                if (UsesUnitAdditiveReader && AdditiveXmlReader.Classify(_barXmlRoot, name, true) != AdditiveEntryKind.Custom)
+                    throw new InvalidDataException($"Unit '{name}' is an original override or has an unresolved original identity. Additive editing is not enabled in this checkpoint.");
                 var snapshot = draft.Session.CaptureForSave()!;
                 var original = ProtoXmlHandler.GetUnitElement(_modXmlRoot, name);
                 if (original == null)

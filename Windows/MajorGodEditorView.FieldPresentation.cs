@@ -45,5 +45,6 @@ public partial class MajorGodEditorView
         foreach (var row in controls.OfType<StackPanel>().Where(row => row.Orientation == Orientation.Horizontal &&
                      row.Children.Any(child => child is TextBox or AutoCompleteBox or ComboBox or AssetPathEditor)))
             EditorFormLayout.UseInlineRowLayout(row);
+        DecorateMajorGodAdditiveFields();
     }
 }

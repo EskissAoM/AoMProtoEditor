@@ -35,6 +35,14 @@ internal static class EditorValidationBindings
         return control;
     }
 
+    internal static bool TryGetXmlSource(Control control, out XElement? source, out string? field)
+    {
+        var found = Bindings.TryGetValue(control, out var binding);
+        source = binding?.Source;
+        field = binding?.Field;
+        return found && !binding!.Repeated;
+    }
+
     // A chip removal edits XML without changing the empty search box's Text.
     // Observe only this bound list, and unsubscribe with the failure lifecycle.
     internal static IDisposable? ObserveRepeatedChanges(Control control, Action changed)

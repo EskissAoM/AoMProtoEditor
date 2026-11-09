@@ -32,11 +32,11 @@ public partial class PowerEditorView
     private async Task<bool> BeginPowerXmlEditingAsync()
     {
         await _populationTask;
-        if (!IsModifiedMode || _currentEntry == null || string.IsNullOrWhiteSpace(_modPath)) return false;
+        if (!IsEditablePower || _currentEntry == null || string.IsNullOrWhiteSpace(_modPath)) return false;
         if (!await CommitCurrentPowerAsync()) return false;
         await _populationTask;
         RefreshRawXmlFromCurrent();
-        return IsModifiedMode && _currentEntry != null;
+        return IsEditablePower && _currentEntry != null;
     }
 
     private void BindPowerXmlPreview(string text)
@@ -45,7 +45,7 @@ public partial class PowerEditorView
         { _powerXmlController.Bind(null, false); return; }
         text = XmlSyntaxEditorService.PreparePreviewText(text);
         XmlEditSession session;
-        if (IsModifiedMode)
+        if (IsEditablePower)
         {
             if (!_powerXmlDrafts.TryGetValue(_loadedEntryName, out var draft))
             {
@@ -69,6 +69,7 @@ public partial class PowerEditorView
 
     private XElement ParsePowerXml(string name, PowerXmlDraft draft, string text)
     {
+        if (!CanEditPower(name)) throw new InvalidDataException($"Power '{name}' is read-only in this checkpoint.");
         var candidate = XElement.Parse(text, LoadOptions.PreserveWhitespace);
         if (candidate.Name != PowerCatalog.EntryName)
             throw new InvalidDataException("Raw XML must have one <power> root element without a namespace.");
@@ -120,7 +121,7 @@ public partial class PowerEditorView
             var proposed = CreatePowerXmlSnapshot()!;
             var catalogs = CreatePowerSaveCatalogs() with
             { PowerNames = _baseEntries.Keys.Concat(proposed.Root!.Elements(PowerCatalog.EntryName).Select(PowerCatalog.GetName)).ToList() };
-            var validation = PowerSaveValidator.Validate(proposed, catalogs);
+            var validation = ValidatePowerCandidate(proposed, catalogs);
             if (!validation.IsValid) throw new InvalidDataException(string.Join(Environment.NewLine, validation.Errors));
             foreach (var (name, draft) in _powerXmlDrafts.Where(pair => pair.Value.Session.IsEditing).ToArray())
             {
@@ -193,6 +194,6 @@ public partial class PowerEditorView
         }
         _rawEditorDirty = CurrentPowerXmlDraft?.Session.IsDirty == true;
         SetDirty(_session.HasPendingWork || _powerXmlDrafts.Values.Any(draft => draft.Session.IsDirty));
-        if (_currentEntry != null) BindPowerXmlPreview(PowerCatalog.FormatPreview(_currentEntry));
+        if (_currentEntry != null) RefreshRawXmlFromCurrent();
     }
 }

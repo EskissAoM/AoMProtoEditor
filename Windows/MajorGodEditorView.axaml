@@ -14,22 +14,27 @@
 
     <Border Grid.Column="0" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
-        <Grid x:Name="_majorGodStructuredForm" Grid.RowSpan="2" RowDefinitions="Auto,*">
+        <Grid x:Name="_majorGodStructuredForm" Grid.RowSpan="2" RowDefinitions="Auto,Auto,*">
         <Grid x:Name="_majorGodIdentityRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
           <TextBlock Text="Major God :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
-          <TextBox Grid.Column="1" x:Name="_nameBox" Width="380" MaxWidth="380"
+          <WrapPanel Grid.Column="1" Orientation="Horizontal">
+          <TextBox x:Name="_nameBox" Width="380" MaxWidth="380" Margin="0,0,10,0"
                    HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold"
                    TextChanged="NameBox_TextChanged" LostFocus="NameBox_LostFocus"/>
+          <TextBlock x:Name="_majorGodAdditiveSummary" IsVisible="False" VerticalAlignment="Center" TextWrapping="Wrap"/>
+          </WrapPanel>
         </Grid>
+        <TextBlock Grid.Row="1" x:Name="_majorGodAdditiveDiagnostics" IsVisible="False" TextWrapping="Wrap" Margin="0,0,10,8"/>
 
-        <TextBlock Grid.Row="1" x:Name="_emptySelectionMessage"
+        <TextBlock Grid.Row="2" x:Name="_emptySelectionMessage"
                    Text="Select a major god from the list."
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="False"/>
-        <TabControl Grid.Row="1" x:Name="_majorGodTabs" SelectedIndex="0">
+        <TabControl Grid.Row="2" x:Name="_majorGodTabs" SelectedIndex="0">
           <TabItem x:Name="_propertiesTab" Classes="editorTab" Header="Properties">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="10" Margin="0,0,15,0">
+                <StackPanel x:Name="_majorGodPropertyNotices" Spacing="4" IsVisible="False"/>
                 <StackPanel x:Name="_majorGodPropertiesPanel" Spacing="10">
             <TextBlock Text="──── Properties ────" FontWeight="Bold" FontSize="14"
                        Foreground="#C59A52" Margin="0,15,0,5"/>
@@ -179,6 +184,7 @@
           <TabItem x:Name="_startingAttributesTab" Classes="editorTab" Header="Starting Attributes">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="10" Margin="0,12,15,0">
+                <StackPanel x:Name="_majorGodStartingNotices" Spacing="4" IsVisible="False"/>
                 <TextBlock Text="──── Starting Attributes ────" FontWeight="Bold" FontSize="14"
                            Foreground="#C59A52" Margin="0,3,0,5"/>
                 <TextBlock Text="Starting Units" FontWeight="SemiBold" FontSize="14" Margin="0,2,0,2"/>
@@ -203,6 +209,7 @@
           <TabItem x:Name="_specialAttributesTab" Classes="editorTab" Header="Special Attributes">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel x:Name="_specialAttributesPanel" Spacing="10" Margin="0,12,15,0">
+                <StackPanel x:Name="_majorGodSpecialNotices" Spacing="4" IsVisible="False"/>
                 <TextBlock Text="──── Special mechanics ────" FontWeight="Bold" FontSize="14"
                            Foreground="#C59A52" Margin="0,3,0,5"/>
                 <StackPanel x:Name="_specialMechanicToggleRow" Orientation="Horizontal" Spacing="16" Margin="4,0,0,2">

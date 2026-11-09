@@ -6,7 +6,8 @@ public sealed record PreparedModXmlDocument(
     string Path,
     ModXmlDocumentKind Kind,
     XDocument Document,
-    FileIntegrityTransaction.FileState LoadedState);
+    FileIntegrityTransaction.FileState LoadedState,
+    IReadOnlySet<string>? ReadOnlyAdditiveNames = null);
 
 /// <summary>
 /// Shared lifecycle for editable auxiliary mod documents: stable load, structural
@@ -32,7 +33,7 @@ public static class ModDocumentPersistence
         var prepared = documents.ToList();
         foreach (var item in prepared)
         {
-            var validation = ModXmlDocumentSafety.Validate(item.Document, item.Kind);
+            var validation = ModXmlDocumentSafety.Validate(item.Document, item.Kind, item.ReadOnlyAdditiveNames);
             if (!validation.IsSafeToEdit)
                 throw new InvalidDataException(validation.ToDisplayMessage(item.Path));
         }
@@ -65,7 +66,7 @@ public static class ModDocumentPersistence
         var prepared = documents.ToList();
         foreach (var item in prepared)
         {
-            var validation = ModXmlDocumentSafety.Validate(item.Document, item.Kind);
+            var validation = ModXmlDocumentSafety.Validate(item.Document, item.Kind, item.ReadOnlyAdditiveNames);
             if (!validation.IsSafeToEdit)
                 throw new InvalidDataException(validation.ToDisplayMessage(item.Path));
         }

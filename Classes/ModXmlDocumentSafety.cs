@@ -240,7 +240,8 @@ public static class ModXmlDocumentSafety
             state);
     }
 
-    public static ModXmlDocumentValidation Validate(XDocument document, ModXmlDocumentKind kind)
+    public static ModXmlDocumentValidation Validate(XDocument document, ModXmlDocumentKind kind,
+        IReadOnlySet<string>? readOnlyAdditiveNames = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         var issues = new List<ModXmlValidationIssue>();
@@ -262,7 +263,8 @@ public static class ModXmlDocumentSafety
                 ValidateAbilityAssociations(root, issues);
                 break;
             case ModXmlDocumentKind.Powers:
-                ValidateNamedAttributeEntries(root, "power", "power", PowerSingletonElements, issues);
+                ValidateNamedAttributeEntries(root, "power", "power", PowerSingletonElements, issues,
+                    readOnlyAdditiveNames: readOnlyAdditiveNames);
                 WarnUnknownRootChildren(root, ["power"], issues);
                 break;
             case ModXmlDocumentKind.ProtoUnitCommands:
@@ -289,7 +291,7 @@ public static class ModXmlDocumentSafety
                 WarnUnknownRootChildren(root, ["culture"], issues);
                 break;
             case ModXmlDocumentKind.MajorGods:
-                ValidateNamedChildEntries(root, "civ", "major god", "name", MajorGodSingletonElements, issues, ValidateMajorGod);
+                ValidateNamedChildEntries(root, "civ", "major god", "name", MajorGodSingletonElements, issues, ValidateMajorGod, readOnlyAdditiveNames);
                 WarnUnknownRootChildren(root, ["civ"], issues);
                 break;
             case ModXmlDocumentKind.MinorGods:
@@ -552,7 +554,8 @@ public static class ModXmlDocumentSafety
         string objectKind,
         HashSet<string>? singletonElements,
         List<ModXmlValidationIssue> issues,
-        Action<XElement, string, List<ModXmlValidationIssue>>? additionalValidation = null)
+        Action<XElement, string, List<ModXmlValidationIssue>>? additionalValidation = null,
+        IReadOnlySet<string>? readOnlyAdditiveNames = null)
     {
         var direct = root.Elements().Where(element => IsNamed(element, entryName)).ToList();
         var nested = root.Descendants()
@@ -575,7 +578,7 @@ public static class ModXmlDocumentSafety
                 AddError(issues, $"{objectKind} entry", "does not have exactly one non-empty name attribute.");
             else
                 names.Add(name);
-            if (singletonElements != null)
+            if (singletonElements != null && readOnlyAdditiveNames?.Contains(name) != true)
                 ValidateDuplicateSingletons(entry, $"{objectKind} '{name}'", singletonElements, issues);
             additionalValidation?.Invoke(entry, name.Length == 0 ? "(unnamed)" : name, issues);
         }
@@ -589,7 +592,8 @@ public static class ModXmlDocumentSafety
         string identifierElement,
         HashSet<string> singletonElements,
         List<ModXmlValidationIssue> issues,
-        Action<XElement, string, List<ModXmlValidationIssue>>? additionalValidation = null)
+        Action<XElement, string, List<ModXmlValidationIssue>>? additionalValidation = null,
+        IReadOnlySet<string>? readOnlyAdditiveNames = null)
     {
         var direct = root.Elements().Where(element => IsNamed(element, entryName)).ToList();
         var nested = root.Descendants().Where(element => IsNamed(element, entryName)).Except(direct).ToList();
@@ -604,8 +608,11 @@ public static class ModXmlDocumentSafety
                 AddError(issues, $"{objectKind} entry", $"does not have exactly one non-empty <{identifierElement}>.");
             else
                 names.Add(name);
-            ValidateDuplicateSingletons(entry, $"{objectKind} '{name}'", singletonElements, issues);
-            additionalValidation?.Invoke(entry, name.Length == 0 ? "(unnamed)" : name, issues);
+            if (readOnlyAdditiveNames?.Contains(name) != true)
+            {
+                ValidateDuplicateSingletons(entry, $"{objectKind} '{name}'", singletonElements, issues);
+                additionalValidation?.Invoke(entry, name.Length == 0 ? "(unnamed)" : name, issues);
+            }
         }
         AddDuplicateNames(issues, objectKind, names);
     }

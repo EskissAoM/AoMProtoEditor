@@ -86,10 +86,12 @@ public sealed class PowerEditorComposition
         string? modPath,
         string? modStringsPath = null,
         PowerEditorCatalogs? catalogs = null,
-        PowerEditorHostServices? hostServices = null)
+        PowerEditorHostServices? hostServices = null,
+        bool baseCatalogAvailable = true)
     {
         ArgumentNullException.ThrowIfNull(baseDefinitions);
         BaseDefinitions = baseDefinitions.ToList();
+        BaseCatalogAvailable = baseCatalogAvailable;
         ModPath = modPath;
         ModStringsPath = modStringsPath;
         Catalogs = catalogs ?? new PowerEditorCatalogs();
@@ -97,6 +99,7 @@ public sealed class PowerEditorComposition
     }
 
     public IReadOnlyList<PowerDefinition> BaseDefinitions { get; }
+    public bool BaseCatalogAvailable { get; }
     public string? ModPath { get; }
     public string? ModStringsPath { get; }
     public PowerEditorCatalogs Catalogs { get; }

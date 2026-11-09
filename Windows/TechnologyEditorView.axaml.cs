@@ -403,6 +403,7 @@ public partial class TechnologyEditorView : UserControl
         : this()
     {
         _originalBarDocuments = originalBarDocuments?.ToList() ?? [];
+        _hasOriginalTechnologyCatalog = originalBarDocuments != null;
         _baseGameplayDirectory = baseGameplayDirectory;
         _modTechtreePath = modTechtreePath;
         _modStringsPath = modStringsPath;
@@ -439,7 +440,8 @@ public partial class TechnologyEditorView : UserControl
 
     private bool IsModifiedTab => _techTabs.SelectedIndex == 1;
 
-    private bool CanEditModifiedDocument => IsModifiedTab && _modDocumentSafetyError == null;
+    private bool CanEditModifiedDocument => IsModifiedTab && _modDocumentSafetyError == null &&
+        (_currentOriginalName == null || GetTechnologyEntryKind(_currentOriginalName) == AdditiveEntryKind.Custom);
 
     public bool IsModifiedMode => IsModifiedTab;
 
@@ -498,6 +500,7 @@ public partial class TechnologyEditorView : UserControl
 
     public void DiscardTechnologyChanges(string technologyName, XElement? savedElement)
     {
+        if (GetTechnologyEntryKind(technologyName) != AdditiveEntryKind.Custom) return;
         ForgetTechnologyXmlDraft(technologyName);
         var current = _modified.GetValueOrDefault(technologyName);
         var restored = savedElement == null ? null : new XElement(savedElement);
@@ -739,7 +742,14 @@ public partial class TechnologyEditorView : UserControl
         {
             var path = Path.Combine(_baseGameplayDirectory, name);
             if (!File.Exists(path)) continue;
-            try { MergeTechs(XDocument.Load(path, LoadOptions.PreserveWhitespace), _original, overwrite: false); } catch { }
+            try
+            {
+                var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+                MergeTechs(document, _original, overwrite: false);
+                if (document.Root?.Name.LocalName.Equals("techtree", StringComparison.OrdinalIgnoreCase) == true)
+                    _hasOriginalTechnologyCatalog = true;
+            }
+            catch { }
         }
     }
 
@@ -772,7 +782,7 @@ public partial class TechnologyEditorView : UserControl
             try
             {
                 var document = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace);
-                var validation = TechnologyDocumentSafety.ValidateModDocument(document);
+                var validation = ValidateTechnologySourceStructure(document);
                 _modDocument = document;
                 if (!validation.IsValid)
                     _modDocumentSafetyError = validation.ToDisplayMessage(_modTechtreePath);
@@ -835,7 +845,7 @@ public partial class TechnologyEditorView : UserControl
         if (_techList.SelectedItem is not string name) { ClearEditor(); return; }
         var source = IsModifiedTab ? _modified : _original;
         if (!source.TryGetValue(name, out var tech)) { ClearEditor(); return; }
-        _current = tech;
+        _current = ResolveTechnologyForReading(name);
         _currentOriginalName = name;
         UpdatePreview();
         _ = BuildEditorAsync();
@@ -846,6 +856,7 @@ public partial class TechnologyEditorView : UserControl
         _activeEditorBuildCancellation?.Cancel();
         _editorBuildGeneration++;
         _loadingUi = true;
+        ClearTechnologyAdditivePresentation();
         _current = null;
         _currentOriginalName = null;
         _iconPreviewControl = null;
@@ -888,6 +899,7 @@ public partial class TechnologyEditorView : UserControl
             var tech = _current;
             _loadingUi = true;
             _iconPreviewControl = null;
+            ClearTechnologySectionNotices();
             _propertiesPanel.Children.Clear();
             _prereqsPanel.Children.Clear();
             _effectsPanel.Children.Clear();
@@ -904,7 +916,7 @@ public partial class TechnologyEditorView : UserControl
                      !a.Name.LocalName.Equals("name", StringComparison.OrdinalIgnoreCase) &&
                      !a.Name.LocalName.Equals("type", StringComparison.OrdinalIgnoreCase) &&
                      !a.Name.LocalName.Equals("orderhint", StringComparison.OrdinalIgnoreCase)).ToList())
-            AddTextPropertyRow(HumanizeLabel(attr.Name.LocalName), attr.Value, v => attr.Value = v);
+            EditorValidationBindings.BindXml(AddTextPropertyRow(HumanizeLabel(attr.Name.LocalName), attr.Value, v => attr.Value = v), attr);
 
             var handled = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -921,7 +933,7 @@ public partial class TechnologyEditorView : UserControl
             foreach (var child in optionalPreview.Elements().Where(e => !e.HasElements && !handled.Contains(e.Name.LocalName))
                          .Select(e => optionalSources[e]).ToList())
             {
-            if (!IsModifiedTab && string.IsNullOrWhiteSpace(child.Value) && !child.HasAttributes)
+            if (!CanEditModifiedDocument && string.IsNullOrWhiteSpace(child.Value) && !child.HasAttributes)
                 continue;
 
             if (child.Name.LocalName.Equals("techage", StringComparison.OrdinalIgnoreCase))
@@ -934,10 +946,10 @@ public partial class TechnologyEditorView : UserControl
             string label = HumanizeLabel(child.Name.LocalName) + (suffix.Length > 0 ? $" [{suffix}]" : "");
             var role = child.Name.LocalName.ToLowerInvariant() is "researchlimit" or "delay" or "initialdelay" or "combatxptier"
                 ? EditorFieldWidthRole.Numeric : EditorFieldWidthRole.SingleLineText;
-            EditorValidationBindings.Bind(AddTextPropertyRow(label, child.Value, v => child.Value = v, IsModifiedTab ? () => RemoveOptionalElement(child) : null, role), child);
+            EditorValidationBindings.Bind(AddTextPropertyRow(label, child.Value, v => child.Value = v, CanEditModifiedDocument ? () => RemoveOptionalElement(child) : null, role), child);
             }
 
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
                 AddOtherAttributesSelector(tech, handled);
 
             AddCostsEditor(tech);
@@ -982,6 +994,7 @@ public partial class TechnologyEditorView : UserControl
             if (!IsEditorBuildCurrent(tech, generation)) return;
             ApplyReadOnlyVisualState();
             FinalizeTechnologyPresentation();
+            PresentTechnologyAdditiveReading();
             UpdatePreview();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1031,7 +1044,7 @@ public partial class TechnologyEditorView : UserControl
         {
             var element = tech.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase));
             if (element == null) return null;
-            if (!IsModifiedTab && string.IsNullOrWhiteSpace(element.Value) && !element.HasAttributes) return null;
+            if (!CanEditModifiedDocument && string.IsNullOrWhiteSpace(element.Value) && !element.HasAttributes) return null;
             return element;
         }
 
@@ -1044,7 +1057,7 @@ public partial class TechnologyEditorView : UserControl
         _iconPreviewControl = new IconPreviewControl(_iconPreviewService)
         {
             Margin = new Thickness(
-                IconPreviewControl.PropertyGridLeftOffset + (IsModifiedTab ? 40 : 0),
+                IconPreviewControl.PropertyGridLeftOffset + (CanEditModifiedDocument ? 40 : 0),
                 4,
                 12,
                 4),
@@ -1056,19 +1069,19 @@ public partial class TechnologyEditorView : UserControl
         RefreshIconPreview();
         _propertiesPanel.Children.Add(identityLayout);
 
-        var displayName = FindVisible("displaynameid") ?? (IsModifiedTab ? new XElement("displaynameid") : null);
+        var displayName = FindVisible("displaynameid") ?? (CanEditModifiedDocument ? new XElement("displaynameid") : null);
         await AddPrimaryTechnologyRowAsync(tech, displayName, identityFields);
 
-        var rollover = FindVisible("rollovertextid") ?? (IsModifiedTab ? new XElement("rollovertextid") : null);
+        var rollover = FindVisible("rollovertextid") ?? (CanEditModifiedDocument ? new XElement("rollovertextid") : null);
         if (rollover != null)
             await AddStringBackedPropertyRowAsync(EditorDisplayText.Rollover, rollover, multiline: true, target: identityFields, owner: tech);
 
         var advancedRollover = FindVisible("advancedrollovertextoverrideid");
         if (advancedRollover != null)
-            await AddStringBackedPropertyRowAsync(EditorDisplayText.AdvancedRollover, advancedRollover, multiline: true, removable: IsModifiedTab, target: identityFields);
+            await AddStringBackedPropertyRowAsync(EditorDisplayText.AdvancedRollover, advancedRollover, multiline: true, removable: CanEditModifiedDocument, target: identityFields);
 
         var icon = FindVisible("icon");
-        if (icon != null || IsModifiedTab)
+        if (icon != null || CanEditModifiedDocument)
             AddIconEditor(icon ?? new XElement("icon"), identityFields);
 
         var status = FindVisible("status");
@@ -1144,10 +1157,10 @@ public partial class TechnologyEditorView : UserControl
         var hasIcon = tech.Elements()
             .Any(element => element.Name.LocalName.Equals("icon", StringComparison.OrdinalIgnoreCase));
         var typeAttribute = tech.Attribute("type");
-        if (!IsModifiedTab && string.IsNullOrWhiteSpace(typeAttribute?.Value)) typeAttribute = null;
+        if (!CanEditModifiedDocument && string.IsNullOrWhiteSpace(typeAttribute?.Value)) typeAttribute = null;
         var orderHintAttribute = tech.Attribute("orderhint");
-        if (!IsModifiedTab && string.IsNullOrWhiteSpace(orderHintAttribute?.Value)) orderHintAttribute = null;
-        if (!IsModifiedTab && displayNameElement == null && typeAttribute == null &&
+        if (!CanEditModifiedDocument && string.IsNullOrWhiteSpace(orderHintAttribute?.Value)) orderHintAttribute = null;
+        if (!CanEditModifiedDocument && displayNameElement == null && typeAttribute == null &&
             orderHintAttribute == null && !hasIcon)
             return;
 
@@ -1166,13 +1179,14 @@ public partial class TechnologyEditorView : UserControl
             var displayBox = EditorTextFieldStyle.ConfigureTextBox(new TextBox
             {
                 Text = text,
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 Margin = new Thickness(0, 4, 8, 4)
             }, EditorFieldWidthRole.SingleLineText);
+            EditorValidationBindings.Bind(displayBox, displayNameElement);
             var lastDisplayText = text;
             ObserveTechnologyTextEdits(displayBox, (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 var value = displayBox.Text ?? "";
                 if (value.Equals(lastDisplayText, StringComparison.Ordinal)) return;
                 stringId = PrepareTechnologyStringField(tech, displayNameElement, value);
@@ -1215,11 +1229,12 @@ public partial class TechnologyEditorView : UserControl
             {
                 Text = currentType,
                 FilterMode = AutoCompleteFilterMode.Contains,
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 4, 0, 4)
             });
             ConfigureTechnologyField(typeSelector, EditorFieldWidthRole.ShortEnum);
+            EditorValidationBindings.Bind(typeSelector, tech, "@type");
             EditorAutoCompleteService.ConfigureStrict(
                 typeSelector,
                 typeOptions,
@@ -1230,14 +1245,14 @@ public partial class TechnologyEditorView : UserControl
                 commitEmptyAsValid: true,
                 valueCommitted: value =>
                 {
-                    if (_loadingUi || !IsModifiedTab) return;
+                    if (_loadingUi || !CanEditModifiedDocument) return;
                     if (string.IsNullOrWhiteSpace(value)) tech.Attribute("type")?.Remove();
                     else tech.SetAttributeValue("type", value);
                     MarkDirty();
                     UpdatePreview();
                 });
             segment.Children.Add(typeSelector);
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
                 segment.Children.Add(CreateRemoveButton(() => tech.Attribute("type")?.Remove()));
             metadataRow.Children.Add(segment);
         }
@@ -1255,7 +1270,7 @@ public partial class TechnologyEditorView : UserControl
             EditorValidationBindings.Bind(orderBox, tech, "@orderhint");
             ObserveTechnologyTextEdits(orderBox, (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 var value = (orderBox.Text ?? "").Trim();
                 if (value.Length == 0) tech.Attribute("orderhint")?.Remove();
                 else tech.SetAttributeValue("orderhint", value);
@@ -1263,7 +1278,7 @@ public partial class TechnologyEditorView : UserControl
                 UpdatePreview();
             });
             segment.Children.Add(orderBox);
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
                 segment.Children.Add(CreateRemoveButton(() => tech.Attribute("orderhint")?.Remove()));
             metadataRow.Children.Add(segment);
         }
@@ -1273,7 +1288,7 @@ public partial class TechnologyEditorView : UserControl
         if (orderHintAttribute != null)
             AddOrderHintEditor();
 
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             if (typeAttribute == null)
             {
@@ -1324,7 +1339,7 @@ public partial class TechnologyEditorView : UserControl
         var button = entireCard ? EditorRemoveButtons.Card() : EditorRemoveButtons.Field();
         button.Click += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             removeAction();
             MarkDirty();
             _ = BuildEditorAsync();
@@ -1334,7 +1349,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void RemoveOptionalElement(XElement element)
     {
-        if (!IsModifiedTab) return;
+        if (!CanEditModifiedDocument) return;
         var technology = element.Parent;
         var removeUsesValueText = element.Name.LocalName.Equals("valuetext", StringComparison.OrdinalIgnoreCase);
         if (TechnologyStringBackedTags.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase))
@@ -1377,7 +1392,7 @@ public partial class TechnologyEditorView : UserControl
         var box = CreateNumericTextBox(researchPoints.Value);
         EditorValidationBindings.Bind(box, researchPoints);
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedFloat);
-        EditorNumericInputBehavior.AttachValueChanged(box, () => _loadingUi || !IsModifiedTab, value =>
+        EditorNumericInputBehavior.AttachValueChanged(box, () => _loadingUi || !CanEditModifiedDocument, value =>
         {
             researchPoints.Value = value;
             MarkDirty();
@@ -1385,7 +1400,7 @@ public partial class TechnologyEditorView : UserControl
         });
         row.Children.Add(box);
 
-        if (IsModifiedTab && devotionCost == null)
+        if (CanEditModifiedDocument && devotionCost == null)
         {
             var button = CreateOptionalPropertyButton("Devotion cost");
             button.Margin = new Thickness(8, 4, 0, 4);
@@ -1418,11 +1433,12 @@ public partial class TechnologyEditorView : UserControl
         {
             Text = currentType,
             FilterMode = AutoCompleteFilterMode.Contains,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
         });
         ConfigureTechnologyField(typeSelector, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(typeSelector, devotionCost, "@devotiontype");
         EditorAutoCompleteService.ConfigureStrict(
             typeSelector,
             DevotionTypes,
@@ -1432,7 +1448,7 @@ public partial class TechnologyEditorView : UserControl
             allowEmpty: false,
             valueCommitted: value =>
             {
-                if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(value)) return;
+                if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrWhiteSpace(value)) return;
                 devotionCost.SetAttributeValue("devotiontype", value);
                 MarkDirty();
                 UpdatePreview();
@@ -1450,13 +1466,13 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(numberBox, ProtoUnitNumericKind.UnsignedInteger);
         ObserveTechnologyTextEdits(numberBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             devotionCost.Value = numberBox.Text ?? "";
             MarkDirty();
             UpdatePreview();
         });
         row.Children.Add(numberBox);
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
             row.Children.Add(CreateRemoveButton(() => RemoveOptionalElement(devotionCost)));
 
         Grid.SetColumn(row, 1);
@@ -1479,17 +1495,18 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = text,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 0, 4)
         });
         if (multiline)
         {
             EditorRolloverField.Configure(box);
         }
+        EditorValidationBindings.Bind(box, element);
         var lastText = text;
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(box);
-        if (removable && IsModifiedTab)
+        if (removable && CanEditModifiedDocument)
             row.Children.Add(CreateRemoveButton(() => RemoveOptionalElement(element)));
         Grid.SetColumn(row, 1);
         ObserveTechnologyTextEdits(box, (_, _) =>
@@ -1509,7 +1526,7 @@ public partial class TechnologyEditorView : UserControl
         {
             row.Children.Clear();
             grid = EditorRolloverField.CreateRow(label, box,
-                removable && IsModifiedTab ? CreateRemoveButton(() => RemoveOptionalElement(element)) : null);
+                removable && CanEditModifiedDocument ? CreateRemoveButton(() => RemoveOptionalElement(element)) : null);
         }
         (target ?? _propertiesPanel).Children.Add(grid);
     }
@@ -1519,7 +1536,7 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorNumericFieldStyle.ConfigureNumericTextBox(new TextBox
         {
             Text = value,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 0, 4)
         }, role);
         ConfigureTechnologyField(box, role);
@@ -1533,7 +1550,7 @@ public partial class TechnologyEditorView : UserControl
         Grid.SetColumn(box, 1);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             setter(box.Text ?? "");
             MarkDirty();
             UpdatePreview();
@@ -1650,7 +1667,7 @@ public partial class TechnologyEditorView : UserControl
             EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
             box.Margin = new Thickness(0, 4, index < ProtoConstants.KnownResourceTypes.Length - 1 ? 8 : 0, 4);
             Grid.SetColumn(box, index * 2 + 1);
-            EditorNumericInputBehavior.AttachValueChanged(box, () => _loadingUi || !IsModifiedTab, value =>
+            EditorNumericInputBehavior.AttachValueChanged(box, () => _loadingUi || !CanEditModifiedDocument, value =>
             {
                 if (existing == null)
                 {
@@ -1690,16 +1707,17 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Obtainable", "Unobtainable", "Active" },
             SelectedItem = ToStatusDisplay(status.Value),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 180,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 0, 4)
         };
         ConfigureTechnologyField(combo, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(combo, status);
         Grid.SetColumn(combo, 1);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string value) return;
             status.Value = value.ToUpperInvariant();
             MarkDirty();
             UpdatePreview();
@@ -1723,11 +1741,12 @@ public partial class TechnologyEditorView : UserControl
         var initial = ProtoEditorWindow.NormalizeIconCatalogValue(icon.Value, _iconPaths);
         var editor = new AssetPathEditor
         {
-            IsEnabled = IsModifiedTab,
-            Opacity = IsModifiedTab ? 1.0 : 0.55,
+            IsEnabled = CanEditModifiedDocument,
+            Opacity = CanEditModifiedDocument ? 1.0 : 0.55,
             Margin = new Thickness(0, 4, 0, 4)
         };
-        editor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
+        EditorValidationBindings.Bind(editor, icon);
+        editor.CompactPresenter.Background = Brush.Parse(CanEditModifiedDocument ? "#0E1110" : "#202220");
         editor.Configure(initial, _iconPaths, value =>
         {
             if (!CanEditModifiedDocument || value.Equals(initial, StringComparison.OrdinalIgnoreCase))
@@ -1776,7 +1795,7 @@ public partial class TechnologyEditorView : UserControl
     private void AddChipListEditor(XElement tech, string tag, string sectionTitle)
     {
         var currentElements = tech.Elements().Where(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (!IsModifiedTab && currentElements.Count == 0)
+        if (!CanEditModifiedDocument && currentElements.Count == 0)
             return;
 
         AddSectionHeader(sectionTitle);
@@ -1813,9 +1832,9 @@ public partial class TechnologyEditorView : UserControl
             foreach (var element in tech.Elements().Where(e => e.Name.LocalName.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToList())
             {
                 var captured = element;
-                chips.Children.Add(EditorChipService.CreateBlueChip(
+                chips.Children.Add(AdditiveChangePresentation.Bind(EditorChipService.CreateBlueChip(
                     captured.Value.Trim(),
-                    IsModifiedTab ? () =>
+                    CanEditModifiedDocument ? () =>
                     {
                         if (tag.Equals("flag", StringComparison.OrdinalIgnoreCase) &&
                             captured.Value.Trim().Equals("AgeUpgrade", StringComparison.OrdinalIgnoreCase))
@@ -1836,11 +1855,11 @@ public partial class TechnologyEditorView : UserControl
                             UpdatePreview();
                         }
                     } : null,
-                    readOnly: !IsModifiedTab));
+                    readOnly: !CanEditModifiedDocument), captured));
             }
         }
 
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             picker = EditorTextFieldStyle.ConfigureSelector(new AutoCompleteBox
             {
@@ -1930,7 +1949,7 @@ public partial class TechnologyEditorView : UserControl
             box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
             {
                 Text = value,
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 Margin = new Thickness(0, 4, 0, 4)
             }, role);
         }
@@ -1940,14 +1959,14 @@ public partial class TechnologyEditorView : UserControl
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
             var nextValue = box.Text ?? "";
-            if (_loadingUi || !IsModifiedTab || nextValue == lastValue) return;
+            if (_loadingUi || !CanEditModifiedDocument || nextValue == lastValue) return;
             setter(nextValue);
             lastValue = nextValue;
             MarkDirty();
             UpdatePreview();
         });
         row.Children.Add(box);
-        if (removeAction != null && IsModifiedTab)
+        if (removeAction != null && CanEditModifiedDocument)
             row.Children.Add(CreateRemoveButton(removeAction));
         Grid.SetColumn(row, 1);
         grid.Children.Add(row);
@@ -1963,22 +1982,23 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = TechnologyAges,
             SelectedItem = TechnologyAges.FirstOrDefault(age => age.Equals(techAge.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? techAge.Value.Trim(),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 150,
             MaxWidth = 150,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 0, 4)
         };
         ConfigureTechnologyField(combo, EditorFieldWidthRole.LongEnum);
+        EditorValidationBindings.Bind(combo, techAge);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string age) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string age) return;
             techAge.Value = age;
             MarkDirty();
             UpdatePreview();
         };
         row.Children.Add(combo);
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
             row.Children.Add(CreateRemoveButton(() => RemoveOptionalElement(techAge)));
         Grid.SetColumn(row, 1);
         grid.Children.Add(row);
@@ -2134,7 +2154,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = PrerequisiteTypes,
             SelectedItem = PrerequisiteTypes.FirstOrDefault(x => x.Equals(currentType, StringComparison.OrdinalIgnoreCase)) ?? currentType,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 150,
             MaxWidth = 150,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -2143,7 +2163,7 @@ public partial class TechnologyEditorView : UserControl
         ConfigureTechnologyField(typeCombo, EditorFieldWidthRole.LongEnum);
         typeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || typeCombo.SelectedItem is not string selectedType ||
+            if (_loadingUi || !CanEditModifiedDocument || typeCombo.SelectedItem is not string selectedType ||
                 selectedType.Equals(GetPrereqTypeName(prereq), StringComparison.OrdinalIgnoreCase)) return;
             ReplacePrerequisiteType(prereq, selectedType);
             MarkDirty();
@@ -2153,7 +2173,7 @@ public partial class TechnologyEditorView : UserControl
 
         AddPrerequisiteFields(prereq, currentType, firstRow);
 
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             var removePrereq = CreateRemoveButton(() =>
             {
@@ -2217,7 +2237,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Obtainable", "Unobtainable", "Active" },
             SelectedItem = ToStatusDisplay((string?)prereq.Attribute("status") ?? "UNOBTAINABLE"),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 140,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
@@ -2226,7 +2246,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(status, prereq, "@status");
         status.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || status.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || status.SelectedItem is not string value) return;
             prereq.SetAttributeValue("status", value);
             MarkDirty();
             UpdatePreview();
@@ -2240,7 +2260,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = TechnologyAges,
             SelectedItem = TechnologyAges.FirstOrDefault(x => x.Equals(prereq.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? prereq.Value.Trim(),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 150,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
@@ -2249,7 +2269,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(age, prereq);
         age.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || age.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || age.SelectedItem is not string value) return;
             prereq.Value = value;
             MarkDirty();
             UpdatePreview();
@@ -2274,7 +2294,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(count, ProtoUnitNumericKind.UnsignedInteger);
         ObserveTechnologyTextEdits(count, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var raw = (count.Text ?? "0").Trim();
             if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedCount) && parsedCount >= 0)
                 SetPrereqAttribute(prereq, "count", parsedCount.ToString("0.00", CultureInfo.InvariantCulture), rebuild: false);
@@ -2287,7 +2307,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = states,
             SelectedItem = ToPrereqStateDisplay((string?)prereq.Attribute("state") ?? "aliveState"),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 120,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
@@ -2295,7 +2315,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(state, prereq, "@state");
         state.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || state.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || state.SelectedItem is not string selected) return;
             SetPrereqAttribute(prereq, "state", FromPrereqStateDisplay(selected));
         };
         row.Children.Add(state);
@@ -2333,7 +2353,7 @@ public partial class TechnologyEditorView : UserControl
             {
                 ItemsSource = ProtoConstants.KnownResourceTypes,
                 SelectedItem = ProtoConstants.KnownResourceTypes.FirstOrDefault(x => x.Equals(param, StringComparison.OrdinalIgnoreCase)),
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 Width = 100,
                 MaxWidth = 100,
                 HorizontalAlignment = HorizontalAlignment.Left,
@@ -2342,7 +2362,7 @@ public partial class TechnologyEditorView : UserControl
             EditorValidationBindings.Bind(resource, prereq, "@kbParam");
             resource.SelectionChanged += (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab || resource.SelectedItem is not string value) return;
+                if (_loadingUi || !CanEditModifiedDocument || resource.SelectedItem is not string value) return;
                 SetCaseInsensitiveAttribute(prereq, "kbParam", value);
                 MarkDirty();
                 UpdatePreview();
@@ -2355,7 +2375,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(valueBox, prereq, "@value");
         ObserveTechnologyTextEdits(valueBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetPrereqAttribute(prereq, "value", valueBox.Text ?? "0", rebuild: false);
         });
         row.Children.Add(valueBox);
@@ -2371,7 +2391,7 @@ public partial class TechnologyEditorView : UserControl
         var entries = prereq.Elements().Where(e => e.Name.LocalName.Equals(childName, StringComparison.OrdinalIgnoreCase)).ToList();
         if (entries.Count == 0 && !string.IsNullOrWhiteSpace(prereq.Value))
             entries.Add(new XElement(childName, prereq.Value.Trim()));
-        if (entries.Count == 0 && IsModifiedTab)
+        if (entries.Count == 0 && CanEditModifiedDocument)
             entries.Add(new XElement(childName)); // A detached form placeholder must not dirty an untouched document.
 
         var catalogOptions = options
@@ -2426,17 +2446,17 @@ public partial class TechnologyEditorView : UserControl
                 finally { _loadingUi = loading; }
             }, deferSelectionCommit: true, selectAllOnFirstClick: true);
             EditorValidationBindings.Bind(entrySelector, isAttached ? entry : prereq);
-            if (IsModifiedTab && isAttached)
+            if (CanEditModifiedDocument && isAttached)
                 entrySelector.Margin = new Thickness(entrySelector.Margin.Left, entrySelector.Margin.Top, 0, entrySelector.Margin.Bottom);
             entryGroup.Children.Add(entrySelector);
-            if (IsModifiedTab && isAttached)
+            if (CanEditModifiedDocument && isAttached)
                 entryGroup.Children.Add(CreateRemoveButton(() => entry.Remove()));
             EditorFormLayout.UseInlineRowLayout(entryGroup);
             entryGroup.Margin = new Thickness(0, 0, EditorFormLayout.GroupGap, EditorFormLayout.LabelGap);
             firstRow.Children.Add(entryGroup);
         }
 
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             var add = CreateOptionalPropertyButton($"Add {label.ToLowerInvariant()}");
             add.Margin = new Thickness(8, 4, 8, 4);
@@ -2497,7 +2517,7 @@ public partial class TechnologyEditorView : UserControl
             Text = current,
             FilterMode = AutoCompleteFilterMode.Contains,
             MinimumPrefixLength = 0,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
         });
@@ -2516,7 +2536,7 @@ public partial class TechnologyEditorView : UserControl
             keepStartVisibleAfterCommit: true,
             valueCommitted: value =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 var normalized = value.Trim();
                 if (normalized.Equals(lastCommittedValue, StringComparison.OrdinalIgnoreCase)) return;
                 lastCommittedValue = normalized;
@@ -2532,14 +2552,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = displayValues,
             SelectedItem = OperatorToSymbol((string?)prereq.Attribute("operator") ?? "gte"),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 62,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 6, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string symbol) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string symbol) return;
             SetPrereqAttribute(prereq, "operator", SymbolToOperator(symbol));
         };
         ConfigureTechnologyField(combo, EditorFieldWidthRole.ComparisonOperator);
@@ -2746,11 +2766,12 @@ public partial class TechnologyEditorView : UserControl
         };
         var content = new StackPanel { Spacing = 6 };
         border.Child = content;
+        AdditiveChangePresentation.Bind(border, effect);
 
         var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var selectorRow = new WrapPanel { Orientation = Orientation.Horizontal };
         headerGrid.Children.Add(selectorRow);
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             var removeEffect = CreateRemoveButton(() =>
             {
@@ -2800,19 +2821,19 @@ public partial class TechnologyEditorView : UserControl
         }
 
         var hideTooltipAttribute = effect.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("hideTooltip", StringComparison.OrdinalIgnoreCase));
-        if (IsModifiedTab || hideTooltipAttribute != null)
+        if (CanEditModifiedDocument || hideTooltipAttribute != null)
         {
             var hideTooltip = new CheckBox
             {
                 Content = "Hide tooltip",
                 IsChecked = hideTooltipAttribute != null,
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 4, 8, 4)
             };
             hideTooltip.IsCheckedChanged += (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 if (hideTooltip.IsChecked == true) SetCaseInsensitiveAttribute(effect, "hideTooltip", "");
                 else RemoveCaseInsensitiveAttribute(effect, "hideTooltip");
                 MarkDirty();
@@ -2824,7 +2845,7 @@ public partial class TechnologyEditorView : UserControl
         var delayAttribute = effect.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("delay", StringComparison.OrdinalIgnoreCase));
         if (delayAttribute == null)
         {
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
             {
                 var addDelay = CreateOptionalPropertyButton("Delay");
                 addDelay.Margin = new Thickness(0, 4, 8, 4);
@@ -2845,18 +2866,18 @@ public partial class TechnologyEditorView : UserControl
             EditorNumericInputBehavior.AttachRule(delayBox, ProtoUnitNumericKind.UnsignedFloat);
             ObserveTechnologyTextEdits(delayBox, (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 delayAttribute.Value = delayBox.Text ?? "0";
                 MarkDirty();
                 UpdatePreview();
             });
             segment.Children.Add(delayBox);
-            if (IsModifiedTab) segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "delay")));
+            if (CanEditModifiedDocument) segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "delay")));
             selectorRow.Children.Add(segment);
         }
 
         var tooltipIdAttribute = effect.Attributes().FirstOrDefault(a => a.Name.LocalName.Equals("tooltipID", StringComparison.OrdinalIgnoreCase));
-        if (tooltipIdAttribute == null && IsModifiedTab)
+        if (tooltipIdAttribute == null && CanEditModifiedDocument)
         {
             var addTooltip = CreateOptionalPropertyButton("Tooltip override");
             addTooltip.Margin = new Thickness(0, 4, 8, 4);
@@ -3568,7 +3589,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 8, 4)
@@ -3576,7 +3597,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(typeCombo, effect, "@" + attributeName);
         typeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || typeCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || typeCombo.SelectedItem is not string selected) return;
             if (selected.Equals("All", StringComparison.OrdinalIgnoreCase)) RemoveCaseInsensitiveAttribute(effect, attributeName);
             else SetCaseInsensitiveAttribute(effect, attributeName, selected);
             MarkDirty();
@@ -3641,7 +3662,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = relativityOptions.ToList(),
             SelectedItem = RelativityToDisplay(currentRelativity),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 132,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(8, 4, 8, 4)
@@ -3649,7 +3670,7 @@ public partial class TechnologyEditorView : UserControl
         ConfigureTechnologyField(relativityCombo, EditorFieldWidthRole.ShortEnum);
         relativityCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || relativityCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || relativityCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "relativity", DisplayToRelativity(selected));
             MarkDirty();
             UpdatePreview();
@@ -3723,14 +3744,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = ageAmounts.Keys.ToList(),
             SelectedItem = ageAmounts.First(pair => pair.Value == currentAmount).Key,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 110,
             Margin = new Thickness(0, 4, 8, 4)
         };
         ConfigureTechnologyField(ageCombo, EditorFieldWidthRole.LongEnum);
         ageCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || ageCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || ageCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", ageAmounts[selected]);
             SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
             MarkDirty();
@@ -3871,19 +3892,19 @@ public partial class TechnologyEditorView : UserControl
         var iconPath = pathStringId.Length == 0 ? "" : await ResolveTechnologyStringValueAsync(pathStringId);
         var iconEditor = new AssetPathEditor
         {
-            IsEnabled = IsModifiedTab,
-            Opacity = IsModifiedTab ? 1.0 : 0.55,
+            IsEnabled = CanEditModifiedDocument,
+            Opacity = CanEditModifiedDocument ? 1.0 : 0.55,
             Width = 260,
             Margin = new Thickness(0, 4, 0, 4)
         };
-        iconEditor.CompactPresenter.Background = Brush.Parse(IsModifiedTab ? "#0E1110" : "#202220");
+        iconEditor.CompactPresenter.Background = Brush.Parse(CanEditModifiedDocument ? "#0E1110" : "#202220");
         var configuredIconPath = ProtoEditorWindow.NormalizeIconCatalogValue(iconPath, _iconPaths);
         iconEditor.Configure(
             configuredIconPath,
             _iconPaths,
             async value =>
             {
-                if (!IsModifiedTab || value.Equals(configuredIconPath, StringComparison.OrdinalIgnoreCase)) return;
+                if (!CanEditModifiedDocument || value.Equals(configuredIconPath, StringComparison.OrdinalIgnoreCase)) return;
                 configuredIconPath = value;
                 var existingId = GetCaseInsensitiveAttribute(effect, "pathstrid")?.Value.Trim() ?? "";
                 if (string.IsNullOrWhiteSpace(value))
@@ -4129,7 +4150,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = values,
             SelectedItem = values.First(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = EditorFormLayout.WidthFor(role),
             Margin = new Thickness(0, 4, 0, 4)
         };
@@ -4137,7 +4158,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(combo, effect, "@" + attributeName);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, attributeName, selected);
             selectionChanged?.Invoke(selected);
             MarkDirty();
@@ -4170,14 +4191,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = componentValues,
             SelectedItem = componentValues.First(value => value.Equals(currentComponent, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 150,
             Margin = new Thickness(0, 4, 8, 4)
         };
         ConfigureTechnologyField(componentCombo, EditorFieldWidthRole.LongEnum);
         componentCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || componentCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || componentCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "component", selected);
             if (!selected.Equals("BuyFactorSpecific", StringComparison.OrdinalIgnoreCase) &&
                 !selected.Equals("SellFactorSpecific", StringComparison.OrdinalIgnoreCase))
@@ -4328,13 +4349,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Unit", "Player" },
             SelectedItem = targetMode,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 8, 4)
         };
         targetModeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || targetModeCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || targetModeCombo.SelectedItem is not string selected) return;
             var currentTarget = EnsureDataTarget(effect);
             currentTarget.RemoveAttributes();
             currentTarget.RemoveNodes();
@@ -4402,13 +4423,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Unit", "Tech" },
             SelectedItem = unitMode ? "Unit" : "Tech",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 90,
             Margin = new Thickness(0, 4, 8, 4)
         };
         targetKindCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || targetKindCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || targetKindCombo.SelectedItem is not string selected) return;
             SetTechnologyDataTargetMode(effect, selected == "Unit" ? "ProtoUnit" : "Tech");
             _ = BuildEditorAsync();
         };
@@ -4471,7 +4492,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Tech", "All Techs", "Tech with Flag", "Tech Type" },
             SelectedItem = target != null && new[] { "Tech", "techAll", "techWithFlag", "TechType" }.Contains(targetType, StringComparer.OrdinalIgnoreCase) ? currentMode : null,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 125,
             Margin = new Thickness(0, 4, 8, 4)
         };
@@ -4480,7 +4501,7 @@ public partial class TechnologyEditorView : UserControl
             EditorValidationBindings.Bind(modeCombo, effect, "target/@type");
         modeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || modeCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || modeCombo.SelectedItem is not string selected) return;
             SetTechnologyDataTargetMode(effect, TechnologyTargetDisplayToType(selected));
             _ = BuildEditorAsync();
         };
@@ -4530,13 +4551,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "No age tech",
             IsChecked = target != null && GetCaseInsensitiveAttribute(target, "ignoreageups") != null,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 4, 8, 4)
         };
         noAgeUp.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
             if (noAgeUp.IsChecked == true) SetCaseInsensitiveAttribute(currentTarget, "ignoreageups", "");
             else RemoveCaseInsensitiveAttribute(currentTarget, "ignoreageups");
@@ -4549,7 +4570,7 @@ public partial class TechnologyEditorView : UserControl
         var exclusionKey = (effect, "target.excludetypes");
         if (exclusionAttribute == null && !_openOnHitOptionalSelectors.Contains(exclusionKey))
         {
-            if (!IsModifiedTab) return;
+            if (!CanEditModifiedDocument) return;
             var addExclusion = CreateOptionalPropertyButton("Exclude tech");
             addExclusion.Click += (_, _) =>
             {
@@ -4597,7 +4618,7 @@ public partial class TechnologyEditorView : UserControl
             var captured = exclusion;
             exclusionGroup.Children.Add(EditorChipService.CreateBlueChip(
                 captured,
-                IsModifiedTab ? () =>
+                CanEditModifiedDocument ? () =>
                 {
                     var currentTarget = EnsureTechnologyDataTarget(effect, "techAll");
                     var remaining = (GetCaseInsensitiveAttribute(currentTarget, "excludetypes")?.Value ?? "")
@@ -4608,9 +4629,9 @@ public partial class TechnologyEditorView : UserControl
                     MarkDirty();
                     _ = BuildEditorAsync();
                 } : null,
-                readOnly: !IsModifiedTab));
+                readOnly: !CanEditModifiedDocument));
         }
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
         {
             exclusionGroup.Children.Add(CreateRemoveButton(() =>
             {
@@ -4723,13 +4744,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Include dead",
             IsChecked = GetCaseInsensitiveAttribute(effect, "includedead")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 0, 4)
         };
         includeDead.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (includeDead.IsChecked == true) SetCaseInsensitiveAttribute(effect, "includedead", "true");
             else RemoveCaseInsensitiveAttribute(effect, "includedead");
             MarkDirty();
@@ -4928,7 +4949,7 @@ public partial class TechnologyEditorView : UserControl
         };
         targetCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || !normalize(effect)) return;
+            if (_loadingUi || !CanEditModifiedDocument || !normalize(effect)) return;
             MarkDirty();
             UpdatePreview();
         };
@@ -4980,13 +5001,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "Self",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "empowertype", selected.ToLowerInvariant());
             MarkDirty();
             UpdatePreview();
@@ -5027,13 +5048,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Add to tactics",
             IsChecked = !string.Equals(GetCaseInsensitiveAttribute(effect, "addToTactics")?.Value, "0", StringComparison.OrdinalIgnoreCase),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(8, 4, 0, 4),
             VerticalAlignment = VerticalAlignment.Center
         };
         addToTactics.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (addToTactics.IsChecked == false) SetCaseInsensitiveAttribute(effect, "addToTactics", "0");
             else RemoveCaseInsensitiveAttribute(effect, "addToTactics");
             MarkDirty();
@@ -5277,13 +5298,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = rankTypeOptions,
             SelectedItem = rankTypeOptions.FirstOrDefault(value => value.Equals(currentRankType, StringComparison.OrdinalIgnoreCase)) ?? "Attacks",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         rankType.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || rankType.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || rankType.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "rankType", selected);
             MarkDirty();
             UpdatePreview();
@@ -5373,14 +5394,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Enable attack", "Disable attack" },
             SelectedItem = current == "0" ? "Disable attack" : "Enable attack",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 135,
             Margin = new Thickness(8, 4, 8, 4)
         };
         ConfigureTechnologyField(toggle, EditorFieldWidthRole.LongEnum);
         toggle.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || toggle.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || toggle.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable attack" ? "0" : "1");
             SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
             MarkDirty(); UpdatePreview();
@@ -5411,13 +5432,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Add", "Set to" },
             SelectedItem = currentRelativity.Equals("Assign", StringComparison.OrdinalIgnoreCase) ? "Set to" : "Add",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(8, 4, 8, 4)
         };
         relativity.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || relativity.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || relativity.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "relativity", selected == "Set to" ? "Assign" : "Absolute");
             MarkDirty(); UpdatePreview();
         };
@@ -5474,13 +5495,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Unit", "Tech", "Command" },
             SelectedItem = referenceKind,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 110,
             Margin = new Thickness(8, 4, 0, 4)
         };
         kindCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || kindCombo.SelectedItem is not string selected ||
+            if (_loadingUi || !CanEditModifiedDocument || kindCombo.SelectedItem is not string selected ||
                 selected.Equals(GetCommandReferenceKind(effect), StringComparison.OrdinalIgnoreCase)) return;
             RemoveCaseInsensitiveAttribute(effect, "proto");
             RemoveCaseInsensitiveAttribute(effect, "tech");
@@ -5566,13 +5587,13 @@ public partial class TechnologyEditorView : UserControl
             {
                 Content = flag,
                 IsChecked = selected.Contains(flag),
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 4, 8, 4)
             };
             checkBox.IsCheckedChanged += (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 if (checkBox.IsChecked == true) selected.Add(flag);
                 else selected.Remove(flag);
                 var value = string.Join("|", ProtoConstants.KnownDamageAreaTargetFlags.Where(selected.Contains));
@@ -5602,13 +5623,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = ProtoConstants.KnownShadingTypeDisplayNames,
             SelectedItem = ProtoConstants.KnownShadingTypeDisplayNames.FirstOrDefault(value => value.Equals(currentShading, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 120,
             Margin = new Thickness(0, 4, 0, 4)
         };
         shadingCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || shadingCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || shadingCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "shadingtype", ProtoConstants.GetShadingTypeXmlValue(selected));
             MarkDirty(); UpdatePreview();
         };
@@ -5618,7 +5639,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(threshold, ProtoUnitNumericKind.ClampZeroToOne);
         ObserveTechnologyTextEdits(threshold, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (!double.TryParse(threshold.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) return;
             var clamped = Math.Clamp(parsed, 0d, 1d);
             var normalized = clamped.ToString("0.################", CultureInfo.InvariantCulture);
@@ -5691,13 +5712,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Enable", "Disable" },
             SelectedItem = currentAmount == "0" ? "Disable" : "Enable",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(leftMargin, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
             SetCaseInsensitiveAttribute(effect, "relativity", relativity);
             MarkDirty(); UpdatePreview();
@@ -5716,13 +5737,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Update lifespan as percent",
             IsChecked = GetCaseInsensitiveAttribute(effect, "updateLifespanAsPercent") != null,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 0, 4)
         };
         updatePercent.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (updatePercent.IsChecked == true) SetCaseInsensitiveAttribute(effect, "updateLifespanAsPercent", "");
             else RemoveCaseInsensitiveAttribute(effect, "updateLifespanAsPercent");
             MarkDirty(); UpdatePreview();
@@ -5755,7 +5776,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Player", "Unit" },
             SelectedItem = playerMode ? "Player" : "Unit",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
@@ -5794,7 +5815,7 @@ public partial class TechnologyEditorView : UserControl
 
         targetKind.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || targetKind.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || targetKind.SelectedItem is not string selected) return;
             var currentTarget = EnsureDataTarget(effect);
             if (selected == "Player")
             {
@@ -5850,7 +5871,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Unit", "Resource" },
             SelectedItem = resourceMode ? "Resource" : "Unit",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(8, 4, 0, 4)
         };
@@ -5872,7 +5893,7 @@ public partial class TechnologyEditorView : UserControl
 
         forKind.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || forKind.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || forKind.SelectedItem is not string selected) return;
             RemoveCaseInsensitiveAttribute(effect, "unittype");
             if (selected == "Resource") SetCaseInsensitiveAttribute(effect, "unittype", ProtoConstants.KnownResourceTypes[0]);
             MarkDirty(); UpdatePreview();
@@ -5936,14 +5957,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = ProtoConstants.KnownResourceTypes,
             SelectedItem = GetCaseInsensitiveAttribute(effect, attributeName) == null ? null : ProtoConstants.KnownResourceTypes.FirstOrDefault(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(8, 4, 0, 4)
         };
         EditorValidationBindings.Bind(combo, effect, "@" + attributeName);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, attributeName, selected);
             MarkDirty(); UpdatePreview();
         };
@@ -6019,7 +6040,7 @@ public partial class TechnologyEditorView : UserControl
         var attribute = GetCaseInsensitiveAttribute(effect, "placementcheck");
         if (attribute == null)
         {
-            if (!IsModifiedTab) return;
+            if (!CanEditModifiedDocument) return;
             var button = CreateOptionalPropertyButton("Placement check");
             button.Click += (_, _) =>
             {
@@ -6035,20 +6056,20 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Default", "TerrainOnly" },
             SelectedItem = attribute.Value.Equals("TerrainOnly", StringComparison.OrdinalIgnoreCase) ? "TerrainOnly" : "Default",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 120,
             Margin = new Thickness(0, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             if (selected == "Default") RemoveCaseInsensitiveAttribute(effect, "placementcheck");
             else SetCaseInsensitiveAttribute(effect, "placementcheck", "TerrainOnly");
             MarkDirty(); UpdatePreview();
             if (selected == "Default") _ = BuildEditorAsync();
         };
         row.Children.Add(CreateLabeledEffectSegment("Placement check", combo));
-        if (IsModifiedTab)
+        if (CanEditModifiedDocument)
             row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "placementcheck")));
     }
 
@@ -6209,14 +6230,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = GetCaseInsensitiveAttribute(effect, "damagetype") == null ? null : options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         EditorValidationBindings.Bind(combo, effect, "@damagetype");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "damagetype", selected);
             MarkDirty(); UpdatePreview();
         };
@@ -6233,14 +6254,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         EditorValidationBindings.Bind(combo, effect, "@" + attributeName);
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             if (selected.Equals("All", StringComparison.OrdinalIgnoreCase)) RemoveCaseInsensitiveAttribute(effect, attributeName);
             else SetCaseInsensitiveAttribute(effect, attributeName, selected);
             MarkDirty(); UpdatePreview();
@@ -6255,7 +6276,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedInteger);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? defaultValue);
             MarkDirty(); UpdatePreview();
         });
@@ -6269,7 +6290,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.SignedInteger);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? defaultValue);
             MarkDirty();
             UpdatePreview();
@@ -6299,7 +6320,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.SignedFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? defaultValue);
             MarkDirty(); UpdatePreview();
         });
@@ -6311,7 +6332,7 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = GetCaseInsensitiveAttribute(effect, attributeName)?.Value ?? "",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = EditorFormLayout.WidthFor(role),
             MaxWidth = EditorFormLayout.WidthFor(role),
             Margin = new Thickness(0, 4, 0, 4)
@@ -6320,7 +6341,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(box, effect, "@" + attributeName);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (string.IsNullOrWhiteSpace(box.Text)) RemoveCaseInsensitiveAttribute(effect, attributeName);
             else SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? "");
             MarkDirty(); UpdatePreview();
@@ -6337,7 +6358,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.PositiveFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var value = box.Text ?? "";
             if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) || number <= 0) return;
             SetCaseInsensitiveAttribute(effect, attributeName, value);
@@ -6361,7 +6382,7 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = current,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = EditorFormLayout.WidthFor(role),
             MaxWidth = EditorFormLayout.WidthFor(role),
             Margin = new Thickness(0, 4, 0, 4)
@@ -6371,7 +6392,7 @@ public partial class TechnologyEditorView : UserControl
         var updating = false;
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || updating) return;
+            if (_loadingUi || !CanEditModifiedDocument || updating) return;
             var filtered = new string((box.Text ?? "").Where(InternalNamePolicy.IsAllowedCharacter).ToArray());
             if (!filtered.Equals(box.Text, StringComparison.Ordinal))
             {
@@ -6412,14 +6433,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Enable", "Disable" },
             SelectedItem = currentAmount == "0" ? "Disable" : "Enable",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(8, 4, 8, 4)
         };
         stateCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || stateCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || stateCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
             SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
             MarkDirty();
@@ -6631,14 +6652,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = new[] { "Enable", "Disable" },
             SelectedItem = GetCaseInsensitiveAttribute(effect, "amount")?.Value.Trim() == "0" ? "Disable" : "Enable",
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(8, 4, 0, 4)
         };
         EditorValidationBindings.Bind(combo, effect, "@amount");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Disable" ? "0" : "1");
             SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
             MarkDirty();
@@ -6657,14 +6678,14 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? options[0],
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         EditorValidationBindings.Bind(combo, effect, "@dmgtype");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "dmgtype", selected);
             MarkDirty();
             UpdatePreview();
@@ -6705,13 +6726,13 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = damageTypeOptions,
             SelectedItem = damageTypeOptions.FirstOrDefault(value => value.Equals(currentDamageType, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 110,
             Margin = new Thickness(0, 4, 0, 4)
         };
         damageTypeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || damageTypeCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || damageTypeCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "dmgtype", selected);
             MarkDirty();
             UpdatePreview();
@@ -6735,7 +6756,7 @@ public partial class TechnologyEditorView : UserControl
         var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
         if (attribute == null && !showWhenMissing && !_openOnHitOptionalSelectors.Contains(key))
         {
-            if (!IsModifiedTab || !offerWhenMissing) return;
+            if (!CanEditModifiedDocument || !offerWhenMissing) return;
             var button = CreateOptionalPropertyButton(buttonLabel);
             button.Margin = new Thickness(buttonLeftSpacing, button.Margin.Top, button.Margin.Right, button.Margin.Bottom);
             button.Click += (_, _) =>
@@ -6756,7 +6777,7 @@ public partial class TechnologyEditorView : UserControl
             UpdatePreview();
         }, role, validationSource: effect, validationField: "@" + attributeName);
         var segment = CreateLabeledEffectSegment(fieldLabel, selector);
-        if (IsModifiedTab && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        if (CanEditModifiedDocument && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
         {
             segment.Children.Add(CreateRemoveButton(() =>
             {
@@ -6774,7 +6795,7 @@ public partial class TechnologyEditorView : UserControl
         var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
         if (attribute == null && !showWhenMissing && !_openOnHitOptionalSelectors.Contains(key))
         {
-            if (!IsModifiedTab || !offerWhenMissing) return;
+            if (!CanEditModifiedDocument || !offerWhenMissing) return;
             var button = CreateOptionalPropertyButton("Damage type");
             button.Click += (_, _) =>
             {
@@ -6790,20 +6811,20 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = options,
             SelectedItem = options.FirstOrDefault(value => value.Equals(attribute?.Value.Trim() ?? "", StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 100,
             Margin = new Thickness(0, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, attributeName, selected);
             _openOnHitOptionalSelectors.Remove(key);
             MarkDirty();
             UpdatePreview();
         };
         var segment = CreateLabeledEffectSegment("Damage type", combo);
-        if (IsModifiedTab && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        if (CanEditModifiedDocument && !showWhenMissing && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
         {
             segment.Children.Add(CreateRemoveButton(() =>
             {
@@ -6824,7 +6845,7 @@ public partial class TechnologyEditorView : UserControl
         var required = effectType.Equals("Freeze", StringComparison.OrdinalIgnoreCase);
         if (!required && attribute == null && !_openOnHitOptionalSelectors.Contains(key))
         {
-            if (!IsModifiedTab) return;
+            if (!CanEditModifiedDocument) return;
             var button = CreateOptionalPropertyButton("Type");
             button.Click += (_, _) =>
             {
@@ -6841,20 +6862,20 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = ProtoConstants.KnownOnHitEffectFreezeTypeDisplayNames,
             SelectedItem = ProtoConstants.KnownOnHitEffectFreezeTypeDisplayNames.FirstOrDefault(value =>
                 value.Equals(current, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 130,
             Margin = new Thickness(0, 4, 0, 4)
         };
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, attributeName, ProtoConstants.GetOnHitEffectFreezeTypeXmlValue(selected));
             _openOnHitOptionalSelectors.Remove(key);
             MarkDirty();
             UpdatePreview();
         };
         var segment = CreateLabeledEffectSegment("Type", combo);
-        if (!required && IsModifiedTab && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
+        if (!required && CanEditModifiedDocument && (attribute != null || _openOnHitOptionalSelectors.Contains(key)))
         {
             segment.Children.Add(CreateRemoveButton(() =>
             {
@@ -6873,7 +6894,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.PositiveFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var value = box.Text ?? "";
             if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) || number <= 0) return;
             SetCaseInsensitiveAttribute(effect, "progFreezeDuration", value);
@@ -6899,7 +6920,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = movementTypes,
             SelectedItem = movementTypes.FirstOrDefault(value => value.Equals(currentMovementType, StringComparison.OrdinalIgnoreCase)),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 120,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 4, 0, 4)
@@ -6907,7 +6928,7 @@ public partial class TechnologyEditorView : UserControl
         ConfigureTechnologyField(movementTypeCombo, EditorFieldWidthRole.LongEnum);
         movementTypeCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || movementTypeCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || movementTypeCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "movementtype", selected);
             SetCaseInsensitiveAttribute(effect, "amount", "1");
             SetCaseInsensitiveAttribute(effect, "relativity", "Assign");
@@ -6985,13 +7006,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Not Nature",
             IsChecked = target?.Attributes().Any(a => a.Name.LocalName.Equals("ignoreNature", StringComparison.OrdinalIgnoreCase)) == true,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 8, 4)
         };
         ignoreNature.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var currentTarget = EnsureDataTarget(effect);
             if (ignoreNature.IsChecked == true) SetCaseInsensitiveAttribute(currentTarget, "ignoreNature", "");
             else RemoveCaseInsensitiveAttribute(currentTarget, "ignoreNature");
@@ -7025,7 +7046,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = relativityOptions,
             SelectedItem = GetCaseInsensitiveAttribute(effect, "relativity") == null ? null : RelativityToDisplay(currentRelativity),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 132,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(8, 4, 8, 4)
@@ -7034,7 +7055,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(relativityCombo, effect, "@relativity");
         relativityCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || relativityCombo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || relativityCombo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "relativity", DisplayToRelativity(selected));
             MarkDirty();
             UpdatePreview();
@@ -7046,7 +7067,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(amount, ProtoUnitNumericKind.SignedFloat);
         ObserveTechnologyTextEdits(amount, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "amount", amount.Text ?? "0");
             MarkDirty();
             UpdatePreview();
@@ -7066,7 +7087,7 @@ public partial class TechnologyEditorView : UserControl
         {
             ItemsSource = displayValues,
             SelectedItem = GetCaseInsensitiveAttribute(effect, "relativity") == null ? null : RelativityToDisplay(currentRelativity),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 132,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(8, 4, 8, 4)
@@ -7075,7 +7096,7 @@ public partial class TechnologyEditorView : UserControl
         EditorValidationBindings.Bind(combo, effect, "@relativity");
         combo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "relativity", DisplayToRelativity(selected));
             MarkDirty();
             UpdatePreview();
@@ -7191,7 +7212,7 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = new[] { "Unit", "Tech" },
             SelectedItem = targetKind,
             Width = 90,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 8, 4)
         };
         row.Children.Add(targetKindCombo);
@@ -7222,7 +7243,7 @@ public partial class TechnologyEditorView : UserControl
             var newNameBox = EditorTextFieldStyle.ConfigureTextBox(new TextBox
             {
                 Text = "",
-                IsEnabled = IsModifiedTab,
+                IsEnabled = CanEditModifiedDocument,
                 Width = 200,
                 MaxWidth = 200,
                 Margin = new Thickness(0, 4, 8, 4)
@@ -7230,7 +7251,7 @@ public partial class TechnologyEditorView : UserControl
             newNameBox.Width = newNameBox.MaxWidth = 200;
             ObserveTechnologyTextEdits(newNameBox, (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab || string.IsNullOrEmpty(newNameBox.Text)) return;
+                if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrEmpty(newNameBox.Text)) return;
                 createdId ??= BuildUniqueSetNameStringId(effect, "NEW_NAME");
                 if (GetCaseInsensitiveAttribute(effect, "newName") == null)
                     SetCaseInsensitiveAttribute(effect, "newName", createdId);
@@ -7246,7 +7267,7 @@ public partial class TechnologyEditorView : UserControl
         AddSetNameOptionalStringButton(effect, row, "New short rollover", "newShortRollover", "NEW_SHORT_ROLLOVER");
 
         var reqTech = GetCaseInsensitiveAttribute(effect, "reqTech");
-        if (reqTech == null && IsModifiedTab)
+        if (reqTech == null && CanEditModifiedDocument)
         {
             var addReq = CreateOptionalPropertyButton("Tech Req");
             addReq.Margin = new Thickness(8, 4, 8, 4);
@@ -7259,12 +7280,12 @@ public partial class TechnologyEditorView : UserControl
             reqLabel.Margin = new Thickness(8, 4, 8, 4);
             row.Children.Add(reqLabel);
             row.Children.Add(CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), reqTech.Value, value => SetCaseInsensitiveAttribute(effect, "reqTech", value), EditorFieldWidthRole.Reference, validationSource: effect, validationField: "@reqTech"));
-            if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "reqTech")));
+            if (CanEditModifiedDocument) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "reqTech")));
         }
 
         targetKindCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || targetKindCombo.SelectedItem is not string kind) return;
+            if (_loadingUi || !CanEditModifiedDocument || targetKindCombo.SelectedItem is not string kind) return;
             ObserveUiOperation(
                 ChangeSetNameTargetKindAsync(effect, kind),
                 "change the SetName target type");
@@ -7320,7 +7341,7 @@ public partial class TechnologyEditorView : UserControl
 
     private void AddSetNameOptionalStringButton(XElement effect, WrapPanel row, string label, string attributeName, string suffix)
     {
-        if (GetCaseInsensitiveAttribute(effect, attributeName) != null || !IsModifiedTab) return;
+        if (GetCaseInsensitiveAttribute(effect, attributeName) != null || !CanEditModifiedDocument) return;
         var button = CreateOptionalPropertyButton(label);
         button.Click += (_, _) =>
         {
@@ -7349,7 +7370,7 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = text,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = 380,
             MaxWidth = 380,
             MinHeight = 32,
@@ -7379,10 +7400,10 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(box);
         if (!allIsIntrinsic)
         {
-            var all = new CheckBox { Content = "To all", IsChecked = GetCaseInsensitiveAttribute(effect, "all")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 0, 4), VerticalAlignment = VerticalAlignment.Center };
+            var all = new CheckBox { Content = "To all", IsChecked = GetCaseInsensitiveAttribute(effect, "all")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 0, 4), VerticalAlignment = VerticalAlignment.Center };
             all.IsCheckedChanged += (_, _) =>
             {
-                if (_loadingUi || !IsModifiedTab) return;
+                if (_loadingUi || !CanEditModifiedDocument) return;
                 if (all.IsChecked == true) SetCaseInsensitiveAttribute(effect, "all", "true"); else RemoveCaseInsensitiveAttribute(effect, "all");
                 MarkDirty(); UpdatePreview();
             };
@@ -7395,9 +7416,9 @@ public partial class TechnologyEditorView : UserControl
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(CreateInlineLabel("Set"));
-        var combo = new ComboBox { ItemsSource = TechnologyAges, SelectedItem = TechnologyAges.FirstOrDefault(a => a.Equals(effect.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? effect.Value.Trim(), Width = 150, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 0, 4) };
+        var combo = new ComboBox { ItemsSource = TechnologyAges, SelectedItem = TechnologyAges.FirstOrDefault(a => a.Equals(effect.Value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? effect.Value.Trim(), Width = 150, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 0, 4) };
         ConfigureTechnologyField(combo, EditorFieldWidthRole.LongEnum);
-        combo.SelectionChanged += (_, _) => { if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string value) return; effect.Value = value; MarkDirty(); UpdatePreview(); };
+        combo.SelectionChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string value) return; effect.Value = value; MarkDirty(); UpdatePreview(); };
         row.Children.Add(combo);
         content.Children.Add(row);
     }
@@ -7412,13 +7433,13 @@ public partial class TechnologyEditorView : UserControl
         statusLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(statusLabel);
         var currentStatus = GetCaseInsensitiveAttribute(effect, "status")?.Value ?? "obtainable";
-        var statusCombo = new ComboBox { ItemsSource = new[] { "Obtainable", "Active", "Unobtainable" }, SelectedItem = ToDisplayStatus(currentStatus), Width = 130, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 8, 4) };
+        var statusCombo = new ComboBox { ItemsSource = new[] { "Obtainable", "Active", "Unobtainable" }, SelectedItem = ToDisplayStatus(currentStatus), Width = 130, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 8, 4) };
         ConfigureTechnologyField(statusCombo, EditorFieldWidthRole.LongEnum);
-        statusCombo.SelectionChanged += (_, _) => { if (_loadingUi || !IsModifiedTab || statusCombo.SelectedItem is not string value) return; SetCaseInsensitiveAttribute(effect, "status", value.ToLowerInvariant()); MarkDirty(); UpdatePreview(); };
+        statusCombo.SelectionChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument || statusCombo.SelectedItem is not string value) return; SetCaseInsensitiveAttribute(effect, "status", value.ToLowerInvariant()); MarkDirty(); UpdatePreview(); };
         row.Children.Add(statusCombo);
 
         var majorGod = GetCaseInsensitiveAttribute(effect, "uiShowIfMajorGod");
-        if (majorGod == null && IsModifiedTab)
+        if (majorGod == null && CanEditModifiedDocument)
         {
             var button = CreateOptionalPropertyButton("Show in UI if major god is");
             button.Margin = new Thickness(8, 4, 8, 4);
@@ -7431,15 +7452,15 @@ public partial class TechnologyEditorView : UserControl
             majorGodLabel.Margin = new Thickness(8, 4, 8, 4);
             row.Children.Add(majorGodLabel);
             row.Children.Add(CreateStrictEffectSelector(_majorGodNames, majorGod.Value, value => SetCaseInsensitiveAttribute(effect, "uiShowIfMajorGod", value), EditorFieldWidthRole.Reference, validationSource: effect, validationField: "@uiShowIfMajorGod"));
-            if (IsModifiedTab) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "uiShowIfMajorGod")));
+            if (CanEditModifiedDocument) row.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "uiShowIfMajorGod")));
         }
         content.Children.Add(row);
     }
 
     private void AddSharedLosEffectEditor(XElement effect, StackPanel content)
     {
-        var reveal = new CheckBox { Content = "Reveal all", IsChecked = GetCaseInsensitiveAttribute(effect, "all")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 0, 4) };
-        reveal.IsCheckedChanged += (_, _) => { if (_loadingUi || !IsModifiedTab) return; if (reveal.IsChecked == true) SetCaseInsensitiveAttribute(effect, "all", "true"); else RemoveCaseInsensitiveAttribute(effect, "all"); MarkDirty(); UpdatePreview(); };
+        var reveal = new CheckBox { Content = "Reveal all", IsChecked = GetCaseInsensitiveAttribute(effect, "all")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 0, 4) };
+        reveal.IsCheckedChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument) return; if (reveal.IsChecked == true) SetCaseInsensitiveAttribute(effect, "all", "true"); else RemoveCaseInsensitiveAttribute(effect, "all"); MarkDirty(); UpdatePreview(); };
         content.Children.Add(reveal);
     }
 
@@ -7457,8 +7478,8 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(newHpSpacer);
         AddOptionalEffectAttribute(row, effect, "New HP", "newHP", "1", EditorFieldWidthRole.Numeric, ProtoUnitNumericKind.UnsignedInteger, requirePositive: true);
 
-        var reset = new CheckBox { Content = "Reset quick action", IsChecked = GetCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = IsModifiedTab, Margin = new Thickness(8, 4, 0, 4) };
-        reset.IsCheckedChanged += (_, _) => { if (_loadingUi || !IsModifiedTab) return; if (reset.IsChecked == true) SetCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex", "true"); else RemoveCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex"); MarkDirty(); UpdatePreview(); };
+        var reset = new CheckBox { Content = "Reset quick action", IsChecked = GetCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(8, 4, 0, 4) };
+        reset.IsCheckedChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument) return; if (reset.IsChecked == true) SetCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex", "true"); else RemoveCaseInsensitiveAttribute(effect, "ResetQuickActionCommandIndex"); MarkDirty(); UpdatePreview(); };
         row.Children.Add(reset);
         content.Children.Add(row);
     }
@@ -7472,8 +7493,8 @@ public partial class TechnologyEditorView : UserControl
         toLabel.Margin = new Thickness(8, 4, 8, 4);
         row.Children.Add(toLabel);
         row.Children.Add(EditorValidationBindings.Bind(CreateStrictEffectSelector(_protoUnitNames, GetCaseInsensitiveAttribute(effect, "toProtoID")?.Value ?? "", value => SetCaseInsensitiveAttribute(effect, "toProtoID", value), EditorFieldWidthRole.Reference), effect, "@toProtoID"));
-        var queued = new CheckBox { Content = "Include queued", IsChecked = GetCaseInsensitiveAttribute(effect, "includeQueued")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = IsModifiedTab, Margin = new Thickness(8, 4, 0, 4) };
-        queued.IsCheckedChanged += (_, _) => { if (_loadingUi || !IsModifiedTab) return; if (queued.IsChecked == true) SetCaseInsensitiveAttribute(effect, "includeQueued", "true"); else RemoveCaseInsensitiveAttribute(effect, "includeQueued"); MarkDirty(); UpdatePreview(); };
+        var queued = new CheckBox { Content = "Include queued", IsChecked = GetCaseInsensitiveAttribute(effect, "includeQueued")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(8, 4, 0, 4) };
+        queued.IsCheckedChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument) return; if (queued.IsChecked == true) SetCaseInsensitiveAttribute(effect, "includeQueued", "true"); else RemoveCaseInsensitiveAttribute(effect, "includeQueued"); MarkDirty(); UpdatePreview(); };
         row.Children.Add(queued);
         content.Children.Add(row);
     }
@@ -7496,7 +7517,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(amountBox, ProtoUnitNumericKind.UnsignedFloat);
         ObserveTechnologyTextEdits(amountBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "amount", amountBox.Text ?? "0");
             MarkDirty(); UpdatePreview();
         });
@@ -7510,7 +7531,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(amount2Box, ProtoUnitNumericKind.UnsignedFloat);
         ObserveTechnologyTextEdits(amount2Box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "amount2", amount2Box.Text ?? "0");
             MarkDirty(); UpdatePreview();
         });
@@ -7539,7 +7560,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(selectBox, ProtoUnitNumericKind.UnsignedInteger);
         ObserveTechnologyTextEdits(selectBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (!int.TryParse(selectBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) || value <= 0) return;
             SetCaseInsensitiveAttribute(effect, "select", value.ToString(CultureInfo.InvariantCulture));
             MarkDirty(); UpdatePreview();
@@ -7554,13 +7575,13 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = new[] { "Obtainable", "Active", "Unobtainable" },
             SelectedItem = ToDisplayStatus(currentStatus),
             Width = 130,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 0, 4)
         };
         ConfigureTechnologyField(statusCombo, EditorFieldWidthRole.LongEnum);
         statusCombo.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || statusCombo.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || statusCombo.SelectedItem is not string value) return;
             SetCaseInsensitiveAttribute(effect, "status", value.ToLowerInvariant());
             MarkDirty(); UpdatePreview();
         };
@@ -7573,7 +7594,7 @@ public partial class TechnologyEditorView : UserControl
         AutoCompleteBox? picker = null;
         picker = CreateStrictEffectSelector(_original.Keys.Concat(_modified.Keys), "", value =>
         {
-            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(value)) return;
+            if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrWhiteSpace(value)) return;
             if (!effect.Elements().Any(e => e.Name.LocalName.Equals("Tech", StringComparison.OrdinalIgnoreCase) && e.Value.Trim().Equals(value, StringComparison.OrdinalIgnoreCase)))
             {
                 effect.Add(new XElement("Tech", value));
@@ -7609,13 +7630,13 @@ public partial class TechnologyEditorView : UserControl
                 var captured = techElement;
                 chips.Children.Add(EditorChipService.CreateBlueChip(
                     captured.Value.Trim(),
-                    IsModifiedTab ? () =>
+                    CanEditModifiedDocument ? () =>
                     {
                         captured.Remove();
                         MarkDirty(); UpdatePreview();
                         RenderChips(); RefreshPicker();
                     } : null,
-                    readOnly: !IsModifiedTab));
+                    readOnly: !CanEditModifiedDocument));
             }
         }
 
@@ -7701,12 +7722,12 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = new[] { "Forbid", "Unforbid" },
             SelectedItem = amount.Trim().StartsWith("0", StringComparison.Ordinal) ? "Unforbid" : "Forbid",
             Width = 110,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(4, 4, 0, 4)
         };
         mode.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || mode.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || mode.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Forbid" ? "1" : "0");
             MarkDirty(); UpdatePreview();
         };
@@ -7729,12 +7750,12 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = new[] { "Activates", "Disable" },
             SelectedItem = amount.Trim().StartsWith("0", StringComparison.Ordinal) ? "Disable" : "Activates",
             Width = 110,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(4, 4, 8, 4)
         };
         action.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || action.SelectedItem is not string selected) return;
+            if (_loadingUi || !CanEditModifiedDocument || action.SelectedItem is not string selected) return;
             SetCaseInsensitiveAttribute(effect, "amount", selected == "Activates" ? "1" : "0");
             MarkDirty(); UpdatePreview();
         };
@@ -7759,13 +7780,13 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = new[] { "Self", "Ally", "Enemy", "All" },
             SelectedItem = GetCaseInsensitiveAttribute(effect, "target")?.Value ?? "Self",
             Width = 100,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 8, 4)
         };
         row.Children.Add(CreateLabeledEffectSegment("Target", target));
         target.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || target.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || target.SelectedItem is not string value) return;
             SetCaseInsensitiveAttribute(effect, "target", value);
             MarkDirty(); UpdatePreview();
         };
@@ -7774,13 +7795,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Include player name",
             IsChecked = GetCaseInsensitiveAttribute(effect, "playerName")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(8, 4, 8, 4),
             VerticalAlignment = VerticalAlignment.Center
         };
         playerName.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "playerName", playerName.IsChecked == true ? "True" : "False");
             MarkDirty(); UpdatePreview();
         };
@@ -7791,7 +7812,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(durationBox, ProtoUnitNumericKind.UnsignedInteger);
         ObserveTechnologyTextEdits(durationBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "duration", durationBox.Text ?? "2500");
             MarkDirty(); UpdatePreview();
         });
@@ -7809,7 +7830,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(quantityBox, ProtoUnitNumericKind.PositiveInteger);
         ObserveTechnologyTextEdits(quantityBox, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (!int.TryParse(quantityBox.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var quantity) || quantity <= 0) return;
             var editablePattern = GetOrCreateCreateUnitPattern(effect);
             SetCaseInsensitiveAttribute(editablePattern, "quantity", quantity.ToString(CultureInfo.InvariantCulture));
@@ -7834,13 +7855,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Queue",
             IsChecked = !string.Equals(GetCaseInsensitiveAttribute(effect, "queue")?.Value, "false", StringComparison.OrdinalIgnoreCase),
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 0, 4)
         };
         queue.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (queue.IsChecked == true) RemoveCaseInsensitiveAttribute(effect, "queue");
             else SetCaseInsensitiveAttribute(effect, "queue", "false");
             MarkDirty(); UpdatePreview();
@@ -7863,12 +7884,12 @@ public partial class TechnologyEditorView : UserControl
             ItemsSource = patternTypes,
             SelectedItem = patternTypes.FirstOrDefault(value => value.Equals(currentPatternType, StringComparison.OrdinalIgnoreCase)),
             Width = 100,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Margin = new Thickness(0, 4, 8, 4)
         };
         patternType.SelectionChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || patternType.SelectedItem is not string value) return;
+            if (_loadingUi || !CanEditModifiedDocument || patternType.SelectedItem is not string value) return;
             SetCaseInsensitiveAttribute(GetOrCreateCreateUnitPattern(effect), "type", value);
             MarkDirty(); UpdatePreview();
         };
@@ -7881,7 +7902,7 @@ public partial class TechnologyEditorView : UserControl
         var offset = pattern?.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("offset", StringComparison.OrdinalIgnoreCase));
         if (offset == null)
         {
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
             {
                 var addOffset = CreateOptionalPropertyButton("Offset");
                 addOffset.Click += (_, _) =>
@@ -7908,13 +7929,13 @@ public partial class TechnologyEditorView : UserControl
                 EditorNumericInputBehavior.AttachRule(axisBox, ProtoUnitNumericKind.SignedFloat);
                 ObserveTechnologyTextEdits(axisBox, (_, _) =>
                 {
-                    if (_loadingUi || !IsModifiedTab) return;
+                    if (_loadingUi || !CanEditModifiedDocument) return;
                     SetCaseInsensitiveAttribute(offset, axis, axisBox.Text ?? "0");
                     MarkDirty(); UpdatePreview();
                 });
                 offsetGroup.Children.Add(axisBox);
             }
-            if (IsModifiedTab)
+            if (CanEditModifiedDocument)
                 offsetGroup.Children.Add(CreateRemoveButton(() => offset.Remove()));
             patternRow.Children.Add(offsetGroup);
         }
@@ -7927,13 +7948,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = label,
             IsChecked = GetCaseInsensitiveAttribute(effect, attributeName) != null,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 0, 4)
         };
         checkBox.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (checkBox.IsChecked == true) SetCaseInsensitiveAttribute(effect, attributeName, enabledValue);
             else RemoveCaseInsensitiveAttribute(effect, attributeName);
             MarkDirty(); UpdatePreview();
@@ -7955,7 +7976,7 @@ public partial class TechnologyEditorView : UserControl
         var attribute = pattern == null ? null : GetCaseInsensitiveAttribute(pattern, attributeName);
         if (attribute == null)
         {
-            if (!IsModifiedTab) return;
+            if (!CanEditModifiedDocument) return;
             var add = CreateOptionalPropertyButton(label);
             add.Click += (_, _) =>
             {
@@ -7972,12 +7993,12 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, signed ? ProtoUnitNumericKind.SignedFloat : ProtoUnitNumericKind.UnsignedFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             attribute.Value = box.Text ?? defaultValue;
             MarkDirty(); UpdatePreview();
         });
         group.Children.Add(box);
-        if (IsModifiedTab) group.Children.Add(CreateRemoveButton(() => attribute.Remove()));
+        if (CanEditModifiedDocument) group.Children.Add(CreateRemoveButton(() => attribute.Remove()));
         row.Children.Add(group);
     }
 
@@ -7997,13 +8018,13 @@ public partial class TechnologyEditorView : UserControl
         {
             Content = "Keep alive",
             IsChecked = GetCaseInsensitiveAttribute(effect, "keepUnit")?.Value.Equals("true", StringComparison.OrdinalIgnoreCase) == true,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 4, 0, 4)
         };
         keepAlive.IsCheckedChanged += (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             if (keepAlive.IsChecked == true) SetCaseInsensitiveAttribute(effect, "keepUnit", "true");
             else RemoveCaseInsensitiveAttribute(effect, "keepUnit");
             MarkDirty(); UpdatePreview();
@@ -8022,7 +8043,7 @@ public partial class TechnologyEditorView : UserControl
         row.Children.Add(CreateLabeledEffectSegment("Source Resource", CreateResourceCombo(effect, "srcResource1")));
 
         var source2 = GetCaseInsensitiveAttribute(effect, "srcResource2");
-        if (source2 == null && IsModifiedTab)
+        if (source2 == null && CanEditModifiedDocument)
         {
             var addSource2 = CreateOptionalPropertyButton("Source Resource 2");
             addSource2.Margin = new Thickness(0, 4, 8, 4);
@@ -8036,7 +8057,7 @@ public partial class TechnologyEditorView : UserControl
         else if (source2 != null)
         {
             var source2Segment = CreateLabeledEffectSegment("Source Resource 2", CreateResourceCombo(effect, "srcResource2"));
-            if (IsModifiedTab) source2Segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "srcResource2")));
+            if (CanEditModifiedDocument) source2Segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, "srcResource2")));
             row.Children.Add(source2Segment);
         }
 
@@ -8088,7 +8109,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, attributeName, box.Text ?? defaultValue);
             MarkDirty(); UpdatePreview();
         });
@@ -8108,7 +8129,7 @@ public partial class TechnologyEditorView : UserControl
         EditorNumericInputBehavior.AttachRule(box, ProtoUnitNumericKind.UnsignedFloat);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             SetCaseInsensitiveAttribute(effect, "multiplier", box.Text ?? "0");
             MarkDirty();
             UpdatePreview();
@@ -8121,9 +8142,9 @@ public partial class TechnologyEditorView : UserControl
     {
         var current = GetCaseInsensitiveAttribute(effect, attributeName)?.Value ?? "";
         var values = ProtoConstants.KnownResourceTypes.Append(current).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var combo = new ComboBox { ItemsSource = values, SelectedItem = values.FirstOrDefault(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)), Width = 100, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 8, 4) };
+        var combo = new ComboBox { ItemsSource = values, SelectedItem = values.FirstOrDefault(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)), Width = 100, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 8, 4) };
         EditorValidationBindings.Bind(combo, effect, "@" + attributeName);
-        combo.SelectionChanged += (_, _) => { if (_loadingUi || !IsModifiedTab || combo.SelectedItem is not string value) return; SetCaseInsensitiveAttribute(effect, attributeName, value); MarkDirty(); UpdatePreview(); };
+        combo.SelectionChanged += (_, _) => { if (_loadingUi || !CanEditModifiedDocument || combo.SelectedItem is not string value) return; SetCaseInsensitiveAttribute(effect, attributeName, value); MarkDirty(); UpdatePreview(); };
         return combo;
     }
 
@@ -8131,9 +8152,9 @@ public partial class TechnologyEditorView : UserControl
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(CreateInlineLabel(label));
-        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox { Text = effect.Value, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 0, 4) }, role);
+        var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox { Text = effect.Value, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 0, 4) }, role);
         EditorValidationBindings.Bind(box, effect);
-        ObserveTechnologyTextEdits(box, (_, _) => { if (_loadingUi || !IsModifiedTab) return; effect.Value = box.Text ?? ""; MarkDirty(); UpdatePreview(); });
+        ObserveTechnologyTextEdits(box, (_, _) => { if (_loadingUi || !CanEditModifiedDocument) return; effect.Value = box.Text ?? ""; MarkDirty(); UpdatePreview(); });
         row.Children.Add(box);
         content.Children.Add(row);
     }
@@ -8153,7 +8174,7 @@ public partial class TechnologyEditorView : UserControl
         var attribute = GetCaseInsensitiveAttribute(effect, attributeName);
         if (attribute == null)
         {
-            if (!IsModifiedTab || !offerWhenMissing) return;
+            if (!CanEditModifiedDocument || !offerWhenMissing) return;
             var button = CreateOptionalPropertyButton(label);
             button.Margin = new Thickness(buttonLeftSpacing, button.Margin.Top, button.Margin.Right, button.Margin.Bottom);
             button.Click += (_, _) => { SetCaseInsensitiveAttribute(effect, attributeName, defaultValue); MarkDirty(); _ = BuildEditorAsync(); };
@@ -8168,19 +8189,19 @@ public partial class TechnologyEditorView : UserControl
         }
         else
         {
-            box = EditorTextFieldStyle.ConfigureTextBox(new TextBox { Text = attribute.Value, IsEnabled = IsModifiedTab, Margin = new Thickness(0, 4, 0, 4) }, role);
+            box = EditorTextFieldStyle.ConfigureTextBox(new TextBox { Text = attribute.Value, IsEnabled = CanEditModifiedDocument, Margin = new Thickness(0, 4, 0, 4) }, role);
         }
         EditorValidationBindings.Bind(box, effect, "@" + attributeName);
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var value = box.Text ?? "";
             if (requirePositive && (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) || number <= 0)) return;
             attribute.Value = value;
             MarkDirty(); UpdatePreview();
         });
         var segment = CreateLabeledEffectSegment(label, box);
-        if (IsModifiedTab) segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, attributeName)));
+        if (CanEditModifiedDocument) segment.Children.Add(CreateRemoveButton(() => RemoveCaseInsensitiveAttribute(effect, attributeName)));
         row.Children.Add(segment);
     }
 
@@ -8193,11 +8214,11 @@ public partial class TechnologyEditorView : UserControl
         if (multiline)
         {
             content.Children.Add(EditorRolloverField.CreateRow(label, box,
-                removable && IsModifiedTab ? CreateRemoveButton(() => { RemoveCaseInsensitiveAttribute(effect, attribute.Name.LocalName); QueueStringForRemoval(id); }) : null));
+                removable && CanEditModifiedDocument ? CreateRemoveButton(() => { RemoveCaseInsensitiveAttribute(effect, attribute.Name.LocalName); QueueStringForRemoval(id); }) : null));
             return;
         }
         var segment = CreateLabeledEffectSegment(label, box);
-        if (removable && IsModifiedTab)
+        if (removable && CanEditModifiedDocument)
             segment.Children.Add(CreateRemoveButton(() => { RemoveCaseInsensitiveAttribute(effect, attribute.Name.LocalName); QueueStringForRemoval(id); }));
         row.Children.Add(segment);
         content.Children.Add(row);
@@ -8209,7 +8230,7 @@ public partial class TechnologyEditorView : UserControl
         var box = EditorTextFieldStyle.ConfigureTextBox(new TextBox
         {
             Text = text,
-            IsEnabled = IsModifiedTab,
+            IsEnabled = CanEditModifiedDocument,
             Width = width,
             MaxWidth = width,
             MinHeight = 32,
@@ -8224,7 +8245,7 @@ public partial class TechnologyEditorView : UserControl
         var lastText = text;
         ObserveTechnologyTextEdits(box, (_, _) =>
         {
-            if (_loadingUi || !IsModifiedTab || string.IsNullOrWhiteSpace(id)) return;
+            if (_loadingUi || !CanEditModifiedDocument || string.IsNullOrWhiteSpace(id)) return;
             var value = box.Text ?? "";
             if (value.Equals(lastText, StringComparison.Ordinal)) return;
             lastText = value;
@@ -8266,7 +8287,7 @@ public partial class TechnologyEditorView : UserControl
         var lastCommittedValue = value.Trim();
         EditorAutoCompleteService.ConfigureStrict(selector, suggestions.Append(value).Where(v => !string.IsNullOrWhiteSpace(v)), value, () => _loadingUi, preserveUnknownInitialValue: true, allowEmpty: true, commitEmptyAsValid: true, deferSelectionCommit: true, selectAllOnFirstClick: true, keepStartVisibleAfterCommit: true, preserveSuggestionOrder: preserveSuggestionOrder, valueCommitted: v =>
         {
-            if (_loadingUi || !IsModifiedTab) return;
+            if (_loadingUi || !CanEditModifiedDocument) return;
             var normalized = v.Trim();
             if (normalized.Equals(lastCommittedValue, StringComparison.OrdinalIgnoreCase)) return;
             lastCommittedValue = normalized;
@@ -8467,6 +8488,7 @@ public partial class TechnologyEditorView : UserControl
 
     public async Task<bool> CommitCurrentTechnologyAsync()
     {
+        if (IsCurrentAdditiveTechnology) return true;
         await _technologyNameCommitGate.WaitAsync();
         try
         {
@@ -8931,7 +8953,10 @@ public partial class TechnologyEditorView : UserControl
         {
             selected = _techList.SelectedItem as string;
             if (!string.IsNullOrWhiteSpace(selected))
+            {
+                if (IsModifiedTab && !CanEditTechnology(selected)) return;
                 (IsModifiedTab ? _modified : _original).TryGetValue(selected, out source);
+            }
         }
         var duplicate = source != null && !string.IsNullOrWhiteSpace(selected);
 
@@ -9060,7 +9085,7 @@ public partial class TechnologyEditorView : UserControl
     {
         var normalizedOldName = oldName.Trim();
         var normalizedNewName = newName.Trim();
-        if (!CanModifyTechnologyDocument || !_modified.ContainsKey(normalizedOldName))
+        if (!CanEditTechnology(normalizedOldName) || !_modified.ContainsKey(normalizedOldName))
             return false;
         var savedElement = LoadSavedTechnologyElement(normalizedOldName);
 
@@ -9098,11 +9123,12 @@ public partial class TechnologyEditorView : UserControl
     }
 
     public Task DeleteTechnologyAsync()
-        => ImmediateDeletionRequestedAsync?.Invoke() ?? DeleteTechnologyCoreAsync();
+        => !CanEditModifiedDocument ? Task.CompletedTask : ImmediateDeletionRequestedAsync?.Invoke() ?? DeleteTechnologyCoreAsync();
 
     internal async Task DeleteAndSaveCurrentTechnologyAsync(Window owner)
     {
         await AwaitActiveEditorBuildCompletionAsync();
+        if (!CanEditModifiedDocument) return;
         if (_current == null || _currentOriginalName == null || _modDocument == null || _modTechtreePath == null)
             return;
         var name = _currentOriginalName;
@@ -9455,8 +9481,9 @@ public partial class TechnologyEditorView : UserControl
             var rawXmlNames = xmlSaves.Select(saved => saved.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var technology in candidateDocument.Root?.Elements().Where(e => e.Name.LocalName.Equals("tech", StringComparison.OrdinalIgnoreCase)) ?? [])
             {
-                NormalizeChangedEffectAttributeOrder(technology);
                 var name = GetCaseInsensitiveAttribute(technology, "name")?.Value.Trim() ?? "";
+                if (GetTechnologyEntryKind(name) != AdditiveEntryKind.Custom) continue;
+                NormalizeChangedEffectAttributeOrder(technology);
                 if (_dirtyTechnologyNames.Contains(name) && !rawXmlNames.Contains(name))
                     TechnologyXmlOrderPolicy.NormalizeForEditor(technology);
             }
@@ -9469,11 +9496,19 @@ public partial class TechnologyEditorView : UserControl
                     SerializeTechnologyForComparison,
                     StringComparer.OrdinalIgnoreCase);
 
-            var validation = TechnologySaveValidator.Validate(candidateDocument, CreateSaveValidationCatalogs());
+            var validation = ValidateTechnologySaveCandidate(candidateDocument, CreateSaveValidationCatalogs());
             if (!validation.IsValid)
             {
                 await ShowSaveValidationErrorsAsync(validation.Errors, validation.Issues);
                 return false;
+            }
+
+            if (!IsDirty && savedTechnologyXml.Count == _savedModifiedTechnologyXml.Count &&
+                savedTechnologyXml.All(entry => _savedModifiedTechnologyXml.GetValueOrDefault(entry.Key) == entry.Value))
+            {
+                AcceptTechnologyXmlSaves(xmlSaves);
+                UpdatePreview();
+                return true;
             }
 
             var originalOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -9574,7 +9609,7 @@ public partial class TechnologyEditorView : UserControl
             _modified.Clear();
             MergeTechs(_modDocument, _modified, overwrite: true, clone: false);
             _current = !string.IsNullOrWhiteSpace(selectedTechnologyName)
-                ? (IsModifiedTab ? _modified : _original).GetValueOrDefault(selectedTechnologyName)
+                ? ResolveTechnologyForReading(selectedTechnologyName)
                 : null;
             _effectsPendingDefaultInitialization.Clear();
             _openOnHitOptionalSelectors.Clear();
@@ -9720,7 +9755,7 @@ public partial class TechnologyEditorView : UserControl
         try
         {
             var externalDocument = XDocument.Load(_modTechtreePath, LoadOptions.PreserveWhitespace);
-            var validation = TechnologyDocumentSafety.ValidateModDocument(externalDocument);
+            var validation = ValidateTechnologySourceStructure(externalDocument);
             if (!validation.IsValid)
             {
                 var message = validation.ToDisplayMessage(_modTechtreePath);
@@ -9772,7 +9807,7 @@ public partial class TechnologyEditorView : UserControl
             _openOnHitOptionalSelectors.Clear();
             _dirtyTechnologyNames.Clear();
             _current = !string.IsNullOrWhiteSpace(selectedName)
-                ? (IsModifiedTab ? _modified : _original).GetValueOrDefault(selectedName)
+                ? ResolveTechnologyForReading(selectedName)
                 : null;
             _currentOriginalName = _current == null ? null : selectedName;
             RefreshTechnologyReferenceUsage();
@@ -10006,6 +10041,12 @@ public partial class TechnologyEditorView : UserControl
             return;
         }
 
+        if (IsCurrentAdditiveTechnology)
+        {
+            var authored = _modified.GetValueOrDefault(_currentOriginalName!);
+            BindTechnologyXmlPreview(authored == null ? "" : FormatTechnologyXmlPreview(authored));
+            return;
+        }
         var previewTech = new XElement(_current);
         var protectedContent = EditorXmlOrderPolicy.HasProtectedContent(_current);
         var currentName = GetCaseInsensitiveAttribute(_current, "name")?.Value.Trim() ?? "";

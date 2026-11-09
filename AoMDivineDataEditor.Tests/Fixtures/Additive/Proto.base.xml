@@ -1,0 +1,254 @@
+<proto>
+  <unit name="VillagerGreek">
+    <displaynameid>STR_UNIT_VILLAGER_NAME</displaynameid>
+    <rollovertextid>STR_UNIT_VILLAGER_LR</rollovertextid>
+    <shortrollovertextid>STR_UNIT_VILLAGER_SR</shortrollovertextid>
+    <editornameid>STR_UNIT_VILLAGER_EDT_NAME</editornameid>
+    <icon>resources\greek\player_color\units\villager_greek_icon.png</icon>
+    <animfile>greek\units\economic\villager_greek\villager_greek.xml</animfile>
+    <soundsetfile>greek\vo\villager_greek\villager_greek.xml</soundsetfile>
+    <obstructionradiusx>0.4900</obstructionradiusx>
+    <obstructionradiusz>0.4900</obstructionradiusz>
+    <impacttype>Unarmoured</impacttype>
+    <unitaitype>Civilian</unitaitype>
+    <movementtype>land</movementtype>
+    <turnrate>18.0000</turnrate>
+    <initialhitpoints>55.0000</initialhitpoints>
+    <maxhitpoints>55.0000</maxhitpoints>
+    <trainpoints>17.0000</trainpoints>
+    <buildlimit>100</buildlimit>
+    <sharedbuildlimitunit>VillagerGreek</sharedbuildlimitunit>
+    <sharedbuildlimitunittypes>
+      <unittype>BuildLimitSharedGreek</unittype>
+    </sharedbuildlimitunittypes>
+    <weightclass>4</weightclass>
+    <populationcount>1</populationcount>
+    <maxvelocity>3.8000</maxvelocity>
+    <los>14.0000</los>
+    <cost resourcetype="Food">50.0000</cost>
+    <carrycapacity resourcetype="Food">15.0000</carrycapacity>
+    <carrycapacity resourcetype="Wood">10.0000</carrycapacity>
+    <carrycapacity resourcetype="Gold">10.0000</carrycapacity>
+    <armor type="Hack" value="0.2500" />
+    <armor type="Pierce" value="0.3500" />
+    <armor type="Crush" value="0.9900" />
+    <unittype>LogicalTypeMinimapFilterEconomic</unittype>
+    <unittype>LogicalTypeEasySelectAvoid</unittype>
+    <unittype>LogicalTypeNeededForVictory</unittype>
+    <unittype>LogicalTypeHandUnitsAutoAttack</unittype>
+    <unittype>LogicalTypePredatorsAttack</unittype>
+    <unittype>LogicalTypeValidSPCUnitsDeadCondition</unittype>
+    <unittype>LogicalTypeGarrisonInShips</unittype>
+    <unittype>LogicalTypeRangedUnitsAutoAttack</unittype>
+    <unittype>LogicalTypeVillagersAttack</unittype>
+    <unittype>LogicalTypeHandUnitsAttack</unittype>
+    <unittype>LogicalTypeRangedUnitsAttack</unittype>
+    <unittype>LogicalTypeAffectedByRestoration</unittype>
+    <unittype>LogicalTypeHealed</unittype>
+    <unittype>LogicalTypeValidShiftingSandsTarget</unittype>
+    <unittype>Unit</unittype>
+    <unittype>UnitClass</unittype>
+    <unittype>EconomicUnit</unittype>
+    <unittype>AbstractVillager</unittype>
+    <unittype>Ranged</unittype>
+    <unittype>CountsTowardEconomicScore</unittype>
+    <unittype>ValidIdleVillager</unittype>
+    <unittype>AffectedByTownBell</unittype>
+    <unittype>LogicalTypeConvertsHerds</unittype>
+    <unittype>LogicalTypeEarthquakeAttack</unittype>
+    <unittype>LogicalTypeValidMeteorTarget</unittype>
+    <unittype>LogicalTypeValidTornadoAttack</unittype>
+    <unittype>LogicalTypeVillagerNotHero</unittype>
+    <unittype>LogicalTypeValidSpyTarget</unittype>
+    <unittype>LogicalTypeValidFrostTarget</unittype>
+    <unittype>EconomicUpgraded</unittype>
+    <unittype>LogicalTypeValidShockwaveTarget</unittype>
+    <unittype>LogicalTypeValidTraitorTarget</unittype>
+    <unittype>BuildLimitSharedGreek</unittype>
+    <unittype>LogicalTypeValidBloodPactTarget</unittype>
+    <hotkeycontext>BuildGreekAccel</hotkeycontext>
+    <train row="0" column="0">House</train>
+    <train row="0" column="1">Granary</train>
+    <train row="0" column="2">Storehouse</train>
+    <train row="0" column="4">Temple</train>
+    <train row="0" column="5">Dock</train>
+    <train row="1" column="0">ArcheryRange</train>
+    <train row="1" column="1">MilitaryAcademy</train>
+    <train row="1" column="2">Stable</train>
+    <train row="1" column="3">Farm</train>
+    <train row="1" column="4">Market</train>
+    <train row="1" column="5">Armory</train>
+    <train row="2" column="0">TownCenter</train>
+    <train row="255" column="0">VillageCenter</train>
+    <train row="2" column="1">WallConnector</train>
+    <train row="255" column="255">WallShort</train>
+    <train row="255" column="255">WallMedium</train>
+    <train row="255" column="255">WallLong</train>
+    <train row="2" column="2">SentryTower</train>
+    <train row="2" column="3">Fortress</train>
+    <train row="2" column="5">Wonder</train>
+    <train>TitanGate</train>
+    <train>GiantGateRam</train>
+    <train>DigPile</train>
+    <train>TrojanHorseBuilding</train>
+    <flag>CollidesWithProjectiles</flag>
+    <flag>CorpseDecays</flag>
+    <flag>ShowGarrisonButton</flag>
+    <flag>DontRotateObstruction</flag>
+    <flag>ObscuredByUnits</flag>
+    <flag>CommonCommands</flag>
+    <flag>AutoTrainable</flag>
+    <flag>HasDefaultAttack</flag>
+    <flag>NoIdleActions</flag>
+    <flag>CreateUnitGroupAutomatically</flag>
+    <flag>NonAutoFormedUnit</flag>
+    <flag>UseSharedBuildLimit</flag>
+    <command row="3" column="2">SeekShelter</command>
+    <command row="3" column="3">Repair</command>
+    <command row="3" column="4">AttackMove</command>
+    <tactics>villager.tactics</tactics>
+    <protoaction>
+      <name>Hunting</name>
+      <rate type="Herdable">1.000000</rate>
+      <rate type="Huntable">1.000000</rate>
+      <rate type="Tree">1.000000</rate>
+      <rate type="NonConvertableHerdable">1.000000</rate>
+    </protoaction>
+    <protoaction>
+      <name>ChopAttack</name>
+      <damage type="Hack">8.000000</damage>
+    </protoaction>
+    <protoaction>
+      <name>RangedAttack</name>
+      <rof>2.000000</rof>
+      <damage type="Pierce">12.000000</damage>
+      <maxrange>12.000000</maxrange>
+      <projectile>ProjectileArrowNotFlaming</projectile>
+    </protoaction>
+    <protoaction>
+      <name>Build</name>
+      <rate type="Building">1.000000</rate>
+    </protoaction>
+    <protoaction>
+      <name>Repair</name>
+      <rate type="AbstractWall">0.2000</rate>
+      <rate type="Building">0.4000</rate>
+    </protoaction>
+    <protoaction>
+      <name>Gather</name>
+      <dropsitegathering>1</dropsitegathering>
+      <rate type="AbstractTemple">0.1</rate>
+      <rate type="WoodResource">1.000000</rate>
+      <rate type="GoldResource">0.850000</rate>
+      <rate type="Herdable">0.900000</rate>
+      <rate type="Huntable">1.000000</rate>
+      <rate type="NonConvertableHerdable">0.900000</rate>
+      <rate type="WildCrops">0.700000</rate>
+      <rate type="AbstractFarm">0.700000</rate>
+      <rate type="ThePeachBlossomSpring" resource="Food">1.000000</rate>
+      <rate type="ThePeachBlossomSpring" resource="Wood">1.000000</rate>
+      <rate type="ThePeachBlossomSpring" resource="Gold">0.850000</rate>
+    </protoaction>
+    <protoaction>
+      <name>HandAttack</name>
+      <rof>1.000000</rof>
+      <damage type="Hack">6.000000</damage>
+      <damagebonus type="AbstractTower">4.00000</damagebonus>
+      <maxrange>0.500000</maxrange>
+      <defaultattack>1</defaultattack>
+    </protoaction>
+  </unit>
+  <unit name="Hoplite">
+    <displaynameid>STR_UNIT_HOPLITE_NAME</displaynameid>
+    <rollovertextid>STR_UNIT_HOPLITE_LR</rollovertextid>
+    <shortrollovertextid>STR_UNIT_HOPLITE_SR</shortrollovertextid>
+    <icon>resources\greek\player_color\units\hoplite_icon.png</icon>
+    <animfile>greek\units\infantry\hoplite\hoplite.xml</animfile>
+    <soundsetfile>greek\vo\hoplite\hoplite.xml</soundsetfile>
+    <obstructionradiusx>0.4900</obstructionradiusx>
+    <obstructionradiusz>0.4900</obstructionradiusz>
+    <impacttype>Armoured</impacttype>
+    <unitaitype>HandCombative</unitaitype>
+    <movementtype>land</movementtype>
+    <turnrate>18.0000</turnrate>
+    <initialhitpoints>115.0000</initialhitpoints>
+    <maxhitpoints>115.0000</maxhitpoints>
+    <trainpoints>12.0000</trainpoints>
+    <weightclass>5</weightclass>
+    <populationcount>2</populationcount>
+    <maxvelocity>4.3000</maxvelocity>
+    <los>16.0000</los>
+    <cost resourcetype="Food">50.0000</cost>
+    <cost resourcetype="Gold">40.0000</cost>
+    <armor type="Hack" value="0.4000" />
+    <armor type="Pierce" value="0.1000" />
+    <armor type="Crush" value="0.9900" />
+    <unittype>LogicalTypeHandUnitsAutoAttack</unittype>
+    <unittype>LogicalTypeValidSPCUnitsDeadCondition</unittype>
+    <unittype>LogicalTypeGarrisonInShips</unittype>
+    <unittype>LogicalTypeRangedUnitsAutoAttack</unittype>
+    <unittype>LogicalTypeVillagersAttack</unittype>
+    <unittype>LogicalTypeHandUnitsAttack</unittype>
+    <unittype>LogicalTypeRangedUnitsAttack</unittype>
+    <unittype>LogicalTypeMinimapFilterMilitary</unittype>
+    <unittype>LogicalTypeAffectedByRestoration</unittype>
+    <unittype>LogicalTypeValidBoltTarget</unittype>
+    <unittype>CountsTowardMilitaryScore</unittype>
+    <unittype>LogicalTypeEarthquakeAttack</unittype>
+    <unittype>LogicalTypeHealed</unittype>
+    <unittype>LogicalTypeValidMeteorTarget</unittype>
+    <unittype>LogicalTypeValidTornadoAttack</unittype>
+    <unittype>LogicalTypeConvertsHerds</unittype>
+    <unittype>LogicalTypeValidSpyTarget</unittype>
+    <unittype>LogicalTypeParticipatesInBattlecries</unittype>
+    <unittype>LogicalTypeValidFrostTarget</unittype>
+    <unittype>LogicalTypeValidTraitorTarget</unittype>
+    <unittype>Unit</unittype>
+    <unittype>UnitClass</unittype>
+    <unittype>MilitaryUnit</unittype>
+    <unittype>AbstractInfantry</unittype>
+    <unittype>HumanSoldier</unittype>
+    <unittype>InfantryLineUpgraded</unittype>
+    <unittype>LogicalTypeLandMilitary</unittype>
+    <unittype>LogicalTypeValidShiftingSandsTarget</unittype>
+    <unittype>LogicalTypeNeededForVictory</unittype>
+    <unittype>LogicalTypeValidShockwaveTarget</unittype>
+    <unittype>LogicalTypeValidEidolon</unittype>
+    <unittype>LogicalTypeValidBloodPactTarget</unittype>
+    <unittype>LogicalTypeMeleeInfantry</unittype>
+    <flag>CollidesWithProjectiles</flag>
+    <flag>CorpseDecays</flag>
+    <flag>ShowGarrisonButton</flag>
+    <flag>DontRotateObstruction</flag>
+    <flag>ObscuredByUnits</flag>
+    <flag>CommonCommands</flag>
+    <flag>MilitaryCommands</flag>
+    <flag>CreateUnitGroupAutomatically</flag>
+    <tactics>handattack.tactics</tactics>
+    <protoaction>
+      <name>HandAttack</name>
+      <rof>1.000000</rof>
+      <damage type="Hack">8.000000</damage>
+      <damagebonus type="AbstractCavalry">1.250000</damagebonus>
+      <maxrange>0.750000</maxrange>
+    </protoaction>
+    <protoaction>
+      <name>HarvestOfSouls</name>
+      <type>ChargedModify</type>
+      <active>0</active>
+      <persistent>1</persistent>
+      <charged>
+        <chargedmodify modifytype="Damage" applytype="Multiply">1.15</chargedmodify>
+        <duration>5</duration>
+        <cooldown>0</cooldown>
+        <activationtype>KillEnemy</activationtype>
+      </charged>
+      <charged>
+        <chargedmodify modifytype="ROF" applytype="Multiply">0.8</chargedmodify>
+        <duration>5</duration>
+        <cooldown>0</cooldown>
+        <activationtype>KillEnemy</activationtype>
+      </charged>
+    </protoaction>
+  </unit>
+</proto>

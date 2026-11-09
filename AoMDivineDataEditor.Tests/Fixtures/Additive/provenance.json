@@ -1,0 +1,14 @@
+{
+  "note": "Reduced from user supplied v3 runtime output, 2026-11-07. Stock baseline is decoded installed Data.bar, not a separate clean runtime dump.",
+  "sources": {
+    "outputs\\additive-merge-test\\reference\\proto.xml": "39c750c5fc69cd779343622c29190d2a92f381029f41f290b87792da4f13c366",
+    "outputs\\additive-merge-test\\verified-v3\\proto.xml": "93a2d9ea2d337503c8d58292865ee502801cea691875cfa14e4b4c8ee9822400",
+    "outputs\\additive-merge-test\\pack\\ADM_Additive_Merge_Probe\\game\\data\\gameplay\\proto_mods.xml": "335941c7ef005e7b5c5aab7f912a00681739149a281bc6d5af6118a4a02d857c",
+    "outputs\\additive-merge-test\\reference\\techtree.xml": "06e1501d9fe8903118f9c7ae02d19472bdf77db681069b6bacae225ec842a9ed",
+    "outputs\\additive-merge-test\\verified-v3\\techtree.xml": "e7706de1bf4360901eb9df8ff344f8163747d935d610bbd56da3491011dbef0d",
+    "outputs\\additive-merge-test\\pack\\ADM_Additive_Merge_Probe\\game\\data\\gameplay\\techtree_mods.xml": "b6c83ba442677a2fcd140f0fa74195844637e4d632858d18f1db8b7edc315b1b",
+    "outputs\\additive-merge-test\\reference\\greek.godpowers": "a47ba2240a8f23ff10f8b9011232eac33a29b1b011696faa70a623df1375d73e",
+    "outputs\\additive-merge-test\\verified-v3\\powers.xml": "ac696eaa0ab4084c9e9e403bcfd53cd1286911b651114280b3db984e1c6f636e",
+    "outputs\\additive-merge-test\\pack\\ADM_Additive_Merge_Probe\\game\\data\\gameplay\\powers_mods.xml": "67a5b2bc268da795ceae62e44081327213eb07fbdb7a05bc837986a95a1c095b"
+  }
+}

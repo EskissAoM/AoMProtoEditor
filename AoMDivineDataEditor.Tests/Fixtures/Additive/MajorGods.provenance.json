@@ -1,0 +1,10 @@
+{
+  "source": "C:\\Users\\alex3\\AppData\\Local\\Temp\\Age of Mythology Retold\\Data\\game\\data\\gameplay\\major_gods.xml",
+  "sha256": "0b7cd58a105caad5bd7389bcaa471e7d40252048c8e11db4e18180786880edb8",
+  "records": [
+    "Zeus",
+    "Hades",
+    "Poseidon"
+  ],
+  "evidence": "Decoded original XML. Merge predictions use recovered EXE civilization registrations; this is not game-generated merged output."
+}

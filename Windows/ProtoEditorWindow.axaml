@@ -257,7 +257,7 @@
                     
                     <TabStrip DockPanel.Dock="Top" x:Name="_unitTabs" Margin="0,0,0,6" SelectionChanged="UnitTab_SelectionChanged">
                         <TabStripItem x:Name="_originalTab" FontSize="14" Padding="8,4">Original</TabStripItem>
-                        <TabStripItem x:Name="_modifiedTab" FontSize="14" Padding="8,4">Modified</TabStripItem>
+                        <TabStripItem x:Name="_modifiedTab" FontSize="14" Padding="8,4">Mod</TabStripItem>
                     </TabStrip>
                     
                     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
@@ -265,12 +265,35 @@
                         <Button x:Name="_entityDeleteButton" Grid.Column="1" Classes="danger" Content="🗑 Delete" Click="EntityDelete_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
                     
-                    <ListBox x:Name="_unitList"
+                    <ListBox x:Name="_unitList" x:CompileBindings="False"
                              SelectionChanged="UnitList_SelectionChanged"
                              ContextRequested="UnitList_ContextRequested">
+                        <ListBox.Styles>
+                            <Style Selector="ListBoxItem">
+                                <Setter Property="Focusable" Value="{Binding IsEntry}" />
+                            </Style>
+                            <Style Selector="Button.unit-group-toggle">
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="Padding" Value="0,4" />
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                            </Style>
+                            <Style Selector="Button.unit-group-toggle:pointerover /template/ ContentPresenter, Button.unit-group-toggle:pressed /template/ ContentPresenter">
+                                <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderBrush" Value="Transparent" />
+                            </Style>
+                        </ListBox.Styles>
                         <ListBox.ItemTemplate>
                             <DataTemplate x:CompileBindings="False">
-                                <TextBlock Text="{Binding DisplayName}" FontWeight="{Binding FontWeight}" />
+                                <Grid>
+                                    <Button Classes="unit-group-toggle" IsVisible="{Binding IsHeader}" Click="UnitGroupToggle_Click">
+                                        <TextBlock Text="{Binding GroupToggleText}" FontWeight="Bold" />
+                                    </Button>
+                                    <TextBlock Text="{Binding DisplayName}" IsVisible="{Binding IsEntry}" FontWeight="{Binding FontWeight}" />
+                                </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -430,10 +453,13 @@
                             </StackPanel>
                         </Border>
                     </Grid>
-                    <Grid x:Name="_unitStructuredForm" Grid.Row="1" RowDefinitions="Auto,*">
+                    <Grid x:Name="_unitStructuredForm" Grid.Row="1" RowDefinitions="Auto,Auto,*">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="0,0,0,10">
                             <TextBlock Text="Unit :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1" x:Name="_unitNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
+                            <WrapPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBox x:Name="_unitNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="UnitNameBox_TextChanged" />
+                                <TextBlock x:Name="_unitChangeSummaryText" IsVisible="False" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="Wrap" />
+                            </WrapPanel>
                             <Button Grid.Column="2"
                                     x:Name="_sectionsButton"
                                     Content="Sections"
@@ -456,30 +482,45 @@
                                 </Button.Flyout>
                             </Button>
                         </Grid>
-                        <TabControl Grid.Row="1" x:Name="_editorTabs" SelectedIndex="0" SelectionChanged="EditorTab_SelectionChanged">
+                        <TabControl Grid.Row="2" x:Name="_editorTabs" SelectedIndex="0" SelectionChanged="EditorTab_SelectionChanged">
                             <TabItem Classes="editorTab" Header="Stats">
                                 <ScrollViewer x:Name="_editorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                  <StackPanel>
+                                    <StackPanel x:Name="_unitStatsNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
                                     <StackPanel x:Name="_statsEditorPanel" Classes="statsEditor" Spacing="10" Margin="0,0,15,0" />
+                                  </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Actions">
                                 <ScrollViewer x:Name="_actionsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                  <StackPanel>
+                                    <StackPanel x:Name="_unitActionNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
                                     <StackPanel x:Name="_actionsEditorPanel" Spacing="10" Margin="0,0,15,0" />
+                                  </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Commands">
                                 <ScrollViewer x:Name="_commandsEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                  <StackPanel>
+                                    <StackPanel x:Name="_unitCommandNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
                                     <StackPanel x:Name="_commandsEditorPanel" Spacing="10" Margin="0,0,15,0" />
+                                  </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Abilities">
                                 <ScrollViewer x:Name="_abilitiesEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                  <StackPanel>
+                                    <StackPanel x:Name="_unitAbilityNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
                                     <StackPanel x:Name="_abilitiesEditorPanel" Spacing="10" Margin="0,0,15,0" />
+                                  </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                             <TabItem Classes="editorTab" Header="Train/Research">
                                 <ScrollViewer x:Name="_trainResearchEditorScroll" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                  <StackPanel>
+                                    <StackPanel x:Name="_unitTrainResearchNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
                                     <StackPanel x:Name="_trainResearchEditorPanel" Spacing="10" Margin="0,0,15,0" />
+                                  </StackPanel>
                                 </ScrollViewer>
                             </TabItem>
                         </TabControl>

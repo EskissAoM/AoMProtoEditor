@@ -20,5 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AoMDivineDataEditor.csproj" />
+    <None Update="Fixtures/Additive/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

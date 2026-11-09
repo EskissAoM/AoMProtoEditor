@@ -37,6 +37,7 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <EmbeddedResource Include="Assets/Additive/Rules.json" LogicalName="AoMDivineDataEditor.AdditiveRules" />
   </ItemGroup>
 
     <!-- Keep the in-repository regression suite beside the desktop application

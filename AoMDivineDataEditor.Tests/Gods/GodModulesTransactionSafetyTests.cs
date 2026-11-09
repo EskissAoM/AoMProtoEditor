@@ -133,7 +133,7 @@ public sealed class GodModulesTransactionSafetyTests
         Assert.Contains("TopLevel.GetTopLevel(this) as Window ?? _dialogOwner", majorGodEditor, StringComparison.Ordinal);
         Assert.Contains("Major Gods changed outside the editor", majorGodEditor, StringComparison.Ordinal);
         Assert.Contains("confirmButtonText: \"Reload\"", majorGodEditor, StringComparison.Ordinal);
-        Assert.Contains("EnsureMajorGodCanBeDeletedAsync,\n            this);", host.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("EnsureMajorGodCanBeDeletedAsync,\n            this, baseCatalogAvailable);", host.Replace("\r\n", "\n"), StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

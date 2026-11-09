@@ -1,0 +1,4792 @@
+{
+  "title": "AoM: Retold Additive XML merge rule catalog — Codex handoff",
+  "version": "codex-handoff-2026-11-07",
+  "exe_file": "AoMRT_s.exe",
+  "exe_sha256": "dd15d1d838e78faa1bc9854becc3994f4f3a4548ef30efd24108abedc1b84fff",
+  "exe_bytes": 91081056,
+  "total_registrations": 268,
+  "evidence": {
+    "exe_static": "direct strings, comparator/dispatcher and registrations",
+    "extra_boolean": "full-attribute mapping inferred, constructor not directly inspected",
+    "behavior": "not independently tested by running the game"
+  },
+  "merge_modes": {
+    "modify": {
+      "match": true,
+      "on_match": "recursive-merge",
+      "on_missing": "insert",
+      "default": true
+    },
+    "add": {
+      "match_required": false,
+      "operation": "append-sibling"
+    },
+    "replace": {
+      "match": true,
+      "on_match": "replace-whole-node",
+      "on_missing": "no-replacement"
+    },
+    "remove": {
+      "match": true,
+      "on_match": "delete-node",
+      "on_missing": "no-removal"
+    },
+    "default": {
+      "alias_of": "modify",
+      "recommended_output": "omit mergeMode or use modify"
+    }
+  },
+  "matcher": {
+    "compare_names": true,
+    "first_matching_sibling": true,
+    "context_sensitive": true,
+    "options": [
+      "namedAttributes",
+      "directText",
+      "namedChild",
+      "allAttributes"
+    ],
+    "mergeMode_attribute_excluded_from_normal_identity": true
+  },
+  "special_warnings": {
+    "TechTree/Effect": "direct text+all attrs, not target child; duplicate base identities unsafe to target",
+    "GodPowers/SoundSet": "direct text+all attrs, changing listener defeats old identity (inferred)",
+    "ProtoUnit/ProtoAction": "child Name is identity",
+    "MajorGods/SpawnPointEarningFactor": "legacy; key unit registered but older XML also allows type; beware collision",
+    "MajorGods/UnitSpawnPointCost": "legacy; resourceType key, modern RewardPointCost is different hierarchy"
+  },
+  "path_resolution_warning": "group assignment sometimes inferred; use ancestor context and loader registration, not terminal element only",
+  "source_references": {
+    "executable_addresses": [
+      "0x1425C6240",
+      "0x1425C64F0",
+      "0x1425C6A00",
+      "0x1425C6E40"
+    ],
+    "documentation": "AoMRT_Additive_XML_Merge_Implementation_Reference.md"
+  },
+  "rules": [
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf458",
+      "element": "Include",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Include"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf4e5",
+      "element": "Unit",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Unit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf572",
+      "element": "Icon",
+      "match_key_type": "attribute",
+      "keys": [
+        "culture"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "culture",
+        "Icon"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf5ff",
+      "element": "AnimFile",
+      "match_key_type": "attribute",
+      "keys": [
+        "culture"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "culture",
+        "AnimFile"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf68c",
+      "element": "Spawn",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Spawn"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf719",
+      "element": "Replacement",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Replacement"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf788",
+      "element": "DependentUnit",
+      "match_key_type": "all-attributes",
+      "keys": [],
+      "extra_flag_28": "1",
+      "raw_strings": [
+        "DependentUnit"
+      ],
+      "notes": "2026-11-07 re-audit: previously unresolved extra flag is the full-attributes comparison option. The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "match_all_attributes": true,
+      "match_element_text": false,
+      "match_named_children": false,
+      "matching_details": "The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "confidence": "high—attribute comparator proven; constructor boolean mapping inferred from registration call signature (protected helper)"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf815",
+      "element": "Cost",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourcetype"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourcetype",
+        "Cost"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf8a2",
+      "element": "InitialResource",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourceType",
+        "InitialResource"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf92f",
+      "element": "CarryCapacity",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourceType",
+        "CarryCapacity"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cf9bc",
+      "element": "ResourceConversion",
+      "match_key_type": "attribute",
+      "keys": [
+        "fromResourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "fromResourceType",
+        "ResourceConversion"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfa94",
+      "element": "ResourceReturn",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourceType",
+        "ResourceReturn"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfb21",
+      "element": "ResourceReturnRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourceType",
+        "ResourceReturnRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfbae",
+      "element": "DamageBonus",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "DamageBonus"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfc3b",
+      "element": "Rate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Rate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfcc8",
+      "element": "Armor",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Armor"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfd4b",
+      "element": "ProtoAction",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "ProtoAction"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfdba",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfe47",
+      "element": "Rate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Rate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cfed4",
+      "element": "MinRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "MinRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cff43",
+      "element": "ForbidAbstractType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForbidAbstractType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404cffb2",
+      "element": "ForbidUnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForbidUnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d003f",
+      "element": "ConversionProtoID",
+      "match_key_type": "attribute",
+      "keys": [
+        "srcType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "srcType",
+        "ConversionProtoID"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d00cc",
+      "element": "Damage",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Damage"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0159",
+      "element": "DamageBonus",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "DamageBonus"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d01e6",
+      "element": "FreeBuildRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "FreeBuildRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0273",
+      "element": "OnHitEffect",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "OnHitEffect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0300",
+      "element": "Modify",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Modify"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d03d8",
+      "element": "ModifyRamp",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "ModifyRamp"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d04b0",
+      "element": "EmpowerRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "modifyType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "modifyType",
+        "EmpowerRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d053d",
+      "element": "TypedAnim",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "TypedAnim"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d05ca",
+      "element": "SizeClassAnim",
+      "match_key_type": "attribute",
+      "keys": [
+        "class"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "class",
+        "SizeClassAnim"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0639",
+      "element": "Amount",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Amount"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d06a8",
+      "element": "Flag",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Flag"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0717",
+      "element": "UnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "UnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0786",
+      "element": "Command",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Command"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d07f5",
+      "element": "Train",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Train"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0864",
+      "element": "Build",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Build"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d08d3",
+      "element": "Tech",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Tech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0942",
+      "element": "Contain",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Contain"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d09b1",
+      "element": "NotContain",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "NotContain"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0a20",
+      "element": "Tier",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Tier"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0aad",
+      "element": "Rank",
+      "match_key_type": "attribute",
+      "keys": [
+        "id"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "id",
+        "Rank"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0b3a",
+      "element": "VeterancyModify",
+      "match_key_type": "attribute",
+      "keys": [
+        "modifyType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "modifyType",
+        "VeterancyModify"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit / ProtoAction data",
+      "registration": "0x1404d0bc7",
+      "element": "OnDamageModify",
+      "match_key_type": "attribute",
+      "keys": [
+        "modifyType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "modifyType",
+        "OnDamageModify"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d11f4",
+      "element": "Tech",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Tech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d1296",
+      "element": "Cost",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourcetype"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourcetype",
+        "Cost"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d1338",
+      "element": "Icon",
+      "match_key_type": "attribute",
+      "keys": [
+        "culture"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "culture",
+        "Icon"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d13b4",
+      "element": "TechType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TechType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d1430",
+      "element": "Flag",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Flag"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d14ac",
+      "element": "TechStatus",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TechStatus"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d1528",
+      "element": "Effect",
+      "match_key_type": "element-text+all-attributes",
+      "keys": [],
+      "extra_flag_28": "1",
+      "raw_strings": [
+        "Effect"
+      ],
+      "notes": "2026-11-07 re-audit: previously unresolved extra flag is the full-attributes comparison option. The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "match_all_attributes": true,
+      "match_element_text": true,
+      "match_named_children": false,
+      "matching_details": "The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "confidence": "high—attribute comparator proven; constructor boolean mapping inferred from registration call signature (protected helper)"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d15ca",
+      "element": "TypeCount",
+      "match_key_type": "attribute",
+      "keys": [
+        "unit"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "unit",
+        "TypeCount"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "TechTree",
+      "registration": "0x1404d166c",
+      "element": "KBStat",
+      "match_key_type": "attribute",
+      "keys": [
+        "kbStat"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "kbStat",
+        "KBStat"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1aad",
+      "element": "Civ",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "Civ"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1b29",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1bc8",
+      "element": "AgeTech",
+      "match_key_type": "attribute",
+      "keys": [
+        "age"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "age",
+        "AgeTech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1c67",
+      "element": "StartingUnits",
+      "match_key_type": "attribute",
+      "keys": [
+        "mode"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "mode",
+        "StartingUnits"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1d06",
+      "element": "StartingResources",
+      "match_key_type": "attribute",
+      "keys": [
+        "mode"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "mode",
+        "StartingResources"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1da5",
+      "element": "StartingQueue",
+      "match_key_type": "attribute",
+      "keys": [
+        "mode"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "mode",
+        "StartingQueue"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1e21",
+      "element": "Unit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Unit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1e9d",
+      "element": "TargetUnit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TargetUnit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1f19",
+      "element": "Spawnable",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Spawnable"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d1f95",
+      "element": "ExcludedSpawnable",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExcludedSpawnable"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d2011",
+      "element": "ExcludedTarget",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExcludedTarget"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d208d",
+      "element": "ForceSpawn",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForceSpawn"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d212c",
+      "element": "UnitSpawnPointCost",
+      "match_key_type": "attribute",
+      "keys": [
+        "resourceType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "resourceType",
+        "UnitSpawnPointCost"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d21cb",
+      "element": "SpawnPointEarningFactor",
+      "match_key_type": "attribute",
+      "keys": [
+        "unit"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "unit",
+        "SpawnPointEarningFactor"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d22cd",
+      "element": "BountyReward",
+      "match_key_type": "attribute",
+      "keys": [
+        "unit"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "unit",
+        "BountyReward"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d23cf",
+      "element": "BountyTargetMultiplier",
+      "match_key_type": "attribute",
+      "keys": [
+        "unit"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "unit",
+        "BountyTargetMultiplier"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d250f",
+      "element": "ProtoUnit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ProtoUnit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d25ae",
+      "element": "TerrainCreep",
+      "match_key_type": "attribute",
+      "keys": [
+        "creep"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "creep",
+        "TerrainCreep"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Major gods / civilization",
+      "registration": "0x1404d262a",
+      "element": "ProtoUnit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ProtoUnit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit commands",
+      "registration": "0x1404d2a95",
+      "element": "ProtoUnitCommand",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "ProtoUnitCommand"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit commands",
+      "registration": "0x1404d2b11",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "ProtoUnit commands",
+      "registration": "0x1404d2b8d",
+      "element": "ForbidTech",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForbidTech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d32b9",
+      "element": null,
+      "match_key_type": "child-element",
+      "keys": [
+        "age"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "age"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d333f",
+      "element": "name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d3709",
+      "element": "Culture",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "Culture"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d3788",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d3c7a",
+      "element": null,
+      "match_key_type": "child-element",
+      "keys": [],
+      "extra_flag_28": "",
+      "raw_strings": [],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d3d2d",
+      "element": "name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d4105",
+      "element": "Unit",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Unit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d41aa",
+      "element": "ProtoAction",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "ProtoAction"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4506",
+      "element": "Include",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Include"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d45ae",
+      "element": "Power",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Power"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d462a",
+      "element": "SoundSet",
+      "match_key_type": "element-text+all-attributes",
+      "keys": [],
+      "extra_flag_28": "1",
+      "raw_strings": [
+        "SoundSet"
+      ],
+      "notes": "2026-11-07 re-audit: previously unresolved extra flag is the full-attributes comparison option. The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "match_all_attributes": true,
+      "match_element_text": true,
+      "match_named_children": false,
+      "matching_details": "The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "confidence": "high—attribute comparator proven; constructor boolean mapping inferred from registration call signature (protected helper)"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d46a6",
+      "element": "RevealLOS",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "RevealLOS"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4722",
+      "element": "AbstractAttackTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AbstractAttackTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d479e",
+      "element": "AbstractPlacementTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AbstractPlacementTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d481a",
+      "element": "ExplicitlyRestrictedAttackTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExplicitlyRestrictedAttackTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4896",
+      "element": "ExplicitlyRestrictedPlacementTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExplicitlyRestrictedPlacementTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4912",
+      "element": "LevelRollover",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "LevelRollover"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d498e",
+      "element": "CreateUnit",
+      "match_key_type": "element-text+all-attributes",
+      "keys": [],
+      "extra_flag_28": "1",
+      "raw_strings": [
+        "CreateUnit"
+      ],
+      "notes": "2026-11-07 re-audit: previously unresolved extra flag is the full-attributes comparison option. The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "match_all_attributes": true,
+      "match_element_text": true,
+      "match_named_children": false,
+      "matching_details": "The registered additional boolean selects the comparator's full-attribute matching branch. A differing ordinary attribute (not only the tag or text) prevents a match. The comparator tolerates one extra merge-control attribute on the patch node. A separately registered text flag also compares the direct element text when enabled.",
+      "confidence": "high—attribute comparator proven; constructor boolean mapping inferred from registration call signature (protected helper)"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4a0a",
+      "element": "AttachProto",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AttachProto"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4a86",
+      "element": "AbstractType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AbstractType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4b2e",
+      "element": "unitModify",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "apply"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "apply",
+        "unitModify"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4c5f",
+      "element": "Effect",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Target",
+        "type",
+        "Effect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4cdb",
+      "element": "Target",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Target"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4d57",
+      "element": "AttractType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AttractType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4dd3",
+      "element": "AgeInfo",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AgeInfo"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4e68",
+      "element": "Armor",
+      "match_key_type": "child-element",
+      "keys": [
+        "AbstractType"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "AbstractType",
+        "Armor"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4ee4",
+      "element": "ArmorType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ArmorType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4f60",
+      "element": "GatherRate",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "GatherRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d4fdc",
+      "element": "ExcludeFromThrow",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExcludeFromThrow"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5058",
+      "element": "ExcludeFromPullingIntoFunnel",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ExcludeFromPullingIntoFunnel"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d50ed",
+      "element": "TerrainLogic",
+      "match_key_type": "child-element",
+      "keys": [
+        "TerrainUIClass"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "TerrainUIClass",
+        "TerrainLogic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5169",
+      "element": "TerrainUIClass",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TerrainUIClass"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d51e5",
+      "element": "AgeAdjustment",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AgeAdjustment"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5284",
+      "element": "MaxFood",
+      "match_key_type": "attribute",
+      "keys": [
+        "age"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "age",
+        "MaxFood"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5319",
+      "element": "ParticleSFXNode",
+      "match_key_type": "child-element",
+      "keys": [
+        "UnitType"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "UnitType",
+        "ParticleSFXNode"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5395",
+      "element": "UnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "UnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5411",
+      "element": "AttackTarget",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AttackTarget"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d54b0",
+      "element": "SnowDrift",
+      "match_key_type": "attribute",
+      "keys": [
+        "target"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "target",
+        "SnowDrift"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d552c",
+      "element": "MainPackTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "MainPackTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d55a8",
+      "element": "MiniPackTargetType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "MiniPackTargetType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d5624",
+      "element": "PlacementRestriction",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "PlacementRestriction"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "God powers",
+      "registration": "0x1404d56a0",
+      "element": "KillOnEffectEnd",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "KillOnEffectEnd"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d5a4a",
+      "element": "Ability",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Ability"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d5dc0",
+      "element": "SquadMode",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "SquadMode"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d5e39",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d629b",
+      "element": "Transform",
+      "match_key_type": "child-element",
+      "keys": [
+        "From",
+        "To"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "To",
+        "From",
+        "Transform"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d631e",
+      "element": "From",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "From"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d639a",
+      "element": "To",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "To"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d6774",
+      "element": "protounit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "protounit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d67ea",
+      "element": "civ",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "civ"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d6860",
+      "element": "title",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "title"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d68d6",
+      "element": "name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d694c",
+      "element": "epithet",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "epithet"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d6cdf",
+      "element": "Forest",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Forest"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d6d55",
+      "element": "Tree",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Tree"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d6dcb",
+      "element": "Underbrush",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Underbrush"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d71a4",
+      "element": "ocean",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "ocean"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d7246",
+      "element": "river",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "river"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d72e8",
+      "element": "lake",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "lake"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d7364",
+      "element": "protounit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "protounit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d73e0",
+      "element": "texture",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "texture"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d745c",
+      "element": "item",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "item"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d7842",
+      "element": "UnitTypeEntry",
+      "match_key_type": "child-element",
+      "keys": [
+        "UnitType"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "UnitType",
+        "UnitTypeEntry"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d78c1",
+      "element": "UnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "UnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d7bb0",
+      "element": "Model",
+      "match_key_type": "attribute",
+      "keys": [
+        "base"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "base",
+        "Model"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d7c49",
+      "element": "ModelXML",
+      "match_key_type": "attribute",
+      "keys": [
+        "file"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "file",
+        "ModelXML"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d7ce2",
+      "element": "Attachment",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Attachment"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d7d7b",
+      "element": "Popcorn",
+      "match_key_type": "attribute",
+      "keys": [
+        "base"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "base",
+        "Popcorn"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Models / graphical data (likely)",
+      "registration": "0x1404d81a4",
+      "element": null,
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d85aa",
+      "element": "Personality",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Personality"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d889b",
+      "element": "Action",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "Action"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d890a",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8997",
+      "element": "Rate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Rate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8a24",
+      "element": "MinRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "MinRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8a93",
+      "element": "UnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "UnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8b02",
+      "element": "ForbidAbstractType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForbidAbstractType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8b71",
+      "element": "ForbidUnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ForbidUnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8bfe",
+      "element": "ConversionProtoID",
+      "match_key_type": "attribute",
+      "keys": [
+        "srcType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "srcType",
+        "ConversionProtoID"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8c8b",
+      "element": "Damage",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "Damage"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8d18",
+      "element": "DamageBonus",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "DamageBonus"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8da5",
+      "element": "FreeBuildRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "FreeBuildRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8e32",
+      "element": "OnHitEffect",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "OnHitEffect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8ebf",
+      "element": "EmpowerRate",
+      "match_key_type": "attribute",
+      "keys": [
+        "modifyType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "modifyType",
+        "EmpowerRate"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8f4c",
+      "element": "TypedAnim",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "TypedAnim"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d8fd9",
+      "element": "SizeClassAnim",
+      "match_key_type": "attribute",
+      "keys": [
+        "class"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "class",
+        "SizeClassAnim"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d9048",
+      "element": "Amount",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Amount"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d90b7",
+      "element": "Tactic",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Tactic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d9126",
+      "element": "Action",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Action"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d91a9",
+      "element": "Transition",
+      "match_key_type": "child-element",
+      "keys": [
+        "Tactic"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Tactic",
+        "Transition"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics",
+      "registration": "0x1404d9236",
+      "element": "ArmorOverride",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "ArmorOverride"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics and related data",
+      "registration": "0x1404d9599",
+      "element": "Tactic",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "Tactic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics and related data",
+      "registration": "0x1404d9618",
+      "element": "Name",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics and related data",
+      "registration": "0x1404d99d9",
+      "element": "Stance",
+      "match_key_type": "child-element",
+      "keys": [
+        "AIStance"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "AIStance",
+        "Stance"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Tactics and related data",
+      "registration": "0x1404d9a58",
+      "element": "AIStance",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AIStance"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404d9d96",
+      "element": "Sky",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Sky"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other game data (context unresolved)",
+      "registration": "0x1404da14f",
+      "element": "relic",
+      "match_key_type": "attribute",
+      "keys": [
+        "tech"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "tech",
+        "relic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404da525",
+      "element": "Context",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Context"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404da9b5",
+      "element": "TerrainUnitEffect",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "TerrainUnitEffect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404daa63",
+      "element": "Effect",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Effect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404daadf",
+      "element": "Target",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Target"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404dab5b",
+      "element": "TerrainType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TerrainType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404dabd7",
+      "element": "Tech",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Tech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Terrain unit effects",
+      "registration": "0x1404dac85",
+      "element": "Creep",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "target"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "target",
+        "Creep"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404db115",
+      "element": "TerrainCreep",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "TerrainCreep"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404db1c3",
+      "element": "TerrainReplace",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "TerrainReplace"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404db23f",
+      "element": "Terrain",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Terrain"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404db2bb",
+      "element": "TerrainIgnore",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TerrainIgnore"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404db68a",
+      "element": "TechType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "TechType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dbb2d",
+      "element": "AbstractType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AbstractType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc058",
+      "element": "Command",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Command"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc0f1",
+      "element": "Train",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Train"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc18a",
+      "element": "Tech",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Tech"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc223",
+      "element": "ConsoleCommand",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "ConsoleCommand"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc2bc",
+      "element": "CountedCommand",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "CountedCommand"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc355",
+      "element": "Tactic",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Tactic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc3ee",
+      "element": "Formation",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Formation"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc487",
+      "element": "Stance",
+      "match_key_type": "attribute",
+      "keys": [
+        "command"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "command",
+        "Stance"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc520",
+      "element": "Ability",
+      "match_key_type": "attribute",
+      "keys": [
+        "position"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "position",
+        "Ability"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dc5b9",
+      "element": "PassiveAbility",
+      "match_key_type": "attribute",
+      "keys": [
+        "position"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "position",
+        "PassiveAbility"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dd3ec",
+      "element": "Portrait",
+      "match_key_type": "child-element",
+      "keys": [
+        "ID"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "ID",
+        "Portrait"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dd46b",
+      "element": "ID",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ID"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dd824",
+      "element": "PresetList",
+      "match_key_type": "attribute",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name",
+        "PresetList"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dd8c6",
+      "element": "Preset",
+      "match_key_type": "attribute",
+      "keys": [
+        "Type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Type",
+        "Preset"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404ddd00",
+      "element": "AbstractUnitType",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "AbstractUnitType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de065",
+      "element": "DistanceAtMostFromType",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "player"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "player",
+        "DistanceAtMostFromType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de104",
+      "element": "DistanceAtLeastFromType",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "player"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "player",
+        "DistanceAtLeastFromType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de1a3",
+      "element": "ObstructionAtLeastFromType",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "player"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "player",
+        "ObstructionAtLeastFromType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de21f",
+      "element": "DistanceAtMostFromSocket",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "DistanceAtMostFromSocket"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de29b",
+      "element": "InsidePerimeterWall",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "InsidePerimeterWall"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de696",
+      "element": "AmbientEffect",
+      "match_key_type": "child-element",
+      "keys": [
+        "ProtoUnit"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "ProtoUnit",
+        "AmbientEffect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404de715",
+      "element": "ProtoUnit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ProtoUnit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404deadf",
+      "element": "Cliff",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Cliff"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404deb5e",
+      "element": "Object",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Object"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404defb0",
+      "element": "sequence",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "sequence"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404df02f",
+      "element": "tile",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "tile"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404df4fd",
+      "element": "Color",
+      "match_key_type": "tag-only/other",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Color"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404df945",
+      "element": "grasstype",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "grasstype"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404df9ea",
+      "element": "layer",
+      "match_key_type": "attribute",
+      "keys": [
+        "model"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "model",
+        "layer"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dfe16",
+      "element": "type",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "type"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dfeb8",
+      "element": "uiclass",
+      "match_key_type": "attribute",
+      "keys": [
+        "uiname"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "uiname",
+        "uiclass"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404dff34",
+      "element": "subtype",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "subtype"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e03a0",
+      "element": "weatheringtype",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "weatheringtype"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e066f",
+      "element": "paint",
+      "match_key_type": "attribute",
+      "keys": [
+        "mode"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "mode",
+        "paint"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e06de",
+      "element": "texture",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "texture"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e076b",
+      "element": "objects",
+      "match_key_type": "attribute",
+      "keys": [
+        "mode"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "mode",
+        "objects"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e07da",
+      "element": "model",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "model"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e0849",
+      "element": "decal",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "decal"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e08b8",
+      "element": "modeldecal",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "modeldecal"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e0f10",
+      "element": "soundset",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "soundset"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e0fac",
+      "element": "sound",
+      "match_key_type": "attribute",
+      "keys": [
+        "filename"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "filename",
+        "sound"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e12bb",
+      "element": "SoundType",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "SoundType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e135d",
+      "element": "choice",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "choice"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e13ff",
+      "element": "SoundSet",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "SoundSet"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e17a9",
+      "element": "sound",
+      "match_key_type": "attribute",
+      "keys": [
+        "unitType"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "unitType",
+        "sound"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e1b7b",
+      "element": "playlist",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "playlist"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e1c1a",
+      "element": "musicset",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "musicset"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e1c96",
+      "element": "file",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "file"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e2091",
+      "element": "UnitAIType",
+      "match_key_type": "attribute",
+      "keys": [
+        "type"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "type",
+        "UnitAIType"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e245b",
+      "element": "UISkin",
+      "match_key_type": "attribute",
+      "keys": [
+        "culture"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "culture",
+        "UISkin"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e24d7",
+      "element": "Skin",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Skin"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e2576",
+      "element": "SkinVariant",
+      "match_key_type": "text+attribute",
+      "keys": [
+        "civ"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "civ",
+        "SkinVariant"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e29af",
+      "element": "topic",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "topic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e2dff",
+      "element": "category",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "category"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e2e7e",
+      "element": "Topic",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Topic"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e351a",
+      "element": "Condition",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Condition"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e35b9",
+      "element": "Effect",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Effect"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e3658",
+      "element": "AIVariable",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "AIVariable"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e36f7",
+      "element": "Param",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Param"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e3b06",
+      "element": "Civ",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Civ"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e3ba8",
+      "element": "Culture",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Culture"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e3c4a",
+      "element": "Function",
+      "match_key_type": "attribute",
+      "keys": [
+        "name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "name",
+        "Function"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e3cc6",
+      "element": "Unit",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Unit"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e4199",
+      "element": "Token",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Token"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e45c1",
+      "element": "Name",
+      "match_key_type": "attribute",
+      "keys": [
+        "from"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "from",
+        "Name"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e49b9",
+      "element": "Tip",
+      "match_key_type": "attribute",
+      "keys": [
+        "ID"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ID",
+        "Tip"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e4d74",
+      "element": "visual",
+      "match_key_type": "attribute",
+      "keys": [
+        "file"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "file",
+        "visual"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e4e79",
+      "element": "animxml",
+      "match_key_type": "attribute",
+      "keys": [
+        "file"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "file",
+        "animxml"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e5202",
+      "element": "Legend",
+      "match_key_type": "attribute",
+      "keys": [
+        "effectName"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "effectName",
+        "Legend"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e55c8",
+      "element": "file",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "file"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e59ec",
+      "element": "FavorStashItem",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "FavorStashItem"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e5a68",
+      "element": "Flag",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Flag"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e5ae4",
+      "element": "Proto",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Proto"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e5ee5",
+      "element": "ChaosEvent",
+      "match_key_type": "child-element",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "",
+      "raw_strings": [
+        "Name",
+        "ChaosEvent"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": true,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e624f",
+      "element": "BloodGroup",
+      "match_key_type": "attribute",
+      "keys": [
+        "Name"
+      ],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Name",
+        "BloodGroup"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": false,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e62be",
+      "element": "Decal",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Decal"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e632d",
+      "element": "SplatDecal",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "SplatDecal"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e639c",
+      "element": "Skeleton",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Skeleton"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e640b",
+      "element": "ProtoBloodGroup",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "ProtoBloodGroup"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e647a",
+      "element": "PrismaticColor",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "PrismaticColor"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e64e9",
+      "element": "BonePile",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "BonePile"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e6558",
+      "element": "NoSkullBonePile",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "NoSkullBonePile"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    },
+    {
+      "group": "Other / unknown",
+      "registration": "0x1404e65c7",
+      "element": "Flag",
+      "match_key_type": "element-text",
+      "keys": [],
+      "extra_flag_28": "0",
+      "raw_strings": [
+        "Flag"
+      ],
+      "notes": "Recovered from explicit rule-registration call.",
+      "match_all_attributes": false,
+      "match_element_text": true,
+      "match_named_children": false,
+      "confidence": "EXE registration; other key semantics as previously documented"
+    }
+  ]
+}

@@ -22,7 +22,7 @@
         <TextBox DockPanel.Dock="Top" x:Name="_searchBox" PlaceholderText="Search..." Margin="0,0,0,6" TextChanged="SearchBox_TextChanged"/>
         <TabStrip DockPanel.Dock="Top" x:Name="_techTabs" Margin="0,0,0,6" SelectionChanged="TechTab_SelectionChanged">
           <TabStripItem FontSize="14" Padding="8,4">Original</TabStripItem>
-          <TabStripItem FontSize="14" Padding="8,4">Modified</TabStripItem>
+          <TabStripItem FontSize="14" Padding="8,4">Mod</TabStripItem>
         </TabStrip>
         <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*" Margin="0,6,0,0" ColumnSpacing="6">
           <Button Grid.Column="0" Classes="add-item" Content="New" Click="AddTech_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
@@ -34,25 +34,38 @@
     <GridSplitter Grid.Column="1" IsVisible="False" Width="0" />
     <Border Grid.Column="2" Classes="MainPanel" BorderThickness="0" Padding="16,16,4,16">
       <Grid RowDefinitions="Auto,*,Auto">
-        <Grid x:Name="_technologyForm" Grid.RowSpan="2" RowDefinitions="Auto,*">
-        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,0,0,10">
+        <Grid x:Name="_technologyForm" Grid.RowSpan="2" RowDefinitions="Auto,Auto,*">
+        <WrapPanel Orientation="Horizontal" Margin="0,0,0,10">
           <TextBlock Text="Technology :" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
-          <TextBox Grid.Column="1" x:Name="_techNameBox" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="TechNameBox_TextChanged" LostFocus="TechNameBox_LostFocus"/>
-        </Grid>
-        <TabControl Grid.Row="1" SelectedIndex="0">
+          <TextBox x:Name="_techNameBox" Margin="10,0,10,0" Width="380" MaxWidth="380" HorizontalAlignment="Left" FontSize="16" FontWeight="SemiBold" TextChanged="TechNameBox_TextChanged" LostFocus="TechNameBox_LostFocus"/>
+          <TextBlock x:Name="_technologyAdditiveSummary" IsVisible="False" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </WrapPanel>
+        <StackPanel Grid.Row="1" Spacing="6" Margin="0,0,0,8">
+          <TextBlock x:Name="_technologyAdditiveDiagnostics" IsVisible="False" TextWrapping="Wrap"/>
+        </StackPanel>
+        <TabControl x:Name="_technologyEditorTabs" Grid.Row="2" SelectedIndex="0">
           <TabItem Classes="editorTab" Header="Properties">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <StackPanel x:Name="_technologyPropertyNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
               <StackPanel x:Name="_propertiesPanel" Spacing="10" Margin="0,0,15,0"/>
+              </StackPanel>
             </ScrollViewer>
           </TabItem>
           <TabItem Classes="editorTab" Header="Prereqs">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <StackPanel x:Name="_technologyPrerequisiteNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
               <StackPanel x:Name="_prereqsPanel" Spacing="8" Margin="0,0,15,0"/>
+              </StackPanel>
             </ScrollViewer>
           </TabItem>
           <TabItem Classes="editorTab" Header="Effects">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <StackPanel x:Name="_technologyEffectNotices" Spacing="4" Margin="0,0,15,0" IsVisible="False"/>
               <StackPanel x:Name="_effectsPanel" Spacing="8" Margin="0,0,15,0"/>
+              </StackPanel>
             </ScrollViewer>
           </TabItem>
         </TabControl>

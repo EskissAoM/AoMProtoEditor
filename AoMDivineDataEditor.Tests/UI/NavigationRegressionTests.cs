@@ -209,7 +209,7 @@ public sealed class NavigationRegressionTests
         Assert.Contains("<Border Padding=\"0,0,0,14\">", xamlText, StringComparison.Ordinal);
         Assert.Contains("EditorEntityKind.MajorGods => \"Major God\"", code, StringComparison.Ordinal);
         Assert.Contains("EditorEntityKind.Powers => \"Power\"", code, StringComparison.Ordinal);
-        Assert.Contains("var source = tab.IsModified ? \"Custom\" : \"Original\";", code, StringComparison.Ordinal);
+        Assert.Contains("var source = GetDocumentTabSource(tab);", code, StringComparison.Ordinal);
         Assert.Contains("$\"{kind}: {tab.EntityName} ({source})\"", code, StringComparison.Ordinal);
         Assert.Contains("MaxWidth = 170", code, StringComparison.Ordinal);
 
@@ -561,7 +561,7 @@ public sealed class NavigationRegressionTests
         Assert.Contains("RefreshCultureIconPreview()", unitEditor, StringComparison.Ordinal);
         Assert.DoesNotContain("displayRow.Children.Add(iconPreview)", unitEditor, StringComparison.Ordinal);
         Assert.Contains("var identityFields = new StackPanel", technologyEditor, StringComparison.Ordinal);
-        Assert.Contains("IconPreviewControl.PropertyGridLeftOffset + (IsModifiedTab ? 40 : 0)", technologyEditor, StringComparison.Ordinal);
+        Assert.Contains("IconPreviewControl.PropertyGridLeftOffset + (CanEditModifiedDocument ? 40 : 0)", technologyEditor, StringComparison.Ordinal);
         Assert.Contains("_propertiesPanel.IsEnabled = _current != null", technologyEditor, StringComparison.Ordinal);
         Assert.Contains("AddPrimaryTechnologyRowAsync(tech, displayName, identityFields)", technologyEditor, StringComparison.Ordinal);
         Assert.Contains("target.Children.Add(displayGrid)", technologyEditor, StringComparison.Ordinal);

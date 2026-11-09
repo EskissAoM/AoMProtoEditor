@@ -659,7 +659,7 @@ public sealed partial class TechnologyEditorWorkflowTests : IDisposable
             Func<XDocument, IReadOnlyList<TechnologyRenameOperation>, IReadOnlyCollection<string>, PreparedModXmlDocument?>?
                 prepareMinorGodLifecycle = null)
             => new(
-                originalDocuments,
+                originalDocuments ?? [],
                 baseGameplayDirectory: null,
                 TechtreePath,
                 resolveStringAsync,

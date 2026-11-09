@@ -121,6 +121,12 @@
     <Setter Property="BorderBrush" Value="#B58A47" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
+  <!-- Target the rendered Fluent border too: readonly/disabled template states
+       can override the outer input's BorderBrush. Validation styles follow. -->
+  <Style Selector="TextBox.mod-changed /template/ Border#PART_BorderElement, AutoCompleteBox.mod-changed /template/ TextBox /template/ Border#PART_BorderElement, ComboBox.mod-changed /template/ Border#Background, ComboBox.mod-changed /template/ Border#HighlightBackground">
+    <Setter Property="BorderBrush" Value="#A78BFA" />
+    <Setter Property="BorderThickness" Value="1.5" />
+  </Style>
   <Style Selector="AutoCompleteBox.invalid-field, TextBox.invalid-field, ComboBox.invalid-field, controls|AssetPathEditor.invalid-field TextBox, controls|AssetPathEditor.invalid-field AutoCompleteBox">
     <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
     <Setter Property="BorderThickness" Value="2" />
@@ -131,7 +137,7 @@
   </Style>
   <!-- Fluent's focused TextBox paints its template border independently of
        BorderBrush on the outer control. Keep validation visible after focus. -->
-  <Style Selector="TextBox.invalid-field /template/ Border#PART_BorderElement, AutoCompleteBox.invalid-field /template/ TextBox /template/ Border#PART_BorderElement, controls|AssetPathEditor.invalid-field TextBox /template/ Border#PART_BorderElement, controls|AssetPathEditor.invalid-field AutoCompleteBox /template/ TextBox /template/ Border#PART_BorderElement">
+  <Style Selector="TextBox.invalid-field /template/ Border#PART_BorderElement, AutoCompleteBox.invalid-field /template/ TextBox /template/ Border#PART_BorderElement, ComboBox.invalid-field /template/ Border#Background, ComboBox.invalid-field /template/ Border#HighlightBackground, controls|AssetPathEditor.invalid-field TextBox /template/ Border#PART_BorderElement, controls|AssetPathEditor.invalid-field AutoCompleteBox /template/ TextBox /template/ Border#PART_BorderElement">
     <Setter Property="BorderBrush" Value="{DynamicResource DangerBorderBrush}" />
     <Setter Property="BorderThickness" Value="2" />
   </Style>
